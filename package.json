@@ -1,0 +1,41 @@
+{
+  "name": "meshup",
+  "version": "0.0.1",
+  "description": "Broad general purpose 3D mesh library with various modeling techniques (CSG, SDF, quasi-CAD) and target applications (3D printing, craft, CNC) in Typescript and powered by Rust (CSGRS). ",
+  "type": "module", 
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./dist/index.js",
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev:example:basics": "tsx examples/basics.ts",
+    "dev:example:mesh": "tsx examples/mesh.ts",
+    "dev:example:curve": "tsx examples/curve.ts",
+    "build:wasm": "tsx buildscripts/build-wasm.ts",
+    "rust:check" : "cd ./lib/csgrs && cargo check --features wasm --no-deps --target wasm32-unknown-unknown",
+    "build": "tsup",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "pnpm build"
+  },
+  "keywords": [],
+  "author": "Mark van der Net (Archiyou)",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@10.26.0",
+  "devDependencies": {
+    "@types/node": "^25.0.2",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.15"
+  }
+}

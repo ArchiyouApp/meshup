@@ -1,0 +1,5 @@
+# Workspace configuration: Needed for rust-analyzer to find Cargo.toml of csgrs
+[workspace]
+members = [
+    "./lib/csgrs"
+]    
