@@ -77,6 +77,7 @@ export class Bbox
     }
 
     /** Get Shape representation of current Bbox */
+    /*
     shape():Mesh|PlaneJs|Point3Js
     {
         if (this.is3D())
@@ -85,5 +86,6 @@ export class Bbox
         }
         
     }
+    */
 
 }

@@ -1,0 +1,3 @@
+[submodule "lib/csgrs"]
+	path = lib/csgrs
+	url = https://github.com/ArchiyouApp/csgrs.git
