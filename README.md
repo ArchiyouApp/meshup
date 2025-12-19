@@ -11,7 +11,7 @@ Please check out CSGRS or its WASMs bindings for a more robust layer.
 
 This repo offers (a fork of) csgrs as submodule for development in Rust and TS/JS. See lib/csgrs.
 
-sh```
+```bash
 # get from github
 git clone --recursive https://github.com/ArchiyouApp/meshup
 
