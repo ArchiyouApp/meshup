@@ -14,9 +14,9 @@
  * 
  */
 
+import { Curve } from './Curve';
 import { loadSync, loadAsync } from './loader';
-import { Mesh } from './internal';
-import type { CsgrsModule } from './internal';
+import type { CsgrsModule } from './types';
 
 // Global state
 let _csgrs: ReturnType<typeof loadSync> | null = null;
@@ -63,5 +63,9 @@ export function isInitialized(): boolean
 }
 
 //// RE-EXPORTS ////
+/* To enable to load from main module
+    TODO: All other classes too?
+*/
 
-export * from './internal';
+export { Mesh } from './Mesh';
+export { Curve } from './Curve';

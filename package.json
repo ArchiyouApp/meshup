@@ -18,6 +18,7 @@
   ],
   "scripts": {
     "dev:example:basics": "tsx examples/basics.ts",
+    "dev:example:vector": "tsx examples/vector.ts",
     "dev:example:mesh": "tsx examples/mesh.ts",
     "dev:example:curve": "tsx examples/curve.ts",
     "build:wasm": "tsx buildscripts/build-wasm.ts",

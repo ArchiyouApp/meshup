@@ -1,7 +1,8 @@
 import { Point3Js, PlaneJs } from './wasm/csgrs.js';
 
-import { Point, Mesh } from './internal';
-import type { PointLike } from './internal';
+import { Point } from './Point';
+import { Mesh } from './Mesh';
+import type { PointLike } from './types';
 
 /** Axis-aligned Bounding Box */
 export class Bbox

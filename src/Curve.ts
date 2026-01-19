@@ -6,8 +6,9 @@
 
 import { NurbsCurve2DJs, Point2Js } from "./wasm/csgrs";
 
-import type { CsgrsModule, PointLike } from './internal';
-import { getCsgrs, Point } from './internal';
+import { getCsgrs } from './index';
+import type { CsgrsModule, PointLike } from './types';
+import { Point } from './Point';
 
 
 export class Curve

@@ -1,4 +1,8 @@
-import type { 
+import { Vector } from './Vector'
+import { Vertex } from './Vertex';
+import { Point } from './Point';
+
+import { 
   Point2Js,
   Point3Js,
   Vector2Js,
@@ -33,6 +37,24 @@ export type CsgrsModule =
 };
 
 export type Axis = 'x'|'y'|'z';
-export type PointLike = Point2Js | Point3Js | Vector2Js | 
+
+
+export type PointLike = Point | Vector | Vertex |
+  Point2Js | Point3Js | Vector2Js | 
   Vector3Js | VertexJs | Array<number> | 
   { x: number; y: number; z: number; };
+
+export function isPointLike(obj: any): obj is PointLike {
+  return (
+    obj instanceof Point ||
+    obj instanceof Vector ||
+    obj instanceof Vertex ||
+    obj instanceof Point2Js ||
+    obj instanceof Point3Js ||
+    obj instanceof Vector2Js ||
+    obj instanceof Vector3Js ||
+    obj instanceof VertexJs ||
+    Array.isArray(obj) && obj.length >= 2 ||
+    typeof obj === 'object' && obj !== null && 'x' in obj && 'y' in obj
+  );
+}
