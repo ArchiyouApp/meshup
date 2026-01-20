@@ -58,6 +58,12 @@ export class Point
         }
     }
 
+    /** Create a new Point instance from the given parameters */
+    static from(x: PointLike|number, y?: number, z?: number):Point
+    {
+        return new Point(x, y, z);
+    }
+
     //// GETTERS / SETTERS
 
     get x(): number
@@ -109,7 +115,7 @@ export class Point
         return new Vector(this._x, this._y, this._z);
     }
 
-    toVertex(n:PointLike): Vertex
+    toVertex(n?:PointLike): Vertex
     {
         const normal = isPointLike(n) ? new Point(n) : new Point([0,0,0]);
         return new Vertex(this, normal);

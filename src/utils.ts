@@ -11,8 +11,14 @@ export function deg(radians: number): number
 //// FILE UTILS ////
 
 /** Save data to file (works in Node.js and browser) */
-export async function save(filepath: string, data: string | Buffer | Uint8Array | ArrayBuffer): void
+export async function save(filepath: string, 
+    data?: string | Buffer | Uint8Array | ArrayBuffer): Promise<void>
 {
+    if(data == null)
+    {
+        console.warn(`utils::save(): No data provided. Please supply a file as string or Buffer.`);
+        return;
+    }
     // Detect environment
     if (typeof window === 'undefined')
     {
@@ -26,8 +32,9 @@ export async function save(filepath: string, data: string | Buffer | Uint8Array 
             fs.mkdirSync(dir, { recursive: true });
         }
 
-        await fs.promises.writeFile(filepath, data);
-        console.log(`Saved to: ${filepath}`);
+        await fs.promises.writeFile(filepath, data as any);
+        const fullPath = path.resolve(filepath);
+        console.log(`utils::save(): Saved file to: "${fullPath}"`);
     } 
     else {
         // Browser

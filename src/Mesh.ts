@@ -9,19 +9,20 @@
  * 
  */
 
+import type { CsgrsModule, Axis, PointLike } from './types';
+import { isPointLike } from './types';
+
 import { getCsgrs } from './index';
 import { Point } from './Point';
 import { Bbox } from './Bbox';
 import { Vector } from './Vector'
 
-import type { CsgrsModule, PointLike } from './types';
-
-
-import { MeshJs, PolygonJs, Vector3Js } from './wasm/csgrs';
+import { MeshJs, PolygonJs, PlaneJs, Vector3Js } from './wasm/csgrs';
 
 // Settings
 import { SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT, 
     SHAPES_CYLINDER_SEGMENTS_RADIAL } from './constants';
+import { MeshCollection } from './MeshCollection';
 
 export class Mesh
 {
@@ -35,6 +36,7 @@ export class Mesh
         {
             throw new Error('Mesh::constructor(): WASM module not initialized. Call init() or await initAsync() first.');
         }
+        this._mesh = new this._csgrs.MeshJs(); // create empty mesh
     }
 
     /** Manual empty Csgrs reference 
@@ -57,16 +59,23 @@ export class Mesh
         return getCsgrs(); // Always gets the current global instance
     }
 
-    static fromCsgrs(mesh: MeshJs): Mesh
+    /** Create new Mesh instance from different other types */
+    static from(mesh: MeshJs): Mesh
     {
-        if(!mesh) { throw new Error('Mesh::fromCsgrs(): Invalid mesh'); }
-        const newMesh = new Mesh();
-        newMesh._mesh = mesh;
-        return newMesh;
+        if(!mesh) { throw new Error('Mesh::from(): Invalid mesh'); }
+
+        if(mesh instanceof MeshJs)
+        {
+            const newMesh = new Mesh();
+            newMesh._mesh = mesh;
+            return newMesh;
+        }
+        else {
+            throw new Error('Mesh::from(): Unsupported mesh type');
+        }
     }
 
     //// BASIC DATA ////
-
 
     /** Get all positions of vertices of Mesh */
     positions(): Array<Point>
@@ -100,6 +109,13 @@ export class Mesh
             yield new Vector(buffer[i], buffer[i + 1], buffer[i + 2]);
         }
     }
+
+    /** Get polygons of the Mesh */
+    polygons(): undefined|Array<PolygonJs>
+    {
+        return this?._mesh?.polygons();
+    }
+
     
     //// META DATA ////
 
@@ -127,7 +143,9 @@ export class Mesh
 
     // MESH FROM DATA
 
-    /** Create Mesh directly from polygons defined vertices (N > 2) */
+    /** Create Mesh directly from planar polygons defined by (N >= 3) vertices  
+     *  For some export formats (like STL) polygons are triangulated first
+    */
     static fromPolygons(verts: Array<Array<PointLike|PointLike|PointLike>>):Mesh
     {
         if(!Array.isArray(verts) || verts.length === 0)
@@ -136,28 +154,28 @@ export class Mesh
         }
 
         const polygons: Array<PolygonJs> = [];
-        verts.forEach((tri, i) => 
+        verts.forEach((poly, i) => 
         {
-            if (!Array.isArray(tri) || tri.length < 3) 
+            if (!Array.isArray(poly) || poly.length < 3) 
             {
-                console.warn(`Mesh::fromVertices(): Invalid triangle at index ${i}. Supply something [<PointLike>,<PointLike>,<PointLike>]`);
+                console.warn(`Mesh::fromVertices(): Invalid polygon at index ${i}. Supply something [<PointLike>,<PointLike>,<PointLike>]`);
             }
             else {
-                const polyVerts = tri.map(v => new Point(v).toVertex());
+                const polyVerts = poly.map(v => Point.from(v).toVertex());
                 polygons.push(new PolygonJs(polyVerts, {}));
             }
         });
 
-        return this.fromCsgrs(getCsgrs().MeshJs.fromPolygons(polygons, {}));
+        return this.from(getCsgrs().MeshJs.fromPolygons(polygons, {}));
     }
 
 
     // MESH PRIMITIVES
 
     /** Make a cube of given size with center at origin ([0,0,0]) */
-    static makeCube(size: number): Mesh
+    static Cube(size: number): Mesh
     {
-        const mesh = this.fromCsgrs(
+        const mesh = this.from(
             getCsgrs().MeshJs.cube(size, {}));
         // NOTE: CSGRS created boxes from [0,0,0] to [size,size,size]
         // But create at center here, following defaults of many other software
@@ -168,22 +186,24 @@ export class Mesh
      *  @param w Width
      *  @param h Height
      *  @param d Depth
+     *  with center at the origin
      */
-    static makeCuboid(w: number, d?: number, h?: number): Mesh
+    static Cuboid(w: number, d?: number, h?: number): Mesh
     {
         if (d === undefined) d = w;
         if (h === undefined) h = w;
-        return this.fromCsgrs(getCsgrs().MeshJs.cuboid(w, d, h, {}));
+        const mesh = this.from(getCsgrs().MeshJs.cuboid(w, d, h, {}));
+        return mesh.moveToCenter();
     }
 
     /** Alias for makeCuboid */
-    static makeBox(w: number, d?: number, h?: number): Mesh
+    static Box(w: number, d?: number, h?: number): Mesh
     {
-        return this.makeCuboid(w, d, h);
+        return this.Cuboid(w, d, h);
     }
 
     /** Make Box between two points */
-    static makeBoxBetween(from: PointLike, to: PointLike): Mesh
+    static BoxBetween(from: PointLike, to: PointLike): Mesh
     {
         const fromPoint = new Point(from);
         const toPoint = new Point(to);
@@ -199,22 +219,22 @@ export class Mesh
         const mesh = getCsgrs()?.MeshJs.cuboid(width, height, depth, {})
                         .center() // center at origin
                         .translate(center.toVector3Js()); // move to center point
-        return this.fromCsgrs(mesh);
+        return this.from(mesh);
     }
 
-    static makeSphere(radius: number): Mesh
+    static Sphere(radius: number): Mesh
     {
         const mesh = getCsgrs()?.MeshJs.sphere(radius, 
             SHAPES_SPHERE_SEGMENTS_WIDTH, 
             SHAPES_SPHERE_SEGMENTS_HEIGHT, {});
-        return this.fromCsgrs(mesh);
+        return this.from(mesh);
     }
 
-    static makeCylinder(radius: number, height: number): Mesh
+    static Cylinder(radius: number, height: number): Mesh
     {
         const mesh = getCsgrs()?.MeshJs.cylinder(radius, height, 
             SHAPES_CYLINDER_SEGMENTS_RADIAL, {});
-        return this.fromCsgrs(mesh);
+        return this.from(mesh);
     }
 
     //// CALCULATED PROPERTIES ////
@@ -236,6 +256,16 @@ export class Mesh
     bbox(): Bbox
     {
         return Bbox.fromMesh(this);
+    }
+
+    /** Copy current Mesh into a new one 
+     *  NOTE: We use copy here instead of clone
+     *  conventionally cloning is used for operations involving references to previous data
+    */
+    copy():undefined|Mesh
+    {
+        const c = this?._mesh?.clone();
+        return c ? Mesh.from(c) : undefined; 
     }
 
     //// TRANSLATE/ROTATE/SCALE OPERATIONS ////
@@ -268,6 +298,29 @@ export class Mesh
         return this;
     }
 
+    mirror(dir:Axis|PointLike, pos?:PointLike): this
+    {
+        const planeNormal = isPointLike(dir) 
+                                ? Point.from(dir).toVector()
+                                : Vector.from(dir); // converts axis to Vector
+        // If position is not given use center of mass of Mesh
+        const planePosition = pos ? Point.from(pos) : this.center();
+        // TODO CSGRS: Plane could use some work for ease of use
+        const plane = PlaneJs.fromNormal(
+                planeNormal.toVector3Js(), 10.0);
+        const offsettedPlanePoints = plane
+                                    .points()
+                                    .map( p => Vector.from(p).add(planePosition).toPoint().toPoint3Js());
+        const offsettedPlane = PlaneJs.fromPoints(
+                                offsettedPlanePoints[0],
+                                offsettedPlanePoints[1],
+                                offsettedPlanePoints[2]
+                            );
+
+        this._mesh = this._mesh?.mirror(offsettedPlane);
+        return this;
+    }
+
     /** Centers Mesh with center of mass at origin ([0,0,0]) */
     moveToCenter():this
     {
@@ -285,6 +338,34 @@ export class Mesh
         {
             this._mesh = this._mesh?.translate(new Vector3Js(0, 0, z));
         }
+        return this;
+    }
+    
+
+    /** Recompute normals of polygons of this mesh */
+    renormalize(): this
+    {
+        this._mesh = this._mesh?.renormalize();
+        return this;
+    }
+
+    /** Turn all polygons of this Mesh into triangles */
+    triangulate(): this
+    {
+        this._mesh = this._mesh?.triangulate();
+        return this;
+    }
+
+    /** Return new Mesh that is convex hull of current Mesh  */
+    hull(): undefined|Mesh
+    {
+        const ch = this._mesh?.convexHull();
+        return ch ? Mesh.from(ch) : undefined;
+    }
+
+    smooth(lambda: number, mu:number, iterations:number, preserveBoundaries:boolean): this
+    {
+        this._mesh = this._mesh?.taubinSmooth(lambda, mu, iterations, preserveBoundaries);
         return this;
     }
 
@@ -341,6 +422,53 @@ export class Mesh
         return this;
     }
 
+    //// CREATING MESH COLLECTIONS ////
+
+    /** Create a series of new Meshes along a given Vector and given distance from pivots 
+     *  We don't use csgrs distribute_linear() because it merges meshes into one
+     *  We want to output a collection of individual meshes
+    */
+    row(count:number, spacing:number, direction:PointLike|Axis='x'):MeshCollection
+    {
+        const meshes = new MeshCollection();
+        const dirVec = Vector.from(direction).normalize(); // auto converts Axis
+        for(let i=0; i<count; i++)
+        {
+            const mesh = this.copy();
+            if(mesh)
+            {
+                mesh.move(dirVec.scale(i * spacing));
+                meshes.add(mesh);
+            }
+        }
+        return meshes;
+    }
+
+    grid(cx:number=2, cy:number=2, cz:number=1, spacing:number=2):MeshCollection
+    {
+        if(typeof cx !== 'number' || typeof cy !== 'number' || typeof cz !== 'number' || typeof spacing !== 'number')
+        {
+            throw new Error("Mesh::grid(): Please supply valid numbers for counts along each axes!");
+        }
+        const meshes = new MeshCollection();
+        for(let x=0; x<cx; x++)
+        {
+            for(let y=0; y<cy; y++)
+            {
+                for(let z=0; z<cz; z++)
+                {
+                    const mesh = this.copy();
+                    if(mesh)
+                    {
+                        mesh.move(x * spacing, y * spacing, z * spacing);
+                        meshes.add(mesh);
+                    }
+                }
+            }
+        }
+        return meshes;
+    }
+
     //// EXPORT ////
 
     toSTLBinary(): Uint8Array | undefined
@@ -353,11 +481,14 @@ export class Mesh
         return this._mesh?.toSTLASCII();
     }
 
-    toGLTF(): string | undefined
+    /** Export Mesh to GLTF format
+     *  @param up Up axis of the model (default Z)
+     */
+    toGLTF(up:Axis='z'): string | undefined
     {
-        return this._mesh?.toGLTF('model');
+        // TODO: GLTF has up = Y instead of Z
+        return this._mesh?.toGLTF('model', up);
     }
-
     toAMF(): string | undefined
     {
         return this._mesh?.toAMF('model', 'mm');

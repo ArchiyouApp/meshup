@@ -37,7 +37,9 @@ export type CsgrsModule =
 };
 
 export type Axis = 'x'|'y'|'z';
-
+export function isAxis(obj: any): obj is Axis {
+  return obj === 'x' || obj === 'y' || obj === 'z';
+}
 
 export type PointLike = Point | Vector | Vertex |
   Point2Js | Point3Js | Vector2Js | 
