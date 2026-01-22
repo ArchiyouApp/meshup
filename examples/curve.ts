@@ -22,11 +22,13 @@ console.log(polyline.weights());
 console.log(polyline.tessellate());
 console.log(polyline.bbox());
 
+save('polyline.gltf', polyline.toGLTF());
+
 const curve = Curve.Interpolated([
     [0,0],
-    [50,10],
+    [50,50],
     [100,0],
-    [150,-10]
+    [150,-100]
 ], 3);
 
 console.log(curve.length());

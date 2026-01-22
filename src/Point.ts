@@ -1,4 +1,11 @@
-/** Make working with Points easier */
+/** Point.ts
+ * 
+ * Make working with Points easier by wrapping Point3Js
+ * 
+ * NOTES:
+ *    - we always use 3D version, so no 2D points classes. This for simplicity and consistency.
+ * 
+ * */
 
 import type { Axis, PointLike } from './types'
 import { isPointLike, isAxis } from './types';
@@ -6,7 +13,7 @@ import { Vector } from './Vector';
 import { Vertex } from './Vertex';
 
 // CSGRS WASM LAYER
-import { Point2Js, Vector2Js, Point3Js, Vector3Js, VertexJs  } from "./wasm/csgrs";
+import { Point3Js, Vector3Js, VertexJs  } from "./wasm/csgrs";
 
 export class Point
 {
@@ -34,11 +41,6 @@ export class Point
             this._x = x.x;
             this._y = x.y;
             if(typeof x.z === 'number') this._z = x.z;
-        }
-        else if (x instanceof Point2Js || x instanceof Vector2Js)
-        {
-            this._x = x.x;
-            this._y = x.y;
         }
         else if (x instanceof Point3Js || x instanceof Vector3Js)
         {
@@ -87,10 +89,6 @@ export class Point
 
     //// CALCULATED PROPS ////
 
-    dimension(): 2 | 3
-    {
-        return (this._z === undefined) ? 2 : 3;
-    }
 
     //// RELATIONSHIPS WITH OTHER POINTS ////
 
@@ -109,9 +107,7 @@ export class Point
 
     toArray(): [number, number, number?]
     {
-        return (this.dimension() === 2) 
-            ? [this._x, this._y] 
-            : [this._x, this._y, this._z];
+        return [this._x, this._y, this._z];
     }
 
     toVector(): Vector
@@ -128,26 +124,14 @@ export class Point
 
     //// CSGRS WASM LAYER ////
 
-    toPointJs(): Point2Js|Point3Js
+    toPointJs(): Point3Js
     {
-        return (this.dimension() === 2) 
-            ? new Point2Js(this._x, this._y) 
-            : new Point3Js(this._x, this._y, this._z);
-    }
-
-    toPoint2Js(): Point2Js
-    {
-        return new Point2Js(this._x, this._y);
+        return new Point3Js(this._x, this._y, this._z);
     }
 
     toPoint3Js(): Point3Js
     {
         return new Point3Js(this._x, this._y, this._z || 0.0);
-    }
-
-    toVector2Js(): Vector2Js
-    {
-        return new Vector2Js(this._x, this._y);
     }
 
     toVector3Js(): Vector3Js

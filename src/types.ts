@@ -3,14 +3,12 @@ import { Vertex } from './Vertex';
 import { Point } from './Point';
 
 import { 
-  Point2Js,
   Point3Js,
-  Vector2Js,
   Vector3Js,
   VertexJs, 
   Matrix4Js,
   MeshJs, 
-  NurbsCurve2DJs,
+  NurbsCurve3DJs,
   SketchJs, 
   PlaneJs, 
   PolygonJs, 
@@ -22,9 +20,7 @@ import {
 */
 export type CsgrsModule = 
 {
-  Point2Js: typeof Point2Js;
   Point3Js: typeof Point3Js;
-  Vector2Js: typeof Vector2Js;
   Vector3Js: typeof Vector3Js;
   Matrix4Js: typeof Matrix4Js;
   MeshJs: typeof MeshJs;
@@ -32,7 +28,7 @@ export type CsgrsModule =
   PlaneJs:  typeof PlaneJs;
   PolygonJs: typeof PolygonJs;
   VertexJs: typeof VertexJs;
-  NurbsCurve2DJs: typeof NurbsCurve2DJs;
+  NurbsCurve3DJs: typeof NurbsCurve3DJs;
   // TODO: more
 };
 
@@ -42,8 +38,7 @@ export function isAxis(obj: any): obj is Axis {
 }
 
 export type PointLike = Point | Vector | Vertex |
-  Point2Js | Point3Js | Vector2Js | 
-  Vector3Js | VertexJs | Array<number> | 
+  Point3Js |  Vector3Js | VertexJs | Array<number> | 
   { x: number; y: number; z: number; };
 
 export function isPointLike(obj: any): obj is PointLike {
@@ -51,12 +46,10 @@ export function isPointLike(obj: any): obj is PointLike {
     obj instanceof Point ||
     obj instanceof Vector ||
     obj instanceof Vertex ||
-    obj instanceof Point2Js ||
     obj instanceof Point3Js ||
-    obj instanceof Vector2Js ||
     obj instanceof Vector3Js ||
     obj instanceof VertexJs ||
     Array.isArray(obj) && obj.length >= 2 ||
-    typeof obj === 'object' && obj !== null && 'x' in obj && 'y' in obj
+    typeof obj === 'object' && obj !== null && 'x' in obj && 'y' in obj && 'z' in obj
   );
 }

@@ -12,10 +12,15 @@
  *  and has: 
  *  - degree: 1 = straight, 2 = quadratic, 3 = cubic
  *  - order: degree + 1
- *   
+ *
+ *  NOTES:
+ *    - we always use 3D version, so no 2D curves classes. This for simplicity and consistency.
+ * 
+ *  TODO:
+ *    - Create CompoundCurve3DJs and use for composite curves
  */
 
-import { NurbsCurve2DJs } from "./wasm/csgrs";
+import { NurbsCurve3DJs } from "./wasm/csgrs";
 
 import { getCsgrs } from './index';
 import type { CsgrsModule, PointLike, Axis } from './types';
@@ -27,7 +32,7 @@ import { toBase64 } from "./utils";
 
 export class Curve
 {
-    _curve: NurbsCurve2DJs|undefined = undefined;
+    _curve: NurbsCurve3DJs|undefined = undefined;
 
     metadata: Record<string, any> = {};
 
@@ -43,7 +48,7 @@ export class Curve
     }
 
     /** Get internal curve with checking */
-    internalCurve(): NurbsCurve2DJs
+    internalCurve(): NurbsCurve3DJs
     {
         if (!this._curve)
         {
@@ -57,7 +62,7 @@ export class Curve
         We use factory methods for it's clean syntax
     */
 
-    static fromCsgrs(curve: NurbsCurve2DJs): Curve
+    static fromCsgrs(curve: NurbsCurve3DJs): Curve
     {
         if(!curve) { throw new Error('Curve::fromCsgrs(): Invalid curve'); }
         const newCurve = new Curve();
@@ -72,8 +77,8 @@ export class Curve
     static Polyline(controlPoints: PointLike[]): Curve
     {
         return this.fromCsgrs(
-            getCsgrs()?.NurbsCurve2DJs?.makePolyline(
-                controlPoints.map(p => new Point(p).toPoint2Js()),
+            getCsgrs()?.NurbsCurve3DJs?.makePolyline(
+                controlPoints.map(p => new Point(p).toPoint3Js()),
                 true,
             )
         );
@@ -83,8 +88,8 @@ export class Curve
     static Interpolated(controlPoints: PointLike[], degree: number = 3): Curve
     {
         return this.fromCsgrs(
-            getCsgrs()?.NurbsCurve2DJs?.makeInterpolated(
-                controlPoints.map(p => new Point(p).toPoint2Js()),
+            getCsgrs()?.NurbsCurve3DJs?.makeInterpolated(
+                controlPoints.map(p => new Point(p).toPoint3Js()),
                 degree,
             )
         );
@@ -134,7 +139,7 @@ export class Curve
     {
         return this.internalCurve()
             .paramClosestToPoint(
-                new Point(point).toPoint2Js());
+                new Point(point).toPoint3Js());
     }
 
     pointAtParam(p: number): Point
