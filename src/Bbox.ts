@@ -3,6 +3,7 @@ import { Point3Js, PlaneJs } from './wasm/csgrs.js';
 import { Point } from './Point';
 import { Mesh } from './Mesh';
 import type { PointLike } from './types';
+import { isPointLike } from './types';
 
 /** Axis-aligned Bounding Box */
 export class Bbox
@@ -10,10 +11,21 @@ export class Bbox
     min: Point;
     max: Point;
 
-    constructor(min: PointLike, max: PointLike)
+    constructor(min: PointLike|Array<PointLike>, max?: PointLike)
     {
-        this.min = new Point(min);
-        this.max = new Point(max);
+        if(isPointLike(min) && isPointLike(max))
+        {
+            this.min = new Point(min);
+            this.max = new Point(max);
+        }
+        else if(Array.isArray(min) && min.length === 2 && isPointLike(min[0]) && isPointLike(min[1]))
+        {
+            this.min = new Point(min[0]);
+            this.max = new Point(min[1]);
+        }
+        else {
+            throw new Error('Bbox::constructor(): Invalid parameters. Please supply (min:PointLike, max:PointLike) or ([min:PointLike, max:PointLike])');
+        }
     }
 
     static fromMesh(m:Mesh): Bbox

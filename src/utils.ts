@@ -12,7 +12,7 @@ export function deg(radians: number): number
 
 /** Save data to file (works in Node.js and browser) */
 export async function save(filepath: string, 
-    data?: string | Buffer | Uint8Array | ArrayBuffer): Promise<void>
+    data?: string | Buffer | Uint8Array | Float16Array | Float32Array | ArrayBuffer): Promise<void>
 {
     if(data == null)
     {
@@ -59,4 +59,26 @@ export async function save(filepath: string,
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
     }
+}
+
+/** Encode string or typed array to base64 */
+export function toBase64(data: string | Uint8Array | Float32Array | Float64Array | ArrayBuffer): string
+{
+    let bytes: Uint8Array;
+    
+    if (typeof data === 'string') {
+        bytes = new TextEncoder().encode(data);
+    } else if (data instanceof ArrayBuffer) {
+        bytes = new Uint8Array(data);
+    } else if (data instanceof Uint8Array) {
+        bytes = data;
+    } else {
+        // Float32Array, Float64Array, etc. - get underlying bytes
+        bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    }
+    
+    if (typeof Buffer !== 'undefined') {
+        return Buffer.from(bytes).toString('base64');
+    }
+    return btoa(String.fromCharCode(...bytes));
 }

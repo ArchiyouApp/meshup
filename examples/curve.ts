@@ -1,8 +1,9 @@
 import { initAsync as initMeshup, Curve, Mesh } from '../src';
+import { save } from '../src/utils';
 
 await initMeshup(); // NOTE: loadSync does not work
 
-const polyline = Curve.makePolyline([
+const polyline = Curve.Polyline([
     [0,0],
     [10,0],
     [10,20],
@@ -15,8 +16,13 @@ console.log(polyline.pointAtParam(polyline.paramAtLength(10))); // [10,0]
 console.log(polyline.degree()); // 1 (polyline)
 console.log(polyline.paramClosestToPoint([-1,0])); // 0
 
+console.log(polyline.controlPoints());
+console.log(polyline.knots());
+console.log(polyline.weights());
+console.log(polyline.tessellate());
+console.log(polyline.bbox());
 
-const curve = Curve.makeInterpolated([
+const curve = Curve.Interpolated([
     [0,0],
     [50,10],
     [100,0],
@@ -24,5 +30,10 @@ const curve = Curve.makeInterpolated([
 ], 3);
 
 console.log(curve.length());
-
+console.log(curve.knots());
+console.log(curve.weights());
+console.log(curve.tessellate(1));
+console.log(curve.bbox());
+console.log(curve.toGLTF());
+save('curve.gltf', curve.toGLTF());
 

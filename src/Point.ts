@@ -1,7 +1,7 @@
 /** Make working with Points easier */
 
 import type { Axis, PointLike } from './types'
-import { isPointLike } from './types';
+import { isPointLike, isAxis } from './types';
 import { Vector } from './Vector';
 import { Vertex } from './Vertex';
 
@@ -80,6 +80,10 @@ export class Point
     {
         return this._z;
     }
+
+    //// TRANSFORMS ////
+
+
 
     //// CALCULATED PROPS ////
 

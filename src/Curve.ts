@@ -1,14 +1,28 @@
 /**
  *  Curve.ts
- *  - Has some abstractions specialized for TS/JS usage.
- * 
+ *  
+ *  Wrapper around the NURBS of csgrs => Curvo
+ *  
+ *  A BSpline consists of:
+ *
+ *  - Control Points: the points that define the shape of the curve
+ *  - Weights: higher is closer to control point
+ *  - Knots / Knot Vector: defines the parameter space
+ *
+ *  and has: 
+ *  - degree: 1 = straight, 2 = quadratic, 3 = cubic
+ *  - order: degree + 1
+ *   
  */
 
-import { NurbsCurve2DJs, Point2Js } from "./wasm/csgrs";
+import { NurbsCurve2DJs } from "./wasm/csgrs";
 
 import { getCsgrs } from './index';
-import type { CsgrsModule, PointLike } from './types';
+import type { CsgrsModule, PointLike, Axis } from './types';
 import { Point } from './Point';
+import { Bbox } from './Bbox';
+
+import { toBase64 } from "./utils";
 
 
 export class Curve
@@ -28,11 +42,12 @@ export class Curve
         return getCsgrs(); // Always gets the current global instance
     }
 
-    get curve(): NurbsCurve2DJs
+    /** Get internal curve with checking */
+    internalCurve(): NurbsCurve2DJs
     {
         if (!this._curve)
         {
-            throw new Error('Curve::curve(): Curve not initialized');
+            throw new Error('Curve::internalCurve(): Curve not initialized');
         }
         return this._curve;
     }
@@ -50,14 +65,12 @@ export class Curve
         return newCurve;
     }
 
-    /** Make a polyline curve with corners given by control points */
-    static makePolyline(controlPoints: PointLike[]): Curve
+    /** Make a polyline curve with corners given by control points
+     *  IMPORTANT: Controlpoints have a weight component too! 
+     *     So 2D Curves use 3D control points, and 3D curves 4D points 
+    */
+    static Polyline(controlPoints: PointLike[]): Curve
     {
-        console.log('makePolyline called with points:', controlPoints);
-        console.log(getCsgrs());
-        console.log(getCsgrs()?.NurbsCurve2DJs);
-        console.log(Object.keys(getCsgrs()?.NurbsCurve2DJs));
-
         return this.fromCsgrs(
             getCsgrs()?.NurbsCurve2DJs?.makePolyline(
                 controlPoints.map(p => new Point(p).toPoint2Js()),
@@ -67,7 +80,7 @@ export class Curve
     }
 
     /** Make a NURBS curve by interpolating through given points */
-    static makeInterpolated(controlPoints: PointLike[], degree: number = 3): Curve
+    static Interpolated(controlPoints: PointLike[], degree: number = 3): Curve
     {
         return this.fromCsgrs(
             getCsgrs()?.NurbsCurve2DJs?.makeInterpolated(
@@ -77,39 +90,136 @@ export class Curve
         );
     }
 
+    //// PROPERTIES ////
+
+    controlPoints(): Array<Point>
+    {
+        return this.internalCurve()
+                ?.controlPoints()
+                ?.map(p => Point.from(p));
+    }
+
+    knots()
+    {
+        return this.internalCurve()?.knots();
+    }
+
+    weights()
+    {
+        return this.internalCurve()?.weights();
+    }
+
     //// CALCULATED PROPERTIES ////
     /*
         NOTES:
-            - We use getter this.curve to have error checking if _curve is undefined
+            - We use getter this.internalCurve() to have error checking if _curve is undefined
     */
 
-    public length(): number
+    length(): number
     {
-        return this.curve.length(); 
+        return this.internalCurve().length(); 
     }
     
-    public degree(): number
+    degree(): number
     {
-        return this.curve.degree(); 
+        return this.internalCurve().degree(); 
     }
 
-    public paramAtLength(length: number): number
+    paramAtLength(length: number): number
     {
-        return this.curve.paramAtLength(length);
+        return this.internalCurve().paramAtLength(length);
     }
 
-    public paramClosestToPoint(point: PointLike): number
+    paramClosestToPoint(point: PointLike): number
     {
-        return this.curve
+        return this.internalCurve()
             .paramClosestToPoint(
                 new Point(point).toPoint2Js());
     }
 
-    public pointAtParam(p: number): Point
+    pointAtParam(p: number): Point
     {
         return new Point(
-            this.curve.pointAtParam(p));
+            this.internalCurve().pointAtParam(p));
     }
 
+    bbox():undefined|Bbox
+    {
+        const bboxCoords = this.internalCurve()?.bbox();
+        return bboxCoords ? new Bbox(bboxCoords) : undefined;
+    }
+
+    tessellate(tol: number = 1): Array<Point>
+    {
+        return this.internalCurve().tessellate(tol)
+            .map(p => Point.from(p));
+    }
+
+    //// EXPORTS ////
+
+    toGLTF(up:Axis='z')
+    {
+        const points = this.tessellate(1);
+        const pointsFlat = new Float32Array(
+            points
+                .map(p => {
+                    const arr = p.toArray();
+                    if(up === 'z')
+                    {
+                        return [arr[0], arr[2], -arr[1]];
+                    }
+                    else if(up === 'x')
+                    {
+                        return [arr[1], arr[0], arr[2]];
+                    }
+                    else {
+                        // GLTF is Y-up
+                        return [arr[0], arr[2], arr[1]];
+                    }
+                })
+                .flat() as Array<number>
+        );
+ 
+        if(pointsFlat.length < 3){ 
+            throw new Error(`Curve::toGLTF(): Not enough vertices to export!`);
+        }
+        
+        const bbox = this.bbox();
+        const dataBase64 = toBase64(pointsFlat);
+
+        const gltf = {
+            asset: { version: "2.0" },
+            scenes: [{ nodes: [0] }],
+            nodes: [{ mesh: 0 }],
+            meshes: [{
+                primitives: [{
+                    attributes: { POSITION: 0 },
+                    mode: 3 // LINE_STRIP
+                }]
+            }],
+            accessors: [{
+                bufferView: 0,
+                byteOffset: 0,
+                componentType: 5126, // FLOAT
+                count: points.length,
+                type: "VEC3",
+                max: bbox?.max.toArray(),
+                min: bbox?.min.toArray()
+            }],
+            bufferViews: [{
+                buffer: 0,
+                byteOffset: 0,
+                byteLength: pointsFlat.byteLength,
+                target: 34962 // ARRAY_BUFFER
+            }],
+            buffers: [{
+                byteLength: pointsFlat.byteLength,
+                uri: `data:application/octet-stream;base64,${dataBase64}`
+            }]
+        };
+
+        return JSON.stringify(gltf);
+
+    }
 
 }   
