@@ -20,10 +20,13 @@
  *    - Create CompoundCurve3DJs and use for composite curves
  */
 
-import { NurbsCurve3DJs } from "./wasm/csgrs";
+import { TESSELATION_TOLERANCE } from './constants';
+
+import { NurbsCurve3DJs, CompoundCurve3DJs } from "./wasm/csgrs";
 
 import { getCsgrs } from './index';
 import type { CsgrsModule, PointLike, Axis } from './types';
+import { isPointLike } from './types'
 import { Point } from './Point';
 import { Bbox } from './Bbox';
 
@@ -32,7 +35,7 @@ import { toBase64 } from "./utils";
 
 export class Curve
 {
-    _curve: NurbsCurve3DJs|undefined = undefined;
+    _curve: NurbsCurve3DJs|CompoundCurve3DJs|undefined = undefined;
 
     metadata: Record<string, any> = {};
 
@@ -48,13 +51,19 @@ export class Curve
     }
 
     /** Get internal curve with checking */
-    internalCurve(): NurbsCurve3DJs
+    inner(): NurbsCurve3DJs|CompoundCurve3DJs
     {
         if (!this._curve)
         {
-            throw new Error('Curve::internalCurve(): Curve not initialized');
+            throw new Error('Curve::inner(): Curve not initialized');
         }
+        
         return this._curve;
+    }
+
+    isCompound(): this is CompoundCurve3DJs
+    {
+        return this._curve instanceof CompoundCurve3DJs;
     }
 
     //// CREATION ////
@@ -99,72 +108,120 @@ export class Curve
 
     controlPoints(): Array<Point>
     {
-        return this.internalCurve()
-                ?.controlPoints()
-                ?.map(p => Point.from(p));
+        if(!this.isCompound())
+        {
+            return this.inner()
+                    ?.controlPoints()
+                    ?.map(p => Point.from(p));
+        } 
+        else 
+        {
+            // TODO
+            return []
+        }
     }
 
     knots()
     {
-        return this.internalCurve()?.knots();
+        return this.inner()?.knots();
     }
 
     weights()
     {
-        return this.internalCurve()?.weights();
+        return this.inner()?.weights();
     }
 
     //// CALCULATED PROPERTIES ////
     /*
         NOTES:
-            - We use getter this.internalCurve() to have error checking if _curve is undefined
+            - We use getter this.inner() to have error checking if _curve is undefined
     */
 
     length(): number
     {
-        return this.internalCurve().length(); 
+        return this.inner().length(); 
     }
     
-    degree(): number
+    degree(): number|null
     {
-        return this.internalCurve().degree(); 
+        if(!this.isCompound())
+        {
+            return (this.inner() as NurbsCurve3DJs)?.degree();
+        }
+        else {
+            console.warn(`Curve::degree(): Curve is compound. Use specific span to get degree`);
+            return null;
+        }
     }
 
-    paramAtLength(length: number): number
+    paramAtLength(length: number): number|null
     {
-        return this.internalCurve().paramAtLength(length);
+        if(!this.isCompound())
+        {
+            return (this.inner() as NurbsCurve3DJs)?.paramAtLength(length);
+        }
+        else {
+            console.warn(`Curve::paramAtLength(): Curve is compound. Use specific span to get parameter at length`);
+            return null;
+        }
+            
     }
 
-    paramClosestToPoint(point: PointLike): number
+    paramClosestToPoint(point: PointLike): number|null
     {
-        return this.internalCurve()
-            .paramClosestToPoint(
-                new Point(point).toPoint3Js());
+        if(!this.isCompound())
+        {
+            return (this.inner() as NurbsCurve3DJs)?.paramClosestToPoint(new Point(point).toPoint3Js());
+        }
+        else {
+            console.warn(`Curve::paramClosestToPoint(): Curve is compound. Use specific span to get parameter closest to point`);
+            return null;
+        }
     }
 
     pointAtParam(p: number): Point
     {
         return new Point(
-            this.internalCurve().pointAtParam(p));
+            this.inner().pointAtParam(p));
     }
 
     bbox():undefined|Bbox
     {
-        const bboxCoords = this.internalCurve()?.bbox();
+        const bboxCoords = this.inner()?.bbox();
         return bboxCoords ? new Bbox(bboxCoords) : undefined;
     }
 
-    tessellate(tol: number = 1): Array<Point>
+    tessellate(tol: number = TESSELATION_TOLERANCE): Array<Point>
     {
-        return this.internalCurve().tessellate(tol)
+        return this.inner().tessellate(tol)
             .map(p => Point.from(p));
+    }
+
+    //// OPERATIONS ////
+
+    /** Fillet sharp corner(s) of Curve. Optionally only at given point(s) */
+    fillet(radius: number, at?: PointLike|Array<PointLike>): this|null
+    {
+        const atPoints = (isPointLike(at)) 
+                        ? [new Point(at).toPoint3Js()] 
+                        : (Array.isArray(at)) 
+                            ? at.map(p => new Point(p).toPoint3Js()).filter(p => p) 
+                            : null;
+        if(!this.isCompound())
+        {
+            // Any fillet operation results in compound curve
+            const compoundCurve = (this.inner() as NurbsCurve3DJs).fillet(radius, atPoints);
+            this._curve = compoundCurve; // override inner curve
+            return this;
+        }
+        return null;
     }
 
     //// EXPORTS ////
 
     toGLTF(up:Axis='z')
     {
-        const points = this.tessellate(1);
+        const points = this.tessellate(); // use default tolerance
         const pointsFlat = new Float32Array(
             points
                 .map(p => {

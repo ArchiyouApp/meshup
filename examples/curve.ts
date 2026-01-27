@@ -22,8 +22,12 @@ console.log(polyline.weights());
 console.log(polyline.tessellate());
 console.log(polyline.bbox());
 
+console.log(polyline.fillet(3));
+
 save('polyline.gltf', polyline.toGLTF());
 
+
+/*
 const curve = Curve.Interpolated([
     [0,0],
     [50,50],
@@ -37,5 +41,7 @@ console.log(curve.weights());
 console.log(curve.tessellate(1));
 console.log(curve.bbox());
 console.log(curve.toGLTF());
-save('curve.gltf', curve.toGLTF());
 
+//save('curve.gltf', curve.toGLTF());
+
+*/
