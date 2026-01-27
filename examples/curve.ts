@@ -22,7 +22,15 @@ console.log(polyline.weights());
 console.log(polyline.tessellate());
 console.log(polyline.bbox());
 
-console.log(polyline.fillet(3));
+console.log('Knot domain:', polyline.knotsDomain());
+console.log(polyline.paramClosestToPoint([10, 0]));
+console.log(polyline.paramClosestToPoint([10, 20]));
+
+
+// DEBUG
+// console.log(polyline.filletAtParams(5, [0.25])); // ==> at controlpoint [10,0] [FIXED]
+console.log(polyline.filletAtParams(5, [0.75]));  // ==> at controlpoint [10,20]
+//console.log(polyline.fillet(3, [15,0]));
 
 save('polyline.gltf', polyline.toGLTF());
 

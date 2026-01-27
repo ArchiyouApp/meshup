@@ -126,9 +126,14 @@ export class Curve
         return this.inner()?.knots();
     }
 
+    knotsDomain():Array<number|number>
+    {
+        return Array.from(this.inner()?.knotsDomain());
+    }
+
     weights()
     {
-        return this.inner()?.weights();
+        return Array.from(this.inner()?.weights());
     }
 
     //// CALCULATED PROPERTIES ////
@@ -211,6 +216,18 @@ export class Curve
         {
             // Any fillet operation results in compound curve
             const compoundCurve = (this.inner() as NurbsCurve3DJs).fillet(radius, atPoints);
+            this._curve = compoundCurve; // override inner curve
+            return this;
+        }
+        return null;
+    }
+
+    filletAtParams(radius: number, at: Array<number>): this|null
+    {
+        if(!this.isCompound())
+        {
+            // Any fillet operation results in compound curve
+            const compoundCurve = (this.inner() as NurbsCurve3DJs).filletAtParams(radius, new Float64Array(at));
             this._curve = compoundCurve; // override inner curve
             return this;
         }
