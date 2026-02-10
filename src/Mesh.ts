@@ -270,24 +270,26 @@ export class Mesh
 
     //// TRANSLATE/ROTATE/SCALE OPERATIONS ////
 
-    translate(vecOrX: Vector3Js | number, dy?: number, dz?: number): this
+    translate(vecOrX: PointLike | number, dy?: number, dz?: number): this
     {
-        const vec = (typeof vecOrX === 'number') 
-                        ? new Vector3Js(vecOrX, dy || 0, dz || 0) : vecOrX as Vector3Js;
-        this._mesh = this._mesh?.translate(vec);
+        const vec = (isPointLike(vecOrX)) 
+                        ? Point.from(vecOrX)
+                        : Point.from(vecOrX, dy || 0, dz || 0);
+        if(!vec){ throw new Error('Mesh.translate(): Invalid translation input. Please use PointLike or valid offset coordinates.'); }
+        this._mesh = this._mesh?.translate(vec.toVector3Js());
         return this;
     }
 
     /** Alias for translate */
-    move(vecOrX: Vector3Js | number, dy?: number, dz?: number): this
+    move(vecOrX: PointLike | number, dy?: number, dz?: number): this
     {
         return this.translate(vecOrX, dy, dz);
     }
 
-    /** Rotate Mesh around the X, Y, and Z axes */
-    rotate(rx: number, ry: number, rz: number): this
+    /** Rotate Mesh givens angles (rad) around the X, Y, and Z axes */
+    rotate(ax: number, ay: number, az: number): this
     {
-        this._mesh = this._mesh?.rotate(rx, ry, rz);
+        this._mesh = this._mesh?.rotate(ax, ay, az);
         return this;
     }
 

@@ -79,7 +79,18 @@ export class Vector extends Vector3Js
     return super.length();
   }
 
+  angle(other:PointLike):number
+  {
+    if(!isPointLike(other)){ throw new Error('Vector::angle(): Invalid argument. Please supply a PointLike instance.'); }
+    return super.angle(Point.from(other).toVector3Js());
+  }
+
   //// METHODS
+
+  abs(): Vector
+  {
+    return Vector.from(super.abs());
+  }
 
   /** Create new Vector instance by adding another vector */
   add(other: PointLike): Vector
@@ -139,6 +150,7 @@ export class Vector extends Vector3Js
       )
     );
   }
+  
 
   /** Create new Vector by Euler rotation */
   rotateEuler(roll: number, pitch: number, yaw: number): Vector 
