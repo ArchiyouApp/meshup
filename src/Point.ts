@@ -11,6 +11,9 @@ import type { Axis, PointLike } from './types'
 import { isPointLike, isAxis } from './types';
 import { Vector } from './Vector';
 import { Vertex } from './Vertex';
+import { rad } from './utils';
+
+import { POINT_TOLERANCE  } from './constants'; 
 
 // CSGRS WASM LAYER
 import { Point3Js, Vector3Js, VertexJs  } from "./wasm/csgrs";
@@ -34,7 +37,7 @@ export class Point
         {
             this._x = x[0];
             this._y = x[1];
-            this._z = x[2];
+            this._z = x[2] || 0;
         }
         else if(x instanceof Point || x instanceof Vector || x instanceof Vertex)
         {
@@ -85,6 +88,14 @@ export class Point
 
     //// TRANSFORMS ////
 
+    /** Round to a given tolerance */
+    round(tolerance: number = POINT_TOLERANCE): Point
+    {
+        this._x = Math.round(this._x / tolerance) * tolerance;
+        this._y = Math.round(this._y / tolerance) * tolerance;
+        this._z = Math.round(this._z / tolerance) * tolerance;
+        return this;
+    }
 
 
     //// CALCULATED PROPS ////
@@ -102,6 +113,82 @@ export class Point
     }
 
     // NOTE: For other functions use underlying Point3Js or Vector3Js methods
+
+    //// RESOLVE RELATIVE COORDINATES ////
+
+    /** Resolve relative 2D coordinates for Sketches 
+     *  example: 
+     *      lineTo(10,10) - absolute
+     *      lineTo('+10', '-5') - relative to current point
+     *      lineTo('r<45') - polar relative to current point (r is distance, < is angle in degrees)
+     *      lineTo('r<<45') - polar relative to current point, but angle is relative to the last segment (like in autocad)
+    */
+    resolveRelativeCoord2D(cursor:{ at: PointLike, dir: Vector }, args: Array<string|number>): Point
+    {
+        const prevPoint = Point.from(cursor.at);
+        // absolute coordinates
+        if(Array.isArray(args) && args.every(arg => typeof arg === 'number'))
+        {
+            return new Point(args[0], args[1], 0);
+        }
+        // relative coords
+        else if(Array.isArray(args) && args.length === 2 && args.every(arg => typeof arg === 'string'))
+        {
+            try 
+            {
+                const xStr = args[0] as string;
+                const yStr = args[1] as string;
+                const x = xStr.startsWith('+') ? prevPoint.x + parseFloat(xStr.slice(1)) : (xStr.startsWith('-') ? prevPoint.x - parseFloat(xStr.slice(1)) : parseFloat(xStr));
+                const y = yStr.startsWith('+') ? prevPoint.y + parseFloat(yStr.slice(1)) : (yStr.startsWith('-') ? prevPoint.y - parseFloat(yStr.slice(1)) : parseFloat(yStr));
+                return new Point(x, y, 0);
+            }
+            catch (e)
+            {
+                throw new Error(`Point::resolveRelativeCoord2D(): Invalid relative coordinates: ${args}`);
+            }
+        }
+        // polar coords
+        else if(Array.isArray(args) && args.length === 1 && typeof args[0] === 'string')
+        {
+            // polar absolute: "{radius}<{angle}"
+            if(args[0].match(/^\d+(\.\d+)?<\d+(\.\d+)?$/)) 
+            {
+                try 
+                {
+                    const [rStr, angleStr] = (args[0] as string).split('<');
+                    const r = parseFloat(rStr);
+                    const angle = rad(parseFloat(angleStr)); // convert to radians
+                    const x = prevPoint.x + r * Math.cos(angle);
+                    const y = prevPoint.y + r * Math.sin(angle);
+                    return new Point(x, y, 0);
+                }
+                catch (e)                {
+                    throw new Error(`Point::resolveRelativeCoord2D(): Invalid polar coordinates: ${args[0]}`);
+                }
+            }
+            else if(args[0].match(/^\d+(\.\d+)?<<\d+(\.\d+)?$/))  // polar relative: "{radius}<<{angle}"
+            {
+                try
+                {
+                    const angleStr = (args[0] as string).split('<<')[1];
+                    const r = parseFloat((args[0] as string).split('<<')[0].slice(1)); // remove 'r' prefix
+                    const angle = rad(parseFloat(angleStr)); // convert to radians
+                    // calculate angle of the last segment (direction vector) and add the relative angle to it
+                    const prevAngle = new Vector(cursor.dir).angle(new Vector(1,0)); // angle to x-axis
+                    const totalAngle = prevAngle + angle;
+                    const x = prevPoint.x + r * Math.cos(totalAngle);
+                    const y = prevPoint.y + r * Math.sin(totalAngle);
+                    return new Point(x, y, 0);
+                }
+                catch (e)
+                {
+                    throw new Error(`Point::resolveRelativeCoord2D(): Invalid polar relative coordinates: ${args[0]}`);
+                }
+            }
+        }
+    }
+
+
 
     //// AUTO CONVERSION ////
 

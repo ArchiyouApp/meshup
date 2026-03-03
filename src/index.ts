@@ -66,6 +66,6 @@ export function isInitialized(): boolean
 /* To enable to load from main module
     TODO: All other classes too?
 */
-
 export { Mesh } from './Mesh';
 export { Curve } from './Curve';
+export { Collection } from './Collection';

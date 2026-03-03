@@ -1,8 +1,9 @@
-import { initAsync as initMeshup, Curve, Mesh } from '../src';
+import { initAsync as initMeshup, Curve, Mesh, Collection } from '../src';
 import { save } from '../src/utils';
 
 await initMeshup(); // NOTE: loadSync does not work
 
+/*
 const polyline = Curve.Polyline([
     [0,0],
     [10,0],
@@ -53,6 +54,7 @@ const polylineXZ = Curve.Polyline([
 console.log(polylineXZ.length());
 console.log(polylineXZ.isPlanar());
 console.log(polylineXZ.getOnPlane());
+console.log(polylineXZ.extend(10));
 
 //// POLYLINE ROTATED ////
 
@@ -94,4 +96,61 @@ console.log(curve.toGLTF());
 save('curve.gltf', curve.toGLTF());
 
 save('curve_offset.gltf', curve.copy().offset(2, 'round')?.toGLTF());
+*/
+
+//// CURVE INTERACTION ////
+
+const pl = Curve.Polyline([
+    [0,0],
+    [10,0],
+    [10,20],
+]);
+console.log(pl.controlPoints());
+console.log(pl.controlPoints().map(p => p.round()));
+console.log(pl.intersect(Curve.Line([-10,10], [20,10]))); // [10,10,0]
+console.log(pl.intersect(Curve.Line([-10,100], [20,100]))); // []
+
+const spl = Curve.Interpolated([
+    [0,0],
+    [50,50],
+    [100,0],
+    [150,-100],
+    [200, 0]
+]);
+
+console.log(spl.intersect(Curve.Line([100,500], [100,-500])));
+const circl = Curve.Circle(100, [10,10]);
+
+const collection = new Collection(pl, spl, circl);
+console.log(collection.length);
+
+save('circle.gltf', circl.toMesh().toGLTF());
+
+
+
+
+save('collection.gltf', collection.toGLTF());
+
+
+//// CURVE-MESH INTERSECTION ////
+
+const cube = Mesh.Cube(20); // 20x20x20 cube centered at origin
+const line = Curve.Line([-50, 0, 0], [50, 0, 0]); // Line along the X axis through the center
+
+// Should find 2 intersection points where the line enters and exits the cube
+const hits = cube.intersectCurve(line);
+console.log('Curve-Mesh intersection hits:', hits.length, hits.map(p => p.toArray()));
+
+// Also test the Curve.intersectMesh() variant
+const hits2 = line.intersectMesh(cube);
+console.log('Mesh intersection from Curve:', hits2.length, hits2.map(p => p.toArray()));
+
+//// CURVE.INTERSECTION() - Trimmed curve inside mesh ////
+
+const longLine = Curve.Line([-50, 0, 0], [50, 0, 0]);
+const box20 = Mesh.Cube(20); // centered at origin, spans [-10,10] on each axis
+const insideCurves = longLine.intersection(box20)[0]?.move(0,0,30);
+
+save('insideCurves.gltf', new Collection(longLine, box20, insideCurves).toGLTF());
+
 

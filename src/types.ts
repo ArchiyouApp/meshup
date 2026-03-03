@@ -49,7 +49,23 @@ export function isPointLike(obj: any): obj is PointLike {
     obj instanceof Point3Js ||
     obj instanceof Vector3Js ||
     obj instanceof VertexJs ||
-    Array.isArray(obj) && obj.length >= 2 ||
+    (Array.isArray(obj) && obj.every(item => typeof item === 'number')) || // [x], [x,y], [x,y,z] - needs to be numbers
     typeof obj === 'object' && obj !== null && 'x' in obj && 'y' in obj && 'z' in obj
   );
+}
+
+export type BasePlane = 'xy' | 'yz' | 'zx' | 'front' | 'back' | 'left' | 'right';
+export function isBasePlane(obj: any): obj is BasePlane {
+  return ['xy', 'yz', 'zx', 'front', 'back', 'left', 'right'].includes(obj);
+}
+
+//// OUTPUT TYPES ////
+
+export interface GLTFBuffer 
+{
+        data: string;       // base64-encoded binary buffer
+        byteLength: number;
+        count: number;      // vertex count
+        min?: Point; // bbox min
+        max?: Point; // bbox max
 }

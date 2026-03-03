@@ -82,3 +82,15 @@ export function toBase64(data: string | Uint8Array | Float32Array | Float64Array
     }
     return btoa(String.fromCharCode(...bytes));
 }
+
+/** Decode a base64 string back to a Uint8Array */
+export function fromBase64(b64: string): Uint8Array
+{
+    if (typeof Buffer !== 'undefined') {
+        return Buffer.from(b64, 'base64');
+    }
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+}

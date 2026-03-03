@@ -17,12 +17,12 @@ import { Point } from './Point';
 import { Bbox } from './Bbox';
 import { Vector } from './Vector'
 
-import { MeshJs, PolygonJs, PlaneJs, Vector3Js } from './wasm/csgrs';
+import { MeshJs, PolygonJs, PlaneJs, Vector3Js, NurbsCurve3DJs, CompoundCurve3DJs } from './wasm/csgrs';
 
 // Settings
 import { SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT, 
     SHAPES_CYLINDER_SEGMENTS_RADIAL } from './constants';
-import { MeshCollection } from './MeshCollection';
+import { Collection } from './Collection';
 
 export class Mesh
 {
@@ -140,6 +140,17 @@ export class Mesh
         NOTE: We use getCsgrs() because there is no this available in static methods
     
     */
+
+    /* Make a Mesh from points that span one Polygon */
+    static fromPoints(points: Array<PointLike>): Mesh
+    {
+        if(!Array.isArray(points) || points.length === 0 || !points.every(p => isPointLike(p)))
+        {
+            throw new Error(`Mesh::fromPoints(): Invalid points array. Supply something [<PointLike>, <PointLike>, ...]`);
+        }
+
+        return this.fromPolygons([points]);
+    }
 
     // MESH FROM DATA
 
@@ -424,15 +435,48 @@ export class Mesh
         return this;
     }
 
+    //// CURVE–MESH INTERSECTION ////
+
+    /** Find intersection points between a Curve and this Mesh.
+     *  The curve is tessellated into a polyline and each segment is tested
+     *  against every triangle of the mesh surface.
+     * 
+     *  @param curve - A Curve instance (NurbsCurve or CompoundCurve)
+     *  @param tolerance - Tessellation tolerance for the curve (default: 1e-4)
+     *  @returns Array of intersection Points, in order along the curve. Empty array if none found.
+     */
+    intersectCurve(curve: { isCompound(): boolean; inner(): NurbsCurve3DJs | CompoundCurve3DJs }, tolerance?: number): Array<Point>
+    {
+        if(!curve || typeof curve.inner !== 'function')
+        {
+            throw new Error('Mesh::intersectCurve(): Please supply a valid Curve instance!');
+        }
+
+        try 
+        {
+            const inner = curve.inner();
+            const pts = curve.isCompound()
+                ? this._mesh?.intersectCompoundCurve(inner as CompoundCurve3DJs, tolerance)
+                : this._mesh?.intersectCurve(inner as NurbsCurve3DJs, tolerance);
+
+            return (pts || []).map(p => Point.from(p));
+        }
+        catch (e)
+        {
+            console.error('Mesh::intersectCurve(): Error:', e);
+            return [];
+        }
+    }
+
     //// CREATING MESH COLLECTIONS ////
 
     /** Create a series of new Meshes along a given Vector and given distance from pivots 
      *  We don't use csgrs distribute_linear() because it merges meshes into one
      *  We want to output a collection of individual meshes
     */
-    row(count:number, spacing:number, direction:PointLike|Axis='x'):MeshCollection
+    row(count:number, spacing:number, direction:PointLike|Axis='x'):Collection
     {
-        const meshes = new MeshCollection();
+        const meshes = new Collection();
         const dirVec = Vector.from(direction).normalize(); // auto converts Axis
         for(let i=0; i<count; i++)
         {
@@ -446,13 +490,13 @@ export class Mesh
         return meshes;
     }
 
-    grid(cx:number=2, cy:number=2, cz:number=1, spacing:number=2):MeshCollection
+    grid(cx:number=2, cy:number=2, cz:number=1, spacing:number=2):Collection
     {
         if(typeof cx !== 'number' || typeof cy !== 'number' || typeof cz !== 'number' || typeof spacing !== 'number')
         {
             throw new Error("Mesh::grid(): Please supply valid numbers for counts along each axes!");
         }
-        const meshes = new MeshCollection();
+        const meshes = new Collection();
         for(let x=0; x<cx; x++)
         {
             for(let y=0; y<cy; y++)

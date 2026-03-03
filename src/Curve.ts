@@ -22,8 +22,8 @@ import { TESSELATION_TOLERANCE } from './constants';
 
 import { NurbsCurve3DJs, CompoundCurve3DJs, Vector3Js } from "./wasm/csgrs";
 
-import { getCsgrs } from './index';
-import type { CsgrsModule, PointLike, Axis } from './types';
+import { getCsgrs, Mesh } from './index';
+import type { CsgrsModule, PointLike, Axis, GLTFBuffer } from './types';
 import { isPointLike } from './types'
 import { Point } from './Point';
 import { Vector } from './Vector';
@@ -60,11 +60,6 @@ export class Curve
         return this._curve;
     }
 
-    isCompound(): this is CompoundCurve3DJs
-    {
-        return this._curve instanceof CompoundCurve3DJs;
-    }
-
     copy(): Curve
     {
         const newCurve = new Curve();
@@ -77,7 +72,7 @@ export class Curve
         We use factory methods for it's clean syntax
     */
 
-    static fromCsgrs(curve: NurbsCurve3DJs): Curve
+    static fromCsgrs(curve: NurbsCurve3DJs|CompoundCurve3DJs): Curve
     {
         if(!curve) { throw new Error('Curve::fromCsgrs(): Invalid curve'); }
         const newCurve = new Curve();
@@ -85,15 +80,32 @@ export class Curve
         return newCurve;
     }
 
-    /** Make a polyline curve with corners given by control points
-     *  IMPORTANT: Controlpoints have a weight component too! 
-     *     So 2D Curves use 3D control points, and 3D curves 4D points 
-    */
-    static Polyline(controlPoints: PointLike[]): Curve
+    static Line(start: PointLike, end: PointLike): Curve
     {
-        return this.fromCsgrs(
+        if(!isPointLike(start) || !isPointLike(end)){ throw new Error('Curve.Line(): Invalid start or end point. Please supply a PointLike: [x,y], [x,y,z], Point, Vector etc'); }
+        return this.Polyline([Point.from(start), Point.from(end)]); // We can use polyline here
+    }
+
+    /** Make a polyline curve with corners given by control points */
+    static Polyline(controlPoints: PointLike|Array<PointLike>, ...args: Array<PointLike>): Curve
+    {
+        if(!isPointLike(controlPoints) && !(Array.isArray(controlPoints) && controlPoints.every(isPointLike)))
+        {
+            throw new Error('Curve.Polyline(): Invalid control points. Please supply PointLike(s) as arguments or an array of PointLike.');
+        }
+
+        // For flat args: Curve.Polyline(p1,p2,p3)
+        if(isPointLike(controlPoints))
+        {
+            controlPoints = [controlPoints, ...(args?.filter(p => isPointLike(p)) || [])];
+        }
+        else {
+            controlPoints = controlPoints as Array<PointLike>; // already in correct format
+        }
+
+        return Curve.fromCsgrs(
             getCsgrs()?.NurbsCurve3DJs?.makePolyline(
-                controlPoints.map(p => new Point(p).toPoint3Js()),
+                controlPoints.map(p => Point.from(p).toPoint3Js()),
                 true,
             )
         );
@@ -102,15 +114,42 @@ export class Curve
     /** Make a NURBS curve by interpolating through given points */
     static Interpolated(controlPoints: PointLike[], degree: number = 3): Curve
     {
-        return this.fromCsgrs(
-            getCsgrs()?.NurbsCurve3DJs?.makeInterpolated(
-                controlPoints.map(p => new Point(p).toPoint3Js()),
-                degree,
+        return Curve.fromCsgrs(
+            getCsgrs()
+                ?.NurbsCurve3DJs
+                    ?.makeInterpolated(
+                        controlPoints.map(p => new Point(p).toPoint3Js()),
+                        degree,
             )
         );
     }
 
+    static Circle(radius:number = 50, center:PointLike = [0,0,0], normal:PointLike = [0,0,1]): Curve
+    {
+        if(!isPointLike(center) || typeof radius !== 'number' || !isPointLike(normal))
+        { 
+            throw new Error('Curve.Circle(): Invalid center, radius, or normal. Please supply a PointLike for center and normal, and a number for radius.');
+        }
+
+        return Curve.fromCsgrs(
+                getCsgrs()
+                    ?.NurbsCurve3DJs
+                    ?.makeCircle(
+                        radius,
+                        Point.from(center).toPoint3Js(),
+                        Point.from(normal).toVector3Js()
+                    )
+                );
+        
+    }
+
     //// PROPERTIES ////
+
+    isCompound():boolean
+    {
+        return this._curve instanceof CompoundCurve3DJs;
+    }
+    
 
     /** Get control points of Curve */
     controlPoints(): Array<Point>
@@ -118,6 +157,12 @@ export class Curve
         return this.inner()
                 ?.controlPoints()
                 ?.map(p => Point.from(p));
+    }
+
+    /** Alias for controlPoints */
+    points(): Array<Point>
+    {
+        return this.controlPoints();
     }
 
     /** Get knots of Curve */
@@ -132,7 +177,7 @@ export class Curve
         }
     }
 
-    knotsDomain():Array<number|number>
+    knotsDomain():Array<number|number>|undefined
     {
         if(!this.isCompound())
         {
@@ -147,7 +192,7 @@ export class Curve
     {
         if(!this.isCompound())
         {
-            return Array.from(this.inner()?.weights());
+            return Array.from((this.inner() as NurbsCurve3DJs)?.weights());
         }
         else {
             console.warn(`Curve::weights(): Curve is compound. Use specific span to get weights`);
@@ -159,6 +204,11 @@ export class Curve
         NOTES:
             - We use getter this.inner() to have error checking if _curve is undefined
     */
+
+    isClosed(): boolean
+    {
+        return this.inner()?.closed() ?? false;
+    }
 
     isPlanar(): boolean
     {
@@ -238,12 +288,13 @@ export class Curve
 
     paramClosestToPoint(point: PointLike): number|null
     {
-        if(!this.isCompound())
+        try
         {
-            return (this.inner() as NurbsCurve3DJs)?.paramClosestToPoint(new Point(point).toPoint3Js());
+            return this.inner()?.paramClosestToPoint(new Point(point).toPoint3Js());
         }
-        else {
-            console.warn(`Curve::paramClosestToPoint(): Curve is compound. Use specific span to get parameter closest to point`);
+        catch (e)
+        {
+            console.error('Curve::paramClosestToPoint(): Error:', e);
             return null;
         }
     }
@@ -252,6 +303,21 @@ export class Curve
     {
         return new Point(
             this.inner().pointAtParam(p));
+    }
+
+    pointAtLength(length: number): Point|null
+    {
+        const param = this.paramAtLength(length);
+        if(param === null) { return null; }
+        return this.pointAtParam(param);
+    }
+
+    /** Get point at given percentage of the curve length */
+    pointAtPerc(perc: number): Point|null
+    {
+        const length = this.length();
+        if(length === 0) { return null; }
+        return this.pointAtLength(perc * length);
     }
 
     bbox():undefined|Bbox
@@ -328,52 +394,214 @@ export class Curve
         }
         return null;
     }
+    
 
-    extend(length: number): this|null
+    extend(length: number, side: 'start'|'end'|'both' = 'end'): this
     {
-        // TODO    
+        // Both NurbsCurve3DJs and CompoundCurve3DJs now return CompoundCurve3DJs
+        this._curve = this.inner().extend(length, side);
+        return this;
     }
 
-    offset(distance: number, cornerType:'sharp'|'round'|'smooth'='sharp'): this|null
+    /** Offset a Curve a given amount (+ or -) and optionally provide corner type (default:sharp) */
+    offset(distance: number, cornerType:'sharp'|'round'|'smooth'='sharp'): Curve|null
     {
         /* CSGRS/Curvo can only offset curves in 2D, so we need to convert the current
             one (either compound of single) to the 2D version, 
             then offset and turn back into a 3D Curve on TS layer
         */
-
         if(!this.isPlanar()){ throw new Error(`Curve:offset(): Cannot offset a 3D curve!`);}
-
-        if(!this.isCompound())
-        {
-            console.log('==== HIERO ===');
-            this._curve = (this.inner() as NurbsCurve3DJs).offset(distance, cornerType);
-            return this;
-        }
-        else {
-            console.log('Curve::offset(): Compound curve not implemented');
-        }
-        
-
+        return Curve.fromCsgrs(this.inner()?.offset(distance, cornerType));
     }
     
-    //// TRANSFORMS ////
+    
+    //// INTERACTION WITH OTHER CURVES ////
 
+    /** Get intersection points with other curve 
+     *   Empty array if no intersections, null if error (e.g. invalid curve type)
+    */
+    intersect(other:Curve):Array<Point>|null
+    {
+        try 
+        {
+            return ((this.isCompound())
+                ? (!other.isCompound())
+                    ? this.inner()?.intersect(other.inner() as NurbsCurve3DJs)
+                    : this.inner()?.intersectCompound(other.inner() as CompoundCurve3DJs)
+                : (!other.isCompound())
+                    ? this.inner()?.intersect(other.inner() as NurbsCurve3DJs)
+                    : this.inner()?.intersectCompound(other.inner() as CompoundCurve3DJs)
+            || [])
+            .map(p => Point.from(p).round()); // round to default Point tolerance to avoid most rounding errors
+        } 
+        catch (e)
+        {
+            console.error('Curve::intersect(): Error:', e);
+            return null;
+        }
+    }
+
+    /** Find intersection points between this Curve and a Mesh.
+     *  The curve is tessellated into a polyline and each segment is tested
+     *  against every triangle of the mesh surface.
+     * 
+     *  @param mesh - A Mesh instance to test against
+     *  @param tolerance - Tessellation tolerance for the curve (default: 1e-4)
+     *  @returns Array of intersection Points, in order along the curve. Empty array if none found.
+     */
+    intersectMesh(mesh: Mesh, tolerance?: number): Array<Point>
+    {
+        if(!mesh || !(mesh instanceof Mesh))
+        {
+            throw new Error('Curve::intersectMesh(): Please supply a valid Mesh instance!');
+        }
+
+        try
+        {
+            const meshInner = (mesh as any)._mesh;
+            if(!meshInner){ throw new Error('Mesh has no inner WASM object'); }
+
+            const pts = this.isCompound()
+                ? meshInner.intersectCompoundCurve(this.inner() as CompoundCurve3DJs, tolerance)
+                : meshInner.intersectCurve(this.inner() as NurbsCurve3DJs, tolerance);
+
+            return (pts || []).map((p: any) => Point.from(p));
+        }
+        catch (e)
+        {
+            console.error('Curve::intersectMesh(): Error:', e);
+            return [];
+        }
+    }
+
+    //// TRIM & SPLIT ////
+
+    /** Trim the curve to a sub-curve between parameters t0 and t1.
+     *  Returns an array of Curves (typically one for inside trim).
+     *  Parameters are in the curve's knot domain (see knotsDomain()).
+     */
+    trim(t0: number, t1: number): Array<Curve>
+    {
+        try
+        {
+            const spans: Array<NurbsCurve3DJs> = this.inner()?.trimRange(t0, t1);
+            return (spans || []).map(s => Curve.fromCsgrs(s));
+        }
+        catch (e)
+        {
+            console.error('Curve::trim(): Error:', e);
+            return [];
+        }
+    }
+
+    /** Split the curve at parameter t, returning [left, right]. 
+     *  Parameter t must be within the curve's knot domain.
+     */
+    split(t: number): [Curve, Curve] | null
+    {
+        try 
+        {
+            const parts = this.inner()?.split(t);
+            if(!parts || parts.length < 2) return null;
+            return [Curve.fromCsgrs(parts[0]), Curve.fromCsgrs(parts[1])];
+        }
+        catch (e)
+        {
+            console.error('Curve::split(): Error:', e);
+            return null;
+        }
+    }
+
+    /** Intersect this Curve with a Mesh and return the trimmed sub-curve(s)
+     *  that lie inside the mesh volume. If the curve doesn't intersect
+     *  the mesh, returns an empty array.
+     *
+     *  With an even number of intersections the curve alternates
+     *  between outside and inside the mesh. The "inside" segments are returned.
+     *  With two intersection points, a single trimmed curve is returned.
+     *
+     *  @param mesh - The Mesh to intersect with
+     *  @param tolerance - Tessellation tolerance for finding intersections (default: 1e-4)
+     *  @returns Array of Curve segments that lie inside the mesh
+     */
+    intersection(mesh: Mesh, tolerance?: number): Array<Curve>
+    {
+        if(!mesh || !(mesh instanceof Mesh))
+        {
+            throw new Error('Curve::intersection(): Please supply a valid Mesh instance!');
+        }
+
+        // Find intersection points
+        const hitPoints = this.intersectMesh(mesh, tolerance);
+        if(hitPoints.length < 2)
+        {
+            // 0 hits = curve is either entirely inside or entirely outside
+            // 1 hit = tangent touch, no enclosed segment
+            return [];
+        }
+
+        // Map each intersection point to a curve parameter
+        const params: Array<number> = [];
+        for(const pt of hitPoints)
+        {
+            const p = this.paramClosestToPoint(pt);
+            if(p !== null) params.push(p);
+        }
+        params.sort((a, b) => a - b);
+
+        if(params.length < 2) return [];
+
+        // Determine which segments are inside: 
+        //    test the midpoint of each consecutive pair
+        const results: Array<Curve> = [];
+        const meshInner = (mesh as any)._mesh;
+
+        for(let i = 0; i < params.length - 1; i++)
+        {
+            const t0 = params[i];
+            const t1 = params[i + 1];
+            const tMid = (t0 + t1) / 2;
+            const midPoint = this.pointAtParam(tMid);
+
+            // Check if the midpoint is inside the mesh
+            if(meshInner?.containsVertex(midPoint.toPoint3Js()))
+            {
+                const trimmed = this.trim(t0, t1);
+                results.push(...trimmed);
+            }
+        }
+
+        return results;
+    }
+
+    //// TRANSFORMATION TO OTHER TYPES ////
+
+    toMesh(tolerance: number = TESSELATION_TOLERANCE): Mesh
+    {
+        const points = this.tessellate(tolerance);
+        return Mesh.fromPoints(points);
+    }
     
 
-    //// EXPORTS ////
+    //// OUTPUTS ////
 
-    toGLTF(up:Axis='z')
+    /**
+     * Build the raw geometry buffer for this curve, ready to be embedded in a GLTF document.
+     * Returns all pieces needed to assemble one GLTF primitive so that multiple curves can be
+     * combined into a single GLTF later.
+     */
+    toGLTFBuffer(up: Axis = 'z'): GLTFBuffer
     {
-        const points = this.tessellate(); // use default tolerance
+        const points = this.tessellate();
         const pointsFlat = new Float32Array(
             points
                 .map(p => {
                     const arr = p.toArray();
-                    if(up === 'z')
+                    if (up === 'z')
                     {
                         return [arr[0], arr[2], -arr[1]];
                     }
-                    else if(up === 'x')
+                    else if (up === 'x')
                     {
                         return [arr[1], arr[0], arr[2]];
                     }
@@ -384,14 +612,27 @@ export class Curve
                 })
                 .flat() as Array<number>
         );
- 
-        if(pointsFlat.length < 3)
-        { 
-            throw new Error(`Curve::toGLTF(): Not enough vertices to export!`);
+
+        if (pointsFlat.length < 3)
+        {
+            throw new Error(`Curve::toGLTFBuffer(): Not enough vertices to export!`);
         }
-        
+
         const bbox = this.bbox();
-        const dataBase64 = toBase64(pointsFlat);
+
+        return {
+            data: toBase64(pointsFlat),
+            byteLength: pointsFlat.byteLength,
+            count: points.length,
+            min: bbox?.min,
+            max: bbox?.max,
+        };
+    }
+
+    /** Serialize this curve as a self-contained GLTF JSON string (LINE_STRIP). */
+    toGLTF(up: Axis = 'z'): string
+    {
+        const buf = this.toGLTFBuffer(up);
 
         const gltf = {
             asset: { version: "2.0" },
@@ -407,25 +648,24 @@ export class Curve
                 bufferView: 0,
                 byteOffset: 0,
                 componentType: 5126, // FLOAT
-                count: points.length,
+                count: buf.count,
                 type: "VEC3",
-                max: bbox?.max.toArray(),
-                min: bbox?.min.toArray()
+                max: buf.max,
+                min: buf.min,
             }],
             bufferViews: [{
                 buffer: 0,
                 byteOffset: 0,
-                byteLength: pointsFlat.byteLength,
+                byteLength: buf.byteLength,
                 target: 34962 // ARRAY_BUFFER
             }],
             buffers: [{
-                byteLength: pointsFlat.byteLength,
-                uri: `data:application/octet-stream;base64,${dataBase64}`
+                byteLength: buf.byteLength,
+                uri: `data:application/octet-stream;base64,${buf.data}`
             }]
         };
 
         return JSON.stringify(gltf);
-
     }
 
 }   
