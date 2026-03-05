@@ -68,4 +68,4 @@ export function isInitialized(): boolean
 */
 export { Mesh } from './Mesh';
 export { Curve } from './Curve';
-export { Collection } from './Collection';
+export { Collection, MeshCollection, CurveCollection } from './Collection';

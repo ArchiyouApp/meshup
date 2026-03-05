@@ -3,6 +3,67 @@
  *    Sketch.ts
  * 
  *      A sketch is a collection of 2D curves that form the base for further 3D operations
+ * 
+ *      Basic architecture:
+ * 
+ *      1. Create a Sketch on a plane: this can be a baseplane or custom (see _normal, _origin, _xDir, _yDir)
+ * 
+ *              TODO: Add scaling to fit a Plane/Polygon
+ * 
+ *      2. A series of commands create Shapes (using Curves) on the sketch plane. 
+ * 
+ *             These curves are stored in the _shapes property as a Collection.
+ *
+ *          Shapes can be of two kinds: 
+ *              - linear ones (lineTo, splineTo, arcTo) - mostly used to create a contour from scratch
+ *              - closed shapes (rect, circle, ellipse) - build contours by combining (union,subtract,intersect) primitive closed shapes             
+ * 
+ *      3. Cursors: 
+ *              Most commands area sequential: meaning they use the result of the previous command as a starting point for the next one.
+ *              This is tracked by the _cursors:Array<SketchCursor>
+ *              
+ *              - most commands leave a single cursor:
+ *                  moveTo(0,0) => cursor at (0,0)
+ *                  lineTo(10,0) => cursor at (10,0)
+ *              - some commands can generate multiple cursors:
+ *                  rect(100,100).moveToVertices() => 4 cursors at the corners of the rectangle
+ *
+ *      
+ *      4. You can then operate on those shapes
+ *          
+ *           By using the Sketch contact these operations try to interpret the intent of the user and execute the right operation.
+ *              
+ *              - general for shapes: move, rotate, scale, mirror, align
+ *               -only for linear Shapes: fillet, chamfer, offset, close
+ *              - between shapes: union, subtract, intersection/difference/clip
+ 
+ *
+ *      5. Some of these operations are done before they can be executed. 
+ *          These go in _pendingOps, which is processed at the end of each operation
+ * 
+ *           example: 
+ *                  Sketch()
+ *                      .lineTo(10,0)
+ *                      .fillet(2) // local fillet in corner of two lines
+ *                      .lineTo(10,10) // => now fillet can be executed
+ * 
+ *          
+ *      6. Temporary shapes
+ *              
+ *          Shapes can be temporary meaning not part of the final output, 
+ *              but used as a step in the process of creating the final curves:
+ *              
+ *              Sketch().rect(100,100)
+ *                      .copy().offset(-10).isTemp()
+ *                      .moveToVertices()
+ *                      .circle(5) // add circles at the corners of the rectangle
+ *     
+ * 
+ *      7. Access previous Shapes on stack
+ * 
+ *              TODO
+ * 
+ * 
  *      
  *      Features:
  * 
@@ -57,7 +118,7 @@ import { PolygonJs } from "./wasm/csgrs";
 
 import { Vector } from "./Vector";
 import { Point } from "./Point";
-import { CurveCollection } from "./CurveCollection";
+import { Collection } from "./Collection";
 
 
 import type { BasePlane, PointLike } from "./types";
@@ -74,7 +135,7 @@ export class Sketch
     declare _xDir: Vector; // direction of the X axis of the Sketch plane in world coordinates
     declare _yDir: Vector; // direction of the Y axis of the Sketch plane in world coordinates
 
-    declare _curves: CurveCollection;
+    declare _shapes: Collection;
 
     constructor(plane: BasePlane|PolygonJs = 'xy')
     {

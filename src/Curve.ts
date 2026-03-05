@@ -22,7 +22,7 @@ import { TESSELATION_TOLERANCE } from './constants';
 
 import { NurbsCurve3DJs, CompoundCurve3DJs, Vector3Js } from "./wasm/csgrs";
 
-import { getCsgrs, Mesh } from './index';
+import { MeshCollection, CurveCollection, getCsgrs, Mesh } from './index';
 import type { CsgrsModule, PointLike, Axis, GLTFBuffer } from './types';
 import { isPointLike } from './types'
 import { Point } from './Point';
@@ -145,11 +145,15 @@ export class Curve
 
     //// PROPERTIES ////
 
+    type(): 'Curve'|'Compound'
+    {
+        return (this.inner() instanceof NurbsCurve3DJs) ? 'Curve' : 'Compound';
+    }
+
     isCompound():boolean
     {
-        return this._curve instanceof CompoundCurve3DJs;
+        return this.inner() instanceof CompoundCurve3DJs;
     }
-    
 
     /** Get control points of Curve */
     controlPoints(): Array<Point>
@@ -365,6 +369,45 @@ export class Curve
         return this;
     }
 
+    /** Mirror Curve across a plane defined by a direction (Axis or normal vector) and an optional position.
+     *  If no position is given, the bbox center of the curve is used.
+     *  Works by reflecting each NURBS control point across the plane: P' = P - 2·(dot(P−Q, n))·n
+     */
+    mirror(dir: Axis | PointLike, pos?: PointLike): this
+    {
+        const planeNormal = isPointLike(dir)
+                                ? Point.from(dir).toVector()
+                                : Vector.from(dir); // converts axis to Vector
+        const n = planeNormal.normalize();
+        const planePos = pos
+                            ? Point.from(pos)
+                            : this.bbox()?.center() ?? new Point([0, 0, 0]);
+
+        // Reflect a single point: P' = P - 2·dot(P−Q, n)·n
+        const mirrorPoint = (p: Point): Point => {
+            const dot2 = 2 * ((p.x - planePos.x) * n.x + (p.y - planePos.y) * n.y + (p.z - planePos.z) * n.z);
+            return new Point([p.x - dot2 * n.x, p.y - dot2 * n.y, p.z - dot2 * n.z]);
+        };
+
+        // Reflect a single NURBS span and return a new NurbsCurve3DJs
+        const mirrorSpan = (span: NurbsCurve3DJs): NurbsCurve3DJs => {
+            const mirroredPoints = span.controlPoints().map(p => mirrorPoint(Point.from(p)).toPoint3Js());
+            return new NurbsCurve3DJs(span.degree(), mirroredPoints, span.weights(), span.knots());
+        };
+
+        if (!this.isCompound())
+        {
+            this._curve = mirrorSpan(this.inner() as NurbsCurve3DJs);
+        }
+        else
+        {
+            const mirroredSpans = (this.inner() as CompoundCurve3DJs).spans().map(mirrorSpan);
+            this._curve = new CompoundCurve3DJs(mirroredSpans);
+        }
+
+        return this;
+    }
+
     /** Fillet sharp corner(s) of Curve. Optionally only at given point(s) */
     fillet(radius: number, at?: PointLike|Array<PointLike>): this|null
     {
@@ -441,6 +484,150 @@ export class Curve
         }
     }
 
+    //// BOOLEAN OPERATIONS ON CURVES ////
+
+    /** Internal helper: perform a boolean operation against another Curve.
+     *  Dispatches to the correct WASM method based on curve types.
+     *  @returns Array of result Curves (compound), or null on error.
+     */
+    private _booleanOp(other: Curve, operation: string): CurveCollection | null
+    {
+        try
+        {
+            const results = this.isCompound()
+                ? (!other.isCompound()
+                    ? (this.inner() as CompoundCurve3DJs).booleanCurve(other.inner() as NurbsCurve3DJs, operation)
+                    : (this.inner() as CompoundCurve3DJs).booleanCompoundCurve(other.inner() as CompoundCurve3DJs, operation))
+                : (!other.isCompound()
+                    ? (this.inner() as NurbsCurve3DJs).booleanCurve(other.inner() as NurbsCurve3DJs, operation)
+                    : (this.inner() as NurbsCurve3DJs).booleanCompoundCurve(other.inner() as CompoundCurve3DJs, operation));
+
+            return new CurveCollection(
+                (results || []).map((c: CompoundCurve3DJs) => Curve.fromCsgrs(c)));
+        }
+        catch (e)
+        {
+            console.error(`Curve::${operation}(): Error:`, e);
+            return null;
+        }
+    }
+
+    /** Boolean union of this (closed) Curve with another (closed) Curve.
+     *  Both curves must be closed and coplanar.
+     *  Returns the exterior outlines of the resulting regions,
+     *  or null on error.
+     */
+    union(other: Curve): CurveCollection|null
+    {
+        return this._booleanOp(other, 'union');
+    }
+
+    /** Boolean subtraction: this Curve minus the other Curve.
+     *  Both curves must be closed and coplanar.
+     *  Returns the exterior outlines of the resulting regions,
+     *  or null on error.
+     */
+    difference(other: Curve): CurveCollection | null
+    {
+        return this._booleanOp(other, 'difference');
+    }
+
+    // Alias for difference
+    subtract(other: Curve): CurveCollection | null
+    {
+        return this.difference(other);
+    }
+
+    /** Get intersecting Curves with either closed Curves or Mesh */
+    intersections(other: Curve|Mesh): CurveCollection|null
+    {
+        return (other instanceof Mesh) 
+                    ? this._intersectionMesh(other) 
+                    : this._intersectionCurve(other);
+    }
+
+    /** Get single intersection of Curve with another Curve or Mesh */
+    intersection(other: Curve|Mesh): Curve|CurveCollection|null
+    {
+        return this.intersections(other)?.checkSingle() || null;
+    }
+
+    /** Boolean intersection of this (closed) Curve with another (closed) Curve.
+     *  Both curves must be closed and coplanar.
+     *  Returns the exterior outlines of the resulting regions,
+     *  or null on error.
+     *
+     *  NOTE: This is curve-vs-curve boolean intersection.
+     *        For intersection with a Mesh, use `intersection(mesh)` instead.
+     */
+    private _intersectionCurve(other: Curve): CurveCollection | null
+    {
+        if(!this.isClosed){ throw new Error('Curve::intersection(): Intersection requires closed curves for now!'); }
+        
+        return this._booleanOp(other, 'intersection');
+    }
+
+    /** Intersect this Curve with a Mesh and return the trimmed sub-curve(s) as CurveCollection.
+     *  If the curve doesn't intersect the mesh, returns null
+     *
+     *  With an even number of intersections the curve alternates
+     *  between outside and inside the mesh. The "inside" segments are returned.
+     *  With two intersection points, a single trimmed curve is returned.
+     *
+     *  @param mesh - The Mesh to intersect with
+     *  @param tolerance - Tessellation tolerance for finding intersections (default: 1e-4)
+     *  @returns Array of Curve segments that lie inside the mesh
+     */
+    private _intersectionMesh(mesh: Mesh, tolerance?: number): CurveCollection|null
+    {
+        if(!mesh || !(mesh instanceof Mesh))
+        {
+            throw new Error('Curve::intersection(): Please supply a valid Mesh instance!');
+        }
+
+        // Find intersection points
+        const hitPoints = this._intersectionPointsMesh(mesh, tolerance);
+        if(hitPoints.length < 2)
+        {
+            // 0 hits = curve is either entirely inside or entirely outside
+            // 1 hit = tangent touch, no enclosed segment
+            return null;
+        }
+
+        // Map each intersection point to a curve parameter
+        const params: Array<number> = [];
+        for(const pt of hitPoints)
+        {
+            const p = this.paramClosestToPoint(pt);
+            if(p !== null) params.push(p);
+        }
+        params.sort((a, b) => a - b);
+
+        if(params.length < 2) return null;
+
+        // Determine which segments are inside: 
+        //    test the midpoint of each consecutive pair
+        const results: Array<Curve> = [];
+        const meshInner = (mesh as any)._mesh;
+
+        for(let i = 0; i < params.length - 1; i++)
+        {
+            const t0 = params[i];
+            const t1 = params[i + 1];
+            const tMid = (t0 + t1) / 2;
+            const midPoint = this.pointAtParam(tMid);
+
+            // Check if the midpoint is inside the mesh
+            if(meshInner?.containsVertex(midPoint.toPoint3Js()))
+            {
+                const trimmed = this.trim(t0, t1);
+                results.push(...trimmed);
+            }
+        }
+
+        return (results.length > 0) ? new CurveCollection(results) : null;
+    }
+
     /** Find intersection points between this Curve and a Mesh.
      *  The curve is tessellated into a polyline and each segment is tested
      *  against every triangle of the mesh surface.
@@ -449,7 +636,7 @@ export class Curve
      *  @param tolerance - Tessellation tolerance for the curve (default: 1e-4)
      *  @returns Array of intersection Points, in order along the curve. Empty array if none found.
      */
-    intersectMesh(mesh: Mesh, tolerance?: number): Array<Point>
+    private _intersectionPointsMesh(mesh: Mesh, tolerance?: number): Array<Point>
     {
         if(!mesh || !(mesh instanceof Mesh))
         {
@@ -461,9 +648,9 @@ export class Curve
             const meshInner = (mesh as any)._mesh;
             if(!meshInner){ throw new Error('Mesh has no inner WASM object'); }
 
-            const pts = this.isCompound()
-                ? meshInner.intersectCompoundCurve(this.inner() as CompoundCurve3DJs, tolerance)
-                : meshInner.intersectCurve(this.inner() as NurbsCurve3DJs, tolerance);
+            const pts = (this.isCompound())
+                ? mesh.inner()?.intersectCompoundCurve(this.inner() as CompoundCurve3DJs, tolerance)
+                : mesh.inner()?.intersectCurve(this.inner() as NurbsCurve3DJs, tolerance);
 
             return (pts || []).map((p: any) => Point.from(p));
         }
@@ -512,73 +699,18 @@ export class Curve
         }
     }
 
-    /** Intersect this Curve with a Mesh and return the trimmed sub-curve(s)
-     *  that lie inside the mesh volume. If the curve doesn't intersect
-     *  the mesh, returns an empty array.
-     *
-     *  With an even number of intersections the curve alternates
-     *  between outside and inside the mesh. The "inside" segments are returned.
-     *  With two intersection points, a single trimmed curve is returned.
-     *
-     *  @param mesh - The Mesh to intersect with
-     *  @param tolerance - Tessellation tolerance for finding intersections (default: 1e-4)
-     *  @returns Array of Curve segments that lie inside the mesh
-     */
-    intersection(mesh: Mesh, tolerance?: number): Array<Curve>
-    {
-        if(!mesh || !(mesh instanceof Mesh))
-        {
-            throw new Error('Curve::intersection(): Please supply a valid Mesh instance!');
-        }
-
-        // Find intersection points
-        const hitPoints = this.intersectMesh(mesh, tolerance);
-        if(hitPoints.length < 2)
-        {
-            // 0 hits = curve is either entirely inside or entirely outside
-            // 1 hit = tangent touch, no enclosed segment
-            return [];
-        }
-
-        // Map each intersection point to a curve parameter
-        const params: Array<number> = [];
-        for(const pt of hitPoints)
-        {
-            const p = this.paramClosestToPoint(pt);
-            if(p !== null) params.push(p);
-        }
-        params.sort((a, b) => a - b);
-
-        if(params.length < 2) return [];
-
-        // Determine which segments are inside: 
-        //    test the midpoint of each consecutive pair
-        const results: Array<Curve> = [];
-        const meshInner = (mesh as any)._mesh;
-
-        for(let i = 0; i < params.length - 1; i++)
-        {
-            const t0 = params[i];
-            const t1 = params[i + 1];
-            const tMid = (t0 + t1) / 2;
-            const midPoint = this.pointAtParam(tMid);
-
-            // Check if the midpoint is inside the mesh
-            if(meshInner?.containsVertex(midPoint.toPoint3Js()))
-            {
-                const trimmed = this.trim(t0, t1);
-                results.push(...trimmed);
-            }
-        }
-
-        return results;
-    }
+  
 
     //// TRANSFORMATION TO OTHER TYPES ////
 
-    toMesh(tolerance: number = TESSELATION_TOLERANCE): Mesh
+    toMesh(tolerance: number = TESSELATION_TOLERANCE): Mesh | undefined
     {
         const points = this.tessellate(tolerance);
+        if (points.length < 3)
+        {
+            console.warn(`Curve::toMesh(): Not enough points (${points.length}) to create a mesh. A minimum of 3 non-collinear points is required.`);
+            return undefined;
+        }
         return Mesh.fromPoints(points);
     }
     

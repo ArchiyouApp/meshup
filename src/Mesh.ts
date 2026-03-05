@@ -12,7 +12,7 @@
 import type { CsgrsModule, Axis, PointLike } from './types';
 import { isPointLike } from './types';
 
-import { getCsgrs } from './index';
+import { Curve, getCsgrs } from './index';
 import { Point } from './Point';
 import { Bbox } from './Bbox';
 import { Vector } from './Vector'
@@ -59,6 +59,17 @@ export class Mesh
         return getCsgrs(); // Always gets the current global instance
     }
 
+    /** Get MeshJs with checking */
+    inner(): MeshJs
+    {
+        if (!this._mesh)
+        {
+            throw new Error('Mesh::inner(): Mesh not initialized');
+        }
+        
+        return this._mesh;
+    }
+
     /** Create new Mesh instance from different other types */
     static from(mesh: MeshJs): Mesh
     {
@@ -84,10 +95,16 @@ export class Mesh
         return Array.from(this._positionsIter());
     }
 
+    /** Get Vertices of Mesh. Alias for positions */
+    vertices(): Array<Point>
+    {
+        return this.positions();
+    }
+
     /** Get all positions of vertices of Mesh as an iterable */
     *_positionsIter(): IterableIterator<Point>
     {
-        const buffer = this._mesh?.positions() || [];   
+        const buffer = this.inner()?.positions() || [];   
         for (let i = 0; i < buffer.length; i += 3)
         {
             yield new Point(buffer[i], buffer[i + 1], buffer[i + 2]);
@@ -103,7 +120,7 @@ export class Mesh
 
     *_normalsIter(): IterableIterator<Vector>
     {
-        const buffer = this._mesh?.normals() || [];
+        const buffer = this.inner()?.normals() || [];
         for (let i = 0; i < buffer.length; i += 3)
         {
             yield new Vector(buffer[i], buffer[i + 1], buffer[i + 2]);
@@ -113,7 +130,8 @@ export class Mesh
     /** Get polygons of the Mesh */
     polygons(): undefined|Array<PolygonJs>
     {
-        return this?._mesh?.polygons();
+        return this.inner()?.polygons();
+
     }
 
     
@@ -253,14 +271,14 @@ export class Mesh
     /** Center of mass */
     center(): Point
     {
-        console.log(this._mesh?.massProperties(1));
-        return new Point(this._mesh?.massProperties(1)?.centerOfMass);
+        console.log(this.inner()?.massProperties(1));
+        return new Point(this.inner()?.massProperties(1)?.centerOfMass);
     }
 
     /** Volume */
     volume(): number|undefined
     {
-        return this._mesh?.massProperties(1)?.mass;
+        return this.inner()?.massProperties(1)?.mass;
     }
 
     /** Calculate outer bounding box of current Mesh */
@@ -275,7 +293,7 @@ export class Mesh
     */
     copy():undefined|Mesh
     {
-        const c = this?._mesh?.clone();
+        const c = this?.inner()?.clone();
         return c ? Mesh.from(c) : undefined; 
     }
 
@@ -287,7 +305,7 @@ export class Mesh
                         ? Point.from(vecOrX)
                         : Point.from(vecOrX, dy || 0, dz || 0);
         if(!vec){ throw new Error('Mesh.translate(): Invalid translation input. Please use PointLike or valid offset coordinates.'); }
-        this._mesh = this._mesh?.translate(vec.toVector3Js());
+        this._mesh = this.inner()?.translate(vec.toVector3Js());
         return this;
     }
 
@@ -300,14 +318,14 @@ export class Mesh
     /** Rotate Mesh givens angles (rad) around the X, Y, and Z axes */
     rotate(ax: number, ay: number, az: number): this
     {
-        this._mesh = this._mesh?.rotate(ax, ay, az);
+        this._mesh = this.inner()?.rotate(ax, ay, az);
         return this;
     }
 
     /** Scale Mesh with factor alongs X, Y, and Z axes */
     scale(sx: number, sy: number, sz: number): this
     {
-        this._mesh = this._mesh?.scale(sx, sy, sz);
+        this._mesh = this.inner()?.scale(sx, sy, sz);
         return this;
     }
 
@@ -330,14 +348,14 @@ export class Mesh
                                 offsettedPlanePoints[2]
                             );
 
-        this._mesh = this._mesh?.mirror(offsettedPlane);
+        this._mesh = this.inner()?.mirror(offsettedPlane);
         return this;
     }
 
     /** Centers Mesh with center of mass at origin ([0,0,0]) */
     moveToCenter():this
     {
-        this._mesh = this._mesh?.center();
+        this._mesh = this.inner()?.center();
         return this;
     }
 
@@ -346,10 +364,10 @@ export class Mesh
     */
     place(z:number=0)
     {
-        this._mesh = this._mesh?.float();
+        this._mesh = this.inner()?.float();
         if(z)
         {
-            this._mesh = this._mesh?.translate(new Vector3Js(0, 0, z));
+            this._mesh = this.inner()?.translate(new Vector3Js(0, 0, z));
         }
         return this;
     }
@@ -358,27 +376,27 @@ export class Mesh
     /** Recompute normals of polygons of this mesh */
     renormalize(): this
     {
-        this._mesh = this._mesh?.renormalize();
+        this._mesh = this.inner()?.renormalize();
         return this;
     }
 
     /** Turn all polygons of this Mesh into triangles */
     triangulate(): this
     {
-        this._mesh = this._mesh?.triangulate();
+        this._mesh = this.inner()?.triangulate();
         return this;
     }
 
     /** Return new Mesh that is convex hull of current Mesh  */
     hull(): undefined|Mesh
     {
-        const ch = this._mesh?.convexHull();
+        const ch = this.inner()?.convexHull();
         return ch ? Mesh.from(ch) : undefined;
     }
 
     smooth(lambda: number, mu:number, iterations:number, preserveBoundaries:boolean): this
     {
-        this._mesh = this._mesh?.taubinSmooth(lambda, mu, iterations, preserveBoundaries);
+        this._mesh = this.inner()?.taubinSmooth(lambda, mu, iterations, preserveBoundaries);
         return this;
     }
 
@@ -397,7 +415,7 @@ export class Mesh
         {
             throw new Error("Mesh::union(): Please supply a valid Mesh instance!");
         }
-        this._mesh = this._mesh?.union(other._mesh as MeshJs);
+        this._mesh = this.inner()?.union(other.inner() as MeshJs);
         return this;
     }
 
@@ -414,7 +432,7 @@ export class Mesh
         {
             throw new Error("Mesh::difference(): Please supply a valid Mesh instance!");
         }
-        this._mesh = this._mesh?.difference(other._mesh as MeshJs);
+        this._mesh = this.inner()?.difference(other.inner() as MeshJs);
         return this;
     }
 
@@ -431,7 +449,7 @@ export class Mesh
         {
             throw new Error("Mesh::intersection(): Please supply a valid Mesh instance!");
         }
-        this._mesh = this._mesh?.intersection(other._mesh as MeshJs);
+        this._mesh = this.inner()?.intersection(other.inner() as MeshJs);
         return this;
     }
 
@@ -445,25 +463,24 @@ export class Mesh
      *  @param tolerance - Tessellation tolerance for the curve (default: 1e-4)
      *  @returns Array of intersection Points, in order along the curve. Empty array if none found.
      */
-    intersectCurve(curve: { isCompound(): boolean; inner(): NurbsCurve3DJs | CompoundCurve3DJs }, tolerance?: number): Array<Point>
+    intersectionPointsCurve(curve: Curve, tolerance?: number): Array<Point>
     {
         if(!curve || typeof curve.inner !== 'function')
         {
-            throw new Error('Mesh::intersectCurve(): Please supply a valid Curve instance!');
+            throw new Error('Mesh::intersectionPointsCurve(): Please supply a valid Curve instance!');
         }
 
         try 
         {
-            const inner = curve.inner();
-            const pts = curve.isCompound()
-                ? this._mesh?.intersectCompoundCurve(inner as CompoundCurve3DJs, tolerance)
-                : this._mesh?.intersectCurve(inner as NurbsCurve3DJs, tolerance);
+            const pts = (curve.isCompound())
+                ? this.inner()?.intersectCompoundCurve(curve.inner() as CompoundCurve3DJs, tolerance)
+                : this.inner()?.intersectCurve(curve.inner() as NurbsCurve3DJs, tolerance);
 
             return (pts || []).map(p => Point.from(p));
         }
         catch (e)
         {
-            console.error('Mesh::intersectCurve(): Error:', e);
+            console.error('Mesh::intersectionPointsCurve(): Error:', e);
             return [];
         }
     }
@@ -519,12 +536,12 @@ export class Mesh
 
     toSTLBinary(): Uint8Array | undefined
     {
-        return this._mesh?.toSTLBinary();
+        return this.inner()?.toSTLBinary();
     }
 
     toSTLAscii(): string | undefined
     {
-        return this._mesh?.toSTLASCII();
+        return this.inner()?.toSTLASCII();
     }
 
     /** Export Mesh to GLTF format
@@ -533,10 +550,10 @@ export class Mesh
     toGLTF(up:Axis='z'): string | undefined
     {
         // TODO: GLTF has up = Y instead of Z
-        return this._mesh?.toGLTF('model', up);
+        return this.inner()?.toGLTF('model', up);
     }
     toAMF(): string | undefined
     {
-        return this._mesh?.toAMF('model', 'mm');
+        return this.inner()?.toAMF('model', 'mm');
     }
 }

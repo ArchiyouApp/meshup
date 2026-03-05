@@ -5,7 +5,7 @@
  *      
  */
 
-import type { Axis } from "./types";
+import type { Axis, PointLike } from "./types";
 
 import { Mesh } from "./Mesh";
 import { Curve } from "./Curve";
@@ -15,16 +15,25 @@ export class Collection
 {
     private _shapes = new Array<Mesh|Curve>();
 
-    constructor(...args: Array<Mesh|Curve>)
+    constructor(...args: Array<Mesh|Curve|Array<any>|Collection>)
     {
-        args.forEach(arg => {
+        args.forEach(arg => 
+        {
             if(arg instanceof Mesh || arg instanceof Curve)
             {
                 this._shapes.push(arg);
             }
+            else if(arg instanceof Collection)
+            {
+                this._shapes.push(...arg.shapes());
+            }
+            else if(Array.isArray(arg))
+            {
+                this._shapes.push(...arg.flat());
+            }
             else
             {
-                console.warn(`Collection::constructor(): Invalid argument. Only Mesh or Curve instances are allowed. Skipping:`, arg);
+                console.warn(`Collection::constructor(): Given Shape is not a Mesh or Curve. Skipping it!:`, arg);
             }
         });
     }
@@ -46,7 +55,19 @@ export class Collection
 
     get(index: number): Mesh | Curve | undefined
     {
-        return this._shapes[index] as Mesh | undefined;
+        return this._shapes[index] as Mesh | Curve | undefined;
+    }
+
+    first(): Mesh | Curve | undefined
+    {
+        return this._shapes[0] as Mesh | Curve | undefined;
+    }
+
+    /** If single shape in the collection, return it. Otherwise, return collection. */
+    checkSingle(): Mesh | Curve | this
+    {
+        if(this._shapes.length === 1){ return this._shapes[0]; }
+        return this;
     }
 
     shapes():Array<Mesh|Curve>
@@ -64,10 +85,17 @@ export class Collection
         return this._shapes.filter(shape => shape instanceof Curve) as Array<Curve>;
     }
 
-    length(): number
+    count()
     {
-        return this._shapes.length;
+        return  this._shapes.length;
     }
+
+    /** Collection.length for Array compatibility */
+    get length(): number
+    {
+        return this._shapes.length ?? 0;
+    }
+
 
     //// ITERATOR METHODS ////
 
@@ -81,6 +109,46 @@ export class Collection
         const filtered = this._shapes.filter(callback);
         return new Collection(...filtered);
     }
+
+    //// BASIC TRANSFORMATIONS ////
+
+    /** Translate all shapes in Collection */
+    translate(vecOrX: PointLike | number, dy?: number, dz?: number): this
+    {
+        
+        this._shapes.forEach(
+            shape => shape.translate(vecOrX as any, dy as any, dz as any));   
+        return this;
+    }
+
+    /** Alias for translate */
+    move(vecOrX: PointLike | number, dy?: number, dz?: number): this
+    {
+        return this.translate(vecOrX as any, dy as any, dz as any);
+    }
+
+    rotate(angleDeg: number, axis: Axis = 'z', origin: PointLike = {x:0,y:0,z:0}): this
+    {
+        this._shapes.forEach(
+            shape => shape.rotate(angleDeg, axis, origin));
+        return this;
+    }
+
+     scale(factor: number, origin: PointLike = {x:0,y:0,z:0}): this
+     {
+        this._shapes.forEach(
+            shape => shape.scale(factor, origin));
+        return this;
+     }
+
+     mirror(dir:Axis|PointLike, pos?:PointLike): this
+     {
+        this._shapes.forEach(
+            shape => shape.mirror(dir, pos));
+        return this;
+     }
+
+    
 
     //// BOOLEAN OPERATIONS ////
 
@@ -296,5 +364,124 @@ export class Collection
         };
 
         return JSON.stringify(gltf);
+    }
+}
+
+
+//// TYPED COLLECTIONS ////
+
+/** A Collection that only holds Mesh instances. */
+export class MeshCollection extends Collection
+{
+    constructor(...args: Array<Mesh|Array<any>|Collection|MeshCollection>)
+    {
+        super(...args);
+    }
+
+    add(shape: Mesh | Curve): void
+    {
+        if (!(shape instanceof Mesh))
+        {
+            console.error(`MeshCollection::add(): Only Mesh instances are allowed.`);
+            return;
+        }
+        super.add(shape);
+    }
+
+    shapes(): Array<Mesh>  { return super.meshes(); }
+    get(index: number): Mesh | undefined { return super.meshes()[index]; }
+    first(): Mesh|undefined
+    {
+        return super.meshes()[0];
+    }
+
+    /** If single Mesh in the collection, return it. Otherwise, return collection. */
+    checkSingle(): Mesh | this
+    {
+        if(this.meshes().length === 1){ return this.meshes()[0];}
+        return this;
+    }
+
+    forEach(callback: (shape: Mesh, index: number, array: Mesh[]) => void): void
+    {
+        super.meshes().forEach(callback);
+    }
+
+    filter(callback: (shape: Mesh, index: number, array: Mesh[]) => boolean): MeshCollection
+    {
+        return new MeshCollection(...super.meshes().filter(callback));
+    }
+
+    /** Union all meshes into one */
+    unionAll(): Mesh { return super.union(); }
+
+    /** Create a MeshCollection from the Mesh members of a general Collection */
+    static from(collection: Collection): MeshCollection
+    {
+        return new MeshCollection(...collection.meshes());
+    }
+}
+
+
+/** A Collection that only holds Curve instances. */
+export class CurveCollection extends Collection
+{
+    constructor(...args: Array<Curve|Array<any>|Collection|CurveCollection>)
+    {
+        super(...args);
+    }
+
+    add(shape: Mesh | Curve): void
+    {
+        if (!(shape instanceof Curve))
+        {
+            console.error(`CurveCollection::add(): Only Curve instances are allowed.`);
+            return;
+        }
+        super.add(shape);
+    }
+
+    shapes(): Array<Curve>  { return super.curves(); }
+    get(index: number): Curve | undefined { return super.curves()[index]; }
+    first(): Curve|undefined
+    {
+        return super.curves()[0];
+    }
+
+    /** If single Curve in the collection, return it. Otherwise, return collection. */
+    checkSingle(): Curve | this
+    {
+        if(this.curves().length === 1){ return this.curves()[0];}
+        return this;
+    }
+
+    forEach(callback: (shape: Curve, index: number, array: Curve[]) => void): void
+    {
+        super.curves().forEach(callback);
+    }
+
+    filter(callback: (shape: Curve, index: number, array: Curve[]) => boolean): CurveCollection
+    {
+        return new CurveCollection(...super.curves().filter(callback));
+    }
+
+    /** Boolean-union all curves sequentially, returning the result curves */
+    unionAll(): Array<Curve> | null
+    {
+        const curves = super.curves();
+        if (curves.length === 0) return null;
+        let result: Array<Curve> = [curves[0]];
+        for (let i = 1; i < curves.length; i++)
+        {
+            const next = result[0]?.union(curves[i]) as Array<Curve> | null;
+            if (next) result = next;
+        }
+        return result;
+    }
+
+    /** Create a CurveCollection from the Curve members of a general Collection */
+    static from(collection: Collection): CurveCollection
+    {
+        return new CurveCollection(...collection.curves());
     }
 }
