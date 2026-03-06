@@ -170,6 +170,41 @@ export class Mesh
         return this.fromPolygons([points]);
     }
 
+    /** Create a Mesh from an outer boundary polygon with optional interior holes.
+     *  Each hole is an array of PointLike defining an interior boundary.
+     *  The polygon is triangulated (including proper hole subtraction) and returned as a Mesh.
+     */
+    static fromPointsWithHoles(outerPoints: Array<PointLike>, holes: Array<Array<PointLike>>): Mesh
+    {
+        if(!Array.isArray(outerPoints) || outerPoints.length < 3 || !outerPoints.every(p => isPointLike(p)))
+        {
+            throw new Error(`Mesh::fromPointsWithHoles(): Invalid outer points array.`);
+        }
+
+        // Flatten outer points to Float64Array [x, y, z, x, y, z, ...]
+        const outerFlat: number[] = [];
+        for (const p of outerPoints) {
+            const pt = Point.from(p);
+            outerFlat.push(pt.x, pt.y, pt.z);
+        }
+        const outerFloat64 = new Float64Array(outerFlat);
+
+        // Flatten each hole to Float64Array
+        const holeArrays: Float64Array[] = [];
+        for (const hole of (holes || [])) {
+            const holeFlat: number[] = [];
+            for (const p of hole) {
+                const pt = Point.from(p);
+                holeFlat.push(pt.x, pt.y, pt.z);
+            }
+            holeArrays.push(new Float64Array(holeFlat));
+        }
+
+        const meshJs = getCsgrs().MeshJs.fromPointsWithHoles(outerFloat64, holeArrays, {});
+
+        return this.from(meshJs);
+    }
+
     // MESH FROM DATA
 
     /** Create Mesh directly from planar polygons defined by (N >= 3) vertices  

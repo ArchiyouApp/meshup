@@ -20,7 +20,7 @@
 
 import { TESSELATION_TOLERANCE } from './constants';
 
-import { NurbsCurve3DJs, CompoundCurve3DJs, Vector3Js } from "./wasm/csgrs";
+import { NurbsCurve3DJs, CompoundCurve3DJs, Vector3Js, BooleanRegionJs } from "./wasm/csgrs";
 
 import { MeshCollection, CurveCollection, getCsgrs, Mesh } from './index';
 import type { CsgrsModule, PointLike, Axis, GLTFBuffer } from './types';
@@ -35,6 +35,9 @@ import { toBase64, rad } from "./utils";
 export class Curve
 {
     _curve: NurbsCurve3DJs|CompoundCurve3DJs|undefined = undefined;
+
+    /** Interior hole curves (e.g. from boolean difference where one curve contains the other) */
+    private _holes: Array<Curve> = [];
 
     metadata: Record<string, any> = {};
 
@@ -60,10 +63,30 @@ export class Curve
         return this._curve;
     }
 
+    /** Get interior hole curves (if any, e.g. from boolean difference creating a hole) */
+    holes(): Array<Curve>
+    {
+        return this._holes;
+    }
+
+    /** Check if this curve has interior holes */
+    hasHoles(): boolean
+    {
+        return this._holes.length > 0;
+    }
+
+    /** Add an interior hole curve */
+    addHole(hole: Curve): this
+    {
+        this._holes.push(hole);
+        return this;
+    }
+
     copy(): Curve
     {
         const newCurve = new Curve();
         newCurve._curve = this._curve?.clone();
+        newCurve._holes = this._holes.map(h => h.copy());
         return newCurve;
     }
 
@@ -142,7 +165,35 @@ export class Curve
                 );
         
     }
+    /** Build a CompoundCurve from an ordered array of connecting Curves.
+     *  The underlying Curvo `try_new` validates connectivity and auto-inverts spans if needed.
+     */
+    static Compound(curves: Array<Curve>): Curve
+    {
+        if(!Array.isArray(curves) || curves.length === 0)
+        {
+            throw new Error('Curve.Compound(): Supply a non-empty array of Curves.');
+        }
 
+        // Flatten: if a Curve is already compound, unwrap its spans
+        const spans: NurbsCurve3DJs[] = [];
+        for(const c of curves)
+        {
+            const inner = c.inner();
+            if(inner instanceof CompoundCurve3DJs)
+            {
+                spans.push(...inner.spans());
+            }
+            else
+            {
+                spans.push(inner as NurbsCurve3DJs);
+            }
+        }
+
+        // CompoundCurve3DJs constructor uses try_new: validates connectivity, auto-inverts
+        const compound = new CompoundCurve3DJs(spans);
+        return Curve.fromCsgrs(compound);
+    }
     //// PROPERTIES ////
 
     type(): 'Curve'|'Compound'
@@ -264,6 +315,20 @@ export class Curve
     {
         return this.inner().length(); 
     }
+
+    /** Start point of the curve (at the start of the knot domain) */
+    start(): Point
+    {
+        const domain = this.inner().knotsDomain();
+        return new Point(this.inner().pointAtParam(domain[0]));
+    }
+
+    /** End point of the curve (at the end of the knot domain) */
+    end(): Point
+    {
+        const domain = this.inner().knotsDomain();
+        return new Point(this.inner().pointAtParam(domain[1]));
+    }
     
     degree(): number|null
     {
@@ -324,6 +389,18 @@ export class Curve
         return this.pointAtLength(perc * length);
     }
 
+    /** Get the tangent direction at the closest point on the curve to the given point.
+     *  Returns a normalised Vector, or null if the closest parameter cannot be found.
+     */
+    tangentAt(point: PointLike): Vector|null
+    {
+        const param = this.paramClosestToPoint(point);
+        if(param === null){ return null; }
+        return Vector.from(this.inner().tangentAt(param));
+    }
+
+  
+
     bbox():undefined|Bbox
     {
         const bboxCoords = this.inner()?.bbox();
@@ -366,6 +443,15 @@ export class Curve
     scale(sx: number, sy: number, sz: number): this
     {
         this._curve = this._curve?.scale(sx, sy, sz);
+        return this;
+    }
+
+    /** Reverse the direction of this curve (swap start/end).
+     *  Returns self for chaining.
+     */
+    reverse(): this
+    {
+        this._curve = this._curve?.reverse();
         return this;
     }
 
@@ -488,13 +574,14 @@ export class Curve
 
     /** Internal helper: perform a boolean operation against another Curve.
      *  Dispatches to the correct WASM method based on curve types.
-     *  @returns Array of result Curves (compound), or null on error.
+     *  Returns BooleanRegionJs results that include both exterior and interior hole curves.
+     *  @returns CurveCollection of result Curves (each with holes attached), or null on error.
      */
     private _booleanOp(other: Curve, operation: string): CurveCollection | null
     {
         try
         {
-            const results = this.isCompound()
+            const regions: BooleanRegionJs[] = this.isCompound()
                 ? (!other.isCompound()
                     ? (this.inner() as CompoundCurve3DJs).booleanCurve(other.inner() as NurbsCurve3DJs, operation)
                     : (this.inner() as CompoundCurve3DJs).booleanCompoundCurve(other.inner() as CompoundCurve3DJs, operation))
@@ -502,8 +589,20 @@ export class Curve
                     ? (this.inner() as NurbsCurve3DJs).booleanCurve(other.inner() as NurbsCurve3DJs, operation)
                     : (this.inner() as NurbsCurve3DJs).booleanCompoundCurve(other.inner() as CompoundCurve3DJs, operation));
 
-            return new CurveCollection(
-                (results || []).map((c: CompoundCurve3DJs) => Curve.fromCsgrs(c)));
+            const curves: Array<Curve> = [];
+            for (const region of (regions || []))
+            {
+                const exterior = Curve.fromCsgrs(region.exterior);
+                // Attach hole curves to the exterior curve
+                const holeCurves = region.holes || [];
+                for (const hole of holeCurves)
+                {
+                    exterior.addHole(Curve.fromCsgrs(hole));
+                }
+                curves.push(exterior);
+            }
+
+            return new CurveCollection(...curves);
         }
         catch (e)
         {
@@ -711,6 +810,14 @@ export class Curve
             console.warn(`Curve::toMesh(): Not enough points (${points.length}) to create a mesh. A minimum of 3 non-collinear points is required.`);
             return undefined;
         }
+
+        // If this curve has holes, tessellate each hole and use fromPointsWithHoles
+        if (this.hasHoles())
+        {
+            const holePointArrays = this._holes.map(hole => hole.tessellate(tolerance));
+            return Mesh.fromPointsWithHoles(points, holePointArrays);
+        }
+
         return Mesh.fromPoints(points);
     }
     

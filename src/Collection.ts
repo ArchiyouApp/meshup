@@ -332,6 +332,30 @@ export class Collection
                     name: `curve_${i}`,
                     primitives: [{ attributes: { POSITION: posAcc }, mode: 3 }] // LINE_STRIP
                 });
+                gltfNodes.push({ mesh: gltfMeshes.length - 1, name: `curve_${i}` });
+
+                // Also export interior hole curves as separate line strips
+                if (shape.hasHoles())
+                {
+                    for (let h = 0; h < shape.holes().length; h++)
+                    {
+                        const holeCurve = shape.holes()[h];
+                        const holeBuf = holeCurve.toGLTFBuffer(up);
+                        if (holeBuf.count < 2) continue;
+                        const holeBytes = fromBase64(holeBuf.data);
+                        const holeViewIdx = addChunk(holeBytes, 34962);
+                        const holeMinArr = holeBuf.min ? [holeBuf.min.x, holeBuf.min.y, holeBuf.min.z] : undefined;
+                        const holeMaxArr = holeBuf.max ? [holeBuf.max.x, holeBuf.max.y, holeBuf.max.z] : undefined;
+                        const holeAcc = addAccessor(holeViewIdx, 5126, holeBuf.count, "VEC3", holeMinArr, holeMaxArr);
+                        gltfMeshes.push({
+                            name: `curve_${i}_hole_${h}`,
+                            primitives: [{ attributes: { POSITION: holeAcc }, mode: 3 }]
+                        });
+                        gltfNodes.push({ mesh: gltfMeshes.length - 1, name: `curve_${i}_hole_${h}` });
+                    }
+                }
+
+                continue; // skip the generic node push below
             }
             else
             {
@@ -439,6 +463,12 @@ export class CurveCollection extends Collection
             return;
         }
         super.add(shape);
+    }
+
+    /** Alias for add (like an Array) */
+    push(shape:Mesh|Curve): void
+    {
+        this.add(shape);
     }
 
     shapes(): Array<Curve>  { return super.curves(); }

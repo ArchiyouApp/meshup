@@ -175,18 +175,29 @@ save('curve_subtract.gltf', subtractResult?.toGLTF());
 
 save('curve_intersection.gltf', intersectionResult?.toGLTF());
 save('curve_intersection_mesh.gltf', intersectionResult?.first()?.toMesh()?.toGLTF());
-console.log(intersectionResult);
-console.log(intersectionResult?.first()?.inner()?.tessellate().map(p => Point.from(p).toArray()));
-save('curve_intersection_test.gltf', 
-    Curve.Polyline(intersectionResult?.first()?.inner()?.tessellate().map(p => Point.from(p)) || []).toGLTF());
-//console.log(Curve.Polyline(intersectionResult?.first()?.inner()?.tessellate().map(p => Point.from(p)) || []).toGLTF());
 
-console.log(Curve.Polyline(intersectionResult?.first()?.inner()?.tessellate().map(p => Point.from(p)) as Point[]).isClosed());
-console.log(Curve.Polyline(intersectionResult?.first()?.inner()?.tessellate().map(p => Point.from(p)) as Point[]).toMesh()?.polygons()[0]?.triangulate());
+// curve with hole (subtracting a smaller circle from a larger one, fully contained)
+const hole = Curve.Circle(5);
+const subHoleResult = circle1.subtract(Curve.Circle(5));
+console.log('Subtract hole result:', subHoleResult?.length, 'curves');
+if (subHoleResult?.first()) {
+    const firstCurve = subHoleResult.first()!;
+    console.log('  Has holes:', firstCurve.hasHoles(), 'hole count:', firstCurve.holes().length);
+    if (firstCurve.hasHoles()) {
+        console.log('  Hole curves:', firstCurve.holes().map(h => `closed=${h.isClosed()}`));
+    }
+    // Test toMesh() with holes - should create a triangulated mesh with the hole cut out
+    const meshWithHole = firstCurve.toMesh();
+    if (meshWithHole) {
+        console.log('  Mesh with hole created successfully');
+        save('curve_hole_mesh.gltf', meshWithHole.toGLTF());
+    } else {
+        console.log('  ERROR: toMesh() returned undefined');
+    }
+}
+save('sub_hole.gltf', 
+        new Collection(
+            subHoleResult,
+            hole,
+        )?.toGLTF());
 
-
-
-save('curve_debug.gltf', Curve.Polyline(intersectionResult?.first()?.inner()?.tessellate().map(p => Point.from(p)) as Point[]).toGLTF());
-
-    //console.log(intersectionResult?.first()?.toMesh()?.positions());
-//save('curve_intersection_mesh.gltf', intersectionResult?.first()?.toMesh()?.toGLTF());

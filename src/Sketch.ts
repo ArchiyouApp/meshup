@@ -61,55 +61,11 @@
  * 
  *      7. Access previous Shapes on stack
  * 
- *              TODO
+ *              TODO:tags
  * 
- * 
- *      
- *      Features:
- * 
- *      - Different ways to define next coordinates in relation to the current cursor point:
- *           - absolute: .lineTo(x,y)
- *           - relative: .lineTo('+dx','-dy')
- *           - polar: .lineTo('r<angle') // or compatible with autocad
- *           - polar relative: .lineTo('r<<angle')
- * 
- *      - Draw on standard planes (xy, yz, zx) or custom plane defined by normal vector and origin point:
- *          Sketch('xy') // standard plane
- *          Sketch('yz')
- *          Sketch('zx')
- *          Sketch(normalVector, originPoint) // custom plane
- *          Sketch(Polygon) // plane defined by polygon contour
- *              
- *      - Create contours from basic non-closed curves:
- *              Sketch('xy')
- *                  .moveTo(x,y)
- *                  .lineTo(x,y)
- *                  .arcTo(mid, end)
- *                  .splineTo(p1,p2,p3)
- *      
- *      - Combine closed curves into a single sketch with (automatic) booleans:
- *            Sketch('xy')
- *                  .lineTo(x1,y1)
- *                  .lineTo(x2,y2) 
- *                  .lineTo(x3,y3)
- *                  .close() // closes the contour by adding extra line where needed
- * 
- *            Sketch()
- *                 .rectTo(100,100) // outer contour
- *                  // because shapes are inside the previous one, this will be subtracted from the first rectangle
- *                 .circle(10).at(0.5, 0.5) // add circular hole at center of the (bbox of) rectangle
- *                 .circle(5).at(10, 10) // add circular hole at absolute coordinates
- *                  // because shapes are outside/overlap the previous one, this will be added to the first rectangle
- *                  .rect(10,10).pivot(1,1).at(0,1) // add small rectangle at top right corner of the first rectangle
- *                 
- *      - Tag shapes for use in later operations [TODO]:
- *          Sketch('xy')
- *              .rect(100,100).tag('base') // tag the first rectangle as 'base'
- *              .circle(this.base).width()*0.5)
- *  
- *      - Import SVG paths [TODO]:
- *          Sketch('xy')
- *              .loadSvg('shape.svg').scale(0.1).at(50,50)
+ *      8. End Sketch and import: end() / importSketch() 
+ *          Once the user is done with the sketch, they can call end() to import the curves into main scene:
+ *          - local 2D coordinates are converted to 3D world coordinates using the workplane definition
  * 
  * 
  */
@@ -122,10 +78,10 @@ import { Collection } from "./Collection";
 
 
 import type { BasePlane, PointLike } from "./types";
-import { isBasePlane } from "./types";
+import { isBasePlane, isPointLike } from "./types";
 
 import { BASE_PLANE_NAME_TO_PLANE } from "./constants";
-
+import { Curve } from "./Curve";
 
 
 export class Sketch  
@@ -135,11 +91,13 @@ export class Sketch
     declare _xDir: Vector; // direction of the X axis of the Sketch plane in world coordinates
     declare _yDir: Vector; // direction of the Y axis of the Sketch plane in world coordinates
 
-    declare _shapes: Collection;
+    _shapes: Collection = new Collection(); // collection of shapes in the sketch (mostly Curves)
+    _cursors: Array<SketchCursor> = []; // active cursor stack
 
     constructor(plane: BasePlane|PolygonJs = 'xy')
     {
         this._setWorkingPlane(plane);
+        this._pushCursor(new Point(0,0)); 
     }
 
     _setWorkingPlane(plane: BasePlane|PolygonJs): void
@@ -166,6 +124,270 @@ export class Sketch
         }
     }
 
+    //// CURSOR MANAGEMENT ////
 
+    private _pushCursor(at: Point, direction:Vector = new Vector(1,0)): void
+    {
+        this._cursors = [{ at, direction }];
+    }
+
+    /** Take all cursors of the stack for processing */
+    private _popAllCursors(): Array<SketchCursor>
+    {
+        const allCursors = this._cursors;
+        this._cursors = [];
+        return allCursors;
+    }
+
+    /** Create new cursor at the given point */
+    moveTo(m: PointLike): this
+    {
+        if(!isPointLike(m)){ throw new Error('Sketch::moveTo(): Invalid point. Please supply a PointLike like [x,y], [x,y,z], Point(x,y), Vector(x,y) etc');}
+        this._pushCursor(new Point(m));
+        return this;
+    }
+
+    //// LINEAR SHAPES ////
+
+    /** Make a line from current cursor to the given 2D point */
+    lineTo(...coords:SketchCoords): this
+    {
+        this._popAllCursors()
+        .forEach(
+            (cur) => {
+                const p = Point.fromSketchCoords(cur, coords);
+                if(p)
+                { 
+                    const l = Curve.Line(cur.at, p);
+
+                    if(l.length() === 0)
+                    {
+                        console.warn(`Sketch::lineTo(): Zero length line from ${cur.at} to ${p}. Skipping.`);
+                        return;
+                    }
+                    this._shapes.add(l);
+                    // make end of line (and its tangent) the new cursor
+                    this._pushCursor(p, l.tangentAt(l.end()) || new Vector(1,0,0));
+                }
+                else 
+                {
+                    console.warn(`Sketch::lineTo(): Invalid coordinates: ${JSON.stringify(coords)}. Please supply absolute, relative or polar coordinates like [x,y], ['+dx','-dy'], 'r<angle' or 'r<<angle'`);
+                }
+            });    
+        return this;
+    }
+
+    /** Make an arc from current cursor to the given 2D point, with the given mid point */
+    arcTo(mid: PointLike, end: PointLike): this
+    {
+        // TODO
+        return this;
+    }
+
+    /** Make a NURBS Curve through given 2D points as control points */
+    splineTo(pnts:Array<PointLike>): this
+    {
+        // TODO
+        return this;
+    }
+
+    //// CLOSED SHAPES //// 
+
+    // TODO
+
+    //// CONSOLIDATION ////
+
+    /** 
+     *  Combine all shapes into the minimal set of curves:
+     *   - Consecutive collinear degree-1 segments are merged into single polylines
+     *   - All remaining connected segments become CompoundCurves
+     *   - Disconnected groups stay as separate curves
+     */
+    consolidate(): this
+    {
+        const curves = this._shapes.curves();
+        if(curves.length <= 1) return this;
+
+        const chains = this._buildChains(curves);
+        const consolidated = chains.map(chain => this._chainToCurve(chain));
+        this._shapes = new Collection(...consolidated);
+        return this;
+    }
+
+    /**
+     *  Group curves into ordered end-to-start connected chains.
+     *  Tries both orientations of each candidate.
+     */
+    private _buildChains(curves: Array<Curve>): Array<Array<Curve>>
+    {
+        if(curves.length === 0) return [];
+
+        const remaining = [...curves];
+        const chains: Array<Array<Curve>> = [];
+        const TOLERANCE = 1e-6;
+
+        while(remaining.length > 0)
+        {
+            const chain: Array<Curve> = [remaining.shift()!];
+            let extended = true;
+            while(extended)
+            {
+                extended = false;
+                const chainEnd = chain.at(-1)!.end();
+
+                for(let i = 0; i < remaining.length; i++)
+                {
+                    const c = remaining[i];
+                    const cStart = c.start();
+                    const cEnd = c.end();
+                    // Forward: candidate start connects to chain end
+                    if(this._pointDist(chainEnd, cStart) < TOLERANCE)
+                    {
+                        chain.push(c);
+                        remaining.splice(i, 1);
+                        extended = true;
+                        break;
+                    }
+                    // Reversed: candidate end connects to chain end
+                    if(this._pointDist(chainEnd, cEnd) < TOLERANCE)
+                    {
+                        chain.push(c.copy().reverse());
+                        remaining.splice(i, 1);
+                        extended = true;
+                        break;
+                    }
+                }
+            }
+            chains.push(chain);
+        }
+        return chains;
+    }
+
+    /**
+     *  Convert a connected chain into the simplest representation:
+     *   - Single curve          → as-is
+     *   - All collinear degree-1 → single Polyline
+     *   - Mixed types           → CompoundCurve
+     */
+    private _chainToCurve(chain: Array<Curve>): Curve
+    {
+        if(chain.length === 1) return chain[0];
+
+        const merged = this._mergeCollinearSegments(chain);
+        if(merged.length === 1) return merged[0];
+
+        return Curve.Compound(merged);
+    }
+
+    /**
+     *  Walk a chain and merge consecutive collinear degree-1 segments
+     *  into single polylines.  Non-linear curves pass through as-is.
+     *
+     *  Collinearity test:  |cross(dirA, dirB)| < tolerance
+     */
+    private _mergeCollinearSegments(chain: Array<Curve>): Array<Curve>
+    {
+        const TOLERANCE = 1e-6;
+        const result: Array<Curve> = [];
+        let run: Array<Point> = [];  // accumulated polyline points
+
+        const flushRun = () => {
+            if(run.length >= 2)
+            {
+                result.push(Curve.Polyline(run));
+            }
+            run = [];
+        };
+
+        for(const curve of chain)
+        {
+            if(!curve.isCompound() && curve.degree() === 1)
+            {
+                const segStart = curve.start();
+                const segEnd   = curve.end();
+                const dx = segEnd.x - segStart.x;
+                const dy = segEnd.y - segStart.y;
+                const dz = segEnd.z - segStart.z;
+                const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                if(len < TOLERANCE) continue;  // skip zero-length
+                const segDir = new Vector(dx/len, dy/len, dz/len);
+
+                if(run.length === 0)
+                {
+                    // Start a new run
+                    run.push(segStart, segEnd);
+                }
+                else
+                {
+                    // Check collinearity against last segment direction
+                    const prev = run.at(-2)!;
+                    const last = run.at(-1)!;
+                    const px = last.x - prev.x;
+                    const py = last.y - prev.y;
+                    const pz = last.z - prev.z;
+                    const plen = Math.sqrt(px*px + py*py + pz*pz);
+                    const prevDir = plen > TOLERANCE 
+                        ? new Vector(px/plen, py/plen, pz/plen) 
+                        : segDir;
+
+                    const cross = prevDir.cross(segDir);
+                    if(cross.length() < TOLERANCE)
+                    {
+                        // Collinear — extend the run (shared endpoint already present)
+                        run.push(segEnd);
+                    }
+                    else
+                    {
+                        // Direction change — flush and start new
+                        flushRun();
+                        run.push(segStart, segEnd);
+                    }
+                }
+            }
+            else
+            {
+                // Non-linear or compound curve — flush any pending polyline run
+                flushRun();
+                result.push(curve);
+            }
+        }
+        flushRun();
+        return result;
+    }
+
+    //// FINISHING ////
+
+    end(): Collection
+    {
+        this.consolidate();
+        return this._shapes;
+    }
+
+    /** Alias for end */
+    importSketch(): Collection
+    {
+        return this.end();
+    }
+
+    /** Euclidean distance between two Points */
+    private _pointDist(a: Point, b: Point): number
+    {
+        const dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+        return Math.sqrt(dx*dx + dy*dy + dz*dz);
+    }
 
 }
+
+
+//// SKETCH TYPES ////
+
+/** Cursor keeps track of last Sketch command */
+export interface SketchCursor
+{
+    at: Point; // 2D point
+    direction?: Vector; // tangent at last (linear) Shape       
+}
+
+/** absolute, relative, polar and polar relative */
+export type SketchCoords = [number|string, (number|string)?] // absolute or relative
+                            | [string]; // polar absolute or polar relative (e.g. 'r<45' or 'r<<45')
