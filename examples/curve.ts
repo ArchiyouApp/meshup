@@ -1,4 +1,4 @@
-import { initAsync as initMeshup, Curve, Mesh, Collection } from '../src';
+import { initAsync as initMeshup, Curve, Mesh, Collection, CurveCollection } from '../src';
 import { Point } from '../src/Point';
 import { save } from '../src/utils';
 
@@ -101,6 +101,7 @@ save('curve_offset.gltf', curve.copy().offset(2, 'round')?.toGLTF());
 
 //// CURVE INTERACTION ////
 
+/*
 const pl = Curve.Polyline([
     [0,0],
     [10,0],
@@ -201,3 +202,39 @@ save('sub_hole.gltf',
             hole,
         )?.toGLTF());
 
+    
+*/
+
+
+//// CURVE COMBINES ////
+
+/*
+const pl = Curve.Polyline([
+    [0,0],
+    [-10,0],
+    [-10,20],
+]);
+
+const line = Curve.Line([15,0], [15,40]);
+
+save('beforeCombine.gltf', new Collection(pl, line).toGLTF());
+
+console.log(pl.connectTo(line));
+
+save('connect.gltf', pl.connectTo(line)?.toGLTF());
+
+*/
+
+const pl = Curve.Polyline([
+    [0,0],
+    [-10,0],
+    [-10,20],
+]);
+
+const line = Curve.Line([15,0], [15,40]);
+const lineM = Curve.Line([0,0], [15,0]);
+
+//save('connBeforeCombine.gltf', new Collection(pl, line, lineM).toGLTF());
+save('connCurveCollection.gltf', CurveCollection.from(pl, line, lineM).combine()?.toGLTF());
+//const coll = CurveCollection.from(pl, line, lineM).combine();
+//console.log(coll.first()?.points());

@@ -74,7 +74,7 @@ import { PolygonJs } from "./wasm/csgrs";
 
 import { Vector } from "./Vector";
 import { Point } from "./Point";
-import { Collection } from "./Collection";
+import { Collection, CurveCollection } from "./Collection";
 
 
 import type { BasePlane, PointLike } from "./types";
@@ -91,7 +91,7 @@ export class Sketch
     declare _xDir: Vector; // direction of the X axis of the Sketch plane in world coordinates
     declare _yDir: Vector; // direction of the Y axis of the Sketch plane in world coordinates
 
-    _shapes: Collection = new Collection(); // collection of shapes in the sketch (mostly Curves)
+    _shapes: CurveCollection = new CurveCollection(); // collection of curves in the sketch
     _cursors: Array<SketchCursor> = []; // active cursor stack
 
     constructor(plane: BasePlane|PolygonJs = 'xy')
@@ -193,187 +193,39 @@ export class Sketch
 
     //// CLOSED SHAPES //// 
 
-    // TODO
-
-    //// CONSOLIDATION ////
-
-    /** 
-     *  Combine all shapes into the minimal set of curves:
-     *   - Consecutive collinear degree-1 segments are merged into single polylines
-     *   - All remaining connected segments become CompoundCurves
-     *   - Disconnected groups stay as separate curves
-     */
-    consolidate(): this
+    /** Close shapes in Sketch 
+     *  First we need to consolidate any segments into connected curves
+     *  If there is only one connected curve, it is clear the user wants to close it. 
+     *  If there are multiple (for example after offset), the intent is probably to connect the two (or more) curves 
+    */
+    close(): this
     {
-        const curves = this._shapes.curves();
-        if(curves.length <= 1) return this;
-
-        const chains = this._buildChains(curves);
-        const consolidated = chains.map(chain => this._chainToCurve(chain));
-        this._shapes = new Collection(...consolidated);
+        this.combine(); 
+        // TODO
         return this;
     }
 
-    /**
-     *  Group curves into ordered end-to-start connected chains.
-     *  Tries both orientations of each candidate.
-     */
-    private _buildChains(curves: Array<Curve>): Array<Array<Curve>>
+    //// COMBINATIONS ////
+
+    combine(): this
     {
-        if(curves.length === 0) return [];
-
-        const remaining = [...curves];
-        const chains: Array<Array<Curve>> = [];
-        const TOLERANCE = 1e-6;
-
-        while(remaining.length > 0)
-        {
-            const chain: Array<Curve> = [remaining.shift()!];
-            let extended = true;
-            while(extended)
-            {
-                extended = false;
-                const chainEnd = chain.at(-1)!.end();
-
-                for(let i = 0; i < remaining.length; i++)
-                {
-                    const c = remaining[i];
-                    const cStart = c.start();
-                    const cEnd = c.end();
-                    // Forward: candidate start connects to chain end
-                    if(this._pointDist(chainEnd, cStart) < TOLERANCE)
-                    {
-                        chain.push(c);
-                        remaining.splice(i, 1);
-                        extended = true;
-                        break;
-                    }
-                    // Reversed: candidate end connects to chain end
-                    if(this._pointDist(chainEnd, cEnd) < TOLERANCE)
-                    {
-                        chain.push(c.copy().reverse());
-                        remaining.splice(i, 1);
-                        extended = true;
-                        break;
-                    }
-                }
-            }
-            chains.push(chain);
-        }
-        return chains;
-    }
-
-    /**
-     *  Convert a connected chain into the simplest representation:
-     *   - Single curve          → as-is
-     *   - All collinear degree-1 → single Polyline
-     *   - Mixed types           → CompoundCurve
-     */
-    private _chainToCurve(chain: Array<Curve>): Curve
-    {
-        if(chain.length === 1) return chain[0];
-
-        const merged = this._mergeCollinearSegments(chain);
-        if(merged.length === 1) return merged[0];
-
-        return Curve.Compound(merged);
-    }
-
-    /**
-     *  Walk a chain and merge consecutive collinear degree-1 segments
-     *  into single polylines.  Non-linear curves pass through as-is.
-     *
-     *  Collinearity test:  |cross(dirA, dirB)| < tolerance
-     */
-    private _mergeCollinearSegments(chain: Array<Curve>): Array<Curve>
-    {
-        const TOLERANCE = 1e-6;
-        const result: Array<Curve> = [];
-        let run: Array<Point> = [];  // accumulated polyline points
-
-        const flushRun = () => {
-            if(run.length >= 2)
-            {
-                result.push(Curve.Polyline(run));
-            }
-            run = [];
-        };
-
-        for(const curve of chain)
-        {
-            if(!curve.isCompound() && curve.degree() === 1)
-            {
-                const segStart = curve.start();
-                const segEnd   = curve.end();
-                const dx = segEnd.x - segStart.x;
-                const dy = segEnd.y - segStart.y;
-                const dz = segEnd.z - segStart.z;
-                const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
-                if(len < TOLERANCE) continue;  // skip zero-length
-                const segDir = new Vector(dx/len, dy/len, dz/len);
-
-                if(run.length === 0)
-                {
-                    // Start a new run
-                    run.push(segStart, segEnd);
-                }
-                else
-                {
-                    // Check collinearity against last segment direction
-                    const prev = run.at(-2)!;
-                    const last = run.at(-1)!;
-                    const px = last.x - prev.x;
-                    const py = last.y - prev.y;
-                    const pz = last.z - prev.z;
-                    const plen = Math.sqrt(px*px + py*py + pz*pz);
-                    const prevDir = plen > TOLERANCE 
-                        ? new Vector(px/plen, py/plen, pz/plen) 
-                        : segDir;
-
-                    const cross = prevDir.cross(segDir);
-                    if(cross.length() < TOLERANCE)
-                    {
-                        // Collinear — extend the run (shared endpoint already present)
-                        run.push(segEnd);
-                    }
-                    else
-                    {
-                        // Direction change — flush and start new
-                        flushRun();
-                        run.push(segStart, segEnd);
-                    }
-                }
-            }
-            else
-            {
-                // Non-linear or compound curve — flush any pending polyline run
-                flushRun();
-                result.push(curve);
-            }
-        }
-        flushRun();
-        return result;
+        const combined = this._shapes.combine();
+        this._shapes = combined;
+        return this;
     }
 
     //// FINISHING ////
 
-    end(): Collection
+    end(): CurveCollection
     {
-        this.consolidate();
+        this.combine();
         return this._shapes;
     }
 
     /** Alias for end */
-    importSketch(): Collection
+    importSketch(): CurveCollection
     {
         return this.end();
-    }
-
-    /** Euclidean distance between two Points */
-    private _pointDist(a: Point, b: Point): number
-    {
-        const dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
-        return Math.sqrt(dx*dx + dy*dy + dz*dz);
     }
 
 }

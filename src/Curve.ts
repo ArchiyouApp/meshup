@@ -253,6 +253,19 @@ export class Curve
             console.warn(`Curve::weights(): Curve is compound. Use specific span to get weights`);
         }
     }
+    
+    spans(): Array<Curve>
+    {
+        if(!this.isCompound())
+        {
+            // If not compound, return self as single span for consistent API
+            return [this];
+        }
+        else {
+            return (this.inner() as CompoundCurve3DJs).spans().map(span => Curve.fromCsgrs(span));
+        }
+    }
+
 
     //// CALCULATED PROPERTIES ////
     /*
@@ -399,7 +412,122 @@ export class Curve
         return Vector.from(this.inner().tangentAt(param));
     }
 
-  
+    /** Minimum distance to another PointLike or Curve
+     *  Returns null if the closest parameter cannot be determined.
+     */
+    distance(to: PointLike|Curve): number|null
+    {
+        if(isPointLike(to))
+        {
+            return this._distanceToPoint(Point.from(to));
+        }
+        else if(to instanceof Curve)
+        {
+            return this._distanceToCurve(to);
+        }
+        return null;
+    }
+
+    /** Find the closest pair of points between this curve and another.
+     *  Uses coarse sampling + multi-seed alternating closest-point refinement.
+     *  Returns [pointOnThis, pointOnOther], or null if it cannot be determined.
+     */
+    closestPoints(other: Curve): [Point, Point]|null
+    {
+        const NUM_SAMPLES = 30;
+        const NUM_SEEDS = 3;
+        const MAX_ACI_ITER = 15;
+        const ACI_TOL = 1e-10;
+
+        // 1. Sample both curves uniformly
+        const domainA = this.inner().knotsDomain();
+        const domainB = other.inner().knotsDomain();
+        const samplesA: Array<{ param: number, pt: Point }> = [];
+        const samplesB: Array<{ param: number, pt: Point }> = [];
+
+        for (let i = 0; i <= NUM_SAMPLES; i++)
+        {
+            const tA = domainA[0] + (domainA[1] - domainA[0]) * i / NUM_SAMPLES;
+            const tB = domainB[0] + (domainB[1] - domainB[0]) * i / NUM_SAMPLES;
+            samplesA.push({ param: tA, pt: this.pointAtParam(tA) });
+            samplesB.push({ param: tB, pt: other.pointAtParam(tB) });
+        }
+
+        // 2. Find top-k closest pairs as seeds
+        const seeds: Array<{ distSq: number, paramA: number, paramB: number }> = [];
+        for (const a of samplesA)
+        {
+            for (const b of samplesB)
+            {
+                const dx = a.pt.x - b.pt.x;
+                const dy = a.pt.y - b.pt.y;
+                const dz = a.pt.z - b.pt.z;
+                const distSq = dx * dx + dy * dy + dz * dz;
+
+                if (seeds.length < NUM_SEEDS)
+                {
+                    seeds.push({ distSq, paramA: a.param, paramB: b.param });
+                    seeds.sort((a, b) => b.distSq - a.distSq);
+                }
+                else if (distSq < seeds[0].distSq)
+                {
+                    seeds[0] = { distSq, paramA: a.param, paramB: b.param };
+                    seeds.sort((a, b) => b.distSq - a.distSq);
+                }
+            }
+        }
+
+        if (seeds.length === 0) return null;
+
+        // 3. Refine each seed with alternating closest-point iteration
+        let bestDist = Infinity;
+        let bestPair: [Point, Point]|null = null;
+
+        for (const seed of seeds)
+        {
+            let ptA = this.pointAtParam(seed.paramA);
+            let ptB = other.pointAtParam(seed.paramB);
+            let prevDist = Infinity;
+
+            for (let i = 0; i < MAX_ACI_ITER; i++)
+            {
+                const paramB = other.paramClosestToPoint(ptA);
+                if (paramB === null) break;
+                ptB = other.pointAtParam(paramB);
+
+                const paramA = this.paramClosestToPoint(ptB);
+                if (paramA === null) break;
+                ptA = this.pointAtParam(paramA);
+
+                const dist = ptA.distance(ptB);
+                if (Math.abs(prevDist - dist) < ACI_TOL) { prevDist = dist; break; }
+                prevDist = dist;
+            }
+
+            if (prevDist < bestDist)
+            {
+                bestDist = prevDist;
+                bestPair = [ptA, ptB];
+            }
+        }
+
+        return bestPair;
+    }
+
+    private _distanceToCurve(other: Curve): number|null
+    {
+        const pair = this.closestPoints(other);
+        if (!pair) return null;
+        return pair[0].distance(pair[1]);
+    }
+
+    private _distanceToPoint(point: PointLike): number|null
+    {
+        if(!isPointLike(point)){ throw new Error(`Curve::distance(): Please supply a PointLike. Got: ${point}`); }
+        const param = this.paramClosestToPoint(point);
+        if (param === null) return null;
+        return Point.from(this.pointAtParam(param)).distance(Point.from(point));
+    }
 
     bbox():undefined|Bbox
     {
@@ -494,6 +622,35 @@ export class Curve
         return this;
     }
 
+     /** Close this curve by adding a line segment from end back to start.
+     *  If already closed, returns self unchanged.
+     *  The (inner) result is always a CompoundCurve.
+     */
+    close(): this
+    {
+        if (this.isClosed()) return this;
+
+        const startPt = this.start();
+        const endPt = this.end();
+        const closingLine = Curve.Line(endPt, startPt);
+
+        // Build spans array: existing span(s) + closing line
+        const spans: NurbsCurve3DJs[] = [];
+        const inner = this.inner();
+        if (inner instanceof CompoundCurve3DJs)
+        {
+            spans.push(...inner.spans());
+        }
+        else
+        {
+            spans.push(inner as NurbsCurve3DJs);
+        }
+        spans.push(closingLine.inner() as NurbsCurve3DJs);
+
+        this._curve = new CompoundCurve3DJs(spans);
+        return this;
+    }
+
     /** Fillet sharp corner(s) of Curve. Optionally only at given point(s) */
     fillet(radius: number, at?: PointLike|Array<PointLike>): this|null
     {
@@ -542,7 +699,42 @@ export class Curve
         if(!this.isPlanar()){ throw new Error(`Curve:offset(): Cannot offset a 3D curve!`);}
         return Curve.fromCsgrs(this.inner()?.offset(distance, cornerType));
     }
-    
+
+    /** Trim the curve to a sub-curve between parameters t0 and t1.
+     *  Returns an array of Curves (typically one for inside trim).
+     *  Parameters are in the curve's knot domain (see knotsDomain()).
+     */
+    trim(t0: number, t1: number): Array<Curve>
+    {
+        try
+        {
+            const spans: Array<NurbsCurve3DJs> = this.inner()?.trimRange(t0, t1);
+            return (spans || []).map(s => Curve.fromCsgrs(s));
+        }
+        catch (e)
+        {
+            console.error('Curve::trim(): Error:', e);
+            return [];
+        }
+    }
+
+    /** Split the curve at parameter t, returning [left, right]. 
+     *  Parameter t must be within the curve's knot domain.
+     */
+    split(t: number): [Curve, Curve] | null
+    {
+        try 
+        {
+            const parts = this.inner()?.split(t);
+            if(!parts || parts.length < 2) return null;
+            return [Curve.fromCsgrs(parts[0]), Curve.fromCsgrs(parts[1])];
+        }
+        catch (e)
+        {
+            console.error('Curve::split(): Error:', e);
+            return null;
+        }
+    }
     
     //// INTERACTION WITH OTHER CURVES ////
 
@@ -570,7 +762,57 @@ export class Curve
         }
     }
 
-    //// BOOLEAN OPERATIONS ON CURVES ////
+    /** Connect endpoints to endpoints of another Curve by creating Line 
+     *      and if possible create a single continuous (closed) curve
+     * 
+     *  Setting the distance controls behaviour:
+     *  - maxGap = undefined: connect both endpoints unrelated to distance
+     *  - maxGap < distance(other) - can't connect
+     *  - maxGap >= distance(other) - connect closest endpoints
+     */
+    connectTo(other:Curve, maxGap?: number):this 
+    {
+        if(!(other instanceof Curve)){ throw new Error(`Curve::connectTo(): Expected a Curve. Got: ${other}`); }
+
+        const curEndpoints = [{ point: this.start(), used: false }, { point: this.end(), used: false }];
+        const otherEndpoints = [{ point: other.start(), used: false }, { point: other.end(), used: false }];
+        
+        // Find closest pair of endpoints and create extra lines
+        const addedLines: Array<Curve> = [];
+
+        curEndpoints.forEach(curEndpoint => 
+        {
+            otherEndpoints.forEach(otherEndpoint => 
+            {
+                // skip if either endpoint already used
+                if(curEndpoint.used || otherEndpoint.used){ return; }
+
+                const dist = curEndpoint.point.distance(otherEndpoint.point);
+                if (maxGap === undefined || dist <= maxGap)
+                {
+                    curEndpoint.used = true;
+                    otherEndpoint.used = true;
+                    const line = Curve.Line(curEndpoint.point, otherEndpoint.point); 
+                    addedLines.push(line);
+                }
+            });
+        });
+
+        // Combine original spans with added lines and create a new CompoundCurve
+        const combinedCurves = CurveCollection.from(
+                                    this.spans().concat(addedLines)
+                                ).combine();
+        // The combined collection should always be a Curve or CompoundCurve
+        // But just to make sure:
+        if(combinedCurves.count() > 1)
+        {
+            console.warn(`Curve::connectTo(): Unexpected result: more than one combined curve. Check connectivity and maxGap.`, combinedCurves);
+        }
+
+        this._curve = combinedCurves.first()?.inner();
+        
+        return this;
+    }
 
     /** Internal helper: perform a boolean operation against another Curve.
      *  Dispatches to the correct WASM method based on curve types.
@@ -760,44 +1002,6 @@ export class Curve
         }
     }
 
-    //// TRIM & SPLIT ////
-
-    /** Trim the curve to a sub-curve between parameters t0 and t1.
-     *  Returns an array of Curves (typically one for inside trim).
-     *  Parameters are in the curve's knot domain (see knotsDomain()).
-     */
-    trim(t0: number, t1: number): Array<Curve>
-    {
-        try
-        {
-            const spans: Array<NurbsCurve3DJs> = this.inner()?.trimRange(t0, t1);
-            return (spans || []).map(s => Curve.fromCsgrs(s));
-        }
-        catch (e)
-        {
-            console.error('Curve::trim(): Error:', e);
-            return [];
-        }
-    }
-
-    /** Split the curve at parameter t, returning [left, right]. 
-     *  Parameter t must be within the curve's knot domain.
-     */
-    split(t: number): [Curve, Curve] | null
-    {
-        try 
-        {
-            const parts = this.inner()?.split(t);
-            if(!parts || parts.length < 2) return null;
-            return [Curve.fromCsgrs(parts[0]), Curve.fromCsgrs(parts[1])];
-        }
-        catch (e)
-        {
-            console.error('Curve::split(): Error:', e);
-            return null;
-        }
-    }
-
   
 
     //// TRANSFORMATION TO OTHER TYPES ////
@@ -907,4 +1111,4 @@ export class Curve
         return JSON.stringify(gltf);
     }
 
-}   
+}

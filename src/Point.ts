@@ -102,8 +102,20 @@ export class Point
 
     //// CALCULATED PROPS ////
 
+    // TODO
 
     //// RELATIONSHIPS WITH OTHER POINTS ////
+
+    distance(to: PointLike): number
+    {
+        if(!isPointLike(to)){ throw new Error(`Point::distance(): Invalid parameter: ${to}`); }
+        const otherPoint = new Point(to);
+        const dx = this._x - otherPoint._x;
+        const dy = this._y - otherPoint._y;
+        const dz = this._z - otherPoint._z;
+        // NOTE: could use WASM Vector3Js for this calculation, but might not be faster
+        return Math.sqrt(dx*dx + dy*dy + dz*dz);
+    }
 
     sameCoordAt(other:PointLike): Axis|null
     {
@@ -230,6 +242,11 @@ export class Point
         return new Vector3Js(this._x, this._y, this._z || 0.0);
     }
 
-    
+    //// REPRESENTATION ////
+
+    toString(): string
+    {
+        return `<Point(${this._x}, ${this._y}, ${this._z})>`;
+    }
 
 }   
