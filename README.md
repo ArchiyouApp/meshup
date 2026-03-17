@@ -22,7 +22,12 @@ pnpm dev:examples:mesh
 pnpm dev:examples:curve
 
 # Rust setup
-# Make sure you have cargo
+# Make sure you have rust/cargo/wasm-pack
+# see: https://rustup.rs/
+cargo install wasm-pack
+
+
+# Rust build
 cd /lib/csgrs
 cargo
 # Test rust

@@ -12,5 +12,5 @@ const s = new Sketch()
             .lineTo('50<<-45')
             .end();
 
-console.log(s)
+// ...existing code...
 save('sketch.gltf', s.toGLTF());

@@ -85,6 +85,13 @@ export class Vector extends Vector3Js
     return super.angle(Point.from(other).toVector3Js());
   }
 
+  angleEuler(other: PointLike): [number, number, number]
+  {
+      if(!isPointLike(other)){ throw new Error('Vector::angleEuler(): Invalid argument. Please supply a PointLike instance.'); }
+      const result = super.angleEuler(Vector.from(other).toVector3Js());
+      return [result[0] as number, result[1] as number, result[2] as number];
+  }
+
   //// METHODS
 
   abs(): Vector
@@ -151,13 +158,34 @@ export class Vector extends Vector3Js
     );
   }
   
-
   /** Create new Vector by Euler rotation */
   rotateEuler(roll: number, pitch: number, yaw: number): Vector 
   {
     return Vector.from(
       super.rotateEuler(roll, pitch, yaw)
     );
+  }
+
+  /**
+   * Helper: Convert a 3x3 rotation matrix to Euler angles (XYZ order).
+   * Returns [roll, pitch, yaw].
+   * Assumes matrix is valid rotation.
+   */
+  static _rotationMatrixToEulerXYZ(R: number[][]): [number, number, number] {
+    // XYZ convention:
+    // R = Rz(yaw) * Ry(pitch) * Rx(roll)
+    // See: https://www.geometrictools.com/Documentation/EulerAngles.pdf
+    let pitch = Math.asin(-Math.max(-1, Math.min(1, R[2][0])));
+    let roll, yaw;
+    if (Math.abs(R[2][0]) < 0.99999) {
+      roll = Math.atan2(R[2][1], R[2][2]);
+      yaw = Math.atan2(R[1][0], R[0][0]);
+    } else {
+      // Gimbal lock
+      roll = 0;
+      yaw = Math.atan2(-R[0][1], R[1][1]);
+    }
+    return [roll, pitch, yaw];
   }
 
   //// CONVERSIONS ////

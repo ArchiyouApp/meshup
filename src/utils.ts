@@ -34,7 +34,7 @@ export async function save(filepath: string,
 
         await fs.promises.writeFile(filepath, data as any);
         const fullPath = path.resolve(filepath);
-        console.log(`utils::save(): Saved file to: "${fullPath}"`);
+        console.info(`utils::save(): File saved to "${fullPath}"`);
     } 
     else {
         // Browser

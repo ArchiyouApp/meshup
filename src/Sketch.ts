@@ -12,7 +12,7 @@
  * 
  *      2. A series of commands create Shapes (using Curves) on the sketch plane. 
  * 
- *             These curves are stored in the _shapes property as a Collection.
+ *             These curves are stored in the _curves property as a Collection.
  *
  *          Shapes can be of two kinds: 
  *              - linear ones (lineTo, splineTo, arcTo) - mostly used to create a contour from scratch
@@ -77,7 +77,7 @@ import { Point } from "./Point";
 import { Collection, CurveCollection } from "./Collection";
 
 
-import type { BasePlane, PointLike } from "./types";
+import type { Axis, BasePlane, PointLike } from "./types";
 import { isBasePlane, isPointLike } from "./types";
 
 import { BASE_PLANE_NAME_TO_PLANE } from "./constants";
@@ -91,7 +91,7 @@ export class Sketch
     declare _xDir: Vector; // direction of the X axis of the Sketch plane in world coordinates
     declare _yDir: Vector; // direction of the Y axis of the Sketch plane in world coordinates
 
-    _shapes: CurveCollection = new CurveCollection(); // collection of curves in the sketch
+    _curves: CurveCollection = new CurveCollection(); // collection of curves in the sketch
     _cursors: Array<SketchCursor> = []; // active cursor stack
 
     constructor(plane: BasePlane|PolygonJs = 'xy')
@@ -115,8 +115,8 @@ export class Sketch
         else if(plane instanceof PolygonJs)
         {
             // Initialize sketch with polygon
-            // TODO
             // NOTE: also add fitting plane to the polygon 
+            console.warn(`Sketch::setWorkingPlane(): Initializing sketch with a PolygonJs not implemented yet!`);
         }
         else
         {
@@ -140,14 +140,57 @@ export class Sketch
     }
 
     /** Create new cursor at the given point */
-    moveTo(m: PointLike): this
+    moveTo(...coords:SketchCoords): this
     {
-        if(!isPointLike(m)){ throw new Error('Sketch::moveTo(): Invalid point. Please supply a PointLike like [x,y], [x,y,z], Point(x,y), Vector(x,y) etc');}
-        this._pushCursor(new Point(m));
+        this._popAllCursors()
+        .forEach(
+            (cur) => {
+                const p = Point.fromSketchCoords(cur, coords);
+                if(!isPointLike(p)){ throw new Error('Sketch::moveTo(): Invalid point. Please supply a PointLike like [x,y], [x,y,z], Point(x,y), Vector(x,y) etc');}
+                this._pushCursor(new Point(p));
+            });
+        return this;
+    }
+    
+    //// SHAPES GENERAL ////
+
+    /** Copy last curve and append to shapes */
+    copy(): this
+    {
+        this.combine(); // first combine command curves
+
+        this._curves.add(this._curves.last()?.copy());
         return this;
     }
 
-    //// LINEAR SHAPES ////
+    /** Offset last curve */
+    offset(distance: number): this
+    {
+        const last = this._curves.last();
+        if (!last) return this;
+        last.offset(distance); // in place
+        return this;
+    }
+
+    /** Translate last curve */
+    translate(vecOrX: PointLike | number, dy?: number, dz?: number): this
+    {
+        this._curves?.last()?.translate(vecOrX as any, dy as any, dz as any);
+        return this;
+    }
+
+    /** Rotate last curve a given angle around a pivot point 
+     *  If given pivot not given use center of curve
+    */
+    rotate(angleDeg: number, pivot: PointLike): this
+    {
+        // NOTE: use rotateAround which is more convenient
+        const lastCurve = this._curves?.last();
+        lastCurve?.rotateAround(angleDeg, 'z', pivot || lastCurve?.bbox()?.center() || new Point(0,0));
+        return this;
+    }
+
+    //// LINEAR CURVES ////
 
     /** Make a line from current cursor to the given 2D point */
     lineTo(...coords:SketchCoords): this
@@ -165,7 +208,7 @@ export class Sketch
                         console.warn(`Sketch::lineTo(): Zero length line from ${cur.at} to ${p}. Skipping.`);
                         return;
                     }
-                    this._shapes.add(l);
+                    this._curves.add(l);
                     // make end of line (and its tangent) the new cursor
                     this._pushCursor(p, l.tangentAt(l.end()) || new Vector(1,0,0));
                 }
@@ -191,35 +234,57 @@ export class Sketch
         return this;
     }
 
-    //// CLOSED SHAPES //// 
+    //// CLOSED CURVES //// 
 
     /** Close shapes in Sketch 
-     *  First we need to consolidate any segments into connected curves
+     *  First we need to combine any segments into connected curves
      *  If there is only one connected curve, it is clear the user wants to close it. 
      *  If there are multiple (for example after offset), the intent is probably to connect the two (or more) curves 
     */
     close(): this
     {
-        this.combine(); 
-        // TODO
+        this.combine(); // connect curves if possible
+        
+        // Only one contineous shape, so we can just close it
+        if(this._curves.count() === 1)
+        {
+            this._curves.first()?.close();
+        }
+        else {
+            // Multiple shapes, try to connect them into one closed curve
+            this._curves.connect();
+        }
+    
         return this;
     }
+
+    // TODO: More closed shapes: rect, circle, ellipse, polygon
 
     //// COMBINATIONS ////
 
     combine(): this
     {
-        const combined = this._shapes.combine();
-        this._shapes = combined;
+        const combined = this._curves.combine();
+        this._curves = combined;
         return this;
     }
 
     //// FINISHING ////
 
+    /** Convert all curves in Sketch to world coordinates and return copies */
+    _localToWorld():CurveCollection
+    {
+        return this._curves.copy()
+            .forEach((curve) => {
+                curve.reorient(this._normal, this._origin, [0,0,1]);
+        });
+    }
+
     end(): CurveCollection
     {
-        this.combine();
-        return this._shapes;
+        // ...existing code...
+        
+        return this._localToWorld();
     }
 
     /** Alias for end */

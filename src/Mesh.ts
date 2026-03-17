@@ -16,6 +16,7 @@ import { Curve, getCsgrs } from './index';
 import { Point } from './Point';
 import { Bbox } from './Bbox';
 import { Vector } from './Vector'
+import { rad } from './utils';
 
 import { MeshJs, PolygonJs, PlaneJs, Vector3Js, NurbsCurve3DJs, CompoundCurve3DJs } from './wasm/csgrs';
 
@@ -306,7 +307,7 @@ export class Mesh
     /** Center of mass */
     center(): Point
     {
-        console.log(this.inner()?.massProperties(1));
+        // ...existing code...
         return new Point(this.inner()?.massProperties(1)?.centerOfMass);
     }
 
@@ -354,6 +355,57 @@ export class Mesh
     rotate(ax: number, ay: number, az: number): this
     {
         this._mesh = this.inner()?.rotate(ax, ay, az);
+        return this;
+    }
+
+    /** Rotate Mesh by angleDeg around an axis through a pivot point.
+     *  @param angleDeg - rotation angle in degrees
+     *  @param axis     - 'x' | 'y' | 'z' or an arbitrary direction vector (PointLike)
+     *  @param pivot    - point the axis passes through (default: world origin)
+     */
+    rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
+    {
+        const p = Point.from(pivot);
+        // Translate pivot to origin
+        this.translate(-p.x, -p.y, -p.z);
+
+        if (typeof axis === 'string')
+        {
+            // Named axis — map to Euler angles
+            const a = rad(angleDeg);
+            this.rotate(
+                axis === 'x' ? a : 0,
+                axis === 'y' ? a : 0,
+                axis === 'z' ? a : 0,
+            );
+        }
+        else
+        {
+            // Arbitrary axis — Rodrigues rotation on every vertex via two helper rotations:
+            // align arbitrary axis to Z, rotate, unalign
+            const axVec = Point.from(axis).toVector().normalize();
+            const theta = rad(angleDeg);
+            const cos = Math.cos(theta), sin = Math.sin(theta), t = 1 - cos;
+            const { x: ux, y: uy, z: uz } = axVec;
+            // Rodrigues rotation matrix rows applied via translate trick:
+            // We decompose to Euler using the rotation matrix R:
+            //   R = [[t*ux²+cos,  t*ux*uy−sin*uz,  t*ux*uz+sin*uy],
+            //        [t*ux*uy+sin*uz, t*uy²+cos,   t*uy*uz−sin*ux],
+            //        [t*ux*uz−sin*uy, t*uy*uz+sin*ux, t*uz²+cos  ]]
+            // Extract Euler ZYX: ay = asin(-R[2][0]), az = atan2(R[1][0],R[0][0]), ax = atan2(R[2][1],R[2][2])
+            const R20 = t * ux * uz - sin * uy;
+            const R21 = t * uy * uz + sin * ux;
+            const R22 = t * uz * uz + cos;
+            const R10 = t * ux * uy + sin * uz;
+            const R00 = t * ux * ux + cos;
+            const ay2 = Math.asin(Math.max(-1, Math.min(1, -R20)));
+            const ax2 = Math.atan2(R21, R22);
+            const az2 = Math.atan2(R10, R00);
+            this.rotate(ax2, ay2, az2);
+        }
+
+        // Translate back
+        this.translate(p.x, p.y, p.z);
         return this;
     }
 

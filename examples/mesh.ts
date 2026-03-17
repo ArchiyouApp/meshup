@@ -5,13 +5,13 @@ import { save } from '../src/utils'
 await initAsync(); // NOTE: loadSync does not work
 
 const cube = Mesh.Cube(10); // nicer than new Mesh().Cube(10);
-console.log(cube);
+// ...existing code...
 
 const box = Mesh.BoxBetween([0,0,0], [10,20,30]);
 //const box = new Mesh().Box(10, 20, 30).moveToCenter();
 
 const bbox = box.bbox();
-console.log('Bounding Box:', bbox.width(), bbox.depth(), bbox.height(), bbox.center());
+// ...existing code...
 //console.log(bbox.center());
 
 // From polygons
@@ -33,19 +33,12 @@ const pyramid = Mesh.fromPolygons([
     [[-5, 5, 0], [-5, -5, 0], [0, 0, 10]],
 ]);
 
-console.log('pyramid');
-console.log(pyramid.bbox());
-console.log(pyramid.center());
+// ...existing code...
 
-console.log(Mesh.Box(10).center())
 const bb = Mesh.Box(10);
-console.log(bb.positions());
-console.log(bb.normals());
+// ...existing code...
 
-console.log('==== VEC ====');
-const vv = new Vector(1,2,3);
-console.log(vv);
-console.log(vv.normalize());
+// ...existing code...
 
 //// MESH NGON ////
 /*

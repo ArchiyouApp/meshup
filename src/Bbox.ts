@@ -8,20 +8,20 @@ import { isPointLike } from './types';
 /** Axis-aligned Bounding Box */
 export class Bbox
 {
-    min: Point;
-    max: Point;
+    private _min: Point;
+    private _max: Point;
 
     constructor(min: PointLike|Array<PointLike>, max?: PointLike)
     {
         if(isPointLike(min) && isPointLike(max))
         {
-            this.min = new Point(min);
-            this.max = new Point(max);
+            this._min = new Point(min);
+            this._max = new Point(max);
         }
         else if(Array.isArray(min) && min.length === 2 && isPointLike(min[0]) && isPointLike(min[1]))
         {
-            this.min = new Point(min[0]);
-            this.max = new Point(min[1]);
+            this._min = new Point(min[0]);
+            this._max = new Point(min[1]);
         }
         else {
             throw new Error('Bbox::constructor(): Invalid parameters. Please supply (min:PointLike, max:PointLike) or ([min:PointLike, max:PointLike])');
@@ -39,12 +39,22 @@ export class Bbox
 
     //// CALCULATED PROPERTIES ////
 
+    min(): Point
+    {
+        return this._min;
+    }
+
+    max(): Point
+    {
+        return this._max;
+    }
+
     center(): Point
     {
         return new Point(
-            (this.min.x + this.max.x) / 2,
-            (this.min.y + this.max.y) / 2,
-            (this.min.z + this.max.z) / 2,
+            (this._min.x + this._max.x) / 2,
+            (this._min.y + this._max.y) / 2,
+            (this._min.z + this._max.z) / 2,
         );
     }
 
@@ -52,25 +62,25 @@ export class Bbox
     size(): Point3Js
     {
         return new Point3Js(
-            this.max.x - this.min.x,
-            this.max.y - this.min.y,
-            this.max.z - this.min.z,
+            this._max.x - this._min.x,
+            this._max.y - this._min.y,
+            this._max.z - this._min.z,
         );
     }
 
     width(): number
     {
-        return this.max.x - this.min.x;
+        return this._max.x - this._min.x;
     }
 
     depth(): number
     {
-        return this.max.y - this.min.y;
+        return this._max.y - this._min.y;
     }
 
     height(): number
     {
-        return this.max.z - this.min.z;
+        return this._max.z - this._min.z;
     }
 
     is1D():boolean

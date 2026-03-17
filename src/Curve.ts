@@ -63,6 +63,21 @@ export class Curve
         return this._curve;
     }
 
+    /** Update internal curve */
+    update(c:NurbsCurve3DJs|CompoundCurve3DJs|Curve): this
+    {
+        if(c instanceof Curve)
+        {
+            this._curve = c._curve;
+            this._holes = c._holes.map(h => h.copy());
+        }
+        else
+        {
+            this._curve = c;
+        }
+        return this
+    }
+
     /** Get interior hole curves (if any, e.g. from boolean difference creating a hole) */
     holes(): Array<Curve>
     {
@@ -551,7 +566,7 @@ export class Curve
                         : Point.from(vecOrX, dy || 0, dz || 0);
 
         if(!vec){ throw new Error('Curve.translate(): Invalid translation input. Please use PointLike or valid offset coordinates.'); }
-        this._curve = this._curve?.translate(vec.toVector3Js());
+        this.update(this.inner().translate(vec.toVector3Js()));
         return this;
     }
 
@@ -564,14 +579,60 @@ export class Curve
     /** rotate the given curve for the specified angles (in degrees) per axis */
     rotate(ax: number, ay?: number, az?: number): this
     {
-        this._curve = this._curve?.rotate(rad(ax), rad(ay || 0), rad(az || 0));
+        return this.update(this.inner().rotate(rad(ax), rad(ay || 0), rad(az || 0)));
+    }
+
+    /** Rotate Curve by angleDeg around an axis through a pivot point.
+     *  Uses Rodrigues' rotation formula on control points — works for any axis.
+     *  @param angleDeg - rotation angle in degrees
+     *  @param axis     - 'x' | 'y' | 'z' or an arbitrary direction vector (PointLike)
+     *  @param pivot    - point the axis passes through (default: world origin)
+     */
+    rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
+    {
+        const axVec = (typeof axis === 'string') ? Vector.from(axis) : Point.from(axis).toVector();
+        const u = axVec.normalize();
+        const o = Point.from(pivot);
+        const theta = rad(angleDeg);
+        const cos = Math.cos(theta), sin = Math.sin(theta), t = 1 - cos;
+        const { x: ux, y: uy, z: uz } = u;
+
+        // Rodrigues rotation of a single point around axis through pivot
+        const rotatePoint = (p: Point): Point =>
+        {
+            const dx = p.x - o.x, dy = p.y - o.y, dz = p.z - o.z;
+            const dot = dx * ux + dy * uy + dz * uz;
+            return new Point(
+                o.x + (t * ux * ux + cos) * dx + (t * ux * uy - sin * uz) * dy + (t * ux * uz + sin * uy) * dz,
+                o.y + (t * ux * uy + sin * uz) * dx + (t * uy * uy + cos) * dy + (t * uy * uz - sin * ux) * dz,
+                o.z + (t * ux * uz - sin * uy) * dx + (t * uy * uz + sin * ux) * dy + (t * uz * uz + cos) * dz,
+            );
+        };
+
+        const rotateSpan = (span: NurbsCurve3DJs): NurbsCurve3DJs =>
+        {
+            const pts = span.controlPoints().map(p => rotatePoint(Point.from(p)).toPoint3Js());
+            return new NurbsCurve3DJs(span.degree(), pts, span.weights(), span.knots());
+        };
+
+        if (!this.isCompound())
+        {
+            this.update(rotateSpan(this.inner() as NurbsCurve3DJs));
+        }
+        else
+        {
+            const spans = (this.inner() as CompoundCurve3DJs).spans().map(rotateSpan);
+            this.update(new CompoundCurve3DJs(spans));
+        }
+
+        this._holes = this._holes.map(h => { h.rotateAround(angleDeg, axis, pivot); return h; });
+
         return this;
     }
 
     scale(sx: number, sy: number, sz: number): this
     {
-        this._curve = this._curve?.scale(sx, sy, sz);
-        return this;
+        return this.update(this.inner().scale(sx, sy, sz));
     }
 
     /** Reverse the direction of this curve (swap start/end).
@@ -579,8 +640,7 @@ export class Curve
      */
     reverse(): this
     {
-        this._curve = this._curve?.reverse();
-        return this;
+        return this.update(this.inner().reverse());
     }
 
     /** Mirror Curve across a plane defined by a direction (Axis or normal vector) and an optional position.
@@ -611,13 +671,66 @@ export class Curve
 
         if (!this.isCompound())
         {
-            this._curve = mirrorSpan(this.inner() as NurbsCurve3DJs);
+            this.update(mirrorSpan(this.inner() as NurbsCurve3DJs));
         }
         else
         {
             const mirroredSpans = (this.inner() as CompoundCurve3DJs).spans().map(mirrorSpan);
-            this._curve = new CompoundCurve3DJs(mirroredSpans);
+            this.update(new CompoundCurve3DJs(mirroredSpans));
         }
+
+        return this;
+    }
+
+    /** Merge seperate line spans into a single polyline Curve 
+     *  TODO: more robust
+    */
+    mergeLines(): this
+    {
+        // ...existing code...
+        
+        if (!this.isCompound()) return this;
+
+        const spans = (this.inner() as CompoundCurve3DJs).spans();
+        if (spans.some(s => s.degree() !== 1)) return this;
+
+        const points: Point[] = [];
+        for (let i = 0; i < spans.length; i++)
+        {
+            const cps = spans[i].controlPoints().map(p => Point.from(p));
+            if (i === 0) points.push(cps[0]);
+            points.push(cps[cps.length - 1]);
+        }
+
+        return this.update(Curve.Polyline(points));
+    }
+
+    /** Reorient this Curve from its current plane onto the plane defined by `normal` and `offset`.
+     *  1. Translates so the curve's bbox-min lands on `offset`.
+     *  2. Rotates via Euler angles (from `srcNormal.angleEuler(targetNormal)`) to align the planes.
+     */
+    reorient(normal: PointLike, offset: PointLike = [0,0,0], up: PointLike = [0,0,1]): this
+    {
+        const srcPlane = this.getOnPlane();
+        if (!srcPlane){ console.error(`Curve::reorient(): Curve is not planar.`); return this; }
+
+        const tgtNormal = Vector.from(normal);
+
+        // Canonicalize: ensure source normal is in the same half-space as the target,
+        // so opposite-winding copies of the same plane get an identical rotation.
+        const srcNormal = srcPlane.normal.dot(tgtNormal) < 0
+            ? srcPlane.normal.scale(-1)
+            : srcPlane.normal;
+
+        // TODO: make offset useful
+        this.translate(offset);
+
+        // Rotation: align normals — angleEuler returns radians, inner().rotate takes radians
+        const [roll, pitch, yaw] = srcNormal.angleEuler(tgtNormal);
+        this.update(this.inner().rotate(roll, pitch, yaw));
+
+        // Propagate to holes
+        this._holes = this._holes.map(h => h.reorient(normal, offset, up));
 
         return this;
     }
@@ -692,12 +805,10 @@ export class Curve
     /** Offset a Curve a given amount (+ or -) and optionally provide corner type (default:sharp) */
     offset(distance: number, cornerType:'sharp'|'round'|'smooth'='sharp'): Curve|null
     {
-        /* CSGRS/Curvo can only offset curves in 2D, so we need to convert the current
-            one (either compound of single) to the 2D version, 
-            then offset and turn back into a 3D Curve on TS layer
-        */
         if(!this.isPlanar()){ throw new Error(`Curve:offset(): Cannot offset a 3D curve!`);}
-        return Curve.fromCsgrs(this.inner()?.offset(distance, cornerType));
+        // If compound with all-line spans, combine into a single polyline first
+        const curve = this.isCompound() ? this.mergeLines() : this;
+        return this.update(Curve.fromCsgrs(curve.inner()?.offset(distance, cornerType)));
     }
 
     /** Trim the curve to a sub-curve between parameters t0 and t1.
@@ -1028,6 +1139,11 @@ export class Curve
 
     //// OUTPUTS ////
 
+    toString()
+    {
+        return `<Curve(${this.isCompound() ? 'Compound' : 'Single'}): length="${this.length().toFixed(3)}", planar="${this.isPlanar()}", closed="${this.isClosed()}">`;
+    }
+
     /**
      * Build the raw geometry buffer for this curve, ready to be embedded in a GLTF document.
      * Returns all pieces needed to assemble one GLTF primitive so that multiple curves can be
@@ -1061,14 +1177,24 @@ export class Curve
             throw new Error(`Curve::toGLTFBuffer(): Not enough vertices to export!`);
         }
 
-        const bbox = this.bbox();
+        // Compute min/max from the already-remapped positions in the buffer
+        const minArr = [Infinity, Infinity, Infinity];
+        const maxArr = [-Infinity, -Infinity, -Infinity];
+        for (let i = 0; i < pointsFlat.length; i += 3)
+        {
+            for (let c = 0; c < 3; c++)
+            {
+                if (pointsFlat[i + c] < minArr[c]) minArr[c] = pointsFlat[i + c];
+                if (pointsFlat[i + c] > maxArr[c]) maxArr[c] = pointsFlat[i + c];
+            }
+        }
 
         return {
             data: toBase64(pointsFlat),
             byteLength: pointsFlat.byteLength,
             count: points.length,
-            min: bbox?.min,
-            max: bbox?.max,
+            min: new Point(minArr[0], minArr[1], minArr[2]),
+            max: new Point(maxArr[0], maxArr[1], maxArr[2]),
         };
     }
 

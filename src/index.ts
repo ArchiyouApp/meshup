@@ -37,10 +37,10 @@ export function init(): void
     if (!_csgrs) {
         const t = performance.now();
         _csgrs = loadSync();
-        console.log(`Meshup initialized synchronously in ${(performance.now() - t).toFixed(2)} ms`);
+        // ...existing code...
     }
     else {
-        console.info('Meshup already initialized. Returning existing instance.');
+        // ...existing code...
     }
 }
 
@@ -50,7 +50,7 @@ export async function initAsync(): Promise<void>
     {
         const t = performance.now();
         _csgrs = await loadAsync();
-        console.log(`Meshup initialized asynchronously in ${(performance.now() - t).toFixed(2)} ms`);
+        // ...existing code...
     }
     else {
         console.info('Meshup already initialized. Returning existing instance.');
