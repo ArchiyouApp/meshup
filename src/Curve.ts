@@ -735,21 +735,16 @@ export class Curve
     /** Reorient this Planar Curve from its current plane onto the plane defined by `normal` and `offset` */
     reorient(normal: PointLike, offset: PointLike = [0,0,0]): this
     {
-        const srcNormal = this.normal();
+        let srcNormal = this.normal();
         if (!srcNormal){ console.error(`Curve::reorient(): Curve is not planar.`); return this; }
 
         const toNormal = Vector.from(normal);
 
         // Canonicalize: ensure source normal is in the same half-space as the target,
         // so opposite-winding copies of the same plane get an identical rotation.
-        /*
-        const srcNormal = fromPlane.normal.dot(toNormal) < 0
-            ? fromPlane.normal.scale(-1)
-            : fromPlane.normal;
-        */
-
-        console.log(srcNormal, toNormal);
-        console.log(srcNormal.dot(toNormal));
+        srcNormal = srcNormal.dot(toNormal) < 0
+            ? srcNormal.scale(-1)
+            : srcNormal;
 
         this.translate(offset); // TODO
 
