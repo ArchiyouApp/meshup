@@ -13,6 +13,7 @@ import { Point } from "./Point";
 import { Vector } from "./Vector";
 
 import { toBase64, fromBase64 } from "./utils";
+import { ANGLE_COMPARE_TOLERANCE } from "./constants";
 
 export class Collection
 {
@@ -93,9 +94,16 @@ export class Collection
         this._shapes = this._shapes.filter(s => s !== shape);
     }
 
+    /** Get a shape by its index */
     get(index: number): Mesh | Curve | undefined
     {
         return this._shapes[index] as Mesh | Curve | undefined;
+    }
+
+    /** Alias for get */
+    at(index: number): Mesh | Curve | undefined
+    {
+        return this.get(index);
     }
 
     first(): Mesh | Curve
@@ -193,6 +201,16 @@ export class Collection
     {
         this._shapes.forEach(
             shape => shape.mirror(dir, pos));
+        return this;
+    }
+
+    /** Reorient all shapes in the collection from their current plane onto the plane defined by `normal` and `offset` */
+    reorient(normal: PointLike, offset: PointLike = [0,0,0]): this
+    {
+        this.curves()
+            .forEach((shape,i) => {
+                return shape.reorient(normal, offset)
+            });
         return this;
     }
 
@@ -478,12 +496,19 @@ export class MeshCollection extends Collection
 
     shapes(): Array<Mesh>  { return super.meshes(); }
     get(index: number): Mesh | undefined { return super.meshes()[index]; }
+    at(index: number): Mesh | undefined { return this.get(index); }
     first(): Mesh
     {
         const m = super.meshes()[0];
         if (!m) throw new Error('MeshCollection::first(): Collection is empty.');
         return m;
     }
+
+    last(): Mesh 
+    {
+        return super.meshes()[super.meshes().length - 1];
+    }
+
 
     /** If single Mesh in the collection, return it. Otherwise, return collection. */
     checkSingle(): Mesh | this
@@ -593,6 +618,7 @@ export class CurveCollection extends Collection
 
     shapes(): Array<Curve>  { return super.curves(); }
     get(index: number): Curve | undefined { return super.curves()[index]; }
+    at(index: number): Curve | undefined { return this.get(index); }
     first(): Curve
     {
         const c = super.curves()[0];
@@ -907,6 +933,14 @@ export class CurveCollection extends Collection
     toArray(): Array<Curve>
     {
         return this.curves();
+    }
+
+    toMesh(): MeshCollection
+    {
+        const meshes = this.curves()
+                .map(curve => curve.toMesh())
+                .filter(mesh => mesh?.validate()) as Mesh[]; // filter out empty meshes
+        return new MeshCollection(...meshes);
     }
 }
 

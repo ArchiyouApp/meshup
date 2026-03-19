@@ -166,9 +166,20 @@ export class Sketch
     /** Offset last curve */
     offset(distance: number): this
     {
+        console.log('==== OFFSET SKETCH ====');
+
         const last = this._curves.last();
         if (!last) return this;
+
+        console.log(last.normal());
+        console.log(last.points());
+
         last.offset(distance); // in place
+
+        console.log('AFTER OFFSET');
+        console.log(last.normal());
+        console.log(last.points());
+        
         return this;
     }
 
@@ -223,14 +234,14 @@ export class Sketch
     /** Make an arc from current cursor to the given 2D point, with the given mid point */
     arcTo(mid: PointLike, end: PointLike): this
     {
-        // TODO
+        console.warn(`Sketch::arcTo(): Not implemented yet!`);
         return this;
     }
 
     /** Make a NURBS Curve through given 2D points as control points */
     splineTo(pnts:Array<PointLike>): this
     {
-        // TODO
+        console.warn(`Sketch::splineTo(): Not implemented yet!`);
         return this;
     }
 
@@ -276,7 +287,7 @@ export class Sketch
     {
         return this._curves.copy()
             .forEach((curve) => {
-                curve.reorient(this._normal, this._origin, [0,0,1]);
+                curve.reorient(this._normal, this._origin);
         });
     }
 

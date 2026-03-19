@@ -18,7 +18,7 @@
  * 
  */
 
-import { TESSELATION_TOLERANCE } from './constants';
+import { ANGLE_COMPARE_TOLERANCE, TESSELATION_TOLERANCE } from './constants';
 
 import { NurbsCurve3DJs, CompoundCurve3DJs, Vector3Js, BooleanRegionJs } from "./wasm/csgrs";
 
@@ -308,7 +308,8 @@ export class Curve
      */
     getOnPlane(tolerance: number = 1e-6): { normal: Vector, x: Vector, y: Vector } | null
     {
-        if (this._curve instanceof NurbsCurve3DJs) {
+        if (this._curve instanceof NurbsCurve3DJs)
+        {
             const result = this._curve.getOnPlane(tolerance);
             if (!result || result.length === 0) return null;
             return {
@@ -319,7 +320,8 @@ export class Curve
         }
 
         // For compound curves: check each span's plane
-        if (this._curve instanceof CompoundCurve3DJs) {
+        if (this._curve instanceof CompoundCurve3DJs) 
+        {
             const spans = this._curve.spans();
             if (!spans || spans.length === 0) return null;
             const firstResult = spans[0].getOnPlane(tolerance);
@@ -337,6 +339,29 @@ export class Curve
         }
 
         return null;
+    }
+
+    /** Get normal of planar Curve, returns null if not planar 
+     *  IMPORTANT: This method returns consistent normals independent of curve orientation
+                Use normalOrientation() to get orientation-dependent normal if needed
+    */
+    normal(): Vector|null
+    {
+        const plane = this.getOnPlane();
+        if(!plane){ console.error(`Curve::normal(): Curve is not planar.`); return null; }
+        return plane ? plane.normal : null;
+    }
+
+    /** Get normal based on curve orientation, returns null if not planar */
+    normalOrientation(): Vector|null
+    {
+        if(!this.isPlanar()){ console.error(`Curve::normalOrientation(): Curve is not planar.`); return null; }
+        // A little old fashioned, but should work
+        const pnts = this.points();
+        if(pnts.length < 3){ console.warn(`Curve::normalOrientation(): Curve has less than 3 control points, normal orientation may be unreliable.`); }
+        const v1 = pnts[1].toVector().subtract(pnts[0].toVector());
+        const v2 = pnts[2].toVector().subtract(pnts[1].toVector());
+        return v1.cross(v2).normalize();
     }
 
     length(): number
@@ -576,10 +601,10 @@ export class Curve
         return this.translate(vecOrX, dy, dz);
     }
 
-    /** rotate the given curve for the specified angles (in degrees) per axis */
-    rotate(ax: number, ay?: number, az?: number): this
+    /** Rotate the given curve a specified angle (in degrees) around an axis through the world origin */
+    rotate(angle: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
     {
-        return this.update(this.inner().rotate(rad(ax), rad(ay || 0), rad(az || 0)));
+        return this.rotateAround(angle, axis, pivot);
     }
 
     /** Rotate Curve by angleDeg around an axis through a pivot point.
@@ -590,44 +615,46 @@ export class Curve
      */
     rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
     {
-        const axVec = (typeof axis === 'string') ? Vector.from(axis) : Point.from(axis).toVector();
-        const u = axVec.normalize();
-        const o = Point.from(pivot);
-        const theta = rad(angleDeg);
-        const cos = Math.cos(theta), sin = Math.sin(theta), t = 1 - cos;
-        const { x: ux, y: uy, z: uz } = u;
+        const p = Point.from(pivot);
+        this.translate([-p.x, -p.y, -p.z]);
 
-        // Rodrigues rotation of a single point around axis through pivot
-        const rotatePoint = (p: Point): Point =>
+        if (typeof axis === 'string')
         {
-            const dx = p.x - o.x, dy = p.y - o.y, dz = p.z - o.z;
-            const dot = dx * ux + dy * uy + dz * uz;
-            return new Point(
-                o.x + (t * ux * ux + cos) * dx + (t * ux * uy - sin * uz) * dy + (t * ux * uz + sin * uy) * dz,
-                o.y + (t * ux * uy + sin * uz) * dx + (t * uy * uy + cos) * dy + (t * uy * uz - sin * ux) * dz,
-                o.z + (t * ux * uz - sin * uy) * dx + (t * uy * uz + sin * ux) * dy + (t * uz * uz + cos) * dz,
-            );
-        };
-
-        const rotateSpan = (span: NurbsCurve3DJs): NurbsCurve3DJs =>
-        {
-            const pts = span.controlPoints().map(p => rotatePoint(Point.from(p)).toPoint3Js());
-            return new NurbsCurve3DJs(span.degree(), pts, span.weights(), span.knots());
-        };
-
-        if (!this.isCompound())
-        {
-            this.update(rotateSpan(this.inner() as NurbsCurve3DJs));
+            const a = rad(angleDeg);
+            this.update(this.inner().rotate(
+                axis === 'x' ? a : 0,
+                axis === 'y' ? a : 0,
+                axis === 'z' ? a : 0,
+            ));
         }
         else
         {
-            const spans = (this.inner() as CompoundCurve3DJs).spans().map(rotateSpan);
-            this.update(new CompoundCurve3DJs(spans));
+            // Rodrigues → ZYX Euler decomposition, then delegate to WASM rotate
+            const axVec = Point.from(axis).toVector().normalize();
+            const theta = rad(angleDeg);
+            const cos = Math.cos(theta), sin = Math.sin(theta), t = 1 - cos;
+            const { x: ux, y: uy, z: uz } = axVec;
+            const R20 = t * ux * uz - sin * uy;
+            const R21 = t * uy * uz + sin * ux;
+            const R22 = t * uz * uz + cos;
+            const R10 = t * ux * uy + sin * uz;
+            const R00 = t * ux * ux + cos;
+            const ay2 = Math.asin(Math.max(-1, Math.min(1, -R20)));
+            const ax2 = Math.atan2(R21, R22);
+            const az2 = Math.atan2(R10, R00);
+            this.update(this.inner().rotate(ax2, ay2, az2));
         }
 
+        this.translate([p.x, p.y, p.z]);
         this._holes = this._holes.map(h => { h.rotateAround(angleDeg, axis, pivot); return h; });
-
         return this;
+    }
+
+    /** Rotate Curve by given Euler angles (in degrees) around world axes, in ZYX order */
+    rotateEuler(roll: number, pitch: number, yaw: number): this
+    {
+        // NOTE: curvo uses radians!
+        return this.update(this.inner().rotate(rad(roll), rad(pitch), rad(yaw)));
     }
 
     scale(sx: number, sy: number, sz: number): this
@@ -705,32 +732,38 @@ export class Curve
         return this.update(Curve.Polyline(points));
     }
 
-    /** Reorient this Curve from its current plane onto the plane defined by `normal` and `offset`.
-     *  1. Translates so the curve's bbox-min lands on `offset`.
-     *  2. Rotates via Euler angles (from `srcNormal.angleEuler(targetNormal)`) to align the planes.
-     */
-    reorient(normal: PointLike, offset: PointLike = [0,0,0], up: PointLike = [0,0,1]): this
+    /** Reorient this Planar Curve from its current plane onto the plane defined by `normal` and `offset` */
+    reorient(normal: PointLike, offset: PointLike = [0,0,0]): this
     {
-        const srcPlane = this.getOnPlane();
-        if (!srcPlane){ console.error(`Curve::reorient(): Curve is not planar.`); return this; }
+        const srcNormal = this.normal();
+        if (!srcNormal){ console.error(`Curve::reorient(): Curve is not planar.`); return this; }
 
-        const tgtNormal = Vector.from(normal);
+        const toNormal = Vector.from(normal);
 
         // Canonicalize: ensure source normal is in the same half-space as the target,
         // so opposite-winding copies of the same plane get an identical rotation.
-        const srcNormal = srcPlane.normal.dot(tgtNormal) < 0
-            ? srcPlane.normal.scale(-1)
-            : srcPlane.normal;
+        /*
+        const srcNormal = fromPlane.normal.dot(toNormal) < 0
+            ? fromPlane.normal.scale(-1)
+            : fromPlane.normal;
+        */
 
-        // TODO: make offset useful
-        this.translate(offset);
+        console.log(srcNormal, toNormal);
+        console.log(srcNormal.dot(toNormal));
 
-        // Rotation: align normals — angleEuler returns radians, inner().rotate takes radians
-        const [roll, pitch, yaw] = srcNormal.angleEuler(tgtNormal);
-        this.update(this.inner().rotate(roll, pitch, yaw));
+        this.translate(offset); // TODO
+
+        if(srcNormal.angle(toNormal) < ANGLE_COMPARE_TOLERANCE)
+        {
+            console.warn(`Curve::reorient(): Source and target normals are already aligned. No rotation applied, only translation if offset is given.`);
+            return this;
+        }
+
+        const [roll, pitch, yaw] = srcNormal.angleEuler(toNormal);
+        this.update(this.rotateEuler(roll, pitch, yaw));
 
         // Propagate to holes
-        this._holes = this._holes.map(h => h.reorient(normal, offset, up));
+        this._holes = this._holes.map(h => h.reorient(normal, offset));
 
         return this;
     }
@@ -1120,20 +1153,27 @@ export class Curve
     toMesh(tolerance: number = TESSELATION_TOLERANCE): Mesh | undefined
     {
         const points = this.tessellate(tolerance);
+
         if (points.length < 3)
         {
             console.warn(`Curve::toMesh(): Not enough points (${points.length}) to create a mesh. A minimum of 3 non-collinear points is required.`);
             return undefined;
         }
-
         // If this curve has holes, tessellate each hole and use fromPointsWithHoles
         if (this.hasHoles())
         {
             const holePointArrays = this._holes.map(hole => hole.tessellate(tolerance));
             return Mesh.fromPointsWithHoles(points, holePointArrays);
         }
+        const m = Mesh.fromPoints(points);
 
-        return Mesh.fromPoints(points);
+        // When converting to Mesh, the orientation is important for the resulting normal of new polygons/faces.
+        // Once case is ackward: If Curve normal (based on orientation) is pointing away from default camera position ([0,1,0])
+        // It is not immediately visible. Correct this.
+        console.log(this.normalOrientation());
+        return ((this.isPlanar() && this.normalOrientation()!.dot(new Vector(0, 1, 0)) < 0))
+                ? m.inverse()
+                : m;
     }
     
 

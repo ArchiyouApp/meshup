@@ -5,15 +5,23 @@
  *  Mostly for more convenient usage in TypeScript and introspection
  *  
  *  NOTES:
+ *  
+ *    - ANGLES IN DEGREES
+ *        Although the underlying CSGRS library uses radians, we convert all angles to degrees in our API. 
+ * 
  *    - IMMUTABLE: For these simple Vectors we always return a new instance instead of modifying the original.
  *        This is less error prone, and enables us to easily maintain the properties
  * 
 */
 
-import type { PointLike, Axis } from "./types";
-import { isAxis, isPointLike } from "./types";
-import { Point } from "./Point";
 import { Vector3Js  } from "./wasm/csgrs";
+
+import type { PointLike, Axis } from "./types";
+import { isAxis, isPointLike } from "./types"; // type guards
+
+import { Point } from "./Point";
+
+import { deg } from "./utils";
 
 export class Vector extends Vector3Js
 {
@@ -82,14 +90,14 @@ export class Vector extends Vector3Js
   angle(other:PointLike):number
   {
     if(!isPointLike(other)){ throw new Error('Vector::angle(): Invalid argument. Please supply a PointLike instance.'); }
-    return super.angle(Point.from(other).toVector3Js());
+    return deg(super.angle(Point.from(other).toVector3Js()));
   }
 
   angleEuler(other: PointLike): [number, number, number]
   {
       if(!isPointLike(other)){ throw new Error('Vector::angleEuler(): Invalid argument. Please supply a PointLike instance.'); }
       const result = super.angleEuler(Vector.from(other).toVector3Js());
-      return [result[0] as number, result[1] as number, result[2] as number];
+      return [deg(result[0] as number), deg(result[1] as number), deg(result[2] as number)];
   }
 
   //// METHODS
@@ -109,7 +117,7 @@ export class Vector extends Vector3Js
   /** Create new Vector instance by subtracting another vector */
   subtract(other: PointLike): Vector
   {
-    if(!isPointLike(other)){ throw new Error('Vector::add(): Invalid argument. Please supply a PointLike instance.'); }
+    if(!isPointLike(other)){ throw new Error('Vector::subtract(): Invalid argument. Please supply a PointLike instance.'); }
     return Vector.from(super.subtract(Vector.from(other).toVector3Js()));
   }
 
@@ -143,7 +151,7 @@ export class Vector extends Vector3Js
     return super.dot(other);
   }
 
-  /** Create new Vector by rotating with given angle (in rad) around an axis */
+  /** Create new Vector by rotating with given angle (in rad) around arch axis */
   rotate(axis: PointLike, angle: number): Vector
   {
     if(!isPointLike(axis))

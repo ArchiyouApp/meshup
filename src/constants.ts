@@ -2,6 +2,7 @@
 
 // after Point operations we round to a given tolerance to avoid inaccuracies in further operations
 export const POINT_TOLERANCE = 1e-6; 
+export const ANGLE_COMPARE_TOLERANCE = 1e-3; // in degrees, for comparing angles (e.g. to detect axis-alignment)
 export const TESSELATION_TOLERANCE = 1e-3; 
 
 export const SHAPES_SPHERE_SEGMENTS_WIDTH = 32;

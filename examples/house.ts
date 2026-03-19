@@ -1,4 +1,5 @@
 import { Curve, CurveCollection, initAsync as initMeshup, Sketch } from '../src';
+import { Point } from '../src/Point';
 
 import { rad } from '../src/utils';
 
@@ -14,17 +15,42 @@ const HEIGHT = 300;
 const ROOF_ANGLE = 45; 
 
 
-
-const roofLine = new Sketch('xy')
+const roofLine = new Sketch('xz')
                 .moveTo(0,HEIGHT)
                 .lineTo(WIDTH/2, `+${Math.round(Math.tan(rad(ROOF_ANGLE)) * WIDTH/2)}`) 
                 .lineTo(WIDTH, HEIGHT)
                 .copy().offset(10)
+                .close()
                 .end();
 
-// ...existing code...
+console.log(roofLine.first().normal());
+const pnts = roofLine.first().points();
+const v1 = pnts[0].toVector().subtract(pnts[1].toVector());
+const v2 = pnts[1].toVector().subtract(pnts[2].toVector());
+console.log(v1.cross(v2).normalize()); // should be [0,0,1] or [0,0,-1] depending on orientation
 
-save('roofLine.gltf', roofLine.toGLTF()); // OFFSET NOT OK
+
+//roofLine.rotate(90,'x'); // OK
+//console.log(roofLine.first().normal());
+//console.log(roofLine.last().normal());
+
+
+//roofLine.reorient([0,-1,0]);
+//console.log(roofLine.toMesh().toGLTF());
+//console.log(roofLine.toMesh().first().vertices());
+
+
+
+    
+    
+save('roofLine.gltf', roofLine.toMesh().toGLTF()); 
+
+
+/*
+const c1 = Curve.Polyline([0,0], [100,0],[100,100]);
+console.log(c1.normal());
+console.log(c1.offset(10)?.normal());
+*/
 
 
 

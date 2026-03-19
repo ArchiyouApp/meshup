@@ -43,7 +43,7 @@ export class Point
         }
         else if(x instanceof Point || x instanceof Vector || x instanceof Vertex)
         {
-            this._x = x.x;
+            this._x = x.x;// ...existing code...
             this._y = x.y;
             if(typeof x.z === 'number') this._z = x.z;
         }
@@ -58,6 +58,16 @@ export class Point
             this._x = x.position().x;
             this._y = x.position().y;
             this._z = x.position().z;
+        }
+        else if( typeof x === 'object') 
+        {
+            const obj = x as {x: number, y: number, z?: number};
+            if(typeof obj.x === 'number' && typeof obj.y === 'number' && (typeof obj.z === 'number' || obj.z === undefined))
+            {
+                this._x = obj.x;
+                this._y = obj.y;
+                this._z = obj?.z || 0;
+            }
         }
         else
         {
