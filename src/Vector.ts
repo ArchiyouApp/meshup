@@ -93,11 +93,11 @@ export class Vector extends Vector3Js
     return deg(super.angle(Point.from(other).toVector3Js()));
   }
 
-  angleEuler(other: PointLike): [number, number, number]
+  /** Get the shortest-arc rotation (as a quaternion) to align this vector with another */
+  rotationBetween(other: PointLike): { x: number, y: number, z: number, w: number }
   {
-      if(!isPointLike(other)){ throw new Error('Vector::angleEuler(): Invalid argument. Please supply a PointLike instance.'); }
-      const result = super.angleEuler(Vector.from(other).toVector3Js());
-      return [deg(result[0] as number), deg(result[1] as number), deg(result[2] as number)];
+      if(!isPointLike(other)){ throw new Error('Vector::rotationBetween(): Invalid argument. Please supply a PointLike instance.'); }
+      return super.rotationBetween(Vector.from(other).toVector3Js());
   }
 
   //// METHODS
@@ -166,34 +166,12 @@ export class Vector extends Vector3Js
     );
   }
   
-  /** Create new Vector by Euler rotation */
-  rotateEuler(roll: number, pitch: number, yaw: number): Vector 
+  /** Create new Vector by Quaternion rotation */
+  rotateQuaternion(w: number, x: number, y: number, z: number): Vector 
   {
     return Vector.from(
-      super.rotateEuler(roll, pitch, yaw)
+      super.rotateQuaternion(w, x, y, z)
     );
-  }
-
-  /**
-   * Helper: Convert a 3x3 rotation matrix to Euler angles (XYZ order).
-   * Returns [roll, pitch, yaw].
-   * Assumes matrix is valid rotation.
-   */
-  static _rotationMatrixToEulerXYZ(R: number[][]): [number, number, number] {
-    // XYZ convention:
-    // R = Rz(yaw) * Ry(pitch) * Rx(roll)
-    // See: https://www.geometrictools.com/Documentation/EulerAngles.pdf
-    let pitch = Math.asin(-Math.max(-1, Math.min(1, R[2][0])));
-    let roll, yaw;
-    if (Math.abs(R[2][0]) < 0.99999) {
-      roll = Math.atan2(R[2][1], R[2][2]);
-      yaw = Math.atan2(R[1][0], R[0][0]);
-    } else {
-      // Gimbal lock
-      roll = 0;
-      yaw = Math.atan2(-R[0][1], R[1][1]);
-    }
-    return [roll, pitch, yaw];
   }
 
   //// CONVERSIONS ////

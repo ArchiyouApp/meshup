@@ -604,7 +604,7 @@ export class Curve
     /** Rotate the given curve a specified angle (in degrees) around an axis through the world origin */
     rotate(angle: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
     {
-        return this.rotateAround(angle, axis, pivot);
+        return this.update(this.rotateAround(angle, axis, pivot));
     }
 
     /** Rotate Curve by angleDeg around an axis through a pivot point.
@@ -629,20 +629,10 @@ export class Curve
         }
         else
         {
-            // Rodrigues → ZYX Euler decomposition, then delegate to WASM rotate
             const axVec = Point.from(axis).toVector().normalize();
-            const theta = rad(angleDeg);
-            const cos = Math.cos(theta), sin = Math.sin(theta), t = 1 - cos;
-            const { x: ux, y: uy, z: uz } = axVec;
-            const R20 = t * ux * uz - sin * uy;
-            const R21 = t * uy * uz + sin * ux;
-            const R22 = t * uz * uz + cos;
-            const R10 = t * ux * uy + sin * uz;
-            const R00 = t * ux * ux + cos;
-            const ay2 = Math.asin(Math.max(-1, Math.min(1, -R20)));
-            const ax2 = Math.atan2(R21, R22);
-            const az2 = Math.atan2(R10, R00);
-            this.update(this.inner().rotate(ax2, ay2, az2));
+            const half = rad(angleDeg) / 2;
+            const s = Math.sin(half);
+            this.rotateQuaternion(Math.cos(half), axVec.x * s, axVec.y * s, axVec.z * s);
         }
 
         this.translate([p.x, p.y, p.z]);
@@ -650,11 +640,132 @@ export class Curve
         return this;
     }
 
-    /** Rotate Curve by given Euler angles (in degrees) around world axes, in ZYX order */
-    rotateEuler(roll: number, pitch: number, yaw: number): this
+    rotateX(angle: number, pivot: PointLike = [0, 0, 0]): this 
+    { 
+        return this.rotateAround(angle, 'x', pivot); 
+    }
+
+    rotateY(angle: number, pivot: PointLike = [0, 0, 0]): this 
+    { 
+        return this.rotateAround(angle, 'y', pivot); 
+    }
+    
+    rotateZ(angle: number, pivot: PointLike = [0, 0, 0]): this 
+    { 
+        return this.rotateAround(angle, 'z', pivot); 
+    }
+
+    /** Rotate Curve by a quaternion given as components `(w, x, y, z)`.
+     *  The quaternion is normalized internally, so non-unit input is safe.
+     */
+    rotateQuaternion(w: number, x: number, y: number, z: number): this
     {
-        // NOTE: curvo uses radians!
-        return this.update(this.inner().rotate(rad(roll), rad(pitch), rad(yaw)));
+        return this.update(this.inner().rotateQuaternion(w, x, y, z));
+    }
+
+    /** Align this Curve by mapping 3 source points onto 3 target points.
+     *
+     *  - **withScale:** if true, apply a uniform scale (centered at q1) so edge lengths match.
+     *
+     *  @param sourcePoints - 3 reference points on the curve (current space)
+     *  @param targetPoints - 3 corresponding destination points
+     *  @param withScale    - optionally scale uniformly to match first-edge length
+     */
+    alignPoints(
+        sourcePoints: [PointLike, PointLike, PointLike],
+        targetPoints: [PointLike, PointLike, PointLike],
+        withScale = false
+    ): this
+    {
+        if(sourcePoints.length < 3 || targetPoints.length < 3)
+        {
+            throw new Error('Curve.alignPoints(): sourcePoints and targetPoints must have at least 3 points.');
+        }
+
+        if (sourcePoints.length !== targetPoints.length)
+        {
+            throw new Error('Curve.alignPoints(): sourcePoints and targetPoints must have the same length (2 or 3).');
+        }
+
+        const p1 = Point.from(sourcePoints[0]);
+        const p2 = Point.from(sourcePoints[1]);
+        const q1 = Point.from(targetPoints[0]);
+        const q2 = Point.from(targetPoints[1]);
+
+        // Step 1: translate so p1 → q1 ---
+        this.translate([q1.x - p1.x, q1.y - p1.y, q1.z - p1.z]);
+
+        // Edge vectors (source and target)
+        const srcEdge = new Vector(p2.x - p1.x, p2.y - p1.y, p2.z - p1.z);
+        const tgtEdge = new Vector(q2.x - q1.x, q2.y - q1.y, q2.z - q1.z);
+
+        // Step 2: optional uniform scale (before rotation, centered at q1) ---
+        let scaleFactor = 1;
+        if (withScale)
+        {
+            const srcLen = srcEdge.length();
+            const tgtLen = tgtEdge.length();
+            if (srcLen > 1e-10)
+            {
+                scaleFactor = tgtLen / srcLen;
+                this.translate([-q1.x, -q1.y, -q1.z]);
+                this.scale(scaleFactor, scaleFactor, scaleFactor);
+                this.translate([q1.x, q1.y, q1.z]);
+            }
+        }
+
+        // Step 3: rotate around q1 to align srcEdge → tgtEdge ---
+        const R1 = srcEdge.rotationBetween(tgtEdge);
+        this.translate([-q1.x, -q1.y, -q1.z]);
+        this.rotateQuaternion(R1.w, R1.x, R1.y, R1.z);
+        this.translate([q1.x, q1.y, q1.z]);
+
+        // Step 4: twist around the now-aligned edge axis ---
+        if (sourcePoints.length === 3)
+        {
+            const p3 = Point.from((sourcePoints as [PointLike, PointLike, PointLike])[2]);
+            const q3 = Point.from((targetPoints as [PointLike, PointLike, PointLike])[2]);
+
+            // Where p3 ended up after translate + scale + R1 (relative to q1):
+            const rel = new Vector(p3.x - p1.x, p3.y - p1.y, p3.z - p1.z)
+                            .scale(scaleFactor)
+                            .rotateQuaternion(R1.w, R1.x, R1.y, R1.z);
+
+            // Where q3 sits relative to q1:
+            const goal = new Vector(q3.x - q1.x, q3.y - q1.y, q3.z - q1.z);
+
+            // Twist axis = the aligned first edge (unit)
+            const axLen = tgtEdge.length();
+            if (axLen > 1e-10)
+            {
+                const axis = tgtEdge.scale(1 / axLen);
+
+                // Project both vectors onto the plane perpendicular to axis
+                const u1 = rel.subtract(axis.scale(rel.dot(axis)));
+                const u2 = goal.subtract(axis.scale(goal.dot(axis)));
+
+                const len1 = u1.length(), len2 = u2.length();
+                if (len1 > 1e-10 && len2 > 1e-10)
+                {
+                    // Signed angle from u1 → u2 around axis
+                    const cosA = Math.max(-1, Math.min(1, u1.dot(u2) / (len1 * len2)));
+                    // sin component: (u1 × u2) · axis / (|u1| |u2|)
+                    const crossVec = u1.cross(u2);
+                    const sinA = crossVec.dot(axis) / (len1 * len2);
+                    const angle = Math.atan2(sinA, cosA);
+
+                    if (Math.abs(angle) > 1e-10)
+                    {
+                        const half = angle / 2;
+                        const sh = Math.sin(half);
+                        this.translate([-q1.x, -q1.y, -q1.z]);
+                        this.rotateQuaternion(Math.cos(half), axis.x * sh, axis.y * sh, axis.z * sh);
+                        this.translate([q1.x, q1.y, q1.z]);
+                    }
+                }
+            }
+        }
+        return this;
     }
 
     scale(sx: number, sy: number, sz: number): this
@@ -754,14 +865,16 @@ export class Curve
             return this;
         }
 
-        const [roll, pitch, yaw] = srcNormal.angleEuler(toNormal);
-        this.update(this.rotateEuler(roll, pitch, yaw));
+        const {w, x, y, z} = srcNormal.rotationBetween(toNormal);
+        this.update(this.rotateQuaternion(w, x, y, z));
 
         // Propagate to holes
         this._holes = this._holes.map(h => h.reorient(normal, offset));
 
         return this;
     }
+
+
 
      /** Close this curve by adding a line segment from end back to start.
      *  If already closed, returns self unchanged.
@@ -1141,9 +1254,24 @@ export class Curve
         }
     }
 
+    //// SURFACES/SOLIDS OPERATIONS ////
+
+    /** Extrude this curve along a direction to create a Mesh.
+     *  If the curve is closed and planar, creates a solid extrusion.
+     *  If the curve is open or non-planar, creates a swept surface.
+     *  @param direction - The extrusion direction vector (default planar normal or [0,0,1])
+     *  @param length - The extrusion length (default: 1)
+     *  @returns A new Mesh representing the extruded geometry
+     */
+    extrude(length: number, direction: PointLike): Mesh
+    {
+        // TODO
+    }
+
   
 
     //// TRANSFORMATION TO OTHER TYPES ////
+
 
     toMesh(tolerance: number = TESSELATION_TOLERANCE): Mesh | undefined
     {
@@ -1165,7 +1293,6 @@ export class Curve
         // When converting to Mesh, the orientation is important for the resulting normal of new polygons/faces.
         // Once case is ackward: If Curve normal (based on orientation) is pointing away from default camera position ([0,1,0])
         // It is not immediately visible. Correct this.
-        console.log(this.normalOrientation());
         return ((this.isPlanar() && this.normalOrientation()!.dot(new Vector(0, 1, 0)) < 0))
                 ? m.inverse()
                 : m;
@@ -1271,5 +1398,4 @@ export class Curve
 
         return JSON.stringify(gltf);
     }
-
 }

@@ -91,10 +91,7 @@ if (subHoleResult?.first()) {
 
     
 */
-
-    [0,0],
-]);
-
+/*
 const line = Curve.Line([15,0], [15,40]);
 
 save('beforeCombine.gltf', new Collection(pl, line).toGLTF());
@@ -110,6 +107,7 @@ const lineM = Curve.Line([0,0], [15,0]);
 save('connCurveCollection.gltf', CurveCollection.from(pl, line, lineM).combine()?.toGLTF());
 //const coll = CurveCollection.from(pl, line, lineM).combine();
 */
+/*
 const l2 = Curve.Line([15,0],[15,10]);
 
 save('beforeClose.gltf', col.toGLTF());
@@ -124,4 +122,22 @@ const l3 = Curve.Line([0,20], [10,20]);
 const col = new CurveCollection(l1, l2, l3);
 
 save('beforeClose.gltf', col.toGLTF());
+*/
 
+const pl = Curve.Polyline([
+    [0,0],
+    [10,10],
+    [20,0]]);
+
+pl.alignPoints(
+    [[0,0,0], [10,10,0], [20,0,0]], // 3 source points to fully constrain rotation
+    [[0,0,0], [10,0,10], [20,0,0]], // 3 target points (XZ plane)
+    false
+);
+
+//pl.rotateX(45, [0,0,0]);
+
+console.log(pl.bbox());
+
+
+save('pl.gltf', pl.toGLTF());

@@ -16,7 +16,7 @@ import { Curve, getCsgrs } from './index';
 import { Point } from './Point';
 import { Bbox } from './Bbox';
 import { Vector } from './Vector'
-import { rad } from './utils';
+import { rad, deg } from './utils';
 
 import { MeshJs, PolygonJs, PlaneJs, Vector3Js, NurbsCurve3DJs, CompoundCurve3DJs } from './wasm/csgrs';
 
@@ -382,18 +382,17 @@ export class Mesh
     {
         if (typeof axis === 'string')
         {
-            const a = rad(angle);
             this._mesh = this.inner()?.rotate(
-                axis === 'x' ? a : 0,
-                axis === 'y' ? a : 0,
-                axis === 'z' ? a : 0,
+                axis === 'x' ? angle : 0,
+                axis === 'y' ? angle : 0,
+                axis === 'z' ? angle : 0,
             );
         }
         else
         {
+            const a = rad(angle);
             const axVec = Point.from(axis).toVector().normalize();
-            const theta = rad(angle);
-            const cos = Math.cos(theta), sin = Math.sin(theta), t = 1 - cos;
+            const cos = Math.cos(a), sin = Math.sin(a), t = 1 - cos;
             const { x: ux, y: uy, z: uz } = axVec;
             const R20 = t * ux * uz - sin * uy;
             const R21 = t * uy * uz + sin * ux;
@@ -403,8 +402,35 @@ export class Mesh
             const ay2 = Math.asin(Math.max(-1, Math.min(1, -R20)));
             const ax2 = Math.atan2(R21, R22);
             const az2 = Math.atan2(R10, R00);
-            this._mesh = this.inner()?.rotate(ax2, ay2, az2);
+            this._mesh = this.inner()?.rotate(deg(ax2), deg(ay2), deg(az2));
         }
+        return this;
+    }
+
+    /** Rotate Mesh by angle (degrees) around X axis */
+    rotateX(angle: number): this
+    {
+        return this.rotate(angle, 'x');
+    }
+
+    /** Rotate Mesh by angle (degrees) around Y axis */
+    rotateY(angle: number): this
+    {
+        return this.rotate(angle, 'y');
+    }
+
+    /** Rotate Mesh by angle (degrees) around Z axis */
+    rotateZ(angle: number): this
+    {
+        return this.rotate(angle, 'z');
+    }
+
+    /** Rotate Mesh by a quaternion given as components `(w, x, y, z)`.
+     *  The quaternion is normalized internally, so non-unit input is safe.
+     */
+    rotateQuaternion(w: number, x: number, y: number, z: number): this
+    {
+        this._mesh = this.inner()?.rotateQuaternion(w, x, y, z);
         return this;
     }
 
@@ -629,6 +655,13 @@ export class Mesh
             }
         }
         return meshes;
+    }
+
+    //// OUTPUT ////
+
+    toPolygons(): undefined|Array<PolygonJs>
+    {
+        return this.inner()?.polygons();
     }
 
     //// EXPORT ////

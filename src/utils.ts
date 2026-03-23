@@ -94,3 +94,59 @@ export function fromBase64(b64: string): Uint8Array
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return bytes;
 }
+
+/**
+ * Debug helper: decode all base64 buffers embedded in a GLTF JSON string and return
+ * them as raw Uint8Arrays, one per entry in the GLTF `buffers` array.
+ */
+export function debugGLTFBuffers(gltfJson: string): Uint8Array[]
+{
+    const gltf = JSON.parse(gltfJson);
+    if (!Array.isArray(gltf.buffers)) return [];
+    return gltf.buffers.map((buf: { uri?: string }) =>
+    {
+        if (!buf.uri) return new Uint8Array(0);
+        const base64 = buf.uri.slice(buf.uri.indexOf(',') + 1);
+        return fromBase64(base64);
+    });
+}
+
+/**
+ * Debug helper: extract the raw normal vectors from a GLTF JSON string.
+ * Returns one Float32Array per mesh primitive that has a NORMAL attribute,
+ * laid out as [x0,y0,z0, x1,y1,z1, ...].
+ */
+export function debugGLTFNormals(gltfJson: string): Float32Array[]
+{
+    const gltf = JSON.parse(gltfJson);
+
+    // Decode all binary buffers up front
+    const rawBuffers: Uint8Array[] = (gltf.buffers ?? []).map((buf: { uri?: string }) =>
+    {
+        if (!buf.uri) return new Uint8Array(0);
+        const base64 = buf.uri.slice(buf.uri.indexOf(',') + 1);
+        return fromBase64(base64);
+    });
+
+    const results: Float32Array[] = [];
+
+    for (const mesh of (gltf.meshes ?? []))
+    {
+        for (const prim of (mesh.primitives ?? []))
+        {
+            const normalAccIdx = prim.attributes?.NORMAL;
+            if (normalAccIdx == null) continue;
+
+            const acc        = gltf.accessors[normalAccIdx];
+            const bufView    = gltf.bufferViews[acc.bufferView];
+            const raw        = rawBuffers[bufView.buffer];
+
+            const byteOffset = (bufView.byteOffset ?? 0) + (acc.byteOffset ?? 0);
+            const byteLength = acc.count * 3 * 4; // VEC3 of FLOAT (4 bytes each)
+
+            results.push(new Float32Array(raw.buffer, raw.byteOffset + byteOffset, acc.count * 3));
+        }
+    }
+
+    return results;
+}

@@ -12,10 +12,10 @@ export const SHAPES_CYLINDER_SEGMENTS_RADIAL = 32;
 export const BASE_PLANE_NAME_TO_PLANE = {
     'xy': { normal: [0,0,1], xDir: [1,0,0], yDir: [0,1,0] },
     'yz': { normal: [1,0,0], xDir: [0,1,0], yDir: [0,0,1] },
-    'xz': { normal: [0,-1,0], xDir: [0,0,1], yDir: [1,0,0] },
-    'front': { normal: [0,0,1], xDir: [1,0,0], yDir: [0,1,0] },
-    'back': { normal: [0,0,-1], xDir: [-1,0,0], yDir: [0,1,0] },
-    'left': { normal: [-1,0,0], xDir: [0,1,0], yDir: [0,0,-1] },
-    'right': { normal: [1,0,0], xDir: [0,-1,0], yDir: [0,0,-1] },
+    'xz': { normal: [0,-1,0], xDir: [1,0,0], yDir: [0,0,1] },
+    'front': { normal: [0,-1,0], xDir: [1,0,0], yDir: [0,0,1] },
+    'back': { normal: [0,1,0], xDir: [1,0,0], yDir: [0,0,1] },
+    'left': { normal: [-1,0,0], xDir: [0,1,0], yDir: [0,0,1] },
+    'right': { normal: [1,0,0], xDir: [0,1,0], yDir: [0,0,1] },
 }
 

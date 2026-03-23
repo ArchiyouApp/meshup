@@ -70,12 +70,12 @@
  * 
  */
 
-import { PolygonJs } from "./wasm/csgrs";
+import { PolygonJs, SketchJs, VertexJs } from "./wasm/csgrs";
 
 import { Vector } from "./Vector";
 import { Point } from "./Point";
 import { Collection, CurveCollection } from "./Collection";
-
+import { Mesh, getCsgrs } from "./index";
 
 import type { Axis, BasePlane, PointLike } from "./types";
 import { isBasePlane, isPointLike } from "./types";
@@ -166,19 +166,10 @@ export class Sketch
     /** Offset last curve */
     offset(distance: number): this
     {
-        console.log('==== OFFSET SKETCH ====');
-
         const last = this._curves.last();
         if (!last) return this;
 
-        console.log(last.normal());
-        console.log(last.points());
-
         last.offset(distance); // in place
-
-        console.log('AFTER OFFSET');
-        console.log(last.normal());
-        console.log(last.points());
         
         return this;
     }
@@ -280,6 +271,113 @@ export class Sketch
         return this;
     }
 
+    //// 3D OPERATIONS ////
+
+    /** @private Convert closed sketch curves directly to a SketchJs using
+     *  SketchJs.polygon() — no JSON serialization step needed.
+     *  Holes are subtracted via SketchJs.difference().
+     */
+    private _toSketchJs(): SketchJs | null
+    {
+        this.combine();
+        const closed = this._curves.curves().filter(c => c.isClosed());
+
+        if (closed.length === 0)
+        {
+            console.warn('Sketch._toSketchJs(): No closed curves found. Use close() first.');
+            return null;
+        }
+
+        try
+        {
+            const contour = closed[0];
+            const outerPoints = contour.tessellate();;
+            // outer sketch contour
+            let sketch = SketchJs.polygon(
+                            outerPoints.map(p => [p.x, p.y]), null);
+
+            // Additional closed curves in the sketch are treated as holes (difference)
+            const otherContours = closed.slice(1);
+            otherContours.forEach((hole) =>
+            {
+                const holePoints = hole.tessellate();
+                sketch = sketch.difference(SketchJs.polygon(holePoints.map(p => [p.x, p.y]), null));
+            });
+            
+            // Holes subtracted from outer curve (from boolean ops)
+            const holes = contour.holes();
+            holes.forEach((hole) =>
+            {
+                const holePoints = hole.tessellate();
+                sketch = sketch.difference(SketchJs.polygon(holePoints.map(p => [p.x, p.y]), null));
+            });
+
+            console.info(`Sketch._toSketchJs(): Built SketchJs with ${outerPoints.length} points and ${holes.length + otherContours.length} holes.`);
+            //console.log(sketch.debugGeometry());
+
+            return sketch.renormalize(); // Make sure its OK winding order
+        }
+        catch (e)
+        {
+            console.error('Sketch._toSketchJs(): Failed to build SketchJs:', e);
+            return null;
+        }
+    }
+
+    /** Extrude all closed curves in this sketch into a solid Mesh.
+     *  Extrudes `height` units along the sketch plane normal and places the
+     *  result correctly in world space for any sketch plane orientation.
+     *
+     *  @param height - Extrusion distance (positive = along sketch normal)
+     *  @returns Mesh in world space, or null if no closed curves are present.
+     */
+    extrude(height: number): Mesh | null
+    {
+        const sketchJs = this._toSketchJs();
+        if (!sketchJs)
+        {
+            console.error('Sketch.extrude(): No closed curves to extrude.');
+            return null;
+        }
+
+        // SketchJs extrudes along +Z, rotate to align with sketch normal
+        const mesh = Mesh.from(sketchJs.extrude(height));
+        const {w, x, y, z} = new Vector(0,0,1).rotationBetween(this._normal);
+        // TODO: rotate based on normal alone is not enough for non-XY planes, need to also consider xDir and yDir
+        mesh.rotateQuaternion(w, x, y, z);
+        // mesh.translate(this._origin); // TODO new origin
+        return mesh;
+    }
+
+    /** Sweep all closed curves in this sketch along a 3D path Curve.
+     *  The sketch cross-section (in local XY) is placed at each tessellated
+     *  path point and oriented perpendicular to the path tangent.
+     *
+     *  NOTE: Works best for sketches on the default XY plane.
+     *  For other planes the profile is used in local XY only.
+     *
+     *  @param path - 3D path Curve to sweep along (world space)
+     *  @returns Mesh, or null on error.
+     */
+    sweep(path: Curve): Mesh | null
+    {
+       // TODO
+    }
+
+    /** Loft between this sketch (bottom profile) and `other` (top profile).
+     *  Both sketches must contain at least one closed curve.
+     *  Profiles are sampled at `resolution` evenly-spaced points and bridged
+     *  with quadrilateral side faces and triangulated cap polygons.
+     *
+     *  @param other      - Top-profile sketch
+     *  @param resolution - Number of parametric sample points per profile (default 32)
+     *  @returns Mesh in world space, or null on error.
+     */
+    loft(other: Sketch, resolution: number = 32): Mesh | null
+    {
+        // TODO
+    }
+
     //// FINISHING ////
 
     /** Convert all curves in Sketch to world coordinates and return copies */
@@ -287,6 +385,7 @@ export class Sketch
     {
         return this._curves.copy()
             .forEach((curve) => {
+                // TODO: reorient based on normal alone is not enough for non-XY planes, need to also consider xDir and yDir
                 curve.reorient(this._normal, this._origin);
         });
     }
