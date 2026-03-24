@@ -684,7 +684,7 @@ export class CurveCollection extends Collection
         const combined = chains.map(chain => this._chainToCurve(chain));
         this.update(new CurveCollection(...combined));
         // Try to combine Compound curves with line segments
-        // this.curves().forEach(curve => curve.mergeLines()); 
+        // this.curves().forEach(curve => curve.mergeColinearLines()); 
 
         return this;
     }

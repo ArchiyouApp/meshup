@@ -70,7 +70,7 @@
  * 
  */
 
-import { PolygonJs, SketchJs, VertexJs } from "./wasm/csgrs";
+import { PolygonJs, SketchJs, VertexJs, Vector3Js } from "./wasm/csgrs";
 
 import { Vector } from "./Vector";
 import { Point } from "./Point";
@@ -174,6 +174,24 @@ export class Sketch
         return this;
     }
 
+    /** Copy and offset last curve */
+    offsetted(distance:number): this
+    {
+        this.copy()?.offset(distance);   
+        return this;
+    }
+
+    /** Extend the last curve by the given length on the given side */
+    extend(length: number, side: 'start'|'end'|'both' = 'end'): this
+    {
+        if (this._curves.count() === 0) return this;
+        const last = this._curves.last();
+
+        last.extend(length, side)
+
+        return this;
+    }
+
     /** Translate last curve */
     translate(vecOrX: PointLike | number, dy?: number, dz?: number): this
     {
@@ -225,14 +243,57 @@ export class Sketch
     /** Make an arc from current cursor to the given 2D point, with the given mid point */
     arcTo(mid: PointLike, end: PointLike): this
     {
-        console.warn(`Sketch::arcTo(): Not implemented yet!`);
+        if (!isPointLike(mid) || !isPointLike(end))
+        {
+            throw new Error('Sketch::arcTo(): Please supply PointLike for mid and end.');
+        }
+        this._popAllCursors().forEach((cur) => {
+            const midPt = Point.from(mid);
+            const endPt = Point.from(end);
+            const arc = Curve.Arc(cur.at, midPt, endPt);
+            this._curves.add(arc);
+            this._pushCursor(endPt, arc.tangentAt(endPt) ?? new Vector(1, 0, 0));
+        });
         return this;
     }
 
-    /** Make a NURBS Curve through given 2D points as control points */
-    splineTo(pnts:Array<PointLike>): this
+    /** Draw a polyline through the given 2D/3D points, starting from the current cursor.
+     *  Each point is treated as absolute world coordinates (no relative prefix support).
+     *  The cursor is updated to the last point.
+     */
+    polyline(pnts: Array<PointLike>): this
     {
-        console.warn(`Sketch::splineTo(): Not implemented yet!`);
+        if (!Array.isArray(pnts) || pnts.length === 0)
+        {
+            console.warn('Sketch::polyline(): Empty or invalid point array');
+            return this;
+        }
+        this._popAllCursors().forEach((cur) => {
+            const allPoints = [cur.at, ...pnts.map(p => Point.from(p))];
+            const poly = Curve.Polyline(allPoints);
+            this._curves.add(poly);
+            const endPt = Point.from(pnts[pnts.length - 1]);
+            this._pushCursor(endPt, poly.tangentAt(endPt) ?? new Vector(1, 0, 0));
+        });
+        return this;
+    }
+
+    /** Make a smooth NURBS curve from the current cursor interpolating through `pnts` */
+    curveTo(pnts: Array<PointLike>): this
+    {
+        if (!Array.isArray(pnts) || pnts.length === 0)
+        {
+            console.warn('Sketch::curveTo(): Empty or invalid point array');
+            return this;
+        }
+        this._popAllCursors().forEach((cur) => {
+            const endPt = Point.from(pnts[pnts.length - 1]);
+            const allPoints = [cur.at, ...pnts.map(p => Point.from(p))];
+            const degree = Math.min(3, allPoints.length - 1);
+            const curve = Curve.Interpolated(allPoints, degree);
+            this._curves.add(curve);
+            this._pushCursor(endPt, curve.tangentAt(endPt) ?? new Vector(1, 0, 0));
+        });
         return this;
     }
 
@@ -291,7 +352,7 @@ export class Sketch
         try
         {
             const contour = closed[0];
-            const outerPoints = contour.tessellate();;
+            const outerPoints = contour.tessellate();
             // outer sketch contour
             let sketch = SketchJs.polygon(
                             outerPoints.map(p => [p.x, p.y]), null);
@@ -325,57 +386,70 @@ export class Sketch
     }
 
     /** Extrude all closed curves in this sketch into a solid Mesh.
-     *  Extrudes `height` units along the sketch plane normal and places the
+     *  Extrudes `length` units along the specified `direction` and places the
      *  result correctly in world space for any sketch plane orientation.
      *
-     *  @param height - Extrusion distance (positive = along sketch normal)
+     *  @param length - Extrusion distance (positive = along sketch normal)
      *  @returns Mesh in world space, or null if no closed curves are present.
      */
-    extrude(height: number): Mesh | null
+    extrude(length: number): Mesh | null
     {
-        const sketchJs = this._toSketchJs();
-        if (!sketchJs)
+        const sketch = this._toSketchJs();
+        
+        if (!sketch)
         {
             console.error('Sketch.extrude(): No closed curves to extrude.');
             return null;
         }
-
         // SketchJs extrudes along +Z, rotate to align with sketch normal
-        const mesh = Mesh.from(sketchJs.extrude(height));
-        const {w, x, y, z} = new Vector(0,0,1).rotationBetween(this._normal);
-        // TODO: rotate based on normal alone is not enough for non-XY planes, need to also consider xDir and yDir
-        mesh.rotateQuaternion(w, x, y, z);
-        // mesh.translate(this._origin); // TODO new origin
-        return mesh;
+        const dirVecLocal = this._normal.rotateQuaternion(new Vector(0,0,1).rotationBetween(this._normal));
+        
+        const mesh = Mesh.from(
+                sketch.extrudeVector(dirVecLocal.scale(length)));
+        return this._alignMeshToWorld(mesh);
     }
 
     /** Sweep all closed curves in this sketch along a 3D path Curve.
      *  The sketch cross-section (in local XY) is placed at each tessellated
      *  path point and oriented perpendicular to the path tangent.
      *
-     *  NOTE: Works best for sketches on the default XY plane.
-     *  For other planes the profile is used in local XY only.
-     *
      *  @param path - 3D path Curve to sweep along (world space)
      *  @returns Mesh, or null on error.
      */
     sweep(path: Curve): Mesh | null
     {
-       // TODO
+       if(!(path instanceof Curve)){ throw new Error('Sketch.sweep(): Invalid path. Please supply a Curve instance.'); }
+       const points = path.tessellate().map(p => p.toPoint3Js()); // make sure path is tessellated for sweep
+       if(points.length < 2){ throw new Error('Sketch.sweep(): Path must have at least 2 points.'); }
+       const sketch = this._toSketchJs();
+       if (!sketch)
+       {
+           console.error('Sketch.sweep(): No closed curves to sweep.');
+           return null;
+       }
+       // SketchJs sweeps along +Z, rotate to align with sketch normal
+       const mesh = Mesh.from(sketch.sweep(points));
+       // align mesh from sketch plan into world space
+       return this._alignMeshToWorld(mesh);
     }
 
-    /** Loft between this sketch (bottom profile) and `other` (top profile).
-     *  Both sketches must contain at least one closed curve.
-     *  Profiles are sampled at `resolution` evenly-spaced points and bridged
-     *  with quadrilateral side faces and triangulated cap polygons.
-     *
-     *  @param other      - Top-profile sketch
-     *  @param resolution - Number of parametric sample points per profile (default 32)
-     *  @returns Mesh in world space, or null on error.
-     */
-    loft(other: Sketch, resolution: number = 32): Mesh | null
+    loft(other: Sketch): Mesh | null
     {
-        // TODO
+        // TODO: is this really practical?
+        throw new Error('Sketch.loft(): Not implemented yet!');
+        return null;
+    }
+
+    private _alignMeshToWorld(mesh: Mesh): Mesh
+    {
+        // align mesh from sketch plan into world space
+        mesh.alignByPoints(
+            [[0,0,0], [1,0,0], [0,1,0]], // source points in local sketch coordinates
+            [this._origin, this._origin.copy().move(this._xDir), this._origin.copy().move(this._yDir)], // target points in world coordinates
+            false // do not allow scaling
+        );
+        mesh.translate(this._origin);
+        return mesh;
     }
 
     //// FINISHING ////
@@ -385,20 +459,28 @@ export class Sketch
     {
         return this._curves.copy()
             .forEach((curve) => {
-                // TODO: reorient based on normal alone is not enough for non-XY planes, need to also consider xDir and yDir
-                curve.reorient(this._normal, this._origin);
+                // NOTE: normal alone is not enough for non-XY planes, we use xDir and yDir
+                curve.alignByPoints(
+                    [[0,0,0], [1,0,0], [0,1,0]], // source points in local sketch coordinates
+                    [this._origin, this._origin.copy().move(this._xDir), this._origin.copy().move(this._yDir)], // target points in world coordinates
+                    false // do not allow scaling
+                );
         });
     }
 
     end(): CurveCollection
     {
-        // ...existing code...
-        
         return this._localToWorld();
     }
 
     /** Alias for end */
     importSketch(): CurveCollection
+    {
+        return this.end();
+    }
+
+    /** Alias for end */
+    toCurves(): CurveCollection
     {
         return this.end();
     }

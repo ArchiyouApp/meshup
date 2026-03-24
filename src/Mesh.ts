@@ -15,10 +15,12 @@ import { isPointLike } from './types';
 import { Curve, getCsgrs } from './index';
 import { Point } from './Point';
 import { Bbox } from './Bbox';
+import { OBbox } from './OBbox';
 import { Vector } from './Vector'
 import { rad, deg } from './utils';
 
 import { MeshJs, PolygonJs, PlaneJs, Vector3Js, NurbsCurve3DJs, CompoundCurve3DJs } from './wasm/csgrs';
+import { Polygon } from './Polygon';
 
 // Settings
 import { SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT, 
@@ -148,10 +150,10 @@ export class Mesh
         }
     }
 
-    /** Get polygons of the Mesh */
-    polygons(): undefined|Array<PolygonJs>
+    /** Get polygons of the Mesh as wrapped Polygon instances */
+    polygons(): Array<Polygon>
     {
-        return this.inner()?.polygons();
+        return (this.inner()?.polygons() ?? []).map(p => Polygon.from(p));
     }
 
     
@@ -342,6 +344,12 @@ export class Mesh
         return Bbox.fromMesh(this);
     }
 
+    /** Calculate oriented bounding box of current Mesh using PCA */
+    obbox(): OBbox
+    {
+        return OBbox.fromMesh(this);
+    }
+
     /** Copy current Mesh into a new one 
      *  NOTE: We use copy here instead of clone
      *  conventionally cloning is used for operations involving references to previous data
@@ -445,6 +453,102 @@ export class Mesh
         this.translate(-p.x, -p.y, -p.z);
         this.rotate(angleDeg, axis);
         this.translate(p.x, p.y, p.z);
+        return this;
+    }
+
+    /** Align this Mesh by mapping 3 source points onto 3 target points.
+     *
+     *  - **withScale:** if true, apply a uniform scale (centered at q1) so edge lengths match.
+     *
+     *  @param sourcePoints - 3 reference points on the mesh (current space)
+     *  @param targetPoints - 3 corresponding destination points
+     *  @param withScale    - optionally scale uniformly to match first-edge length
+     */
+    alignByPoints(
+        sourcePoints: [PointLike, PointLike, PointLike],
+        targetPoints: [PointLike, PointLike, PointLike],
+        withScale = false
+    ): this
+    {
+        if (sourcePoints.length !== targetPoints.length)
+        {
+            throw new Error('Mesh.alignByPoints(): sourcePoints and targetPoints must have the same length.');
+        }
+
+        const p1 = Point.from(sourcePoints[0]);
+        const p2 = Point.from(sourcePoints[1]);
+        const q1 = Point.from(targetPoints[0]);
+        const q2 = Point.from(targetPoints[1]);
+
+        // Step 1: translate so p1 → q1
+        this.translate(q1.x - p1.x, q1.y - p1.y, q1.z - p1.z);
+
+        // Edge vectors (source and target)
+        const srcEdge = new Vector(p2.x - p1.x, p2.y - p1.y, p2.z - p1.z);
+        const tgtEdge = new Vector(q2.x - q1.x, q2.y - q1.y, q2.z - q1.z);
+
+        // Step 2: optional uniform scale (before rotation, centered at q1)
+        let scaleFactor = 1;
+        if (withScale)
+        {
+            const srcLen = srcEdge.length();
+            const tgtLen = tgtEdge.length();
+            if (srcLen > 1e-10)
+            {
+                scaleFactor = tgtLen / srcLen;
+                this.translate(-q1.x, -q1.y, -q1.z);
+                this.scale(scaleFactor, scaleFactor, scaleFactor);
+                this.translate(q1.x, q1.y, q1.z);
+            }
+        }
+
+        // Step 3: rotate around q1 to align srcEdge → tgtEdge
+        const R1 = srcEdge.rotationBetween(tgtEdge);
+        this.translate(-q1.x, -q1.y, -q1.z);
+        this.rotateQuaternion(R1.w, R1.x, R1.y, R1.z);
+        this.translate(q1.x, q1.y, q1.z);
+
+        // Step 4: twist around the now-aligned edge axis to place p3 → q3
+        const p3 = Point.from(sourcePoints[2]);
+        const q3 = Point.from(targetPoints[2]);
+
+        // Where p3 ended up after translate + scale + R1 (relative to q1):
+        const rel = new Vector(p3.x - p1.x, p3.y - p1.y, p3.z - p1.z)
+                        .scale(scaleFactor)
+                        .rotateQuaternion(R1.w, R1.x, R1.y, R1.z);
+
+        // Where q3 sits relative to q1:
+        const goal = new Vector(q3.x - q1.x, q3.y - q1.y, q3.z - q1.z);
+
+        // Twist axis = the aligned first edge (unit)
+        const axLen = tgtEdge.length();
+        if (axLen > 1e-10)
+        {
+            const axis = tgtEdge.scale(1 / axLen);
+
+            // Project both vectors onto the plane perpendicular to axis
+            const u1 = rel.subtract(axis.scale(rel.dot(axis)));
+            const u2 = goal.subtract(axis.scale(goal.dot(axis)));
+
+            const len1 = u1.length(), len2 = u2.length();
+            if (len1 > 1e-10 && len2 > 1e-10)
+            {
+                const cosA = Math.max(-1, Math.min(1, u1.dot(u2) / (len1 * len2)));
+                const crossVec = u1.cross(u2);
+                const sinA = crossVec.dot(axis) / (len1 * len2);
+                const angle = Math.atan2(sinA, cosA);
+
+                if (Math.abs(angle) > 1e-10)
+                {
+                    const half = angle / 2;
+                    const sh = Math.sin(half);
+                    this.translate(-q1.x, -q1.y, -q1.z);
+                    this.rotateQuaternion(Math.cos(half), axis.x * sh, axis.y * sh, axis.z * sh);
+                    this.translate(q1.x, q1.y, q1.z);
+                }
+            }
+        }
+
         return this;
     }
 

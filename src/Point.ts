@@ -109,6 +109,23 @@ export class Point
         return this;
     }
 
+    /** Return a new Point with the same coordinates */
+    copy(): Point
+    {
+        return new Point(this._x, this._y, this._z);
+    }
+
+    /** Translate this point by the given offset */
+    move(offset: PointLike): Point
+    {
+        if(!isPointLike(offset)){ throw new Error(`Point::move(): Invalid parameter: ${offset}`); }
+        const d = new Point(offset);
+        this._x += d.x;
+        this._y += d.y;
+        this._z += d.z;
+        return this;
+    }
+
 
     //// CALCULATED PROPS ////
 

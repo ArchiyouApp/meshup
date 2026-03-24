@@ -145,6 +145,11 @@ export class Vector extends Vector3Js
     return Vector.from(super.reverse());
   }
 
+  copy(): Vector
+  {
+    return new Vector(this.x, this.y, this.z);
+  }
+
   /** Create new Vector by computing the dot product with another vector */
   dot(other: Vector3Js): number
   {
@@ -167,10 +172,15 @@ export class Vector extends Vector3Js
   }
   
   /** Create new Vector by Quaternion rotation */
-  rotateQuaternion(w: number, x: number, y: number, z: number): Vector 
+  rotateQuaternion(qw: number|{ w: number, x: number, y: number, z: number }, x?: number, y?: number, z?: number): Vector 
   {
+    const qwObj = (typeof qw === 'number') ? { w: qw, x, y, z } : qw;    
+    if(qwObj.w === undefined || qwObj.x === undefined || qwObj.y === undefined || qwObj.z === undefined)
+    {
+      throw new Error('Vector::rotateQuaternion(): Invalid quaternion. Please supply a valid quaternion.');
+    }
     return Vector.from(
-      super.rotateQuaternion(w, x, y, z)
+      super.rotateQuaternion(qwObj.w, qwObj.x!, qwObj.y!, qwObj.z!)
     );
   }
 

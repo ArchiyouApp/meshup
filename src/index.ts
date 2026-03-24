@@ -67,6 +67,9 @@ export function isInitialized(): boolean
     TODO: All other classes too?
 */
 export { Mesh } from './Mesh';
+export { Polygon } from './Polygon';
 export { Curve } from './Curve';
 export { Collection, MeshCollection, CurveCollection } from './Collection';
 export { Sketch } from './Sketch';
+export { Bbox } from './Bbox';
+export { OBbox } from './OBbox';

@@ -18,16 +18,18 @@
  * 
  */
 
-import { ANGLE_COMPARE_TOLERANCE, TESSELATION_TOLERANCE } from './constants';
+import { ANGLE_COMPARE_TOLERANCE, TESSELATION_TOLERANCE, BASE_PLANE_NAME_TO_PLANE } from './constants';
 
 import { NurbsCurve3DJs, CompoundCurve3DJs, Vector3Js, BooleanRegionJs } from "./wasm/csgrs";
 
 import { MeshCollection, CurveCollection, getCsgrs, Mesh } from './index';
-import type { CsgrsModule, PointLike, Axis, GLTFBuffer } from './types';
-import { isPointLike } from './types'
+import type { CsgrsModule, PointLike, Axis, GLTFBuffer, BasePlane } from './types';
+import { isPointLike, isBasePlane } from './types'
 import { Point } from './Point';
 import { Vector } from './Vector';
 import { Bbox } from './Bbox';
+import { OBbox } from './OBbox';
+import { Polygon } from './Polygon';
 
 import { toBase64, rad } from "./utils";
 
@@ -569,12 +571,38 @@ export class Curve
         return Point.from(this.pointAtParam(param)).distance(Point.from(point));
     }
 
+    /** Get Bbox from Curve. 
+     *  NOTE: If Curve is in 3D space, returns a 3D Bbox - if Curve is planar or not
+     */
     bbox():undefined|Bbox
     {
         const bboxCoords = this.inner()?.bbox();
         return bboxCoords ? new Bbox(bboxCoords) : undefined;
     }
 
+    /** Get oriented bounding box of this Curve using PCA */
+    obbox(): OBbox
+    {
+        return OBbox.fromCurve(this);
+    }
+
+    /** Center point of this curve's bounding box */
+    center(): Point
+    {
+        const bb = this.bbox();
+        if (bb) return bb.center();
+        // Fallback: midpoint along the curve
+        return this.pointAtPerc(0.5) ?? this.start();
+    }
+
+    /** Tessellate the curve into a series of points.
+     *  @param tol - tessellation normal tolerance
+     *  @returns array of points representing the tessellated curve
+     * 
+     *  NOTE: Currently only uses normal tolerance in Curvo AdaptiveTessellationOptions
+     *      see https://docs.rs/curvo/0.1.81/curvo/prelude/struct.AdaptiveTessellationOptions.html
+     *      More control can be added in the future
+     */
     tessellate(tol: number = TESSELATION_TOLERANCE): Array<Point>
     {
         return this.inner().tessellate(tol)
@@ -662,6 +690,7 @@ export class Curve
     {
         return this.update(this.inner().rotateQuaternion(w, x, y, z));
     }
+    
 
     /** Align this Curve by mapping 3 source points onto 3 target points.
      *
@@ -671,7 +700,7 @@ export class Curve
      *  @param targetPoints - 3 corresponding destination points
      *  @param withScale    - optionally scale uniformly to match first-edge length
      */
-    alignPoints(
+    alignByPoints(
         sourcePoints: [PointLike, PointLike, PointLike],
         targetPoints: [PointLike, PointLike, PointLike],
         withScale = false
@@ -679,12 +708,12 @@ export class Curve
     {
         if(sourcePoints.length < 3 || targetPoints.length < 3)
         {
-            throw new Error('Curve.alignPoints(): sourcePoints and targetPoints must have at least 3 points.');
+            throw new Error('Curve.alignPoints(): sourcePoints and targetPoints must have at least 3 points for fully defined alignment.');
         }
 
         if (sourcePoints.length !== targetPoints.length)
         {
-            throw new Error('Curve.alignPoints(): sourcePoints and targetPoints must have the same length (2 or 3).');
+            throw new Error('Curve.alignPoints(): sourcePoints and targetPoints must have the same length.');
         }
 
         const p1 = Point.from(sourcePoints[0]);
@@ -820,60 +849,75 @@ export class Curve
         return this;
     }
 
-    /** Merge seperate line spans into a single polyline Curve 
-     *  TODO: more robust
-    */
-    mergeLines(): this
+    /** Project this Curve onto a plane, flattening all control points onto it.
+     *  @param plane - a named base plane ('xy', 'yz', 'xz', 'front', 'back', 'left', 'right')
+     *               or an object { normal: PointLike, origin?: PointLike } for an arbitrary plane.
+     *               If no origin is given for a custom plane, the world origin [0,0,0] is used.
+     */
+    projectOnto(plane: BasePlane | { normal: PointLike; origin?: PointLike }): this
     {
-        // ...existing code...
-        
-        if (!this.isCompound()) return this;
+        let normal: Vector;
+        let origin: Point;
 
-        const spans = (this.inner() as CompoundCurve3DJs).spans();
-        if (spans.some(s => s.degree() !== 1)) return this;
-
-        const points: Point[] = [];
-        for (let i = 0; i < spans.length; i++)
+        if (isBasePlane(plane))
         {
-            const cps = spans[i].controlPoints().map(p => Point.from(p));
-            if (i === 0) points.push(cps[0]);
-            points.push(cps[cps.length - 1]);
+            const def = BASE_PLANE_NAME_TO_PLANE[plane];
+            normal = Vector.from(def.normal as [number, number, number]);
+            origin = new Point(0, 0, 0);
+        }
+        else
+        {
+            normal = Vector.from(plane.normal);
+            origin = plane.origin ? Point.from(plane.origin) : new Point(0, 0, 0);
         }
 
-        return this.update(Curve.Polyline(points));
-    }
+        const n = normal.normalize();
 
-    /** Reorient this Planar Curve from its current plane onto the plane defined by `normal` and `offset` */
-    reorient(normal: PointLike, offset: PointLike = [0,0,0]): this
-    {
-        let srcNormal = this.normal();
-        if (!srcNormal){ console.error(`Curve::reorient(): Curve is not planar.`); return this; }
+        // Project a single point onto the plane: P' = P - dot(P - Q, N) * N
+        const projectPoint = (p: Point): Point => {
+            const dot = (p.x - origin.x) * n.x + (p.y - origin.y) * n.y + (p.z - origin.z) * n.z;
+            return new Point(p.x - dot * n.x, p.y - dot * n.y, p.z - dot * n.z);
+        };
 
-        const toNormal = Vector.from(normal);
+        const projectSpan = (span: NurbsCurve3DJs): NurbsCurve3DJs => {
+            const projectedPoints = span.controlPoints().map(p => projectPoint(Point.from(p)).toPoint3Js());
+            return new NurbsCurve3DJs(span.degree(), projectedPoints, span.weights(), span.knots());
+        };
 
-        // Canonicalize: ensure source normal is in the same half-space as the target,
-        // so opposite-winding copies of the same plane get an identical rotation.
-        srcNormal = srcNormal.dot(toNormal) < 0
-            ? srcNormal.scale(-1)
-            : srcNormal;
-
-        this.translate(offset); // TODO
-
-        if(srcNormal.angle(toNormal) < ANGLE_COMPARE_TOLERANCE)
+        if (!this.isCompound())
         {
-            console.warn(`Curve::reorient(): Source and target normals are already aligned. No rotation applied, only translation if offset is given.`);
-            return this;
+            this.update(projectSpan(this.inner() as NurbsCurve3DJs));
         }
-
-        const {w, x, y, z} = srcNormal.rotationBetween(toNormal);
-        this.update(this.rotateQuaternion(w, x, y, z));
-
-        // Propagate to holes
-        this._holes = this._holes.map(h => h.reorient(normal, offset));
+        else
+        {
+            const projectedSpans = (this.inner() as CompoundCurve3DJs).spans().map(projectSpan);
+            this.update(new CompoundCurve3DJs(projectedSpans));
+        }
 
         return this;
     }
 
+    /** Merge consecutive collinear line spans into single segments.
+     *  If only one span remains, unwraps to a single NurbsCurve. */
+    mergeColinearLines(colinearTol: number = 1e-3): this
+    {
+        if (!this.isCompound()) return this;
+
+        const merged = (this.inner() as CompoundCurve3DJs).mergeColinearLines(colinearTol);
+        this.update(merged);
+
+        // If compound has a single span left, unwrap to a plain NurbsCurve
+        if (this.isCompound())
+        {
+            const spans = (this.inner() as CompoundCurve3DJs).spans();
+            if (spans.length === 1)
+            {
+                this._curve = spans[0];
+            }
+        }
+
+        return this;
+    }
 
 
      /** Close this curve by adding a line segment from end back to start.
@@ -939,7 +983,7 @@ export class Curve
     extend(length: number, side: 'start'|'end'|'both' = 'end'): this
     {
         // Both NurbsCurve3DJs and CompoundCurve3DJs now return CompoundCurve3DJs
-        this._curve = this.inner().extend(length, side);
+        this.update(this.inner().extend(length, side));
         return this;
     }
 
@@ -948,7 +992,7 @@ export class Curve
     {
         if(!this.isPlanar()){ throw new Error(`Curve:offset(): Cannot offset a 3D curve!`);}
         // If compound with all-line spans, combine into a single polyline first
-        const curve = this.isCompound() ? this.mergeLines() : this;
+        const curve = this.isCompound() ? this.mergeColinearLines() : this;
         return this.update(Curve.fromCsgrs(curve.inner()?.offset(distance, cornerType)));
     }
 
@@ -1263,32 +1307,54 @@ export class Curve
      *  @param length - The extrusion length (default: 1)
      *  @returns A new Mesh representing the extruded geometry
      */
-    extrude(length: number, direction: PointLike): Mesh
+    extrude(length: number, direction: PointLike): Mesh|null
     {
-        // TODO
+        console.error(`Curve::extrude(): Not implemented yet!`);
+        return null;
     }
 
-  
+    
 
     //// TRANSFORMATION TO OTHER TYPES ////
 
-
-    toMesh(tolerance: number = TESSELATION_TOLERANCE): Mesh | undefined
+    /** Convert this curve to a Polygon via tessellation (including hole rings if present). */
+    toPolygon(tolerance: number = TESSELATION_TOLERANCE): Polygon | undefined
     {
         const points = this.tessellate(tolerance);
 
         if (points.length < 3)
         {
-            console.warn(`Curve::toMesh(): Not enough points (${points.length}) to create a mesh. A minimum of 3 non-collinear points is required.`);
+            console.warn(`Curve::toPolygon(): Not enough points (${points.length}) to create a polygon. A minimum of 3 non-collinear points is required.`);
             return undefined;
         }
-        // If this curve has holes, tessellate each hole and use fromPointsWithHoles
+
+        const poly = new Polygon(points);
+
         if (this.hasHoles())
         {
-            const holePointArrays = this._holes.map(hole => hole.tessellate(tolerance));
-            return Mesh.fromPointsWithHoles(points, holePointArrays);
+            for (const hole of this._holes)
+            {
+                const holePoints = hole.tessellate(tolerance);
+                if (holePoints.length >= 3)
+                {
+                    poly.addHole(holePoints);
+                }
+            }
         }
-        const m = Mesh.fromPoints(points);
+        return poly;
+    }
+
+
+    toMesh(tolerance: number = TESSELATION_TOLERANCE): Mesh | undefined
+    {
+        const poly = this.toPolygon(tolerance);
+        if (!poly)
+        {
+            return undefined;
+        }
+
+        // Build mesh from one polygon (preserves holes on PolygonJs level)
+        const m = Mesh.from(this._csgrs.MeshJs.fromPolygons([poly.inner()], {}));
 
         // When converting to Mesh, the orientation is important for the resulting normal of new polygons/faces.
         // Once case is ackward: If Curve normal (based on orientation) is pointing away from default camera position ([0,1,0])
@@ -1398,4 +1464,133 @@ export class Curve
 
         return JSON.stringify(gltf);
     }
+
+    /** Export this curve as an SVG string, projecting onto the given named plane.
+     *  Preserves arc geometry: degree-2 rational NURBS → SVG `A`, quadratic → `Q`, cubic → `C`, line → `L`.
+     *  @param plane - named base plane to project onto (default: 'xy')
+     */
+    toSVG(plane: BasePlane = 'xy'): string
+    {
+        const projected = this.copy().projectOnto(plane);
+        const planedef = BASE_PLANE_NAME_TO_PLANE[plane];
+        const xd = planedef.xDir as [number, number, number];
+        const yd = planedef.yDir as [number, number, number];
+
+        // Project a 3D point to 2D SVG coords (flip V axis so Y points up in source space)
+        const pt2d = (p: Point): [number, number] => {
+            const u = p.x * xd[0] + p.y * xd[1] + p.z * xd[2];
+            const v = p.x * yd[0] + p.y * yd[1] + p.z * yd[2];
+            return [u, -v];
+        };
+
+        const fmt = (n: number) => +n.toFixed(6);
+        const parts: string[] = [];
+        const spans = projected.spans();
+
+        for (let i = 0; i < spans.length; i++)
+        {
+            const span = spans[i];
+            const cps = span.controlPoints().map(pt2d);
+            const weights = span.weights() ?? [];
+            const deg = span.degree() ?? 1;
+            const end = cps[cps.length - 1];
+
+            if (i === 0)
+            {
+                parts.push(`M ${fmt(cps[0][0])} ${fmt(cps[0][1])}`);
+            }
+
+            if (deg === 1)
+            {
+                parts.push(`L ${fmt(end[0])} ${fmt(end[1])}`);
+            }
+            else if (deg === 2 && weights.some(w => Math.abs(w - 1.0) > 1e-8))
+            {
+                // Rational degree-2 NURBS (e.g. circular arc) → SVG arc command
+                const midPt3d = span.pointAtPerc(0.5);
+                if (midPt3d)
+                {
+                    const mid = pt2d(midPt3d);
+                    const cc = _circumcircle2D(cps[0][0], cps[0][1], mid[0], mid[1], end[0], end[1]);
+                    if (cc)
+                    {
+                        // sweep-flag: 1 = CW in SVG coords (Y-down)
+                        const cross = (mid[0] - cps[0][0]) * (end[1] - cps[0][1])
+                                    - (mid[1] - cps[0][1]) * (end[0] - cps[0][0]);
+                        const sweep = cross >= 0 ? 1 : 0;
+                        // large-arc-flag: center and mid on same side of chord P0→end → major arc
+                        const cvx = end[0] - cps[0][0], cvy = end[1] - cps[0][1];
+                        const centerSide = cvx * (cc.cy - cps[0][1]) - cvy * (cc.cx - cps[0][0]);
+                        const midSide    = cvx * (mid[1] - cps[0][1]) - cvy * (mid[0] - cps[0][0]);
+                        const largeArc   = Math.sign(centerSide) === Math.sign(midSide) ? 1 : 0;
+                        parts.push(`A ${fmt(cc.r)} ${fmt(cc.r)} 0 ${largeArc} ${sweep} ${fmt(end[0])} ${fmt(end[1])}`);
+                    }
+                    else
+                    {
+                        parts.push(`L ${fmt(end[0])} ${fmt(end[1])}`);
+                    }
+                }
+                else
+                {
+                    parts.push(`L ${fmt(end[0])} ${fmt(end[1])}`);
+                }
+            }
+            else if (deg === 2)
+            {
+                const c = cps[1];
+                parts.push(`Q ${fmt(c[0])} ${fmt(c[1])} ${fmt(end[0])} ${fmt(end[1])}`);
+            }
+            else if (deg === 3)
+            {
+                const c1 = cps[1], c2 = cps[2];
+                parts.push(`C ${fmt(c1[0])} ${fmt(c1[1])} ${fmt(c2[0])} ${fmt(c2[1])} ${fmt(end[0])} ${fmt(end[1])}`);
+            }
+            else
+            {
+                // Higher-degree: tessellate the span
+                const pts = span.tessellate().map(pt2d);
+                for (let j = 1; j < pts.length; j++)
+                {
+                    parts.push(`L ${fmt(pts[j][0])} ${fmt(pts[j][1])}`);
+                }
+            }
+        }
+
+        if (projected.isClosed()) parts.push('Z');
+
+        const d = parts.join(' ');
+
+        // Compute viewBox from tessellated points
+        const allPts = projected.tessellate().map(pt2d);
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const [x, y] of allPts)
+        {
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+        }
+        const padX = (maxX - minX) * 0.05 || 1;
+        const padY = (maxY - minY) * 0.05 || 1;
+        const vb = `${fmt(minX - padX)} ${fmt(minY - padY)} ${fmt(maxX - minX + 2 * padX)} ${fmt(maxY - minY + 2 * padY)}`;
+
+        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}"><path d="${d}" fill="none" stroke="black" stroke-width="1"/></svg>`;
+    }
+}
+
+/** Compute the circumcircle of three 2D points. Returns null if points are collinear. */
+function _circumcircle2D(
+    ax: number, ay: number,
+    bx: number, by: number,
+    cx: number, cy: number
+): { cx: number; cy: number; r: number } | null
+{
+    const D = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    if (Math.abs(D) < 1e-10) return null;
+    const a2 = ax * ax + ay * ay;
+    const b2 = bx * bx + by * by;
+    const c2 = cx * cx + cy * cy;
+    const ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / D;
+    const uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / D;
+    return { cx: ux, cy: uy, r: Math.sqrt((ax - ux) ** 2 + (ay - uy) ** 2) };
 }

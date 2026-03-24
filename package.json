@@ -17,13 +17,10 @@
     "dist"
   ],
   "scripts": {
-    "dev": "tsx examples/basics.ts",
-    "dev:example:basics": "tsx examples/basics.ts",
-    "dev:example:vector": "tsx examples/vector.ts",
     "dev:example:mesh": "tsx examples/mesh.ts",
-    "dev:example:curve": "tsx examples/curve.ts",
-    "dev:example:sketch": "tsx examples/sketch.ts",
     "dev:example:house": "tsx examples/house.ts",
+    "test:example:house": "vitest run tests/examples/house.test.ts",
+    "test:selector": "vitest run tests/unit/Selector.test.ts",
     "build:wasm": "tsx buildscripts/build-wasm.ts",
     "rust:check" : "cd ./lib/csgrs && cargo check --features wasm --no-deps --target wasm32-unknown-unknown",
     "build": "tsup",
