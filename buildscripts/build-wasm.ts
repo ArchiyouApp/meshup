@@ -11,7 +11,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 
 const ROOT_DIR = path.resolve(path.dirname('.')); // from root dir
-const RUST_DIR = path.join(ROOT_DIR, 'lib/csgrs'); // from root dir
+const RUST_DIR = path.join(ROOT_DIR, 'devlibs/csgrs'); // from root dir
 const OUTPUT_TS_PATH = path.join(ROOT_DIR, 'src', 'csgrs-js-binary.ts');
 const WASM_DIR = path.join(ROOT_DIR, './src/wasm');
 const WASM_FILE_NAME = 'csgrs_bg.wasm'; // Adjust based on your crate name

@@ -20,7 +20,7 @@
     "test:example:house": "vitest run tests/examples/house.test.ts",
     "test:selector": "vitest run tests/unit/Selector.test.ts",
     "build:wasm": "tsx buildscripts/build-wasm.ts",
-    "rust:check" : "cd ./lib/csgrs && cargo check --features wasm --no-deps --target wasm32-unknown-unknown",
+    "rust:check" : "cd ./devlibs/csgrs && cargo check --features wasm --no-deps --target wasm32-unknown-unknown",
     "build": "tsup",
     "test": "vitest",
     "test:run": "vitest run",
