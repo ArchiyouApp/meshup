@@ -1,0 +1,31 @@
+{
+  "name": "csgrs",
+  "type": "module",
+  "collaborators": [
+    "Timothy Schmidt <timschmidt@gmail.com>"
+  ],
+  "description": "Constructive solid geometry (CSG) on meshes using BSP trees in Rust",
+  "version": "0.21.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/timschmidt/csgrs"
+  },
+  "files": [
+    "csgrs_bg.wasm",
+    "csgrs.js",
+    "csgrs.d.ts"
+  ],
+  "main": "csgrs.js",
+  "types": "csgrs.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ],
+  "keywords": [
+    "geometry",
+    "physics",
+    "csg",
+    "slicing",
+    "offsetting"
+  ]
+}
