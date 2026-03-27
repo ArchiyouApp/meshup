@@ -13,6 +13,42 @@ import { Point } from "./Point";
 import { Vector } from "./Vector";
 
 import { toBase64, fromBase64 } from "./utils";
+
+// ── Projection types (defined here to avoid circular imports via types.ts) ────
+
+/** Plane specification for projection and section operations. */
+export interface PlaneSpec {
+  origin: [number, number, number];
+  normal: [number, number, number];
+}
+
+/** Options for `Mesh.projectEdges` / `MeshCollection.projectEdges`. */
+export interface ProjectionOptions {
+  viewDirection: [number, number, number];
+  plane: PlaneSpec;
+  /** Minimum crease angle in degrees. @default 15 */
+  featureAngle?: number;
+  /** HLR ray samples per edge. @default 8 */
+  samples?: number;
+}
+
+/** Options for `Mesh.projectSection` / `MeshCollection.projectSection`. */
+export interface SectionOptions extends ProjectionOptions {
+  sectionPlane: PlaneSpec;
+}
+
+/** Result of an edge projection with hidden-line removal. */
+export interface EdgeProjectionResult {
+  /** Curves visible from the view direction. */
+  visible: CurveCollection;
+  /** Occluded curves. */
+  hidden: CurveCollection;
+}
+
+/** Combined section + edge-projection result. */
+export interface SectionElevationResult extends EdgeProjectionResult {
+  cut: import('./Sketch').Sketch;
+}
 import { ANGLE_COMPARE_TOLERANCE } from "./constants";
 
 export class Collection
@@ -534,6 +570,113 @@ export class MeshCollection extends Collection
     static from(collection: Collection): MeshCollection
     {
         return new MeshCollection(...collection.meshes());
+    }
+
+    // ── BVH Spatial Queries ────────────────────────────────────────────────
+
+    /**
+     * Find all pairs of meshes (one from `this`, one from `other`) that overlap.
+     *
+     * Performs a coarse axis-aligned-box check, then a precise BVH hit test.
+     *
+     * @returns Array of `[meshFromThis, meshFromOther]` overlap pairs.
+     */
+    hits(other: Mesh | MeshCollection): Array<[Mesh, Mesh]> {
+        const aList = this.shapes();
+        const bList = other instanceof Mesh ? [other] : other.shapes();
+        const pairs: Array<[Mesh, Mesh]> = [];
+        for (const a of aList) {
+            for (const b of bList) {
+                if (a.hits(b)) pairs.push([a, b]);
+            }
+        }
+        return pairs;
+    }
+
+    /**
+     * Minimum separating distance between any mesh in this collection and
+     * any mesh in `other` (or a single Mesh).
+     *
+     * Returns `0` if any meshes intersect, `Infinity` if either side is empty.
+     */
+    distanceTo(other: Mesh | MeshCollection): number {
+        const aList = this.shapes();
+        const bList = other instanceof Mesh ? [other] : other.shapes();
+        let min = Infinity;
+        for (const a of aList) {
+            for (const b of bList) {
+                const d = a.distanceTo(b);
+                if (d < min) min = d;
+                if (min === 0) return 0;
+            }
+        }
+        return min;
+    }
+
+    /**
+     * Find the closest pair of meshes between this collection and `other`.
+     *
+     * @returns `{ mesh1, mesh2, distance }` for the closest pair, or `null`
+     *          if either collection is empty.
+     */
+    closestPair(other: MeshCollection): { mesh1: Mesh; mesh2: Mesh; distance: number } | null {
+        const aList = this.shapes();
+        const bList = other.shapes();
+        if (aList.length === 0 || bList.length === 0) return null;
+        let best: { mesh1: Mesh; mesh2: Mesh; distance: number } | null = null;
+        for (const a of aList) {
+            for (const b of bList) {
+                const d = a.distanceTo(b);
+                if (best === null || d < best.distance) {
+                    best = { mesh1: a, mesh2: b, distance: d };
+                }
+            }
+        }
+        return best;
+    }
+
+    // ── Edge Projection (HLR) ────────────────────────────────────────────────
+
+    /**
+     * Project the visible and hidden edges of every mesh in this collection
+     * onto a plane, using all meshes in the collection as mutual occluders.
+     *
+     * The results from individual meshes are merged into a single
+     * `EdgeProjectionResult`.
+     *
+     * @param options  View direction, projection plane, feature angle, samples.
+     * @returns Merged `{ visible, hidden }` polyline arrays.
+     */
+    projectEdges(options: ProjectionOptions): EdgeProjectionResult {
+        const meshes = this.shapes();
+        const merged: EdgeProjectionResult = { visible: new CurveCollection(), hidden: new CurveCollection() };
+        for (const mesh of meshes) {
+            const other = meshes.filter(m => m !== mesh);
+            const r = mesh.projectEdges(options, other);
+            r.visible.curves().forEach(c => merged.visible.add(c));
+            r.hidden.curves().forEach(c => merged.hidden.add(c));
+        }
+        return merged;
+    }
+
+    /**
+     * Slice each mesh at the section plane and project visible/hidden edges,
+     * using all meshes in the collection as mutual occluders.
+     *
+     * @returns Merged `{ visible, hidden }` polylines and the per-mesh cut
+     *          sketches in `cuts`.
+     */
+    projectSection(options: SectionOptions): EdgeProjectionResult & { cuts: any[] } {
+        const meshes = this.shapes();
+        const merged: EdgeProjectionResult & { cuts: any[] } = { visible: new CurveCollection(), hidden: new CurveCollection(), cuts: [] };
+        for (const mesh of meshes) {
+            const other = meshes.filter(m => m !== mesh);
+            const r = mesh.projectSection(options, other);
+            r.visible.curves().forEach(c => merged.visible.add(c));
+            r.hidden.curves().forEach(c => merged.hidden.add(c));
+            if (r.cutJs) merged.cuts.push(r.cutJs);
+        }
+        return merged;
     }
 }
 

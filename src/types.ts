@@ -69,3 +69,32 @@ export interface GLTFBuffer
         min?: Point; // bbox min
         max?: Point; // bbox max
 }
+
+// ── BVH Spatial-Query Result Types ───────────────────────────────────────────
+
+/** Result of a BVH-accelerated first-hit raycast. */
+export interface RaycastHit {
+  pointX: number; pointY: number; pointZ: number;
+  normalX: number; normalY: number; normalZ: number;
+  distance: number;
+  triangleIndex: number;
+}
+
+/** Result of a closest-surface-point query. */
+export interface ClosestPointResult {
+  pointX: number; pointY: number; pointZ: number;
+  normalX: number; normalY: number; normalZ: number;
+  distance: number;
+  isInside: boolean;
+}
+
+/** Signed-distance-field sample at a query point. */
+export interface SdfSample {
+  distance: number;
+  isInside: boolean;
+  closestX: number; closestY: number; closestZ: number;
+}
+
+// ── Edge Projection Result Types ─────────────────────────────────────────────
+// Defined in Collection.ts (alongside CurveCollection) to avoid circular imports.
+// Re-exported from there for external consumers.

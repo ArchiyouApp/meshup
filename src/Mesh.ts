@@ -9,7 +9,7 @@
  * 
  */
 
-import type { CsgrsModule, Axis, PointLike } from './types';
+import type { CsgrsModule, Axis, PointLike, RaycastHit, ClosestPointResult, SdfSample } from './types';
 import { isPointLike } from './types';
 
 import { Curve, getCsgrs } from './index';
@@ -25,7 +25,8 @@ import { Polygon } from './Polygon';
 // Settings
 import { SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT, 
     SHAPES_CYLINDER_SEGMENTS_RADIAL } from './constants';
-import { Collection } from './Collection';
+import { Collection, CurveCollection } from './Collection';
+import type { EdgeProjectionResult, SectionElevationResult, ProjectionOptions, SectionOptions } from './Collection';
 
 export class Mesh
 {
@@ -792,4 +793,241 @@ export class Mesh
     {
         return this.inner()?.toAMF('model', 'mm');
     }
+
+    // ── BVH Spatial Queries ─────────────────────────────────────────────────
+
+    /**
+     * BVH-accelerated first-hit raycast.
+     * @param origin      Ray origin `[x, y, z]`.
+     * @param direction   Ray direction (normalised internally).
+     * @param maxDist     Maximum travel distance (default `Infinity`).
+     * @returns Hit result, or `null` if nothing was hit.
+     */
+    raycastFirst(
+        origin: [number, number, number],
+        direction: [number, number, number],
+        maxDist = Infinity,
+    ): RaycastHit | null {
+        const hit = this.inner()?.raycastFirst(
+            origin[0], origin[1], origin[2],
+            direction[0], direction[1], direction[2],
+            maxDist,
+        );
+        if (!hit) return null;
+        const result: RaycastHit = {
+            pointX: hit.pointX, pointY: hit.pointY, pointZ: hit.pointZ,
+            normalX: hit.normalX, normalY: hit.normalY, normalZ: hit.normalZ,
+            distance: hit.distance,
+            triangleIndex: hit.triangleIndex,
+        };
+        hit.free?.();
+        return result;
+    }
+
+    /**
+     * Project a query point onto the nearest mesh surface (BVH-accelerated).
+     * @returns Closest-point result, or `null` if the mesh is empty.
+     */
+    closestPoint(x: number, y: number, z: number): ClosestPointResult | null {
+        const r = this.inner()?.closestPoint(x, y, z);
+        if (!r) return null;
+        const result: ClosestPointResult = {
+            pointX: r.pointX, pointY: r.pointY, pointZ: r.pointZ,
+            normalX: r.normalX, normalY: r.normalY, normalZ: r.normalZ,
+            distance: r.distance,
+            isInside: r.isInside,
+        };
+        r.free?.();
+        return result;
+    }
+
+    /**
+     * Sample the signed distance field at a query point.
+     * Negative distance = inside the mesh.
+     * @returns SDF sample, or `null` if the mesh is empty.
+     */
+    sampleSDF(x: number, y: number, z: number): SdfSample | null {
+        const s = this.inner()?.sampleSdf(x, y, z);
+        if (!s) return null;
+        const result: SdfSample = {
+            distance: s.distance,
+            isInside: s.isInside,
+            closestX: s.closestX, closestY: s.closestY, closestZ: s.closestZ,
+        };
+        s.free?.();
+        return result;
+    }
+
+    /**
+     * Test whether this mesh physically overlaps another (BVH-accelerated).
+     */
+    hits(other: Mesh): boolean {
+        const a = this.inner();
+        const b = other.inner();
+        if (!a || !b) return false;
+        return a.hits(b);
+    }
+
+    /**
+     * Minimum separating distance to another mesh.  Returns `0` if they intersect.
+     */
+    distanceTo(other: Mesh): number {
+        const a = this.inner();
+        const b = other.inner();
+        if (!a || !b) return Infinity;
+        return a.distanceTo(b);
+    }
+
+    /**
+     * Orthographically project all vertices of this mesh onto a plane.
+     * @param planeOrigin A point on the plane `[x, y, z]`.
+     * @param planeNormal The plane normal `[x, y, z]`.
+     */
+    projectToPlane(
+        planeOrigin: [number, number, number],
+        planeNormal: [number, number, number],
+    ): Mesh {
+        const m = this.inner()?.projectToPlane(
+            planeOrigin[0], planeOrigin[1], planeOrigin[2],
+            planeNormal[0], planeNormal[1], planeNormal[2],
+        );
+        if (!m) return new Mesh();
+        return Mesh.from(m);
+    }
+
+    /**
+     * Minimum absolute distance from any vertex to a plane.
+     */
+    distanceToPlane(
+        planeOrigin: [number, number, number],
+        planeNormal: [number, number, number],
+    ): number {
+        return this.inner()?.distanceToPlane(
+            planeOrigin[0], planeOrigin[1], planeOrigin[2],
+            planeNormal[0], planeNormal[1], planeNormal[2],
+        ) ?? Infinity;
+    }
+
+    /**
+     * Create a `Mesh` from a signed distance field by pre-sampling the SDF
+     * on the TypeScript side and passing the resulting grid to the WASM layer.
+     *
+     * @param sdfFn      Function `(x, y, z) => signedDistance`.
+     * @param bounds     Bounding box as `{ min: [x,y,z], max: [x,y,z] }`.
+     * @param resolution Grid resolution as `[nx, ny, nz]` (default `[30,30,30]`).
+     * @param isoValue   Isosurface threshold (default `0.0`).
+     */
+    static fromSDF(
+        sdfFn: (x: number, y: number, z: number) => number,
+        bounds: { min: [number, number, number]; max: [number, number, number] },
+        resolution: [number, number, number] = [30, 30, 30],
+        isoValue = 0.0,
+    ): Mesh {
+        const [nx, ny, nz] = resolution;
+        const [minX, minY, minZ] = bounds.min;
+        const [maxX, maxY, maxZ] = bounds.max;
+        const dx = (maxX - minX) / (Math.max(nx, 2) - 1);
+        const dy = (maxY - minY) / (Math.max(ny, 2) - 1);
+        const dz = (maxZ - minZ) / (Math.max(nz, 2) - 1);
+        const total = nx * ny * nz;
+        const values = new Float64Array(total);
+        for (let iz = 0; iz < nz; iz++) {
+            for (let iy = 0; iy < ny; iy++) {
+                for (let ix = 0; ix < nx; ix++) {
+                    values[iz * ny * nx + iy * nx + ix] = sdfFn(
+                        minX + ix * dx,
+                        minY + iy * dy,
+                        minZ + iz * dz,
+                    );
+                }
+            }
+        }
+        const meshJs = MeshJs.fromSdfValues(
+            values, nx, ny, nz,
+            minX, minY, minZ,
+            maxX, maxY, maxZ,
+            isoValue,
+        );
+        return Mesh.from(meshJs);
+    }
+
+    // ── Edge Projection (HLR) ────────────────────────────────────────────────
+
+    /**
+     * Project visible and hidden edges of this mesh onto a plane.
+     *
+     * @param options  View direction, projection plane, optional feature angle and sample count.
+     * @param occluders Other meshes that may occlude this mesh's edges.
+     * @returns `{ visible, hidden }` — each a `CurveCollection` of polyline curves.
+     */
+    projectEdges(
+        options: ProjectionOptions,
+        occluders: Mesh[] = [],
+    ): EdgeProjectionResult {
+        const { viewDirection: [vx, vy, vz], plane: { origin: [ox, oy, oz], normal: [nx, ny, nz] } } = options;
+        const fa = options.featureAngle ?? 15;
+        const ns = options.samples ?? 8;
+        const occJs = occluders.map(m => m.inner()).filter((m): m is MeshJs => m !== undefined);
+        const res = this.inner()?.projectEdges(vx, vy, vz, ox, oy, oz, nx, ny, nz, fa, ns, occJs);
+        if (!res) return { visible: new CurveCollection(), hidden: new CurveCollection() };
+        const result: EdgeProjectionResult = {
+            visible: polylinesToCurveCollection(res.visiblePolylines() as Array<[number,number,number][]>),
+            hidden:  polylinesToCurveCollection(res.hiddenPolylines()  as Array<[number,number,number][]>),
+        };
+        res.free?.();
+        return result;
+    }
+
+    /**
+     * Slice the mesh at a section plane and project its visible/hidden edges.
+     *
+     * @param options  View direction, projection plane, section plane, optional angle and samples.
+     * @param occluders Other meshes that may occlude edges.
+     * @returns `{ cut, visible, hidden }` where `cut` is the cross-section `Sketch`.
+     */
+    projectSection(
+        options: SectionOptions,
+        occluders: Mesh[] = [],
+    ): Omit<SectionElevationResult, 'cut'> & { cutJs: any } {
+        const { viewDirection: [vx, vy, vz], plane: { origin: [ox, oy, oz], normal: [nx, ny, nz] } } = options;
+        const { sectionPlane: { origin: [sox, soy, soz], normal: [snx, sny, snz] } } = options;
+        // Convert plane-normal + point to d-offset: d = dot(normal, origin)
+        const sOffset = snx * sox + sny * soy + snz * soz;
+        const fa = options.featureAngle ?? 15;
+        const ns = options.samples ?? 8;
+        const occJs = occluders.map(m => m.inner()).filter((m): m is MeshJs => m !== undefined);
+        const res = (this.inner() as any)?.projectEdgesSection(
+            snx, sny, snz, sOffset,
+            vx, vy, vz,
+            ox, oy, oz, nx, ny, nz,
+            fa, ns, occJs,
+        );
+        if (!res) return { visible: new CurveCollection(), hidden: new CurveCollection(), cutJs: null };
+        const result = {
+            visible: polylinesToCurveCollection(res.visiblePolylines() as Array<[number,number,number][]>),
+            hidden:  polylinesToCurveCollection(res.hiddenPolylines()  as Array<[number,number,number][]>),
+            cutJs:   res.cutSketch(),
+        };
+        res.free?.();
+        return result;
+    }
+}
+
+// ── module-private helpers ────────────────────────────────────────────────────
+
+/**
+ * Convert the raw `[[x,y,z], ...][]` polylines returned by the WASM layer into
+ * a `CurveCollection` where each polyline becomes a single `Curve.Polyline`.
+ * Two-point polylines become `Curve.Line`; shorter ones are skipped.
+ */
+function polylinesToCurveCollection(polylines: Array<[number,number,number][]>): CurveCollection {
+    const col = new CurveCollection();
+    for (const pts of polylines) {
+        if (pts.length < 2) continue;
+        const curve = pts.length === 2
+            ? Curve.Line(pts[0], pts[1])
+            : Curve.Polyline(pts as Array<[number,number,number]>);
+        if (curve) col.add(curve);
+    }
+    return col;
 }

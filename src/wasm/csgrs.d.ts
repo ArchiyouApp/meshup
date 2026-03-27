@@ -305,6 +305,86 @@ export class MeshJs {
   toArrays(): object;
   transform(mat: Matrix4Js): MeshJs;
   translate(offset: Vector3Js): MeshJs;
+  // ── BVH Spatial Queries ────────────────────────────────────────────────────
+  /** BVH-accelerated first-hit raycast. Returns `undefined` on no hit. */
+  raycastFirst(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, max_dist: number): RaycastHitJs | undefined;
+  /** Project a query point onto the nearest mesh surface. Returns `undefined` if mesh is empty. */
+  closestPoint(x: number, y: number, z: number): ClosestPointResultJs | undefined;
+  /** Sample the signed-distance field at a query point. Returns `undefined` if mesh is empty. */
+  sampleSdf(x: number, y: number, z: number): SdfSampleJs | undefined;
+  /** Test whether this mesh overlaps another (BVH-accelerated). */
+  hits(other: MeshJs): boolean;
+  /** Minimum separating distance to another mesh (0 if intersecting). */
+  distanceTo(other: MeshJs): number;
+  /** Orthographically project all vertices onto a plane. */
+  projectToPlane(ox: number, oy: number, oz: number, nx: number, ny: number, nz: number): MeshJs;
+  /** Minimum absolute distance from any vertex to a plane. */
+  distanceToPlane(ox: number, oy: number, oz: number, nx: number, ny: number, nz: number): number;
+  /** Create a mesh from pre-sampled SDF values (WASM-friendly alternative to `sdf()`). */
+  static fromSdfValues(values: Float64Array, res_x: number, res_y: number, res_z: number, min_x: number, min_y: number, min_z: number, max_x: number, max_y: number, max_z: number, iso_value: number): MeshJs;
+  // ── Edge Projection (HLR) ──────────────────────────────────────────────────
+  /** Project visible/hidden edges onto a plane with BVH-accelerated HLR. */
+  projectEdges(vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, feature_angle_deg: number, n_samples: number, occluders: MeshJs[]): EdgeProjectionResultJs;
+  /** Slice + project edges for section-elevation drawings. */
+  projectEdgesSection(snx: number, sny: number, snz: number, section_offset: number, vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, feature_angle_deg: number, n_samples: number, occluders: MeshJs[]): SectionElevationResultJs;
+}
+
+export class RaycastHitJs {
+  private constructor();
+  free(): void;
+  [Symbol.dispose](): void;
+  readonly pointX: number;
+  readonly pointY: number;
+  readonly pointZ: number;
+  readonly normalX: number;
+  readonly normalY: number;
+  readonly normalZ: number;
+  readonly distance: number;
+  readonly triangleIndex: number;
+}
+
+export class ClosestPointResultJs {
+  private constructor();
+  free(): void;
+  [Symbol.dispose](): void;
+  readonly pointX: number;
+  readonly pointY: number;
+  readonly pointZ: number;
+  readonly normalX: number;
+  readonly normalY: number;
+  readonly normalZ: number;
+  readonly distance: number;
+  readonly isInside: boolean;
+}
+
+export class SdfSampleJs {
+  private constructor();
+  free(): void;
+  [Symbol.dispose](): void;
+  readonly distance: number;
+  readonly isInside: boolean;
+  readonly closestX: number;
+  readonly closestY: number;
+  readonly closestZ: number;
+}
+
+export class EdgeProjectionResultJs {
+  private constructor();
+  free(): void;
+  [Symbol.dispose](): void;
+  /** Visible projected polylines: `Array<Array<[x, y, z]>>` */
+  visiblePolylines(): any;
+  /** Hidden projected polylines: `Array<Array<[x, y, z]>>` */
+  hiddenPolylines(): any;
+}
+
+export class SectionElevationResultJs {
+  private constructor();
+  free(): void;
+  [Symbol.dispose](): void;
+  visiblePolylines(): any;
+  hiddenPolylines(): any;
+  cutSketch(): SketchJs;
 }
 
 export class NurbsCurve3DJs {
