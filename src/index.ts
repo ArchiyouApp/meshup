@@ -72,6 +72,7 @@ export { Vector } from './Vector';
 export { Vertex } from './Vertex';
 export { Mesh } from './Mesh';
 export { Polygon } from './Polygon';
+export { PolygonCollection } from './Collection';
 export { Curve } from './Curve';
 export { Collection, MeshCollection, CurveCollection } from './Collection';
 export { Sketch } from './Sketch';

@@ -11,6 +11,7 @@ import { Mesh } from "./Mesh";
 import { Curve } from "./Curve";
 import { Point } from "./Point";
 import { Vector } from "./Vector";
+import { Polygon } from "./Polygon";
 
 import { toBase64, fromBase64 } from "./utils";
 
@@ -1113,6 +1114,87 @@ export class CurveCollection extends Collection
                 .map(curve => curve.toMesh())
                 .filter(mesh => mesh?.validate()) as Mesh[]; // filter out empty meshes
         return new MeshCollection(...meshes);
+    }
+}
+
+// ── PolygonCollection ────────────────────────────────────────────────────────
+
+export class PolygonCollection
+{
+    private _polygons: Polygon[] = [];
+
+    constructor(...args: Array<Polygon | Polygon[] | PolygonCollection>)
+    {
+        for (const arg of args)
+        {
+            if (arg instanceof Polygon)           this._polygons.push(arg);
+            else if (arg instanceof PolygonCollection) this._polygons.push(...arg._polygons);
+            else if (Array.isArray(arg))           this._polygons.push(...arg.filter(p => p instanceof Polygon));
+        }
+    }
+
+    static from(...args: Array<Polygon | Polygon[] | PolygonCollection>): PolygonCollection
+    {
+        return new PolygonCollection(...args);
+    }
+
+    add(polygon: Polygon | PolygonCollection): void
+    {
+        if (polygon instanceof Polygon)            this._polygons.push(polygon);
+        else if (polygon instanceof PolygonCollection) this._polygons.push(...polygon._polygons);
+        else console.error('PolygonCollection::add(): Only Polygon or PolygonCollection instances are allowed.');
+    }
+
+    push(polygon: Polygon | PolygonCollection): void { this.add(polygon); }
+
+    remove(polygon: Polygon): void
+    {
+        this._polygons = this._polygons.filter(p => p !== polygon);
+    }
+
+    shapes(): Polygon[]  { return this._polygons; }
+    get(index: number): Polygon | undefined { return this._polygons[index]; }
+    at(index: number): Polygon | undefined  { return this._polygons[index]; }
+    first(): Polygon
+    {
+        if (this._polygons.length === 0) throw new Error('PolygonCollection::first(): Collection is empty.');
+        return this._polygons[0];
+    }
+    last(): Polygon
+    {
+        if (this._polygons.length === 0) throw new Error('PolygonCollection::last(): Collection is empty.');
+        return this._polygons[this._polygons.length - 1];
+    }
+
+    get length(): number { return this._polygons.length; }
+    count(): number      { return this._polygons.length; }
+
+    copy(): PolygonCollection  { return new PolygonCollection(...this._polygons); }
+    clone(): PolygonCollection { return new PolygonCollection(...this._polygons); }
+
+    forEach(callback: (polygon: Polygon, index: number, array: Polygon[]) => void): this
+    {
+        this._polygons.forEach(callback);
+        return this;
+    }
+
+    filter(callback: (polygon: Polygon, index: number, array: Polygon[]) => boolean): PolygonCollection
+    {
+        return new PolygonCollection(...this._polygons.filter(callback));
+    }
+
+    map<T>(callback: (polygon: Polygon, index: number, array: Polygon[]) => T): T[]
+    {
+        return this._polygons.map(callback);
+    }
+
+    toArray(): Polygon[] { return [...this._polygons]; }
+
+    /** Merge all polygons into a single Mesh */
+    toMesh(): Mesh
+    {
+        const pointArrays = this._polygons.map(p => p.vertices());
+        return Mesh.fromPolygons(pointArrays);
     }
 }
 
