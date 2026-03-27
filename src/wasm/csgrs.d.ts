@@ -308,6 +308,7 @@ export class MeshJs {
   // ── BVH Spatial Queries ────────────────────────────────────────────────────
   /** BVH-accelerated first-hit raycast. Returns `undefined` on no hit. */
   raycastFirst(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, max_dist: number): RaycastHitJs | undefined;
+  raycastAll(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, max_dist: number): RaycastHitJs[];
   /** Project a query point onto the nearest mesh surface. Returns `undefined` if mesh is empty. */
   closestPoint(x: number, y: number, z: number): ClosestPointResultJs | undefined;
   /** Sample the signed-distance field at a query point. Returns `undefined` if mesh is empty. */

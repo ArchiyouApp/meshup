@@ -5,7 +5,7 @@
  *      
  */
 
-import type { Axis, PointLike } from "./types";
+import type { Axis, PointLike, RaycastHit } from "./types";
 
 import { Mesh } from "./Mesh";
 import { Curve } from "./Curve";
@@ -591,6 +591,35 @@ export class MeshCollection extends Collection
             }
         }
         return pairs;
+    }
+
+    /**
+     * Fire a ray against every mesh in this collection.
+     *
+     * When `all` is `true` (default) returns every mesh that is hit, each
+     * with its closest-hit result, sorted by distance (nearest first).
+     * When `all` is `false` returns only the single nearest-hit mesh entry,
+     * or `null` if nothing is hit.
+     *
+     * @param origin    Ray origin `[x, y, z]`.
+     * @param direction Ray direction (need not be normalised).
+     * @param maxDist   Maximum ray length (default `Infinity`).
+     * @param all       Return all hits (`true`, default) or only the first (`false`).
+     */
+    raycast(
+        origin: [number, number, number],
+        direction: [number, number, number],
+        maxDist = Infinity,
+        all = true,
+    ): Array<{ mesh: Mesh; hit: RaycastHit }> | { mesh: Mesh; hit: RaycastHit } | null {
+        const results: Array<{ mesh: Mesh; hit: RaycastHit }> = [];
+        for (const mesh of this.shapes()) {
+            const hit = mesh.raycast(origin, direction, maxDist, false);
+            if (hit) results.push({ mesh, hit });
+        }
+        results.sort((a, b) => a.hit.distance - b.hit.distance);
+        if (all) return results;
+        return results[0] ?? null;
     }
 
     /**

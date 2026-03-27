@@ -797,31 +797,55 @@ export class Mesh
     // ── BVH Spatial Queries ─────────────────────────────────────────────────
 
     /**
-     * BVH-accelerated first-hit raycast.
+     * BVH-accelerated raycast against this mesh.
+     *
      * @param origin      Ray origin `[x, y, z]`.
      * @param direction   Ray direction (normalised internally).
      * @param maxDist     Maximum travel distance (default `Infinity`).
-     * @returns Hit result, or `null` if nothing was hit.
+     * @param all         When `true` (default) returns every triangle hit,
+     *                    sorted by distance.  When `false` returns only the
+     *                    closest hit.
      */
-    raycastFirst(
+    raycast(origin: [number, number, number], direction: [number, number, number], maxDist?: number, all?: true): RaycastHit[];
+    raycast(origin: [number, number, number], direction: [number, number, number], maxDist?: number, all?: false): RaycastHit | null;
+    raycast(
         origin: [number, number, number],
         direction: [number, number, number],
         maxDist = Infinity,
-    ): RaycastHit | null {
-        const hit = this.inner()?.raycastFirst(
-            origin[0], origin[1], origin[2],
-            direction[0], direction[1], direction[2],
-            maxDist,
-        );
-        if (!hit) return null;
-        const result: RaycastHit = {
-            pointX: hit.pointX, pointY: hit.pointY, pointZ: hit.pointZ,
-            normalX: hit.normalX, normalY: hit.normalY, normalZ: hit.normalZ,
-            distance: hit.distance,
-            triangleIndex: hit.triangleIndex,
-        };
-        hit.free?.();
-        return result;
+        all = true,
+    ): RaycastHit[] | RaycastHit | null {
+        if (all) {
+            const hits = this.inner()?.raycastAll(
+                origin[0], origin[1], origin[2],
+                direction[0], direction[1], direction[2],
+                maxDist,
+            ) ?? [];
+            return hits.map(hit => {
+                const result: RaycastHit = {
+                    pointX: hit.pointX, pointY: hit.pointY, pointZ: hit.pointZ,
+                    normalX: hit.normalX, normalY: hit.normalY, normalZ: hit.normalZ,
+                    distance: hit.distance,
+                    triangleIndex: hit.triangleIndex,
+                };
+                hit.free?.();
+                return result;
+            });
+        } else {
+            const hit = this.inner()?.raycastFirst(
+                origin[0], origin[1], origin[2],
+                direction[0], direction[1], direction[2],
+                maxDist,
+            );
+            if (!hit) return null;
+            const result: RaycastHit = {
+                pointX: hit.pointX, pointY: hit.pointY, pointZ: hit.pointZ,
+                normalX: hit.normalX, normalY: hit.normalY, normalZ: hit.normalZ,
+                distance: hit.distance,
+                triangleIndex: hit.triangleIndex,
+            };
+            hit.free?.();
+            return result;
+        }
     }
 
     /**
