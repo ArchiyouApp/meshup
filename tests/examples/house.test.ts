@@ -34,6 +34,8 @@ describe('Example: primitive meshes', () =>
                         .lineTo(WIDTH,0)
                         .close()
                         .extrude(THICKNESS);
+        
+        // TODO: add more tests
 
         const backFacade = frontFacade?.copy()?.move(0, DEPTH-THICKNESS, 0);
 
@@ -48,6 +50,7 @@ describe('Example: primitive meshes', () =>
                         .close()
                         .extrude(DEPTH+ROOF_OVERHANG_FRONT*2)
                         ?.move(0,-ROOF_OVERHANG_FRONT);
+                        
 
         const door = Mesh.Box(100, 50, 200).move(WIDTH/2, 0, 200/2);
         frontFacade?.subtract(door);

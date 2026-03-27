@@ -12,23 +12,18 @@ Please check out CSGRS or its WASMs bindings for a more robust layer.
 This repo offers (a fork of) csgrs as submodule for development in Rust and TS/JS. See lib/csgrs.
 
 ```bash
-# get from github
+# get from github (including csgrs submodule in devlibs/)
 git clone --recursive https://github.com/ArchiyouApp/meshup
 
 # install TS/JS dependencies
 pnpm
-# run an example
-pnpm dev:examples:mesh
-pnpm dev:examples:curve
 
-# Rust setup
-# Make sure you have rust/cargo/wasm-pack
-# see: https://rustup.rs/
+# for development of csgrs:
+# Make sure you have rust/cargo/wasm-pack. See: https://rustup.rs/
 cargo install wasm-pack
 
-
 # Rust build
-cd /lib/csgrs
+cd /devlibs/csgrs
 cargo
 # Test rust
 pnpm rust:check
