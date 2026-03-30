@@ -51,15 +51,20 @@ describe('Example: Curves', () =>
         expect(cc).toBeTruthy();
 
         
-        const un = cc.union(rect)?.moveY(-150);
+        const sub = cc.copy().subtract(rect)?.moveY(-150);
+        expect(sub).toBeTruthy();
+
+        const un = cc.copy().union(rect)?.moveY(-150);
         expect(un).toBeTruthy();
 
-        const unOffsets = (un as Curve).replicate(3, (c,i) => c.offset((i+1)*10)!);
+        /*
+        // NOT WORKING
+        const unOffsets = (un as Curve).replicate(3, (c,i) => c.offset((i+1)*10)?.moveZ(i*10)!);
         expect(unOffsets).toBeTruthy();
         expect(unOffsets.length).toBe(3);
+        */
 
-
-        save('test.curves.ops.gltf', new CurveCollection(circles, rect, cc, un!, unOffsets).toGLTF());
+        save('test.curves.ops.gltf', new CurveCollection(circles, rect, cc, un!, sub!.moveZ(10)).toGLTF());
         //save('test.curves.ops.svg', new CurveCollection(circles, rect, cc, /*un!, unOffsets*/).toSVG());
     });
 
