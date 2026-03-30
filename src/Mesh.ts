@@ -498,7 +498,7 @@ export class Mesh
             {
                 scaleFactor = tgtLen / srcLen;
                 this.translate(-q1.x, -q1.y, -q1.z);
-                this.scale(scaleFactor, scaleFactor, scaleFactor);
+                this.scale(scaleFactor);
                 this.translate(q1.x, q1.y, q1.z);
             }
         }
@@ -553,9 +553,18 @@ export class Mesh
         return this;
     }
 
-    /** Scale Mesh with factor alongs X, Y, and Z axes */
-    scale(sx: number, sy: number, sz: number): this
+    /** Scale Mesh with a uniform factor or per-axis [sx, sy, sz]. Optionally around an origin point. */
+    scale(factor: number | PointLike, origin?: PointLike): this
     {
+        const [sx, sy, sz] = (typeof factor === 'number') ? [factor, factor, factor] : [Point.from(factor).x, Point.from(factor).y, Point.from(factor).z];
+        if (origin)
+        {
+            const o = Point.from(origin);
+            this.translate(-o.x, -o.y, -o.z);
+            this._mesh = this.inner()?.scale(sx, sy, sz);
+            this.translate(o.x, o.y, o.z);
+            return this;
+        }
         this._mesh = this.inner()?.scale(sx, sy, sz);
         return this;
     }
@@ -1035,6 +1044,36 @@ export class Mesh
         res.free?.();
         return result;
     }
+
+    /** Isometric projection */
+    isometry(cam:PointLike=[1,1,1], includeHidden:boolean=true):CurveCollection
+    {
+        const camVec = (isPointLike(cam))
+                        ? Point.from(cam).toVector().normalize()
+                        : Vector.from([1,1,1]).normalize();
+
+        const { visible, hidden } = this.projectEdges(
+            { 
+                viewDirection: camVec.toArray() as [number, number, number],
+                plane: { origin: [0, 0, 0], normal: camVec.copy().reverse().toArray() as [number, number, number] },
+                featureAngle: 15,
+                samples: 8,
+            });
+        const xy = camVec.copy().setZ(0);
+        const ax = xy.cross(camVec);
+        // Rotate in steps from projection plane parallel to camera
+        // TODO: can this be better? Quaternion with keeping the up direction parallel to Z maybe?
+
+        return visible.rotateAround(-xy.angle(camVec), ax)
+                   .rotateZ(-xy.angle(new Vector(1, 0, 0)))
+                   .rotateX(-90);
+
+        // TODO: add Collection grouping for isometry results, to keep visible/hidden curves of the same mesh together
+        
+        
+    }
+
+
 }
 
 // ── module-private helpers ────────────────────────────────────────────────────

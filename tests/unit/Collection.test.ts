@@ -88,14 +88,16 @@ describe('Collection accessors', () => {
 
     it('meshes() filters to Mesh instances only', () => {
         const c = new Collection(cube1, line);
-        expect(c.meshes().every(s => s instanceof Mesh)).toBe(true);
-        expect(c.meshes().length).toBe(1);
+        const meshes = c.meshes();
+        expect(meshes.toArray().every(s => s instanceof Mesh)).toBe(true);
+        expect(meshes.length).toBe(1);
     });
 
     it('curves() filters to Curve instances only', () => {
         const c = new Collection(cube1, line);
-        expect(c.curves().every(s => s instanceof Curve)).toBe(true);
-        expect(c.curves().length).toBe(1);
+        const curves = c.curves();
+        expect(curves.toArray().every(s => s instanceof Curve)).toBe(true);
+        expect(curves.length).toBe(1);
     });
 });
 

@@ -23,6 +23,20 @@ export class BooleanRegionJs {
   readonly exterior: CompoundCurve3DJs;
 }
 
+export class ClosestPointResultJs {
+  private constructor();
+  free(): void;
+  [Symbol.dispose](): void;
+  readonly pointX: number;
+  readonly pointY: number;
+  readonly pointZ: number;
+  readonly distance: number;
+  readonly normalX: number;
+  readonly normalY: number;
+  readonly normalZ: number;
+  readonly isInside: boolean;
+}
+
 export class CompoundCurve3DJs {
   free(): void;
   [Symbol.dispose](): void;
@@ -155,6 +169,24 @@ export class CompoundCurve3DJs {
   translate(offset: Vector3Js): CompoundCurve3DJs;
 }
 
+export class EdgeProjectionResultJs {
+  private constructor();
+  free(): void;
+  [Symbol.dispose](): void;
+  /**
+   * Returns hidden polylines as a JS value.
+   *
+   * Shape: `Array< Array<[x: number, y: number, z: number]> >`
+   */
+  hiddenPolylines(): any;
+  /**
+   * Returns visible polylines as a JS value.
+   *
+   * Shape: `Array< Array<[x: number, y: number, z: number]> >`
+   */
+  visiblePolylines(): any;
+}
+
 export class Matrix4Js {
   free(): void;
   [Symbol.dispose](): void;
@@ -181,9 +213,26 @@ export class MeshJs {
   static fromPolygons(polygons: PolygonJs[], metadata: any): MeshJs;
   minkowskiSum(other: MeshJs): MeshJs;
   sameMetadata(other: MeshJs): boolean;
+  /**
+   * Sample the signed distance field at a query point.
+   *
+   * Returns a **negative** signed distance when inside the mesh.
+   * Returns `undefined` if the mesh has no polygons.
+   */
+  sampleSdf(x: number, y: number, z: number): SdfSampleJs | undefined;
   taubinSmooth(lambda: number, mu: number, iterations: number, preserve_boundaries: boolean): MeshJs;
   toSTLBinary(): Uint8Array;
+  /**
+   * Minimum separating distance between this mesh and another.
+   *
+   * Returns `0.0` if they intersect.
+   */
+  distanceTo(other: MeshJs): number;
   distributeArc(count: number, radius: number, start_angle: number, end_angle: number): MeshJs;
+  /**
+   * All-hits raycast: every triangle intersection along the ray, sorted by distance.
+   */
+  raycastAll(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, max_dist: number): RaycastHitJs[];
   /**
    * Number of triangles (handy to sanity-check).
    */
@@ -205,7 +254,32 @@ export class MeshJs {
    */
   intersectCurve(curve: NurbsCurve3DJs, tolerance?: number | null): Point3Js[];
   massProperties(density: number): any;
+  /**
+   * Project a query point onto the nearest mesh surface (BVH-accelerated).
+   *
+   * Returns `undefined` if the mesh has no polygons.
+   */
+  closestPoint(x: number, y: number, z: number): ClosestPointResultJs | undefined;
   laplacianSmooth(lambda: number, iterations: number, preserve_boundaries: boolean): MeshJs;
+  /**
+   * BVH-accelerated edge projection with hidden-line removal.
+   *
+   * - `(vx, vy, vz)` – view direction (normalised internally).
+   * - `(ox, oy, oz)` – projection plane origin.
+   * - `(nx, ny, nz)` – projection plane normal.
+   * - `feature_angle_deg` – crease angle threshold in degrees (e.g. `15.0`).
+   * - `n_samples` – HLR ray samples per edge segment (e.g. `8`).
+   * - `occluders` – additional meshes that can occlude edges of `self`;
+   *   `self` is always included as an occluder.
+   */
+  projectEdges(vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, feature_angle_deg: number, n_samples: number, occluders: MeshJs[]): EdgeProjectionResultJs;
+  /**
+   * BVH-accelerated first-hit raycast.
+   *
+   * Returns the closest intersection along `origin + t * direction` where
+   * `t ∈ [0, max_dist]`, or `undefined` if there is no hit.
+   */
+  raycastFirst(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, max_dist: number): RaycastHitJs | undefined;
   sliceComponents(normal_x: number, normal_y: number, normal_z: number, offset: number): SketchJs;
   distributeLinear(count: number, direction: Vector3Js, spacing: number): MeshJs;
   /**
@@ -215,8 +289,27 @@ export class MeshJs {
   rotateQuaternion(w: number, x: number, y: number, z: number): MeshJs;
   static teardropCylinder(width: number, length: number, height: number, shape_segments: number, metadata: any): MeshJs;
   toAMFWithColor(object_name: string, units: string, r: number, g: number, b: number): string;
+  /**
+   * Create a mesh from pre-sampled SDF values on a regular grid.
+   *
+   * `values` must be laid out as `[z * res_y * res_x + y * res_x + x, ...]`.
+   * `iso_value` is the isosurface threshold (typically `0.0`).
+   */
+  static fromSdfValues(values: Float64Array, res_x: number, res_y: number, res_z: number, min_x: number, min_y: number, min_z: number, max_x: number, max_y: number, max_z: number, iso_value: number): MeshJs;
   static spurGearInvolute(module_: number, teeth: number, pressure_angle_deg: number, clearance: number, backlash: number, segments_per_flank: number, thickness: number, metadata: any): MeshJs;
+  /**
+   * Orthographically project every vertex of this mesh onto a plane.
+   *
+   * `(ox, oy, oz)` is a point on the plane; `(nx, ny, nz)` is its normal.
+   */
+  projectToPlane(ox: number, oy: number, oz: number, nx: number, ny: number, nz: number): MeshJs;
   subdivideTriangles(levels: number): MeshJs;
+  /**
+   * Minimum absolute distance from any mesh vertex to a plane.
+   *
+   * `(ox, oy, oz)` is a point on the plane; `(nx, ny, nz)` is its normal.
+   */
+  distanceToPlane(ox: number, oy: number, oz: number, nx: number, ny: number, nz: number): number;
   transformComponents(m00: number, m01: number, m02: number, m03: number, m10: number, m11: number, m12: number, m13: number, m20: number, m21: number, m22: number, m23: number, m30: number, m31: number, m32: number, m33: number): MeshJs;
   translateComponents(dx: number, dy: number, dz: number): MeshJs;
   /**
@@ -252,6 +345,16 @@ export class MeshJs {
    * A `Vec<Point3Js>` of 3D intersection points, in order along the curve.
    */
   intersectCompoundCurve(curve: CompoundCurve3DJs, tolerance?: number | null): Point3Js[];
+  /**
+   * Slice at a section plane and return visible/hidden edge projections plus
+   * the cut sketch.
+   *
+   * - `(snx, sny, snz)` / `section_offset` – section plane normal + d offset.
+   * - `(vx, vy, vz)` – view direction.
+   * - `(ox, oy, oz)` / `(nx, ny, nz)` – projection plane origin + normal.
+   * - `feature_angle_deg`, `n_samples`, `occluders` – as in `projectEdges`.
+   */
+  projectEdgesSection(snx: number, sny: number, snz: number, section_offset: number, vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, feature_angle_deg: number, n_samples: number, occluders: MeshJs[]): SectionElevationResultJs;
   containsVertexComponents(x: number, y: number, z: number): boolean;
   filterPolygonsByMetadata(needle: any): MeshJs;
   distributeLinearComponents(count: number, dx: number, dy: number, dz: number, spacing: number): MeshJs;
@@ -275,6 +378,10 @@ export class MeshJs {
   toAMF(object_name: string, units: string): string;
   flatten(): SketchJs;
   static frustum(radius1: number, radius2: number, height: number, segments: number, metadata: any): MeshJs;
+  /**
+   * Test whether this mesh physically overlaps another (BVH-accelerated).
+   */
+  hits(other: MeshJs): boolean;
   /**
    * Return triangle indices (u32).
    */
@@ -305,87 +412,6 @@ export class MeshJs {
   toArrays(): object;
   transform(mat: Matrix4Js): MeshJs;
   translate(offset: Vector3Js): MeshJs;
-  // ── BVH Spatial Queries ────────────────────────────────────────────────────
-  /** BVH-accelerated first-hit raycast. Returns `undefined` on no hit. */
-  raycastFirst(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, max_dist: number): RaycastHitJs | undefined;
-  raycastAll(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, max_dist: number): RaycastHitJs[];
-  /** Project a query point onto the nearest mesh surface. Returns `undefined` if mesh is empty. */
-  closestPoint(x: number, y: number, z: number): ClosestPointResultJs | undefined;
-  /** Sample the signed-distance field at a query point. Returns `undefined` if mesh is empty. */
-  sampleSdf(x: number, y: number, z: number): SdfSampleJs | undefined;
-  /** Test whether this mesh overlaps another (BVH-accelerated). */
-  hits(other: MeshJs): boolean;
-  /** Minimum separating distance to another mesh (0 if intersecting). */
-  distanceTo(other: MeshJs): number;
-  /** Orthographically project all vertices onto a plane. */
-  projectToPlane(ox: number, oy: number, oz: number, nx: number, ny: number, nz: number): MeshJs;
-  /** Minimum absolute distance from any vertex to a plane. */
-  distanceToPlane(ox: number, oy: number, oz: number, nx: number, ny: number, nz: number): number;
-  /** Create a mesh from pre-sampled SDF values (WASM-friendly alternative to `sdf()`). */
-  static fromSdfValues(values: Float64Array, res_x: number, res_y: number, res_z: number, min_x: number, min_y: number, min_z: number, max_x: number, max_y: number, max_z: number, iso_value: number): MeshJs;
-  // ── Edge Projection (HLR) ──────────────────────────────────────────────────
-  /** Project visible/hidden edges onto a plane with BVH-accelerated HLR. */
-  projectEdges(vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, feature_angle_deg: number, n_samples: number, occluders: MeshJs[]): EdgeProjectionResultJs;
-  /** Slice + project edges for section-elevation drawings. */
-  projectEdgesSection(snx: number, sny: number, snz: number, section_offset: number, vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, feature_angle_deg: number, n_samples: number, occluders: MeshJs[]): SectionElevationResultJs;
-}
-
-export class RaycastHitJs {
-  private constructor();
-  free(): void;
-  [Symbol.dispose](): void;
-  readonly pointX: number;
-  readonly pointY: number;
-  readonly pointZ: number;
-  readonly normalX: number;
-  readonly normalY: number;
-  readonly normalZ: number;
-  readonly distance: number;
-  readonly triangleIndex: number;
-}
-
-export class ClosestPointResultJs {
-  private constructor();
-  free(): void;
-  [Symbol.dispose](): void;
-  readonly pointX: number;
-  readonly pointY: number;
-  readonly pointZ: number;
-  readonly normalX: number;
-  readonly normalY: number;
-  readonly normalZ: number;
-  readonly distance: number;
-  readonly isInside: boolean;
-}
-
-export class SdfSampleJs {
-  private constructor();
-  free(): void;
-  [Symbol.dispose](): void;
-  readonly distance: number;
-  readonly isInside: boolean;
-  readonly closestX: number;
-  readonly closestY: number;
-  readonly closestZ: number;
-}
-
-export class EdgeProjectionResultJs {
-  private constructor();
-  free(): void;
-  [Symbol.dispose](): void;
-  /** Visible projected polylines: `Array<Array<[x, y, z]>>` */
-  visiblePolylines(): any;
-  /** Hidden projected polylines: `Array<Array<[x, y, z]>>` */
-  hiddenPolylines(): any;
-}
-
-export class SectionElevationResultJs {
-  private constructor();
-  free(): void;
-  [Symbol.dispose](): void;
-  visiblePolylines(): any;
-  hiddenPolylines(): any;
-  cutSketch(): SketchJs;
 }
 
 export class NurbsCurve3DJs {
@@ -728,6 +754,40 @@ export class PolygonJs {
   hasHoles(): boolean;
 }
 
+export class RaycastHitJs {
+  private constructor();
+  free(): void;
+  [Symbol.dispose](): void;
+  readonly triangleIndex: number;
+  readonly pointX: number;
+  readonly pointY: number;
+  readonly pointZ: number;
+  readonly distance: number;
+  readonly normalX: number;
+  readonly normalY: number;
+  readonly normalZ: number;
+}
+
+export class SdfSampleJs {
+  private constructor();
+  free(): void;
+  [Symbol.dispose](): void;
+  readonly distance: number;
+  readonly closestX: number;
+  readonly closestY: number;
+  readonly closestZ: number;
+  readonly isInside: boolean;
+}
+
+export class SectionElevationResultJs {
+  private constructor();
+  free(): void;
+  [Symbol.dispose](): void;
+  cutSketch(): SketchJs;
+  hiddenPolylines(): any;
+  visiblePolylines(): any;
+}
+
 export class SketchJs {
   free(): void;
   [Symbol.dispose](): void;
@@ -738,7 +798,6 @@ export class SketchJs {
   intersection(other: SketchJs): SketchJs;
   static regularNGon(sides: number, radius: number, metadata: any): SketchJs;
   static airfoilNACA4(max_camber: number, camber_position: number, thickness: number, chord: number, samples: number, metadata: any): SketchJs;
-  hilbertCurve(order: number, padding: number): SketchJs;
   static involuteGear(module_: number, teeth: number, pressure_angle_deg: number, clearance: number, backlash: number, segments_per_flank: number, metadata: any): SketchJs;
   /**
    * Return a human-readable summary of every ring coordinate in the
@@ -756,13 +815,11 @@ export class SketchJs {
    */
   debugGeometry(): string;
   extrudeVector(dir: Vector3Js): MeshJs;
-  offsetRounded(distance: number): SketchJs;
   static rightTriangle(width: number, height: number, metadata: any): SketchJs;
   toMultiPolygon(): string;
   static circleWithFlat(radius: number, segments: number, flat_dist: number, metadata: any): SketchJs;
   sweepComponents(path: any): MeshJs;
   static roundedRectangle(width: number, height: number, corner_radius: number, corner_segments: number, metadata: any): SketchJs;
-  straightSkeleton(orientation: boolean): SketchJs;
   static circleWithKeyway(radius: number, segments: number, key_width: number, key_depth: number, metadata: any): SketchJs;
   transformComponents(m00: number, m01: number, m02: number, m03: number, m10: number, m11: number, m12: number, m13: number, m20: number, m21: number, m22: number, m23: number, m30: number, m31: number, m32: number, m33: number): SketchJs;
   translateComponents(dx: number, dy: number, dz: number): SketchJs;
@@ -782,7 +839,6 @@ export class SketchJs {
   static bezier(control: any, segments: number, metadata: any): SketchJs;
   center(): SketchJs;
   static circle(radius: number, segments: number, metadata: any): SketchJs;
-  offset(distance: number): SketchJs;
   rotate(rx: number, ry: number, rz: number): SketchJs;
   static square(width: number, metadata: any): SketchJs;
   toSVG(): string;
@@ -859,7 +915,9 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
   readonly memory: WebAssembly.Memory;
   readonly __wbg_booleanregionjs_free: (a: number, b: number) => void;
+  readonly __wbg_closestpointresultjs_free: (a: number, b: number) => void;
   readonly __wbg_compoundcurve3djs_free: (a: number, b: number) => void;
+  readonly __wbg_edgeprojectionresultjs_free: (a: number, b: number) => void;
   readonly __wbg_matrix4js_free: (a: number, b: number) => void;
   readonly __wbg_meshjs_free: (a: number, b: number) => void;
   readonly __wbg_nurbscurve3djs_free: (a: number, b: number) => void;
@@ -868,12 +926,22 @@ export interface InitOutput {
   readonly __wbg_point3js_free: (a: number, b: number) => void;
   readonly __wbg_point4js_free: (a: number, b: number) => void;
   readonly __wbg_polygonjs_free: (a: number, b: number) => void;
+  readonly __wbg_sdfsamplejs_free: (a: number, b: number) => void;
+  readonly __wbg_sectionelevationresultjs_free: (a: number, b: number) => void;
   readonly __wbg_sketchjs_free: (a: number, b: number) => void;
   readonly __wbg_vertexjs_free: (a: number, b: number) => void;
   readonly booleanregionjs_exterior: (a: number) => number;
   readonly booleanregionjs_hasHoles: (a: number) => number;
   readonly booleanregionjs_holeCount: (a: number) => number;
   readonly booleanregionjs_holes: (a: number) => [number, number];
+  readonly closestpointresultjs_distance: (a: number) => number;
+  readonly closestpointresultjs_is_inside: (a: number) => number;
+  readonly closestpointresultjs_normal_x: (a: number) => number;
+  readonly closestpointresultjs_normal_y: (a: number) => number;
+  readonly closestpointresultjs_normal_z: (a: number) => number;
+  readonly closestpointresultjs_point_x: (a: number) => number;
+  readonly closestpointresultjs_point_y: (a: number) => number;
+  readonly closestpointresultjs_point_z: (a: number) => number;
   readonly compoundcurve3djs_bbox: (a: number) => [number, number];
   readonly compoundcurve3djs_booleanCompoundCurve: (a: number, b: number, c: number, d: number) => [number, number, number, number];
   readonly compoundcurve3djs_booleanCurve: (a: number, b: number, c: number, d: number) => [number, number, number, number];
@@ -904,6 +972,8 @@ export interface InitOutput {
   readonly compoundcurve3djs_tessellate: (a: number, b: number, c: number) => [number, number];
   readonly compoundcurve3djs_translate: (a: number, b: number) => number;
   readonly compoundcurve3djs_trimRange: (a: number, b: number, c: number) => [number, number, number, number];
+  readonly edgeprojectionresultjs_hiddenPolylines: (a: number) => any;
+  readonly edgeprojectionresultjs_visiblePolylines: (a: number) => any;
   readonly matrix4js_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
   readonly matrix4js_toArray: (a: number) => [number, number];
   readonly meshjs_adaptiveRefine: (a: number, b: number, c: number, d: number) => number;
@@ -911,6 +981,7 @@ export interface InitOutput {
   readonly meshjs_boundingBox: (a: number) => any;
   readonly meshjs_center: (a: number) => number;
   readonly meshjs_clone: (a: number) => number;
+  readonly meshjs_closestPoint: (a: number, b: number, c: number, d: number) => number;
   readonly meshjs_containsVertex: (a: number, b: number) => number;
   readonly meshjs_containsVertexComponents: (a: number, b: number, c: number, d: number) => number;
   readonly meshjs_convexHull: (a: number) => number;
@@ -918,6 +989,8 @@ export interface InitOutput {
   readonly meshjs_cuboid: (a: number, b: number, c: number, d: any) => number;
   readonly meshjs_cylinder: (a: number, b: number, c: number, d: any) => number;
   readonly meshjs_difference: (a: number, b: number) => number;
+  readonly meshjs_distanceTo: (a: number, b: number) => number;
+  readonly meshjs_distanceToPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
   readonly meshjs_distributeArc: (a: number, b: number, c: number, d: number, e: number) => number;
   readonly meshjs_distributeGrid: (a: number, b: number, c: number, d: number, e: number) => number;
   readonly meshjs_distributeLinear: (a: number, b: number, c: number, d: number) => number;
@@ -929,11 +1002,13 @@ export interface InitOutput {
   readonly meshjs_float: (a: number) => number;
   readonly meshjs_fromPointsWithHoles: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly meshjs_fromPolygons: (a: number, b: number, c: any) => number;
+  readonly meshjs_fromSdfValues: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
   readonly meshjs_fromSketch: (a: number) => number;
   readonly meshjs_frustum: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly meshjs_frustum_ptp: (a: number, b: number, c: number, d: number, e: number, f: any) => number;
   readonly meshjs_frustum_ptpComponents: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: any) => number;
   readonly meshjs_gyroid: (a: number, b: number, c: number, d: number, e: any) => number;
+  readonly meshjs_hits: (a: number, b: number) => number;
   readonly meshjs_icosahedron: (a: number, b: any) => number;
   readonly meshjs_indices: (a: number) => any;
   readonly meshjs_intersectCompoundCurve: (a: number, b: number, c: number, d: number) => [number, number];
@@ -952,11 +1027,17 @@ export interface InitOutput {
   readonly meshjs_polygons: (a: number) => [number, number];
   readonly meshjs_polyhedron: (a: any, b: any, c: any) => [number, number, number];
   readonly meshjs_positions: (a: number) => any;
+  readonly meshjs_projectEdges: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
+  readonly meshjs_projectEdgesSection: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => number;
+  readonly meshjs_projectToPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
+  readonly meshjs_raycastAll: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+  readonly meshjs_raycastFirst: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
   readonly meshjs_removePoorTriangles: (a: number, b: number) => number;
   readonly meshjs_renormalize: (a: number) => number;
   readonly meshjs_rotate: (a: number, b: number, c: number, d: number) => number;
   readonly meshjs_rotateQuaternion: (a: number, b: number, c: number, d: number, e: number) => number;
   readonly meshjs_sameMetadata: (a: number, b: number) => number;
+  readonly meshjs_sampleSdf: (a: number, b: number, c: number, d: number) => number;
   readonly meshjs_scale: (a: number, b: number, c: number, d: number) => number;
   readonly meshjs_schwarzD: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly meshjs_schwarzP: (a: number, b: number, c: number, d: number, e: any) => number;
@@ -1050,12 +1131,8 @@ export interface InitOutput {
   readonly planejs_toXYTransform: (a: number) => any;
   readonly point3js_new: (a: number, b: number, c: number) => number;
   readonly point3js_toString: (a: number) => [number, number];
-  readonly point3js_x: (a: number) => number;
-  readonly point3js_y: (a: number) => number;
-  readonly point3js_z: (a: number) => number;
   readonly point4js_new: (a: number, b: number, c: number, d: number) => number;
   readonly point4js_toString: (a: number) => [number, number];
-  readonly point4js_w: (a: number) => number;
   readonly polygonjs_addHole: (a: number, b: number, c: number) => void;
   readonly polygonjs_boundingBox: (a: number) => any;
   readonly polygonjs_calculateNewNormal: (a: number) => number;
@@ -1072,6 +1149,11 @@ export interface InitOutput {
   readonly polygonjs_toArray: (a: number) => [number, number];
   readonly polygonjs_triangulate: (a: number) => [number, number];
   readonly polygonjs_vertices: (a: number) => any;
+  readonly raycasthitjs_triangle_index: (a: number) => number;
+  readonly sdfsamplejs_is_inside: (a: number) => number;
+  readonly sectionelevationresultjs_cutSketch: (a: number) => number;
+  readonly sectionelevationresultjs_hiddenPolylines: (a: number) => any;
+  readonly sectionelevationresultjs_visiblePolylines: (a: number) => any;
   readonly sketchjs_airfoilNACA4: (a: number, b: number, c: number, d: number, e: number, f: any) => number;
   readonly sketchjs_arrow: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly sketchjs_bezier: (a: any, b: number, c: any) => [number, number, number];
@@ -1094,14 +1176,11 @@ export interface InitOutput {
   readonly sketchjs_fromMesh: (a: number) => number;
   readonly sketchjs_fromSVG: (a: number, b: number, c: any) => [number, number, number];
   readonly sketchjs_heart: (a: number, b: number, c: number, d: any) => number;
-  readonly sketchjs_hilbertCurve: (a: number, b: number, c: number) => number;
   readonly sketchjs_intersection: (a: number, b: number) => number;
   readonly sketchjs_inverse: (a: number) => number;
   readonly sketchjs_involuteGear: (a: number, b: number, c: number, d: number, e: number, f: number, g: any) => number;
   readonly sketchjs_isEmpty: (a: number) => number;
   readonly sketchjs_keyhole: (a: number, b: number, c: number, d: number, e: any) => number;
-  readonly sketchjs_offset: (a: number, b: number) => number;
-  readonly sketchjs_offsetRounded: (a: number, b: number) => number;
   readonly sketchjs_pieSlice: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly sketchjs_polygon: (a: any, b: any) => [number, number, number];
   readonly sketchjs_rectangle: (a: number, b: number, c: any) => number;
@@ -1117,7 +1196,6 @@ export interface InitOutput {
   readonly sketchjs_square: (a: number, b: any) => number;
   readonly sketchjs_squircle: (a: number, b: number, c: number, d: any) => number;
   readonly sketchjs_star: (a: number, b: number, c: number, d: any) => number;
-  readonly sketchjs_straightSkeleton: (a: number, b: number) => number;
   readonly sketchjs_supershape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any) => number;
   readonly sketchjs_sweep: (a: number, b: number, c: number) => number;
   readonly sketchjs_sweepComponents: (a: number, b: any) => number;
@@ -1158,13 +1236,29 @@ export interface InitOutput {
   readonly polygonjs_new: (a: number, b: number, c: any) => number;
   readonly sketchjs_invalidateBoundingBox: (a: number) => void;
   readonly sketchjs_new: () => number;
+  readonly point3js_x: (a: number) => number;
+  readonly point3js_y: (a: number) => number;
+  readonly point3js_z: (a: number) => number;
+  readonly point4js_w: (a: number) => number;
   readonly point4js_x: (a: number) => number;
   readonly point4js_y: (a: number) => number;
   readonly point4js_z: (a: number) => number;
+  readonly raycasthitjs_distance: (a: number) => number;
+  readonly raycasthitjs_normal_x: (a: number) => number;
+  readonly raycasthitjs_normal_y: (a: number) => number;
+  readonly raycasthitjs_normal_z: (a: number) => number;
+  readonly raycasthitjs_point_x: (a: number) => number;
+  readonly raycasthitjs_point_y: (a: number) => number;
+  readonly raycasthitjs_point_z: (a: number) => number;
+  readonly sdfsamplejs_closest_x: (a: number) => number;
+  readonly sdfsamplejs_closest_y: (a: number) => number;
+  readonly sdfsamplejs_closest_z: (a: number) => number;
+  readonly sdfsamplejs_distance: (a: number) => number;
   readonly vector3js_x: (a: number) => number;
   readonly vector3js_y: (a: number) => number;
   readonly vector3js_z: (a: number) => number;
   readonly planejs_new: (a: number, b: number) => number;
+  readonly __wbg_raycasthitjs_free: (a: number, b: number) => void;
   readonly __wbg_vector3js_free: (a: number, b: number) => void;
   readonly __wbindgen_malloc: (a: number, b: number) => number;
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

@@ -107,6 +107,18 @@ export class Curve
         return newCurve;
     }
 
+    /** Replicate this Curve a given number of times and return in a CurveCollection */
+    replicate(num: number, transform: (curve: Curve, index: number, prev:Curve|undefined) => Curve): CurveCollection
+    {
+        const newCurves = new Array(num).fill(0).map((_, i, arr) => 
+        {
+            const newCurve = transform(this.copy(), i, i > 0 ? arr[i - 1] : undefined);
+            return newCurve;
+        });
+
+        return new CurveCollection(...newCurves);
+    }   
+
     //// CREATION ////
     /*
         We use factory methods for it's clean syntax
@@ -152,14 +164,24 @@ export class Curve
     }
 
     /** Make a NURBS curve by interpolating through given points */
-    static Interpolated(controlPoints: PointLike[], degree: number = 3): Curve
+    static Interpolated(...args: Array<PointLike|Array<PointLike>>): Curve
     {
+        // arguments can be flat [p1, p2, p3] or all in first args [[p1, p2, p3]]
+        const controlPoints = (args[0] instanceof Array && args[0].every(isPointLike))
+                                ? args[0].filter(isPointLike).map(p => Point.from(p)) 
+                                : args.filter(isPointLike).map(p => Point.from(p));
+
+        if(controlPoints.length < 3)
+        {
+            throw new Error('Curve.Interpolated(): At least 3 control points are required. Please supply PointLikes (p1,p2,p3) or [p1,p2,p3].');
+        }
+
         return Curve.fromCsgrs(
             getCsgrs()
                 ?.NurbsCurve3DJs
                     ?.makeInterpolated(
                         controlPoints.map(p => new Point(p).toPoint3Js()),
-                        degree,
+                        3,
             )
         );
     }
@@ -182,6 +204,327 @@ export class Curve
                 );
         
     }
+    /** Build an arc (a portion of a circle).
+     *
+     *  Two methods are available:
+     *
+     *  - `'threepoint': `start`, `mid`, `end` are three points on the arc.
+     *     The three points must not be collinear.
+     *
+     *  - `'tangent'`: `start` is the start point, `mid` is the tangent direction at start,
+     *     and `end` is the end point. The tangent must not be parallel to start→end.
+     */
+    static Arc(start: PointLike, mid: PointLike, end: PointLike, method: 'threepoint'|'tangent' = 'tangent'): Curve
+    {
+        if (!isPointLike(start) || !isPointLike(mid) || !isPointLike(end))
+        {
+            throw new Error('Curve.Arc(): Invalid start, mid, or end point. Please supply PointLike values.');
+        }
+
+        if (method === 'tangent')
+        {
+            return Curve._arcFromTangent(Point.from(start), Vector.from(mid), Point.from(end));
+        }
+
+        return Curve._arcFromThreePoints(Point.from(start), Point.from(mid), Point.from(end));
+    }
+
+    /** Three-point arc: start, mid-point, end all lie on the arc. */
+    private static _arcFromThreePoints(A: Point, B: Point, C: Point): Curve
+    {
+        // Vectors from A to B and A to C
+        const ab = new Vector(B.x - A.x, B.y - A.y, B.z - A.z);
+        const ac = new Vector(C.x - A.x, C.y - A.y, C.z - A.z);
+
+        // Plane normal (cross product of two edges)
+        const rawNormal = ab.cross(ac);
+        if (rawNormal.length() < 1e-10)
+        {
+            throw new Error('Curve.Arc(): start, mid, and end are collinear — no arc can be defined.');
+        }
+        const normalUnit = rawNormal.normalize();
+
+        const { center, radius } = Curve._circumcenter(A, B, C, normalUnit);
+
+        return Curve._trimArcFromCircle(A, B, C, center, radius, normalUnit);
+    }
+
+    /** Tangent arc: start point, tangent direction at start, end point. */
+    private static _arcFromTangent(A: Point, tangent: Vector, C: Point): Curve
+    {
+        const tanUnit = tangent.normalize();
+        const chord = new Vector(C.x - A.x, C.y - A.y, C.z - A.z);
+
+        if (chord.length() < 1e-10)
+        {
+            throw new Error('Curve.Arc(): start and end are the same point.');
+        }
+
+        // The plane normal is the cross product of the tangent and the chord
+        const rawNormal = tanUnit.cross(chord);
+        if (rawNormal.length() < 1e-10)
+        {
+            throw new Error('Curve.Arc(): tangent is parallel to start→end — no arc can be defined.');
+        }
+        const normalUnit = rawNormal.normalize();
+
+        // The center lies on the line through A perpendicular to the tangent in the plane.
+        // perpAtA = normal × tangent — points from A towards center
+        const perpAtA = normalUnit.cross(tanUnit).normalize();
+
+        // Also the center must be equidistant from A and C → lies on perpendicular bisector of AC.
+        const midAC = new Vector((A.x + C.x) / 2, (A.y + C.y) / 2, (A.z + C.z) / 2);
+        const chordDir = chord.normalize();
+        const perpBisector = normalUnit.cross(chordDir).normalize();
+
+        // Solve: A + t·perpAtA = midAC + s·perpBisector
+        // → t·perpAtA − s·perpBisector = midAC − A
+        const dx = midAC.x - A.x;
+        const dy = midAC.y - A.y;
+        const dz = midAC.z - A.z;
+
+        const d1 = perpAtA;
+        const d2neg = perpBisector.scale(-1);
+
+        const det_xy = d1.x * d2neg.y - d2neg.x * d1.y;
+        const det_xz = d1.x * d2neg.z - d2neg.x * d1.z;
+        const det_yz = d1.y * d2neg.z - d2neg.y * d1.z;
+
+        let t: number;
+        if (Math.abs(det_xy) >= Math.abs(det_xz) && Math.abs(det_xy) >= Math.abs(det_yz))
+        {
+            t = (dx * d2neg.y - d2neg.x * dy) / det_xy;
+        }
+        else if (Math.abs(det_xz) >= Math.abs(det_yz))
+        {
+            t = (dx * d2neg.z - d2neg.x * dz) / det_xz;
+        }
+        else
+        {
+            t = (dy * d2neg.z - d2neg.y * dz) / det_yz;
+        }
+
+        const center = new Point(A.x + t * perpAtA.x, A.y + t * perpAtA.y, A.z + t * perpAtA.z);
+        const radius = Math.sqrt((A.x - center.x) ** 2 + (A.y - center.y) ** 2 + (A.z - center.z) ** 2);
+
+        // Synthesise a mid-point on the correct side of the chord for direction resolution
+        const midChord = new Point((A.x + C.x) / 2, (A.y + C.y) / 2, (A.z + C.z) / 2);
+        const centerToMid = new Vector(midChord.x - center.x, midChord.y - center.y, midChord.z - center.z);
+        const midOnArc = new Point(
+            center.x + centerToMid.normalize().scale(radius).x,
+            center.y + centerToMid.normalize().scale(radius).y,
+            center.z + centerToMid.normalize().scale(radius).z,
+        );
+
+        // Use the tangent cross chord to pick the arc side consistent with the tangent direction.
+        // If perpAtA (which points from A towards center) has a positive dot with center−A,
+        // the arc should go the "short way" through midOnArc. Otherwise flip.
+        const centerFromA = new Vector(center.x - A.x, center.y - A.y, center.z - A.z);
+        const sameSide = centerFromA.dot(perpAtA) > 0;
+
+        // B is the guide point that tells the trimmer which side of the circle to take
+        let B: Point;
+        if (sameSide)
+        {
+            // midOnArc is between A and C on the side the tangent bends towards
+            B = midOnArc;
+        }
+        else
+        {
+            // Reflect midOnArc through center to get the point on the opposite arc
+            B = new Point(
+                2 * center.x - midOnArc.x,
+                2 * center.y - midOnArc.y,
+                2 * center.z - midOnArc.z,
+            );
+        }
+
+        return Curve._trimArcFromCircle(A, B, C, center, radius, normalUnit);
+    }
+
+    /** Compute circumcenter and radius for three non-collinear points on a plane with given normal. */
+    private static _circumcenter(A: Point, B: Point, C: Point, normalUnit: Vector): { center: Point, radius: number }
+    {
+        const ab = new Vector(B.x - A.x, B.y - A.y, B.z - A.z);
+        const ac = new Vector(C.x - A.x, C.y - A.y, C.z - A.z);
+
+        const mAB = new Vector((A.x + B.x) / 2, (A.y + B.y) / 2, (A.z + B.z) / 2);
+        const mAC = new Vector((A.x + C.x) / 2, (A.y + C.y) / 2, (A.z + C.z) / 2);
+
+        const dAB = normalUnit.cross(ab).normalize();
+        const dAC = normalUnit.cross(ac).normalize();
+
+        const dx = mAC.x - mAB.x;
+        const dy = mAC.y - mAB.y;
+        const dz = mAC.z - mAB.z;
+
+        const det_xy = dAB.x * (-dAC.y) - (-dAC.x) * dAB.y;
+        const det_xz = dAB.x * (-dAC.z) - (-dAC.x) * dAB.z;
+        const det_yz = dAB.y * (-dAC.z) - (-dAC.y) * dAB.z;
+
+        let t: number;
+        if (Math.abs(det_xy) >= Math.abs(det_xz) && Math.abs(det_xy) >= Math.abs(det_yz))
+        {
+            t = (dx * (-dAC.y) - (-dAC.x) * dy) / det_xy;
+        }
+        else if (Math.abs(det_xz) >= Math.abs(det_yz))
+        {
+            t = (dx * (-dAC.z) - (-dAC.x) * dz) / det_xz;
+        }
+        else
+        {
+            t = (dy * (-dAC.z) - (-dAC.y) * dz) / det_yz;
+        }
+
+        const center = new Point(mAB.x + t * dAB.x, mAB.y + t * dAB.y, mAB.z + t * dAB.z);
+        const radius = Math.sqrt((A.x - center.x) ** 2 + (A.y - center.y) ** 2 + (A.z - center.z) ** 2);
+
+        return { center, radius };
+    }
+
+    /** Trim an arc A→(through B)→C from a full circle defined by center, radius, and normal.
+     *  B is a guide point that determines which side of the circle the arc follows.
+     */
+    private static _trimArcFromCircle(A: Point, B: Point, C: Point, center: Point, radius: number, normalUnit: Vector): Curve
+    {
+        const csgrs = getCsgrs();
+        const makeFullCircle = (n: Vector): Curve =>
+            Curve.fromCsgrs(csgrs?.NurbsCurve3DJs?.makeCircle(radius, center.toPoint3Js(), n.toVector3Js()));
+
+        let circ = makeFullCircle(normalUnit);
+        let tA = circ.paramClosestToPoint(A);
+        let tB = circ.paramClosestToPoint(B);
+        let tC = circ.paramClosestToPoint(C);
+
+        if (tA === null || tB === null || tC === null)
+        {
+            throw new Error('Curve.Arc(): Could not resolve arc parameters on the circumscribed circle.');
+        }
+
+        let kd = (circ.inner() as NurbsCurve3DJs).knotsDomain();
+        let period = kd[1] - kd[0];
+
+        // Ensure A→B→C is the forward direction of the parameterisation.
+        const relB = ((tB - tA) % period + period) % period;
+        const relC = ((tC - tA) % period + period) % period;
+
+        if (relB > relC)
+        {
+            circ = makeFullCircle(normalUnit.scale(-1));
+            tA = circ.paramClosestToPoint(A);
+            tB = circ.paramClosestToPoint(B);
+            tC = circ.paramClosestToPoint(C);
+
+            if (tA === null || tB === null || tC === null)
+            {
+                throw new Error('Curve.Arc(): Could not resolve arc parameters after direction adjustment.');
+            }
+
+            kd     = (circ.inner() as NurbsCurve3DJs).knotsDomain();
+            period = kd[1] - kd[0];
+        }
+
+        const relCfinal = ((tC - tA) % period + period) % period;
+        const innerCircle = circ.inner() as NurbsCurve3DJs;
+        const t1raw = tA + relCfinal;
+
+        let segments: NurbsCurve3DJs[];
+        if (t1raw <= kd[1] + 1e-10)
+        {
+            segments = innerCircle.trimRange(tA, Math.min(t1raw, kd[1]));
+        }
+        else
+        {
+            const seg1 = innerCircle.trimRange(tA, kd[1]);
+            const seg2 = innerCircle.trimRange(kd[0], kd[0] + (t1raw - kd[1]));
+            segments = [...seg1, ...seg2];
+        }
+
+        if (!segments || segments.length === 0)
+        {
+            throw new Error('Curve.Arc(): Failed to trim the arc from the circumscribed circle.');
+        }
+
+        return segments.length === 1
+            ? Curve.fromCsgrs(segments[0])
+            : Curve.fromCsgrs(new CompoundCurve3DJs(segments));
+    }
+
+    /** Create a closed rectangle centered at a given position on an optional base plane.
+     *  @param width  - size along the local X axis of the plane
+     *  @param height - size along the local Y axis of the plane
+     *  @param center - centre of the rectangle (default: origin)
+     *  @param plane  - base plane the rectangle lies on (default: 'xy')
+     */
+    static Rect(width: number, height: number, center: PointLike = [0, 0, 0], plane: BasePlane = 'xy'): Curve
+    {
+        if (typeof width !== 'number' || typeof height !== 'number')
+        {
+            throw new Error('Curve.Rect(): width and height must be numbers.');
+        }
+
+        const c = Point.from(center);
+        const def = BASE_PLANE_NAME_TO_PLANE[plane];
+        const xDir = Vector.from(def.xDir as [number, number, number]);
+        const yDir = Vector.from(def.yDir as [number, number, number]);
+
+        const hw = width / 2;
+        const hh = height / 2;
+
+        const p0 = new Point(c.x - hw * xDir.x - hh * yDir.x, c.y - hw * xDir.y - hh * yDir.y, c.z - hw * xDir.z - hh * yDir.z);
+        const p1 = new Point(c.x + hw * xDir.x - hh * yDir.x, c.y + hw * xDir.y - hh * yDir.y, c.z + hw * xDir.z - hh * yDir.z);
+        const p2 = new Point(c.x + hw * xDir.x + hh * yDir.x, c.y + hw * xDir.y + hh * yDir.y, c.z + hw * xDir.z + hh * yDir.z);
+        const p3 = new Point(c.x - hw * xDir.x + hh * yDir.x, c.y - hw * xDir.y + hh * yDir.y, c.z - hw * xDir.z + hh * yDir.z);
+
+        return Curve.Polyline([p0, p1, p2, p3, p0]);
+    }
+
+    /** Create a closed rectangle defined by two opposite corner points.
+     *  The rectangle lies on the given base plane; each corner is projected onto it.
+     *  @param from  - first corner
+     *  @param to    - opposite corner
+     *  @param plane - base plane (default: 'xy')
+     */
+    static RectBetween(from: PointLike, to: PointLike, plane: BasePlane = 'xy'): Curve
+    {
+        if (!isPointLike(from) || !isPointLike(to))
+        {
+            throw new Error('Curve.RectBetween(): from and to must be PointLike values.');
+        }
+
+        const a = Point.from(from);
+        const b = Point.from(to);
+        const def = BASE_PLANE_NAME_TO_PLANE[plane];
+        const xDir = Vector.from(def.xDir as [number, number, number]);
+        const yDir = Vector.from(def.yDir as [number, number, number]);
+
+        // Project both corners onto the plane's local axes
+        const ax = a.x * xDir.x + a.y * xDir.y + a.z * xDir.z;
+        const ay = a.x * yDir.x + a.y * yDir.y + a.z * yDir.z;
+        const bx = b.x * xDir.x + b.y * xDir.y + b.z * xDir.z;
+        const by = b.x * yDir.x + b.y * yDir.y + b.z * yDir.z;
+
+        // Normal component: average of the two points so the rect sits between them
+        const nDir = Vector.from(def.normal as [number, number, number]);
+        const an = a.x * nDir.x + a.y * nDir.y + a.z * nDir.z;
+        const bn = b.x * nDir.x + b.y * nDir.y + b.z * nDir.z;
+        const avgN = (an + bn) / 2;
+
+        const toWorld = (u: number, v: number): Point =>
+            new Point(
+                u * xDir.x + v * yDir.x + avgN * nDir.x,
+                u * xDir.y + v * yDir.y + avgN * nDir.y,
+                u * xDir.z + v * yDir.z + avgN * nDir.z,
+            );
+
+        const p0 = toWorld(ax, ay);
+        const p1 = toWorld(bx, ay);
+        const p2 = toWorld(bx, by);
+        const p3 = toWorld(ax, by);
+
+        return Curve.Polyline([p0, p1, p2, p3, p0]);
+    }
+
     /** Build a CompoundCurve from an ordered array of connecting Curves.
      *  The underlying Curvo `try_new` validates connectivity and auto-inverts spans if needed.
      */
@@ -213,9 +556,86 @@ export class Curve
     }
     //// PROPERTIES ////
 
-    type(): 'Curve'|'Compound'
+    /** Classify this curve as 'line', 'arc', 'circle', 'rect', 'polyline', 'spline', or 'compound'. */
+    type(): 'line'|'arc'|'circle'|'rect'|'polyline'|'spline'|'compound'
     {
-        return (this.inner() instanceof NurbsCurve3DJs) ? 'Curve' : 'Compound';
+        const inner = this.inner();
+
+        if (inner instanceof NurbsCurve3DJs)
+        {
+            return this._classifyNurbs(inner);
+        }
+
+        // CompoundCurve3DJs: inspect spans
+        const compound = inner as CompoundCurve3DJs;
+        const spans = compound.spans();
+
+        if (spans.length === 0) return 'compound';
+
+        const allDeg1 = spans.every(s => s.degree() === 1);
+        if (allDeg1)
+        {
+            // Rebuild control points from spans to check rect/polyline
+            if (this.isClosed() && this._isRect()) return 'rect';
+            return 'polyline';
+        }
+
+        const allRationalDeg2 = spans.every(s =>
+            s.degree() === 2 && Array.from(s.weights()).some(w => Math.abs(w - 1.0) > 1e-8)
+        );
+        if (allRationalDeg2)
+        {
+            return this.isClosed() ? 'circle' : 'arc';
+        }
+
+        return 'compound';
+    }
+
+    /** Classify a single NurbsCurve3DJs span. */
+    private _classifyNurbs(c: NurbsCurve3DJs): 'line'|'arc'|'circle'|'rect'|'polyline'|'spline'
+    {
+        const deg = c.degree();
+        const weights = Array.from(c.weights());
+        const isRational = weights.some(w => Math.abs(w - 1.0) > 1e-8);
+
+        if (deg === 1)
+        {
+            const nCps = c.controlPoints().length;
+            if (nCps <= 2) return 'line';
+            if (this.isClosed() && this._isRect()) return 'rect';
+            return 'polyline';
+        }
+
+        if (deg === 2 && isRational)
+        {
+            return this.isClosed() ? 'circle' : 'arc';
+        }
+
+        return 'spline';
+    }
+
+    /** Check if a closed degree-1 curve forms a rectangle (4 right-angle corners). */
+    private _isRect(): boolean
+    {
+        const pts = this.controlPoints();
+        // A closed rect polyline has 5 control points (last == first) giving 4 corners
+        const n = pts.length;
+        if (n < 4 || n > 5) return false;
+
+        const corners = (n === 5) ? pts.slice(0, 4) : pts;
+        if (corners.length !== 4) return false;
+
+        for (let i = 0; i < 4; i++)
+        {
+            const a = corners[i];
+            const b = corners[(i + 1) % 4];
+            const c = corners[(i + 2) % 4];
+            const ab = new Vector(b.x - a.x, b.y - a.y, b.z - a.z);
+            const bc = new Vector(c.x - b.x, c.y - b.y, c.z - b.z);
+            if (Math.abs(ab.dot(bc)) > ANGLE_COMPARE_TOLERANCE) return false;
+        }
+
+        return true;
     }
 
     isCompound():boolean
@@ -629,6 +1049,10 @@ export class Curve
         return this.translate(vecOrX, dy, dz);
     }
 
+    moveX(dx: number): this { return this.translate(dx, 0, 0); }
+    moveY(dy: number): this { return this.translate(0, dy, 0); }
+    moveZ(dz: number): this { return this.translate(0, 0, dz); }
+
     /** Rotate the given curve a specified angle (in degrees) around an axis through the world origin */
     rotate(angle: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
     {
@@ -686,9 +1110,13 @@ export class Curve
     /** Rotate Curve by a quaternion given as components `(w, x, y, z)`.
      *  The quaternion is normalized internally, so non-unit input is safe.
      */
-    rotateQuaternion(w: number, x: number, y: number, z: number): this
+    rotateQuaternion(wOrObj: number | {w: number, x: number, y: number, z: number}, x?: number, y?: number, z?: number): this
     {
-        return this.update(this.inner().rotateQuaternion(w, x, y, z));
+        if (typeof wOrObj === 'object' && wOrObj !== null && 'w' in wOrObj && 'x' in wOrObj && 'y' in wOrObj && 'z' in wOrObj) {
+            return this.update(this.inner().rotateQuaternion(wOrObj.w, wOrObj.x, wOrObj.y, wOrObj.z));
+        } else {
+            return this.update(this.inner().rotateQuaternion(wOrObj, x!, y!, z!));
+        }
     }
     
 
@@ -738,7 +1166,7 @@ export class Curve
             {
                 scaleFactor = tgtLen / srcLen;
                 this.translate([-q1.x, -q1.y, -q1.z]);
-                this.scale(scaleFactor, scaleFactor, scaleFactor);
+                this.scale(scaleFactor);
                 this.translate([q1.x, q1.y, q1.z]);
             }
         }
@@ -797,8 +1225,17 @@ export class Curve
         return this;
     }
 
-    scale(sx: number, sy: number, sz: number): this
+    scale(factor: number | PointLike, origin?: PointLike): this
     {
+        const [sx, sy, sz] = (typeof factor === 'number') ? [factor, factor, factor] : [Point.from(factor).x, Point.from(factor).y, Point.from(factor).z];
+        if (origin)
+        {
+            const o = Point.from(origin);
+            this.translate([-o.x, -o.y, -o.z]);
+            this.update(this.inner().scale(sx, sy, sz));
+            this.translate([o.x, o.y, o.z]);
+            return this;
+        }
         return this.update(this.inner().scale(sx, sy, sz));
     }
 
@@ -1110,20 +1547,29 @@ export class Curve
         return this;
     }
 
-    /** Internal helper: perform a boolean operation against another Curve.
+    //// BOOLEAN OPERATIONS ////
+    /*
+        NOTES:
+            - If boolean operation succeeds:
+                    - Result is single Curve: current Curve is replaced by the result
+                    - Result are multiple Curves: a new CurveCollection is returned, current Curve is unchanged (also give warning)
+            - If it fails: return original curve with warning
+            - the operant (other) is not modified/removed in either case
+    */
+
+    /** Perform a boolean operation against another Curve
      *  Dispatches to the correct WASM method based on curve types.
-     *  Returns BooleanRegionJs results that include both exterior and interior hole curves.
      *  @returns CurveCollection of result Curves (each with holes attached), or null on error.
      */
-    private _booleanOp(other: Curve, operation: string): CurveCollection | null
+    private _booleanOp(other: Curve, operation: 'union'|'difference'|'intersection'): CurveCollection | null
     {
         try
         {
-            const regions: BooleanRegionJs[] = this.isCompound()
+            const regions: BooleanRegionJs[] = (this.isCompound())
                 ? (!other.isCompound()
                     ? (this.inner() as CompoundCurve3DJs).booleanCurve(other.inner() as NurbsCurve3DJs, operation)
                     : (this.inner() as CompoundCurve3DJs).booleanCompoundCurve(other.inner() as CompoundCurve3DJs, operation))
-                : (!other.isCompound()
+                : (!other.isCompound() // single Curve
                     ? (this.inner() as NurbsCurve3DJs).booleanCurve(other.inner() as NurbsCurve3DJs, operation)
                     : (this.inner() as NurbsCurve3DJs).booleanCompoundCurve(other.inner() as CompoundCurve3DJs, operation));
 
@@ -1139,12 +1585,14 @@ export class Curve
                 }
                 curves.push(exterior);
             }
-
             return new CurveCollection(...curves);
         }
         catch (e)
         {
             console.error(`Curve::${operation}(): Error:`, e);
+            // TODO: add some analysis of why it failed 
+            // for example: don't touch, not closed etc
+
             return null;
         }
     }
@@ -1154,9 +1602,16 @@ export class Curve
      *  Returns the exterior outlines of the resulting regions,
      *  or null on error.
      */
-    union(other: Curve): CurveCollection|null
+    union(other: Curve): Curve|CurveCollection|null
     {
-        return this._booleanOp(other, 'union');
+        const bool = this._booleanOp(other, 'union')?.checkSingle() || null;
+        if(bool instanceof Curve){ return this.update(bool);}
+        else if (bool instanceof CurveCollection)
+        {
+            console.warn('Curve::union(): Result are multiple curves. Returning a CurveCollection');
+            return bool;
+        }
+        else { console.warn('Curve::union(): Boolean operation failed. Returning null.'); return null; }
     }
 
     /** Boolean subtraction: this Curve minus the other Curve.
@@ -1164,13 +1619,20 @@ export class Curve
      *  Returns the exterior outlines of the resulting regions,
      *  or null on error.
      */
-    difference(other: Curve): CurveCollection | null
+    difference(other: Curve): Curve|CurveCollection|null
     {
-        return this._booleanOp(other, 'difference');
+        const bool = this._booleanOp(other, 'difference')?.checkSingle() || null;
+        if(bool instanceof Curve){ return this.update(bool);}
+        else if (bool instanceof CurveCollection)
+        {
+            console.warn('Curve::difference(): Result are multiple curves. Returning a CurveCollection');
+            return bool;
+        }
+        else { console.warn('Curve::difference(): Boolean operation failed. Returning null.'); return null; }
     }
 
     // Alias for difference
-    subtract(other: Curve): CurveCollection | null
+    subtract(other: Curve): Curve|CurveCollection|null
     {
         return this.difference(other);
     }
@@ -1471,111 +1933,391 @@ export class Curve
      */
     toSVG(plane: BasePlane = 'xy'): string
     {
+        // Project onto the target plane, then read XY as the 2D SVG coordinates
         const projected = this.copy().projectOnto(plane);
-        const planedef = BASE_PLANE_NAME_TO_PLANE[plane];
-        const xd = planedef.xDir as [number, number, number];
-        const yd = planedef.yDir as [number, number, number];
-
-        // Project a 3D point to 2D SVG coords (flip V axis so Y points up in source space)
-        const pt2d = (p: Point): [number, number] => {
-            const u = p.x * xd[0] + p.y * xd[1] + p.z * xd[2];
-            const v = p.x * yd[0] + p.y * yd[1] + p.z * yd[2];
-            return [u, -v];
-        };
 
         const fmt = (n: number) => +n.toFixed(6);
-        const parts: string[] = [];
-        const spans = projected.spans();
+        // SVG Y-axis points down, so negate y
+        const to2D = (p: { x: number; y: number; z: number }): [number, number] => [p.x, -p.y];
 
-        for (let i = 0; i < spans.length; i++)
+        // Full circle → emit a <circle> element directly instead of two arcs
+        if (this.type() === 'circle')
         {
-            const span = spans[i];
-            const cps = span.controlPoints().map(pt2d);
-            const weights = span.weights() ?? [];
-            const deg = span.degree() ?? 1;
-            const end = cps[cps.length - 1];
-
-            if (i === 0)
+            const bb = projected.bbox();
+            if (bb)
             {
-                parts.push(`M ${fmt(cps[0][0])} ${fmt(cps[0][1])}`);
+                const cx = fmt((bb.min().x + bb.max().x) / 2);
+                const cy = fmt(-((bb.min().y + bb.max().y) / 2)); // SVG Y flip
+                const r  = fmt((bb.max().x - bb.min().x) / 2);
+                const pad = +r * 0.05 || 1;
+                const vbX = fmt(cx - r - pad);
+                const vbY = fmt(cy - r - pad);
+                const vbW = fmt(2 * r + 2 * pad);
+                const vbH = fmt(2 * r + 2 * pad);
+                return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}"><circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="black" stroke-width="1"/></svg>`;
+            }
+        }
+
+        const pathParts: string[] = [];
+        const spans = projected._getSvgSpans();
+
+        for (let si = 0; si < spans.length; si++)
+        {
+            const spanCurve = Curve.fromCsgrs(spans[si]);
+            const cps = spanCurve.controlPoints();
+            const curveType = spanCurve.type();
+
+            // Move-to for the first span's start
+            if (si === 0)
+            {
+                const [sx, sy] = to2D(cps[0]);
+                pathParts.push(`M${fmt(sx)} ${fmt(sy)}`);
             }
 
-            if (deg === 1)
+            switch (curveType)
             {
-                parts.push(`L ${fmt(end[0])} ${fmt(end[1])}`);
-            }
-            else if (deg === 2 && weights.some(w => Math.abs(w - 1.0) > 1e-8))
-            {
-                // Rational degree-2 NURBS (e.g. circular arc) → SVG arc command
-                const midPt3d = span.pointAtPerc(0.5);
-                if (midPt3d)
+                case 'line':
+                case 'polyline':
+                case 'rect':
                 {
-                    const mid = pt2d(midPt3d);
-                    const cc = _circumcircle2D(cps[0][0], cps[0][1], mid[0], mid[1], end[0], end[1]);
-                    if (cc)
+                    for (let i = 1; i < cps.length; i++)
                     {
-                        // sweep-flag: 1 = CW in SVG coords (Y-down)
-                        const cross = (mid[0] - cps[0][0]) * (end[1] - cps[0][1])
-                                    - (mid[1] - cps[0][1]) * (end[0] - cps[0][0]);
-                        const sweep = cross >= 0 ? 1 : 0;
-                        // large-arc-flag: center and mid on same side of chord P0→end → major arc
-                        const cvx = end[0] - cps[0][0], cvy = end[1] - cps[0][1];
-                        const centerSide = cvx * (cc.cy - cps[0][1]) - cvy * (cc.cx - cps[0][0]);
-                        const midSide    = cvx * (mid[1] - cps[0][1]) - cvy * (mid[0] - cps[0][0]);
-                        const largeArc   = Math.sign(centerSide) === Math.sign(midSide) ? 1 : 0;
-                        parts.push(`A ${fmt(cc.r)} ${fmt(cc.r)} 0 ${largeArc} ${sweep} ${fmt(end[0])} ${fmt(end[1])}`);
+                        const [x, y] = to2D(cps[i]);
+                        pathParts.push(`L${fmt(x)} ${fmt(y)}`);
+                    }
+                    break;
+                }
+                case 'arc':
+                case 'circle':
+                {
+                    _appendArcSvg(spans[si], to2D, fmt, pathParts);
+                    break;
+                }
+                case 'spline':
+                {
+                    const span = spans[si];
+                    const deg = span.degree();
+                    const weights = Array.from(span.weights());
+                    const bezierSegs = _bsplineToBezierSegments(
+                        span.controlPoints(), Array.from(span.knots()), weights, deg);
+
+                    if (deg === 2)
+                    {
+                        for (const seg of bezierSegs)
+                        {
+                            const [, cp1, end] = seg.map(to2D);
+                            pathParts.push(`Q${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(end[0])} ${fmt(end[1])}`);
+                        }
                     }
                     else
                     {
-                        parts.push(`L ${fmt(end[0])} ${fmt(end[1])}`);
+                        // degree 3 (cubic) is the common case
+                        for (const seg of bezierSegs)
+                        {
+                            const [, cp1, cp2, end] = seg.map(to2D);
+                            pathParts.push(`C${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(cp2[0])} ${fmt(cp2[1])} ${fmt(end[0])} ${fmt(end[1])}`);
+                        }
                     }
+                    break;
                 }
-                else
+                default:
                 {
-                    parts.push(`L ${fmt(end[0])} ${fmt(end[1])}`);
-                }
-            }
-            else if (deg === 2)
-            {
-                const c = cps[1];
-                parts.push(`Q ${fmt(c[0])} ${fmt(c[1])} ${fmt(end[0])} ${fmt(end[1])}`);
-            }
-            else if (deg === 3)
-            {
-                const c1 = cps[1], c2 = cps[2];
-                parts.push(`C ${fmt(c1[0])} ${fmt(c1[1])} ${fmt(c2[0])} ${fmt(c2[1])} ${fmt(end[0])} ${fmt(end[1])}`);
-            }
-            else
-            {
-                // Higher-degree: tessellate the span
-                const pts = span.tessellate().map(pt2d);
-                for (let j = 1; j < pts.length; j++)
-                {
-                    parts.push(`L ${fmt(pts[j][0])} ${fmt(pts[j][1])}`);
+                    // compound or unsupported: tessellate fallback
+                    const pts = spanCurve.tessellate();
+                    for (let i = 1; i < pts.length; i++)
+                    {
+                        const [x, y] = to2D(pts[i]);
+                        pathParts.push(`L${fmt(x)} ${fmt(y)}`);
+                    }
+                    break;
                 }
             }
         }
 
-        if (projected.isClosed()) parts.push('Z');
-
-        const d = parts.join(' ');
-
-        // Compute viewBox from tessellated points
-        const allPts = projected.tessellate().map(pt2d);
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const [x, y] of allPts)
+        // Close path if the curve is closed
+        if (this.isClosed())
         {
-            if (x < minX) minX = x;
-            if (y < minY) minY = y;
-            if (x > maxX) maxX = x;
-            if (y > maxY) maxY = y;
+            pathParts.push('Z');
         }
-        const padX = (maxX - minX) * 0.05 || 1;
-        const padY = (maxY - minY) * 0.05 || 1;
-        const vb = `${fmt(minX - padX)} ${fmt(minY - padY)} ${fmt(maxX - minX + 2 * padX)} ${fmt(maxY - minY + 2 * padY)}`;
 
-        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}"><path d="${d}" fill="none" stroke="black" stroke-width="1"/></svg>`;
+        // Compute viewBox from bbox of the projected curve (in SVG-flipped Y)
+        const bb = projected.bbox();
+        let vbX: number, vbY: number, vbW: number, vbH: number;
+        if (bb)
+        {
+            const minPt = bb.min();
+            const maxPt = bb.max();
+            // SVG y is flipped: world minY → SVG maxY, world maxY → SVG minY
+            const svgMinX = minPt.x;
+            const svgMinY = -maxPt.y;
+            const svgW = maxPt.x - minPt.x;
+            const svgH = maxPt.y - minPt.y;
+            const pad = Math.max(svgW, svgH) * 0.05 || 1;
+            vbX = fmt(svgMinX - pad);
+            vbY = fmt(svgMinY - pad);
+            vbW = fmt(svgW + 2 * pad);
+            vbH = fmt(svgH + 2 * pad);
+        }
+        else
+        {
+            vbX = 0; vbY = 0; vbW = 1; vbH = 1;
+        }
+
+        const d = pathParts.join(' ');
+        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}"><path d="${d}" fill="none" stroke="black" stroke-width="1"/></svg>`;
     }
+
+    /** Collect all individual NurbsCurve3DJs spans from this curve (compound or single).
+     *  Closed degree-2 rational curves (full circles) are split at the midpoint
+     *  so that each resulting arc is open and can map to an SVG `A` command. */
+    private _getSvgSpans(): NurbsCurve3DJs[]
+    {
+        const inner = this.inner();
+        let rawSpans: NurbsCurve3DJs[];
+        if (inner instanceof CompoundCurve3DJs)
+        {
+            rawSpans = inner.spans();
+        }
+        else
+        {
+            rawSpans = [inner as NurbsCurve3DJs];
+        }
+
+        // Split any geometrically-closed rational degree-2 span (full circle) into two open arcs
+        const result: NurbsCurve3DJs[] = [];
+        for (const span of rawSpans)
+        {
+            if (span.degree() === 2
+                && Array.from(span.weights()).some(w => Math.abs(w - 1.0) > 1e-8))
+            {
+                // Check geometric closure: start ≈ end
+                const cps = span.controlPoints();
+                const first = cps[0];
+                const last = cps[cps.length - 1];
+                const dist = Math.sqrt(
+                    (first.x - last.x) ** 2 + (first.y - last.y) ** 2 + (first.z - last.z) ** 2
+                );
+
+                if (dist < 1e-6)
+                {
+                    // Closed circle/arc: split at midpoint so each half is an open arc
+                    const [lo, hi] = Array.from(span.knotsDomain());
+                    const mid = (lo + hi) / 2;
+                    const halves = span.split(mid);
+                    result.push(...halves);
+                    continue;
+                }
+            }
+            result.push(span);
+        }
+        return result;
+    }
+}
+
+/**
+ * Decompose a B-spline into piecewise Bezier segments via Boehm's knot insertion.
+ *
+ * For a degree-p B-spline with a clamped knot vector, each interior knot must
+ * have multiplicity p for the curve to split into independent Bezier pieces.
+ * After full insertion, every (p+1) consecutive control points define one Bezier segment.
+ *
+ * @returns Array of Bezier segments, each is an array of (degree+1) 3D points.
+ */
+function _bsplineToBezierSegments(
+    controlPoints: { x: number; y: number; z: number }[],
+    knots: number[],
+    weights: number[],
+    degree: number,
+): Array<Array<{ x: number; y: number; z: number }>>
+{
+    // Work in homogeneous coordinates for rational curves:  (w*x, w*y, w*z, w)
+    let pts = controlPoints.map((p, i) =>
+    {
+        const w = weights[i] ?? 1;
+        return { x: p.x * w, y: p.y * w, z: p.z * w, w };
+    });
+    let U = knots.slice(); // mutable copy
+
+    // Find distinct interior knots and insert each until multiplicity == degree
+    const p = degree;
+    const interiorKnots = _distinctInteriorKnots(U, p);
+
+    for (const { value, multiplicity } of interiorKnots)
+    {
+        const timesToInsert = p - multiplicity;
+        for (let t = 0; t < timesToInsert; t++)
+        {
+            const result = _boehmInsert(pts, U, p, value);
+            pts = result.points;
+            U = result.knots;
+        }
+    }
+
+    // After full knot insertion, each Bezier segment spans (p+1) control points
+    // with overlap at boundary points.
+    const numSegments = (pts.length - 1) / p;
+    const segments: Array<Array<{ x: number; y: number; z: number }>> = [];
+
+    for (let i = 0; i < numSegments; i++)
+    {
+        const seg: Array<{ x: number; y: number; z: number }> = [];
+        for (let j = 0; j <= p; j++)
+        {
+            const h = pts[i * p + j];
+            const invW = h.w !== 0 ? 1 / h.w : 1;
+            seg.push({ x: h.x * invW, y: h.y * invW, z: h.z * invW });
+        }
+        segments.push(seg);
+    }
+
+    return segments;
+}
+
+/** Get the distinct interior knots and their multiplicities. */
+function _distinctInteriorKnots(
+    knots: number[],
+    degree: number
+): Array<{ value: number; multiplicity: number }>
+{
+    const result: Array<{ value: number; multiplicity: number }> = [];
+    const n = knots.length;
+    // Interior knots are those strictly between the clamped ends
+    // For a clamped knot vector, the first (degree+1) and last (degree+1) knots are at the boundaries
+    const lo = knots[degree];
+    const hi = knots[n - degree - 1];
+
+    let i = degree + 1;
+    while (i < n - degree - 1)
+    {
+        const val = knots[i];
+        if (val > lo && val < hi)
+        {
+            let mult = 0;
+            let j = i;
+            while (j < n - degree - 1 && Math.abs(knots[j] - val) < 1e-12)
+            {
+                mult++;
+                j++;
+            }
+            result.push({ value: val, multiplicity: mult });
+            i = j;
+        }
+        else
+        {
+            i++;
+        }
+    }
+    return result;
+}
+
+/**
+ * Boehm's single knot insertion.
+ * Insert knot value `u` once into the B-spline defined by `pts`, `knots`, `degree`.
+ */
+function _boehmInsert(
+    pts: Array<{ x: number; y: number; z: number; w: number }>,
+    knots: number[],
+    degree: number,
+    u: number
+): { points: Array<{ x: number; y: number; z: number; w: number }>; knots: number[] }
+{
+    const n = pts.length;
+    const p = degree;
+
+    // Find knot span k such that knots[k] <= u < knots[k+1]
+    let k = -1;
+    for (let i = p; i < knots.length - 1; i++)
+    {
+        if (knots[i] <= u + 1e-12 && u < knots[i + 1] - 1e-12)
+        {
+            k = i;
+            break;
+        }
+    }
+    if (k === -1) k = knots.length - p - 2; // fallback for end
+
+    // Compute new control points
+    const newPts: Array<{ x: number; y: number; z: number; w: number }> = [];
+    for (let i = 0; i <= n; i++)
+    {
+        if (i <= k - p)
+        {
+            newPts.push({ ...pts[i] });
+        }
+        else if (i >= k + 1)
+        {
+            newPts.push({ ...pts[i - 1] });
+        }
+        else
+        {
+            // k-p+1 <= i <= k
+            const denom = knots[i + p] - knots[i];
+            const alpha = denom > 1e-14 ? (u - knots[i]) / denom : 0;
+            newPts.push({
+                x: (1 - alpha) * pts[i - 1].x + alpha * pts[i].x,
+                y: (1 - alpha) * pts[i - 1].y + alpha * pts[i].y,
+                z: (1 - alpha) * pts[i - 1].z + alpha * pts[i].z,
+                w: (1 - alpha) * pts[i - 1].w + alpha * pts[i].w,
+            });
+        }
+    }
+
+    // Insert knot value into knot vector
+    const newKnots = [...knots.slice(0, k + 1), u, ...knots.slice(k + 1)];
+
+    return { points: newPts, knots: newKnots };
+}
+
+/** Append SVG arc (A) commands for a rational degree-2 NURBS span (circle/arc).
+ *  Expects the span to already be projected onto XY. Uses (x, -y) for SVG coordinates.
+ *  Uses the circumcircle of three sampled points to determine the radius,
+ *  and the cross product to determine the sweep direction. */
+function _appendArcSvg(
+    span: NurbsCurve3DJs,
+    to2D: (p: { x: number; y: number; z: number }) => [number, number],
+    fmt: (n: number) => number,
+    pathParts: string[]
+): void
+{
+    const cps = span.controlPoints();
+    const [domain0, domain1] = Array.from(span.knotsDomain());
+    const midParam = (domain0 + domain1) / 2;
+    const startPt3 = cps[0];
+    const midPt3 = span.pointAtParam(midParam);
+    const endPt3 = cps[cps.length - 1];
+
+    const start2D = to2D(startPt3);
+    const mid2D = to2D(midPt3);
+    const end2D = to2D(endPt3);
+
+    const circ = _circumcircle2D(start2D[0], start2D[1], mid2D[0], mid2D[1], end2D[0], end2D[1]);
+
+    if (!circ)
+    {
+        // Degenerate (collinear) — fall back to a line
+        pathParts.push(`L${fmt(end2D[0])} ${fmt(end2D[1])}`);
+        return;
+    }
+
+    const r = fmt(circ.r);
+
+    const cross = (end2D[0] - start2D[0]) * (mid2D[1] - start2D[1])
+                - (end2D[1] - start2D[1]) * (mid2D[0] - start2D[0]);
+    const sweepFlag = cross > 0 ? 0 : 1;
+
+    const dx1 = start2D[0] - circ.cx, dy1 = start2D[1] - circ.cy;
+    const dx2 = end2D[0] - circ.cx, dy2 = end2D[1] - circ.cy;
+
+    const angleStart = Math.atan2(dy1, dx1);
+    const angleEnd = Math.atan2(dy2, dx2);
+
+    let sweepToEnd = sweepFlag === 1
+        ? (angleEnd - angleStart + 2 * Math.PI) % (2 * Math.PI)
+        : (angleStart - angleEnd + 2 * Math.PI) % (2 * Math.PI);
+
+    const largeArcFlag = sweepToEnd > Math.PI ? 1 : 0;
+
+    pathParts.push(`A${r} ${r} 0 ${largeArcFlag} ${sweepFlag} ${fmt(end2D[0])} ${fmt(end2D[1])}`);
 }
 
 /** Compute the circumcircle of three 2D points. Returns null if points are collinear. */

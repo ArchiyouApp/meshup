@@ -20,14 +20,14 @@ describe('Example: primitive meshes', () => {
     it('builds a cube and checks it has geometry', () => {
         const cube = Mesh.Cube(10);
         expect(cube.positions().length).toBeGreaterThan(0);
-        expect(cube.inner().triangleCount()).toBeGreaterThan(0);
+        expect(cube.polygons().length).toBeGreaterThan(0);
     });
 
     it('builds a sphere and checks it has more faces than a cube', () => {
         const sphere = Mesh.Sphere(5);
         const cube = Mesh.Cube(10);
-        expect(sphere.inner().triangleCount()).toBeGreaterThan(
-            cube.inner().triangleCount()
+        expect(sphere.polygons().length).toBeGreaterThan(
+            cube.polygons().length
         );
     });
 });
@@ -51,8 +51,12 @@ describe('Example: sketch-to-solid workflow', () => {
             .close()
             .extrude(10);
 
+        console.log('==== MESH ====');
+        console.log(mesh);
+
+
         expect(mesh).toBeTruthy();
-        expect((mesh as Mesh).inner().triangleCount()).toBeGreaterThan(0);
+        expect((mesh as Mesh).polygons().length).toBeGreaterThan(0);
     });
 });
 

@@ -1,7 +1,9 @@
 //// GLOBAL SETTINGS ////
 
+export const TOLERANCE = 1e-6; // general tolerance for geometric comparisons, in world units
+
 // after Point operations we round to a given tolerance to avoid inaccuracies in further operations
-export const POINT_TOLERANCE = 1e-6; 
+export const POINT_TOLERANCE = TOLERANCE; 
 export const ANGLE_COMPARE_TOLERANCE = 1e-3; // in degrees, for comparing angles (e.g. to detect axis-alignment)
 export const TESSELATION_TOLERANCE = 1e-3; 
 

@@ -1,8 +1,6 @@
 /**
- * tests/examples/basics.test.ts
+ * tests/examples/house.test.ts
  *
- * Integration-level tests that mirror typical library usage patterns.
- * These verify that common workflows produce sensible results end-to-end.
  */
 import { beforeAll, describe, it, expect, should } from 'vitest';
 import { Collection, initAsync } from '../../src/index';
@@ -15,7 +13,7 @@ beforeAll(async () => {
     await initAsync();
 });
 
-describe('Example: primitive meshes', () => 
+describe('Example: House', () => 
 {
     const WIDTH = 400;
     const HEIGHT = 300; // wall height

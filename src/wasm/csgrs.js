@@ -246,9 +246,17 @@ const BooleanRegionJsFinalization = (typeof FinalizationRegistry === 'undefined'
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_booleanregionjs_free(ptr >>> 0, 1));
 
+const ClosestPointResultJsFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_closestpointresultjs_free(ptr >>> 0, 1));
+
 const CompoundCurve3DJsFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_compoundcurve3djs_free(ptr >>> 0, 1));
+
+const EdgeProjectionResultJsFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_edgeprojectionresultjs_free(ptr >>> 0, 1));
 
 const Matrix4JsFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
@@ -281,6 +289,18 @@ const Point4JsFinalization = (typeof FinalizationRegistry === 'undefined')
 const PolygonJsFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_polygonjs_free(ptr >>> 0, 1));
+
+const RaycastHitJsFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_raycasthitjs_free(ptr >>> 0, 1));
+
+const SdfSampleJsFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_sdfsamplejs_free(ptr >>> 0, 1));
+
+const SectionElevationResultJsFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_sectionelevationresultjs_free(ptr >>> 0, 1));
 
 const SketchJsFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
@@ -352,6 +372,86 @@ export class BooleanRegionJs {
     }
 }
 if (Symbol.dispose) BooleanRegionJs.prototype[Symbol.dispose] = BooleanRegionJs.prototype.free;
+
+/**
+ * Result of a closest-surface-point query returned to JavaScript.
+ */
+export class ClosestPointResultJs {
+    static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(ClosestPointResultJs.prototype);
+        obj.__wbg_ptr = ptr;
+        ClosestPointResultJsFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        ClosestPointResultJsFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_closestpointresultjs_free(ptr, 0);
+    }
+    /**
+     * @returns {number}
+     */
+    get pointX() {
+        const ret = wasm.closestpointresultjs_point_x(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get pointY() {
+        const ret = wasm.closestpointresultjs_point_y(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get pointZ() {
+        const ret = wasm.closestpointresultjs_point_z(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get distance() {
+        const ret = wasm.closestpointresultjs_distance(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get normalX() {
+        const ret = wasm.closestpointresultjs_normal_x(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get normalY() {
+        const ret = wasm.closestpointresultjs_normal_y(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get normalZ() {
+        const ret = wasm.closestpointresultjs_normal_z(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {boolean}
+     */
+    get isInside() {
+        const ret = wasm.closestpointresultjs_is_inside(this.__wbg_ptr);
+        return ret !== 0;
+    }
+}
+if (Symbol.dispose) ClosestPointResultJs.prototype[Symbol.dispose] = ClosestPointResultJs.prototype.free;
 
 export class CompoundCurve3DJs {
     static __wrap(ptr) {
@@ -754,6 +854,53 @@ export class CompoundCurve3DJs {
 }
 if (Symbol.dispose) CompoundCurve3DJs.prototype[Symbol.dispose] = CompoundCurve3DJs.prototype.free;
 
+/**
+ * Edge projection result returned to JavaScript.
+ *
+ * Call `visiblePolylines()` / `hiddenPolylines()` to get the serialised
+ * polyline data as a JS array of arrays of `[x, y, z]` triplets.
+ */
+export class EdgeProjectionResultJs {
+    static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(EdgeProjectionResultJs.prototype);
+        obj.__wbg_ptr = ptr;
+        EdgeProjectionResultJsFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        EdgeProjectionResultJsFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_edgeprojectionresultjs_free(ptr, 0);
+    }
+    /**
+     * Returns hidden polylines as a JS value.
+     *
+     * Shape: `Array< Array<[x: number, y: number, z: number]> >`
+     * @returns {any}
+     */
+    hiddenPolylines() {
+        const ret = wasm.edgeprojectionresultjs_hiddenPolylines(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * Returns visible polylines as a JS value.
+     *
+     * Shape: `Array< Array<[x: number, y: number, z: number]> >`
+     * @returns {any}
+     */
+    visiblePolylines() {
+        const ret = wasm.edgeprojectionresultjs_visiblePolylines(this.__wbg_ptr);
+        return ret;
+    }
+}
+if (Symbol.dispose) EdgeProjectionResultJs.prototype[Symbol.dispose] = EdgeProjectionResultJs.prototype.free;
+
 export class Matrix4Js {
     static __wrap(ptr) {
         ptr = ptr >>> 0;
@@ -815,6 +962,12 @@ export class MeshJs {
         obj.__wbg_ptr = ptr;
         MeshJsFinalization.register(obj, obj.__wbg_ptr, obj);
         return obj;
+    }
+    static __unwrap(jsValue) {
+        if (!(jsValue instanceof MeshJs)) {
+            return 0;
+        }
+        return jsValue.__destroy_into_raw();
     }
     __destroy_into_raw() {
         const ptr = this.__wbg_ptr;
@@ -985,6 +1138,20 @@ export class MeshJs {
         return ret !== 0;
     }
     /**
+     * Sample the signed distance field at a query point.
+     *
+     * Returns a **negative** signed distance when inside the mesh.
+     * Returns `undefined` if the mesh has no polygons.
+     * @param {number} x
+     * @param {number} y
+     * @param {number} z
+     * @returns {SdfSampleJs | undefined}
+     */
+    sampleSdf(x, y, z) {
+        const ret = wasm.meshjs_sampleSdf(this.__wbg_ptr, x, y, z);
+        return ret === 0 ? undefined : SdfSampleJs.__wrap(ret);
+    }
+    /**
      * @param {number} lambda
      * @param {number} mu
      * @param {number} iterations
@@ -1008,6 +1175,18 @@ export class MeshJs {
         return v1;
     }
     /**
+     * Minimum separating distance between this mesh and another.
+     *
+     * Returns `0.0` if they intersect.
+     * @param {MeshJs} other
+     * @returns {number}
+     */
+    distanceTo(other) {
+        _assertClass(other, MeshJs);
+        const ret = wasm.meshjs_distanceTo(this.__wbg_ptr, other.__wbg_ptr);
+        return ret;
+    }
+    /**
      * @param {number} count
      * @param {number} radius
      * @param {number} start_angle
@@ -1017,6 +1196,23 @@ export class MeshJs {
     distributeArc(count, radius, start_angle, end_angle) {
         const ret = wasm.meshjs_distributeArc(this.__wbg_ptr, count, radius, start_angle, end_angle);
         return MeshJs.__wrap(ret);
+    }
+    /**
+     * All-hits raycast: every triangle intersection along the ray, sorted by distance.
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} dx
+     * @param {number} dy
+     * @param {number} dz
+     * @param {number} max_dist
+     * @returns {RaycastHitJs[]}
+     */
+    raycastAll(ox, oy, oz, dx, dy, dz, max_dist) {
+        const ret = wasm.meshjs_raycastAll(this.__wbg_ptr, ox, oy, oz, dx, dy, dz, max_dist);
+        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
     }
     /**
      * Number of triangles (handy to sanity-check).
@@ -1087,6 +1283,19 @@ export class MeshJs {
         return ret;
     }
     /**
+     * Project a query point onto the nearest mesh surface (BVH-accelerated).
+     *
+     * Returns `undefined` if the mesh has no polygons.
+     * @param {number} x
+     * @param {number} y
+     * @param {number} z
+     * @returns {ClosestPointResultJs | undefined}
+     */
+    closestPoint(x, y, z) {
+        const ret = wasm.meshjs_closestPoint(this.__wbg_ptr, x, y, z);
+        return ret === 0 ? undefined : ClosestPointResultJs.__wrap(ret);
+    }
+    /**
      * @param {number} lambda
      * @param {number} iterations
      * @param {boolean} preserve_boundaries
@@ -1095,6 +1304,54 @@ export class MeshJs {
     laplacianSmooth(lambda, iterations, preserve_boundaries) {
         const ret = wasm.meshjs_laplacianSmooth(this.__wbg_ptr, lambda, iterations, preserve_boundaries);
         return MeshJs.__wrap(ret);
+    }
+    /**
+     * BVH-accelerated edge projection with hidden-line removal.
+     *
+     * - `(vx, vy, vz)` – view direction (normalised internally).
+     * - `(ox, oy, oz)` – projection plane origin.
+     * - `(nx, ny, nz)` – projection plane normal.
+     * - `feature_angle_deg` – crease angle threshold in degrees (e.g. `15.0`).
+     * - `n_samples` – HLR ray samples per edge segment (e.g. `8`).
+     * - `occluders` – additional meshes that can occlude edges of `self`;
+     *   `self` is always included as an occluder.
+     * @param {number} vx
+     * @param {number} vy
+     * @param {number} vz
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @param {number} feature_angle_deg
+     * @param {number} n_samples
+     * @param {MeshJs[]} occluders
+     * @returns {EdgeProjectionResultJs}
+     */
+    projectEdges(vx, vy, vz, ox, oy, oz, nx, ny, nz, feature_angle_deg, n_samples, occluders) {
+        const ptr0 = passArrayJsValueToWasm0(occluders, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.meshjs_projectEdges(this.__wbg_ptr, vx, vy, vz, ox, oy, oz, nx, ny, nz, feature_angle_deg, n_samples, ptr0, len0);
+        return EdgeProjectionResultJs.__wrap(ret);
+    }
+    /**
+     * BVH-accelerated first-hit raycast.
+     *
+     * Returns the closest intersection along `origin + t * direction` where
+     * `t ∈ [0, max_dist]`, or `undefined` if there is no hit.
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} dx
+     * @param {number} dy
+     * @param {number} dz
+     * @param {number} max_dist
+     * @returns {RaycastHitJs | undefined}
+     */
+    raycastFirst(ox, oy, oz, dx, dy, dz, max_dist) {
+        const ret = wasm.meshjs_raycastFirst(this.__wbg_ptr, ox, oy, oz, dx, dy, dz, max_dist);
+        return ret === 0 ? undefined : RaycastHitJs.__wrap(ret);
     }
     /**
      * @param {number} normal_x
@@ -1168,6 +1425,28 @@ export class MeshJs {
         }
     }
     /**
+     * Create a mesh from pre-sampled SDF values on a regular grid.
+     *
+     * `values` must be laid out as `[z * res_y * res_x + y * res_x + x, ...]`.
+     * `iso_value` is the isosurface threshold (typically `0.0`).
+     * @param {Float64Array} values
+     * @param {number} res_x
+     * @param {number} res_y
+     * @param {number} res_z
+     * @param {number} min_x
+     * @param {number} min_y
+     * @param {number} min_z
+     * @param {number} max_x
+     * @param {number} max_y
+     * @param {number} max_z
+     * @param {number} iso_value
+     * @returns {MeshJs}
+     */
+    static fromSdfValues(values, res_x, res_y, res_z, min_x, min_y, min_z, max_x, max_y, max_z, iso_value) {
+        const ret = wasm.meshjs_fromSdfValues(values, res_x, res_y, res_z, min_x, min_y, min_z, max_x, max_y, max_z, iso_value);
+        return MeshJs.__wrap(ret);
+    }
+    /**
      * @param {number} module_
      * @param {number} teeth
      * @param {number} pressure_angle_deg
@@ -1183,12 +1462,44 @@ export class MeshJs {
         return MeshJs.__wrap(ret);
     }
     /**
+     * Orthographically project every vertex of this mesh onto a plane.
+     *
+     * `(ox, oy, oz)` is a point on the plane; `(nx, ny, nz)` is its normal.
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @returns {MeshJs}
+     */
+    projectToPlane(ox, oy, oz, nx, ny, nz) {
+        const ret = wasm.meshjs_projectToPlane(this.__wbg_ptr, ox, oy, oz, nx, ny, nz);
+        return MeshJs.__wrap(ret);
+    }
+    /**
      * @param {number} levels
      * @returns {MeshJs}
      */
     subdivideTriangles(levels) {
         const ret = wasm.meshjs_subdivideTriangles(this.__wbg_ptr, levels);
         return MeshJs.__wrap(ret);
+    }
+    /**
+     * Minimum absolute distance from any mesh vertex to a plane.
+     *
+     * `(ox, oy, oz)` is a point on the plane; `(nx, ny, nz)` is its normal.
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @returns {number}
+     */
+    distanceToPlane(ox, oy, oz, nx, ny, nz) {
+        const ret = wasm.meshjs_distanceToPlane(this.__wbg_ptr, ox, oy, oz, nx, ny, nz);
+        return ret;
     }
     /**
      * @param {number} m00
@@ -1309,6 +1620,38 @@ export class MeshJs {
         var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
         return v1;
+    }
+    /**
+     * Slice at a section plane and return visible/hidden edge projections plus
+     * the cut sketch.
+     *
+     * - `(snx, sny, snz)` / `section_offset` – section plane normal + d offset.
+     * - `(vx, vy, vz)` – view direction.
+     * - `(ox, oy, oz)` / `(nx, ny, nz)` – projection plane origin + normal.
+     * - `feature_angle_deg`, `n_samples`, `occluders` – as in `projectEdges`.
+     * @param {number} snx
+     * @param {number} sny
+     * @param {number} snz
+     * @param {number} section_offset
+     * @param {number} vx
+     * @param {number} vy
+     * @param {number} vz
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @param {number} feature_angle_deg
+     * @param {number} n_samples
+     * @param {MeshJs[]} occluders
+     * @returns {SectionElevationResultJs}
+     */
+    projectEdgesSection(snx, sny, snz, section_offset, vx, vy, vz, ox, oy, oz, nx, ny, nz, feature_angle_deg, n_samples, occluders) {
+        const ptr0 = passArrayJsValueToWasm0(occluders, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.meshjs_projectEdgesSection(this.__wbg_ptr, snx, sny, snz, section_offset, vx, vy, vz, ox, oy, oz, nx, ny, nz, feature_angle_deg, n_samples, ptr0, len0);
+        return SectionElevationResultJs.__wrap(ret);
     }
     /**
      * @param {number} x
@@ -1542,6 +1885,16 @@ export class MeshJs {
     static frustum(radius1, radius2, height, segments, metadata) {
         const ret = wasm.meshjs_frustum(radius1, radius2, height, segments, metadata);
         return MeshJs.__wrap(ret);
+    }
+    /**
+     * Test whether this mesh physically overlaps another (BVH-accelerated).
+     * @param {MeshJs} other
+     * @returns {boolean}
+     */
+    hits(other) {
+        _assertClass(other, MeshJs);
+        const ret = wasm.meshjs_hits(this.__wbg_ptr, other.__wbg_ptr);
+        return ret !== 0;
     }
     /**
      * Return triangle indices (u32).
@@ -2590,21 +2943,21 @@ export class Point3Js {
      * @returns {number}
      */
     get x() {
-        const ret = wasm.point3js_x(this.__wbg_ptr);
+        const ret = wasm.closestpointresultjs_point_x(this.__wbg_ptr);
         return ret;
     }
     /**
      * @returns {number}
      */
     get y() {
-        const ret = wasm.point3js_y(this.__wbg_ptr);
+        const ret = wasm.closestpointresultjs_point_y(this.__wbg_ptr);
         return ret;
     }
     /**
      * @returns {number}
      */
     get z() {
-        const ret = wasm.point3js_z(this.__wbg_ptr);
+        const ret = wasm.closestpointresultjs_point_z(this.__wbg_ptr);
         return ret;
     }
     /**
@@ -2651,28 +3004,28 @@ export class Point4Js {
      * @returns {number}
      */
     get w() {
-        const ret = wasm.point4js_w(this.__wbg_ptr);
+        const ret = wasm.closestpointresultjs_normal_x(this.__wbg_ptr);
         return ret;
     }
     /**
      * @returns {number}
      */
     get x() {
-        const ret = wasm.point3js_x(this.__wbg_ptr);
+        const ret = wasm.closestpointresultjs_point_x(this.__wbg_ptr);
         return ret;
     }
     /**
      * @returns {number}
      */
     get y() {
-        const ret = wasm.point3js_y(this.__wbg_ptr);
+        const ret = wasm.closestpointresultjs_point_y(this.__wbg_ptr);
         return ret;
     }
     /**
      * @returns {number}
      */
     get z() {
-        const ret = wasm.point3js_z(this.__wbg_ptr);
+        const ret = wasm.closestpointresultjs_point_z(this.__wbg_ptr);
         return ret;
     }
     /**
@@ -2878,6 +3231,190 @@ export class PolygonJs {
 }
 if (Symbol.dispose) PolygonJs.prototype[Symbol.dispose] = PolygonJs.prototype.free;
 
+/**
+ * Result of a BVH-accelerated first-hit raycast returned to JavaScript.
+ */
+export class RaycastHitJs {
+    static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(RaycastHitJs.prototype);
+        obj.__wbg_ptr = ptr;
+        RaycastHitJsFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RaycastHitJsFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_raycasthitjs_free(ptr, 0);
+    }
+    /**
+     * @returns {number}
+     */
+    get triangleIndex() {
+        const ret = wasm.raycasthitjs_triangle_index(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get pointX() {
+        const ret = wasm.closestpointresultjs_point_x(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get pointY() {
+        const ret = wasm.closestpointresultjs_point_y(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get pointZ() {
+        const ret = wasm.closestpointresultjs_point_z(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get distance() {
+        const ret = wasm.closestpointresultjs_distance(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get normalX() {
+        const ret = wasm.closestpointresultjs_normal_x(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get normalY() {
+        const ret = wasm.closestpointresultjs_normal_y(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get normalZ() {
+        const ret = wasm.closestpointresultjs_normal_z(this.__wbg_ptr);
+        return ret;
+    }
+}
+if (Symbol.dispose) RaycastHitJs.prototype[Symbol.dispose] = RaycastHitJs.prototype.free;
+
+/**
+ * SDF sample result returned to JavaScript.
+ */
+export class SdfSampleJs {
+    static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(SdfSampleJs.prototype);
+        obj.__wbg_ptr = ptr;
+        SdfSampleJsFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        SdfSampleJsFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_sdfsamplejs_free(ptr, 0);
+    }
+    /**
+     * @returns {number}
+     */
+    get distance() {
+        const ret = wasm.closestpointresultjs_point_x(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get closestX() {
+        const ret = wasm.closestpointresultjs_point_y(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get closestY() {
+        const ret = wasm.closestpointresultjs_point_z(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get closestZ() {
+        const ret = wasm.closestpointresultjs_normal_x(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {boolean}
+     */
+    get isInside() {
+        const ret = wasm.sdfsamplejs_is_inside(this.__wbg_ptr);
+        return ret !== 0;
+    }
+}
+if (Symbol.dispose) SdfSampleJs.prototype[Symbol.dispose] = SdfSampleJs.prototype.free;
+
+/**
+ * Section-elevation result (cut sketch + visible/hidden edge polylines).
+ */
+export class SectionElevationResultJs {
+    static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(SectionElevationResultJs.prototype);
+        obj.__wbg_ptr = ptr;
+        SectionElevationResultJsFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        SectionElevationResultJsFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_sectionelevationresultjs_free(ptr, 0);
+    }
+    /**
+     * @returns {SketchJs}
+     */
+    cutSketch() {
+        const ret = wasm.sectionelevationresultjs_cutSketch(this.__wbg_ptr);
+        return SketchJs.__wrap(ret);
+    }
+    /**
+     * @returns {any}
+     */
+    hiddenPolylines() {
+        const ret = wasm.sectionelevationresultjs_hiddenPolylines(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {any}
+     */
+    visiblePolylines() {
+        const ret = wasm.sectionelevationresultjs_visiblePolylines(this.__wbg_ptr);
+        return ret;
+    }
+}
+if (Symbol.dispose) SectionElevationResultJs.prototype[Symbol.dispose] = SectionElevationResultJs.prototype.free;
+
 export class SketchJs {
     static __wrap(ptr) {
         ptr = ptr >>> 0;
@@ -2967,15 +3504,6 @@ export class SketchJs {
         return SketchJs.__wrap(ret);
     }
     /**
-     * @param {number} order
-     * @param {number} padding
-     * @returns {SketchJs}
-     */
-    hilbertCurve(order, padding) {
-        const ret = wasm.sketchjs_hilbertCurve(this.__wbg_ptr, order, padding);
-        return SketchJs.__wrap(ret);
-    }
-    /**
      * @param {number} module_
      * @param {number} teeth
      * @param {number} pressure_angle_deg
@@ -3024,14 +3552,6 @@ export class SketchJs {
         _assertClass(dir, Vector3Js);
         const ret = wasm.sketchjs_extrudeVector(this.__wbg_ptr, dir.__wbg_ptr);
         return MeshJs.__wrap(ret);
-    }
-    /**
-     * @param {number} distance
-     * @returns {SketchJs}
-     */
-    offsetRounded(distance) {
-        const ret = wasm.sketchjs_offsetRounded(this.__wbg_ptr, distance);
-        return SketchJs.__wrap(ret);
     }
     /**
      * @param {number} width
@@ -3087,14 +3607,6 @@ export class SketchJs {
      */
     static roundedRectangle(width, height, corner_radius, corner_segments, metadata) {
         const ret = wasm.sketchjs_roundedRectangle(width, height, corner_radius, corner_segments, metadata);
-        return SketchJs.__wrap(ret);
-    }
-    /**
-     * @param {boolean} orientation
-     * @returns {SketchJs}
-     */
-    straightSkeleton(orientation) {
-        const ret = wasm.sketchjs_straightSkeleton(this.__wbg_ptr, orientation);
         return SketchJs.__wrap(ret);
     }
     /**
@@ -3294,14 +3806,6 @@ export class SketchJs {
      */
     static circle(radius, segments, metadata) {
         const ret = wasm.sketchjs_circle(radius, segments, metadata);
-        return SketchJs.__wrap(ret);
-    }
-    /**
-     * @param {number} distance
-     * @returns {SketchJs}
-     */
-    offset(distance) {
-        const ret = wasm.sketchjs_offset(this.__wbg_ptr, distance);
         return SketchJs.__wrap(ret);
     }
     /**
@@ -3623,21 +4127,21 @@ export class Vector3Js {
      * @returns {number}
      */
     get x() {
-        const ret = wasm.point3js_x(this.__wbg_ptr);
+        const ret = wasm.closestpointresultjs_point_x(this.__wbg_ptr);
         return ret;
     }
     /**
      * @returns {number}
      */
     get y() {
-        const ret = wasm.point3js_y(this.__wbg_ptr);
+        const ret = wasm.closestpointresultjs_point_y(this.__wbg_ptr);
         return ret;
     }
     /**
      * @returns {number}
      */
     get z() {
-        const ret = wasm.point3js_z(this.__wbg_ptr);
+        const ret = wasm.closestpointresultjs_point_z(this.__wbg_ptr);
         return ret;
     }
     /**
@@ -4072,6 +4576,10 @@ function __wbg_get_imports() {
         const ret = Matrix4Js.__wrap(arg0);
         return ret;
     };
+    imports.wbg.__wbg_meshjs_unwrap = function(arg0) {
+        const ret = MeshJs.__unwrap(arg0);
+        return ret;
+    };
     imports.wbg.__wbg_new_1ba21ce319a06297 = function() {
         const ret = new Object();
         return ret;
@@ -4144,6 +4652,10 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbg_push_7d9be8f38fc13975 = function(arg0, arg1) {
         const ret = arg0.push(arg1);
+        return ret;
+    };
+    imports.wbg.__wbg_raycasthitjs_new = function(arg0) {
+        const ret = RaycastHitJs.__wrap(arg0);
         return ret;
     };
     imports.wbg.__wbg_set_781438a03c0c3c81 = function() { return handleError(function (arg0, arg1, arg2) {

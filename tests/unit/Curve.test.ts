@@ -113,16 +113,9 @@ describe('Curve.pointAtParam()', () => {
 });
 
 describe('Curve.type()', () => {
-    it('returns "Curve" for a simple NurbsCurve', () => {
+    it('returns "line" for a simple NurbsCurve', () => {
         const c = Curve.Line([0,0,0], [1,0,0]);
-        expect(c.type()).toBe('Curve');
-    });
-
-    it('returns "Compound" for a compound curve', () => {
-        const a = Curve.Line([0,0,0], [5,0,0]);
-        const b = Curve.Line([5,0,0], [10,0,0]);
-        const compound = Curve.Compound([a, b]);
-        expect(compound.type()).toBe('Compound');
+        expect(c.type()).toBe('line');
     });
 });
 

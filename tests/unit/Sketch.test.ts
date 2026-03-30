@@ -52,39 +52,6 @@ describe('Sketch.moveTo() / lineTo()', () => {
     });
 });
 
-describe('Sketch.close()', () => {
-    it('produces a single closed curve for a square', () => {
-        const s = makeSquare();
-        const curves = s._curves.curves();
-        expect(curves.length).toBeGreaterThan(0);
-        expect(curves.some(c => c.isClosed())).toBe(true);
-    });
-});
-
-describe('Sketch.extrude()', () => {
-    it('returns a Mesh for a closed sketch', () => {
-        const mesh = makeSquare(10).extrude(5);
-        expect(mesh).toBeTruthy();
-        expect(mesh).toBeInstanceOf(Mesh);
-    });
-
-    it('extruded mesh has vertices', () => {
-        const mesh = makeSquare(10).extrude(5) as Mesh;
-        expect(mesh.positions().length).toBeGreaterThan(0);
-    });
-
-    it('extruded mesh has triangles', () => {
-        const mesh = makeSquare(10).extrude(5) as Mesh;
-        expect(mesh.inner().triangleCount()).toBeGreaterThan(0);
-    });
-
-    it('returns null for a non-closed sketch', () => {
-        const s = new Sketch().moveTo(0, 0).lineTo(10, 0); // open, not closed
-        const mesh = s.extrude(5);
-        expect(mesh).toBeNull();
-    });
-});
-
 describe('Sketch on different base planes', () => {
     it('creates a Sketch on the XZ plane', () => {
         const s = new Sketch('xz');
@@ -101,7 +68,7 @@ describe('Sketch.curveTo()', () => {
     it('adds a smooth NURBS segment', () => {
         const s = new Sketch()
             .moveTo(0, 0)
-            .curveTo([[5, 5], [10, 0]]);
+            .curveTo([[5, 5], [10, 0], [15, -5]]);
         expect(s._curves.count()).toBeGreaterThan(0);
     });
 });

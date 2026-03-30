@@ -5,7 +5,7 @@
  *      
  */
 
-import type { Axis, PointLike, RaycastHit } from "./types";
+import type { Axis, BasePlane, PointLike, RaycastHit } from "./types";
 
 import { Mesh } from "./Mesh";
 import { Curve } from "./Curve";
@@ -166,14 +166,18 @@ export class Collection
         return this._shapes;
     }
 
-    meshes(): Array<Mesh>
+    /** Get all meshes in the collection as a MeshCollection 
+     *  NOTE: Use toArray() if you want a plain array instead of a MeshCollection wrapper
+    */
+    meshes(): MeshCollection
     {
-        return this._shapes.filter(shape => shape instanceof Mesh) as Array<Mesh>;
+        return new MeshCollection(...this._shapes.filter(shape => shape instanceof Mesh) as Array<Mesh>);
     }
 
-    curves(): Array<Curve>
+    /** Get all curves in the collection as a CurveCollection */
+    curves(): CurveCollection
     {
-        return this._shapes.filter(shape => shape instanceof Curve) as Array<Curve>;
+        return new CurveCollection(...this._shapes.filter(shape => shape instanceof Curve) as Array<Curve>);
     }
 
     count()
@@ -202,6 +206,11 @@ export class Collection
         return new Collection(...filtered);
     }
 
+    map<T>(callback: (shape: Mesh|Curve, index: number, array: (Mesh|Curve)[]) => T): T[]
+    {
+        return this._shapes.map(callback);
+    }
+
     //// BASIC TRANSFORMATIONS ////
 
     /** Translate all shapes in Collection */
@@ -219,6 +228,14 @@ export class Collection
         return this.translate(vecOrX as any, dy as any, dz as any);
     }
 
+    moveX(dx: number): this { return this.translate(dx, 0, 0); }
+    moveY(dy: number): this { return this.translate(0, dy, 0); }
+    moveZ(dz: number): this { return this.translate(0, 0, dz); }
+
+    rotateX(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'x', origin); }
+    rotateY(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'y', origin); }
+    rotateZ(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'z', origin); }
+
     rotate(angleDeg: number, axis: Axis = 'z', origin: PointLike = {x:0,y:0,z:0}): this
     {
         this._shapes.forEach(
@@ -226,7 +243,20 @@ export class Collection
         return this;
     }
 
-    scale(factor: number, origin: PointLike = {x:0,y:0,z:0}): this
+    rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot: PointLike = {x:0,y:0,z:0}): this
+    {
+        this._shapes.forEach(
+            shape => shape.rotateAround(angleDeg, axis, pivot));
+        return this;
+    }
+
+    rotateQuaternion(wOrObj: number | {w: number, x: number, y: number, z: number}, x?: number, y?: number, z?: number): this
+    {
+        this.forEach(shape => shape.rotateQuaternion(wOrObj as any, x as any, y as any, z as any));
+        return this;
+    }
+
+    scale(factor: number|PointLike, origin: PointLike = {x:0,y:0,z:0}): this
     {
         this._shapes.forEach(
             shape => shape.scale(factor, origin));
@@ -521,46 +551,48 @@ export class MeshCollection extends Collection
     /** Return a deep copy of this MeshCollection (all members are independently copied) */
     copy(): MeshCollection
     {
-        return new MeshCollection(...super.meshes().map(m => m.copy() as Mesh));
+        return new MeshCollection(...(this._shapes as Array<Mesh>).map(m => m.copy() as Mesh));
     }
 
     /** Return a shallow copy of this MeshCollection (new container, same member references) */
     clone(): MeshCollection
     {
-        return new MeshCollection(...super.meshes());
+        return new MeshCollection(...this._shapes as Array<Mesh>);
     }
 
-    shapes(): Array<Mesh>  { return super.meshes(); }
-    get(index: number): Mesh | undefined { return super.meshes()[index]; }
+    shapes(): Array<Mesh>  { return this._shapes as Array<Mesh>; }
+    get(index: number): Mesh | undefined { return this._shapes[index] as Mesh | undefined; }
     at(index: number): Mesh | undefined { return this.get(index); }
     first(): Mesh
     {
-        const m = super.meshes()[0];
+        const m = this._shapes[0] as Mesh;
         if (!m) throw new Error('MeshCollection::first(): Collection is empty.');
         return m;
     }
 
     last(): Mesh 
     {
-        return super.meshes()[super.meshes().length - 1];
+        const m = this._shapes[this._shapes.length - 1] as Mesh;
+        if (!m) throw new Error('MeshCollection::last(): Collection is empty.');
+        return m;
     }
 
 
     /** If single Mesh in the collection, return it. Otherwise, return collection. */
     checkSingle(): Mesh | this
     {
-        if(this.meshes().length === 1){ return this.meshes()[0];}
+        if(this._shapes.length === 1){ return this.first();}
         return this;
     }
 
     forEach(callback: (shape: Mesh, index: number, array: Mesh[]) => void): void
     {
-        super.meshes().forEach(callback);
+        (this._shapes as Array<Mesh>).forEach(callback);
     }
 
     filter(callback: (shape: Mesh, index: number, array: Mesh[]) => boolean): MeshCollection
     {
-        return new MeshCollection(...super.meshes().filter(callback));
+        return new MeshCollection(...(this._shapes as Array<Mesh>).filter(callback));
     }
 
     /** Union all meshes into one */
@@ -731,7 +763,7 @@ export class CurveCollection extends Collection
         }
         else if(args.every(c => c instanceof Curve || c instanceof Collection)) // also allow multiple Curve or Collection arguments, which are flattened
         {
-            return new CurveCollection(...args.flatMap(arg => arg instanceof Collection ? arg.curves() : (arg instanceof Curve ? [arg] : [])));
+            return new CurveCollection(...args.flatMap(arg => arg instanceof Collection ? arg.curves().toArray() as Curve[] : (arg instanceof Curve ? [arg] : [])));
         }
         else {
             throw new Error(`CurveCollection.from(): Invalid input: "${args.map(a => a.toString()).join(', ')}". Please provide a Collection or an array of Curves.`);
@@ -762,13 +794,13 @@ export class CurveCollection extends Collection
     /** Return a deep copy of this CurveCollection (all members are independently copied) */
     copy(): CurveCollection
     {
-        return new CurveCollection(...super.curves().map(c => c.copy()));
+        return new CurveCollection(...(this._shapes as Array<Curve>).map(c => c.copy()));
     }
 
     /** Return a shallow copy of this CurveCollection (new container, same member references) */
     clone(): CurveCollection
     {
-        return new CurveCollection(...super.curves());
+        return new CurveCollection(...this._shapes as Array<Curve>);
     }
 
     add(shapes: Curve|CurveCollection): void
@@ -788,19 +820,18 @@ export class CurveCollection extends Collection
         this.add(shapes);
     }
 
-    shapes(): Array<Curve>  { return super.curves(); }
-    get(index: number): Curve | undefined { return super.curves()[index]; }
+    shapes(): Array<Curve>  { return this._shapes as Array<Curve>; }
+    get(index: number): Curve | undefined { return this._shapes[index] as Curve | undefined; }
     at(index: number): Curve | undefined { return this.get(index); }
     first(): Curve
     {
-        const c = super.curves()[0];
+        const c = this._shapes[0] as Curve;
         if (!c) throw new Error('CurveCollection::first(): Collection is empty.');
         return c;
     }
     last(): Curve
     {
-        const curves = super.curves();
-        const c = curves[curves.length - 1];
+        const c = this._shapes[this._shapes.length - 1] as Curve;
         if (!c) throw new Error('CurveCollection::last(): Collection is empty.');
         return c;
     }
@@ -808,19 +839,34 @@ export class CurveCollection extends Collection
     /** If single Curve in the collection, return it. Otherwise, return collection. */
     checkSingle(): Curve | this
     {
-        if(this.curves().length === 1){ return this.curves()[0];}
+        if(this._shapes.length === 1){ return this.first();}
         return this;
     }
 
     forEach(callback: (shape: Curve, index: number, array: Curve[]) => void): CurveCollection
     {
-        super.curves().forEach(callback);
+        (this._shapes as Array<Curve>).forEach(callback);
         return this;
     }
 
     filter(callback: (shape: Curve, index: number, array: Curve[]) => boolean): CurveCollection
     {
-        return new CurveCollection(...super.curves().filter(callback));
+        return new CurveCollection(...(this._shapes as Array<Curve>).filter(callback));
+    }
+
+    /** Replicate this CurveCollection a given number of times, applying a transform to each copy */
+    replicate(num: number, transform: (collection: CurveCollection, index: number, prev: CurveCollection | undefined) => CurveCollection): CurveCollection
+    {
+        const results: Curve[] = [];
+        let prev: CurveCollection | undefined;
+        for (let i = 0; i < num; i++)
+        {
+            const copy = this.copy();
+            const transformed = transform(copy, i, prev);
+            results.push(...transformed.curves());
+            prev = transformed;
+        }
+        return new CurveCollection(...results);
     }
 
     /** Boolean-union all curves sequentially, returning the result curves */
@@ -868,7 +914,7 @@ export class CurveCollection extends Collection
         this.combine();
 
         // Create a convenient list of endpoints with references to their curves
-        const endpoints = this.curves().flatMap(curve => {
+        const endpoints = this.curves().toArray().flatMap(curve => {
             // NOTE: references need to be consistent (don't call start()/end() 
             const start = curve.start();
             const end = curve.end();
@@ -928,7 +974,7 @@ export class CurveCollection extends Collection
         
         // add connecting lines to new collection
         const connCol = new CurveCollection(
-                            ...this.curves(), 
+                            ...this.curves().toArray(), 
                             ...connectingLines
                         ).combine(); // combine again to merge connected lines into curves
         this.update(connCol);
@@ -1102,9 +1148,47 @@ export class CurveCollection extends Collection
 
     //// OUTPUTS ////
 
+    /**
+     * Export all curves in this collection as a single SVG string.
+     * Each curve becomes a separate `<path>` element. The viewBox is the union
+     * of all individual curve bounds.
+     */
+    toSVG(plane: BasePlane = 'xy'): string
+    {
+        const curves = this.curves();
+        if (curves.length === 0)
+        {
+            return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"></svg>`;
+        }
+
+        const paths: string[] = [];
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+        curves.forEach(curve =>
+        {
+            const svg = curve.toSVG(plane);
+            const innerMatch = svg.match(/<svg[^>]*>([\s\S]*?)<\/svg>/);
+            const vbMatch = svg.match(/viewBox="([^"]*)"/)
+            if (!innerMatch?.[1]) return;
+            paths.push(innerMatch[1]);
+            if (vbMatch)
+            {
+                const [vx, vy, vw, vh] = vbMatch[1].split(' ').map(Number);
+                if (vx < minX) minX = vx;
+                if (vy < minY) minY = vy;
+                if (vx + vw > maxX) maxX = vx + vw;
+                if (vy + vh > maxY) maxY = vy + vh;
+            }
+        });
+
+        if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 1; maxY = 1; }
+        const vb = `${minX} ${minY} ${maxX - minX} ${maxY - minY}`;
+        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}">${paths.join('')}</svg>`;
+    }
+
     toArray(): Array<Curve>
     {
-        return this.curves();
+        return this._shapes as Array<Curve>;
     }
 
     toMesh(): MeshCollection

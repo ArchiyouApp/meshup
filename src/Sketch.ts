@@ -289,8 +289,7 @@ export class Sketch
         this._popAllCursors().forEach((cur) => {
             const endPt = Point.from(pnts[pnts.length - 1]);
             const allPoints = [cur.at, ...pnts.map(p => Point.from(p))];
-            const degree = Math.min(3, allPoints.length - 1);
-            const curve = Curve.Interpolated(allPoints, degree);
+            const curve = Curve.Interpolated(allPoints);
             this._curves.add(curve);
             this._pushCursor(endPt, curve.tangentAt(endPt) ?? new Vector(1, 0, 0));
         });
@@ -341,7 +340,7 @@ export class Sketch
     private _toSketchJs(): SketchJs | null
     {
         this.combine();
-        const closed = this._curves.curves().filter(c => c.isClosed());
+        const closed = this._curves.curves().toArray().filter(c => c.isClosed());
 
         if (closed.length === 0)
         {

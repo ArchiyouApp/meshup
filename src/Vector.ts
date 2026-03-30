@@ -150,6 +150,13 @@ export class Vector extends Vector3Js
     return new Vector(this.x, this.y, this.z);
   }
 
+  /** Return a new Vector with x replaced */
+  setX(x: number): Vector { return new Vector(x, this.y, this.z); }
+  /** Return a new Vector with y replaced */
+  setY(y: number): Vector { return new Vector(this.x, y, this.z); }
+  /** Return a new Vector with z replaced */
+  setZ(z: number): Vector { return new Vector(this.x, this.y, z); }
+
   /** Create new Vector by computing the dot product with another vector */
   dot(other: Vector3Js): number
   {
@@ -185,6 +192,11 @@ export class Vector extends Vector3Js
   }
 
   //// CONVERSIONS ////
+
+  toArray(): [number, number, number]
+  {
+    return [this.x, this.y, this.z];
+  }
 
   toPoint():Point
   {
