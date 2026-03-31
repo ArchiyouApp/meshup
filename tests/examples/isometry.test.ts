@@ -32,7 +32,7 @@ describe('Example: Isometric projection with hidden lines', () =>
         const bigbox = Mesh.Cube(50);
         const smallbox = Mesh.Cube(20).moveTo(bigbox.bbox().corner('leftfronttop'));
         const diff = bigbox.subtract(smallbox)!;
-        const diffIso = diff.isometry([-1,-1,1]);
+        const diffIso = diff.isometry();
 
         expect(diffIso).toBeTruthy();
         //expect(diffIso.group('hidden')?.length).toBe(9);
@@ -43,4 +43,29 @@ describe('Example: Isometric projection with hidden lines', () =>
 
     });
 
+    it('can do isometric projection of a Sphere', () =>
+    {
+        // A lot of lines because sphere has a lot of faces with low angles between them
+        const sphere = Mesh.Sphere(20);
+        const sphereIso = sphere.isometry();
+        expect(sphereIso).toBeTruthy();
+        save('isometry.sphere.gltf', new Collection(sphere.move(-20*2), sphereIso.group('visible')!).toGLTF());
+    });
+
+    it('can do isometric projection of box with a hole', () =>
+    {
+        const box = Mesh.Cube(50);
+        const hole = Mesh.Cylinder(10, 100);
+        const subBox = Mesh.Cube(20).move(-25);
+        box.subtract(hole)
+                .subtract(subBox);
+
+        save('isometry.hole.gltf', 
+                new Collection( 
+                    box.isometry()?.group('visible')!,
+                    box.move(-100)
+                    ).toGLTF());
+
+        // NOTE: some wrong edge near rectangular hole
+    });
 });       

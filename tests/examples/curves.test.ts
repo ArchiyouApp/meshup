@@ -74,8 +74,7 @@ describe('Example: Curves', () =>
         */
         
         
-
-        save('test.curves.ops.gltf', new CurveCollection(circles, rect, cc, un!, sub!.moveZ(10), offset).toGLTF());
+        save('test.curves.ops.gltf', new CurveCollection(circles, rect, cc, un!, sub!.moveZ(10), offset!).toGLTF());
         //save('test.curves.ops.svg', new CurveCollection(circles, rect, cc, /*un!, unOffsets*/).toSVG());
     });
 

@@ -1067,11 +1067,11 @@ export class Curve
 
     //// OPERATIONS ////
 
-    translate(vecOrX: PointLike | number, dy?: number, dz?: number): this
+    translate(px: PointLike | number, dy?: number, dz?: number): this
     {
-        const vec = (isPointLike(vecOrX)) 
-                        ? Point.from(vecOrX) 
-                        : Point.from(vecOrX, dy || 0, dz || 0);
+        const vec = (isPointLike(px)) 
+                        ? Point.from(px) 
+                        : Point.from(px, dy || 0, dz || 0);
 
         if(!vec){ throw new Error('Curve.translate(): Invalid translation input. Please use PointLike or valid offset coordinates.'); }
         this.update(this.inner().translate(vec.toVector3Js()));
@@ -1079,9 +1079,9 @@ export class Curve
     }
 
     /** Alias for translate */
-    move(vecOrX: PointLike | number, dy?: number, dz?: number): this
+    move(px: PointLike | number, dy?: number, dz?: number): this
     {
-        return this.translate(vecOrX, dy, dz);
+        return this.translate(px, dy, dz);
     }
 
     moveX(dx: number): this { return this.translate(dx, 0, 0); }

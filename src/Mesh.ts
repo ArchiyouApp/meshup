@@ -375,19 +375,23 @@ export class Mesh
 
     //// TRANSLATE/ROTATE/SCALE OPERATIONS ////
 
-    translate(vecOrX: PointLike | number, dy?: number, dz?: number): this
+    translate(px: PointLike | number, dy?: number, dz?: number): this
     {
-        const vec = (isPointLike(vecOrX)) 
-                        ? Point.from(vecOrX)
-                        : Point.from(vecOrX, dy || 0, dz || 0);
-        if(!vec){ throw new Error('Mesh.translate(): Invalid translation input. Please use PointLike or valid offset coordinates.'); }
+        const vec = (isPointLike(px)) 
+                        ? Point.from(px) 
+                        : Point.from(px, dy || 0, dz || 0); // throws is px is invalid Point
+
         return this.update(this.inner()?.translate(vec.toVector3Js()));
     }
 
     /** Alias for translate */
-    move(vecOrX: PointLike | number, dy?: number, dz?: number): this
+    move(px: PointLike | number, dy?: number, dz?: number): this
     {
-        return this.translate(vecOrX, dy, dz);
+        const mv = (isPointLike(px)) 
+                        ? Point.from(px) 
+                        : Point.from(px, dy || 0, dz || 0); // throws is px is invalid Point
+        
+        return this.translate(mv);
     }
 
     moveX(dx: number): this { return this.translate(dx, 0, 0); }
@@ -1037,9 +1041,7 @@ export class Mesh
                 // NOTE: why is it called viewDirection - you would expect -cam? TODO: check in Rust layer
                 viewDirection: camDirVec.toArray(),
                 planeNormal: planeNormal.toArray(),
-                planeOrigin: [0, 0, 0],
-                // featureAngle: use default
-                // samples: use default,
+                planeOrigin: [0, 0, 0]
             });
 
         if(!includeHidden){ iso.removeGroup('hidden'); }

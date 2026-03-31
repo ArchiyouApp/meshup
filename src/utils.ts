@@ -54,9 +54,9 @@ export async function save(filepath: string,
         if (data instanceof Blob) {
             blob = data;
         } else if (data instanceof ArrayBuffer || data instanceof Uint8Array) {
-            blob = new Blob([data]);
+            blob = new Blob([data as any]); // NOTE: suppress type warning TODO: fix
         } else {
-            blob = new Blob([data], { type: 'text/plain' });
+            blob = new Blob([data as any], { type: 'text/plain' });
         }
         
         const url = URL.createObjectURL(blob);

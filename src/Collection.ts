@@ -5,7 +5,7 @@
  *      
  */
 
-import type { Axis, BasePlane, PointLike, RaycastHit } from "./types";
+import type { Axis, BasePlane, PointLike, ProjectEdgeOptions, RaycastHit } from "./types";
 
 import { Mesh } from "./Mesh";
 import { Curve } from "./Curve";
@@ -183,7 +183,8 @@ export class Collection
     */
     meshes(): MeshCollection
     {
-        return new MeshCollection(...this._shapes.filter(shape => shape instanceof Mesh) as Array<Mesh>);
+        return new MeshCollection(
+                    ...this._shapes.filter(shape => shape instanceof Mesh) as Array<Mesh>);
     }
 
     /** Get all curves in the collection as a CurveCollection */
@@ -340,7 +341,7 @@ export class Collection
     union(other?: Mesh|Collection): Mesh
     {
         // We can only union meshes for now, so we filter out curves and other non-mesh shapes
-        const meshesToUnion = this.meshes();
+        const meshesToUnion = this.meshes().toArray();
 
         if(other instanceof Mesh)
         {
@@ -348,7 +349,7 @@ export class Collection
         }
         else if(other instanceof Collection)
         {
-            meshesToUnion.push(...other.meshes());
+            meshesToUnion.push(...other.meshes().toArray());
         }
         else if(other !== undefined)
         {
@@ -660,7 +661,7 @@ export class MeshCollection extends Collection
     /** Create a MeshCollection from the Mesh members of a general Collection */
     static from(collection: Collection): MeshCollection
     {
-        return new MeshCollection(...collection.meshes());
+        return new MeshCollection(collection.meshes());
     }
 
     // ── BVH Spatial Queries ────────────────────────────────────────────────
@@ -767,37 +768,19 @@ export class MeshCollection extends Collection
      * @param options  View direction, projection plane, feature angle, samples.
      * @returns Merged `{ visible, hidden }` polyline arrays.
      */
-    _projectEdges(options: ProjectionOptions): EdgeProjectionResult {
-        const meshes = this.shapes();
-        const merged: EdgeProjectionResult = { visible: new CurveCollection(), hidden: new CurveCollection() };
-        for (const mesh of meshes) {
-            const other = meshes.filter(m => m !== mesh);
-            const r = mesh._projectEdges(options, other);
-            r.visible.curves().forEach(c => merged.visible.add(c));
-            r.hidden.curves().forEach(c => merged.hidden.add(c));
-        }
-        return merged;
+    _projectEdges(options: ProjectEdgeOptions) // CurveCollection
+    {
+        // TODO
     }
 
-    /**
-     * Slice each mesh at the section plane and project visible/hidden edges,
-     * using all meshes in the collection as mutual occluders.
-     *
-     * @returns Merged `{ visible, hidden }` polylines and the per-mesh cut
-     *          sketches in `cuts`.
-     */
-    projectSection(options: SectionOptions): EdgeProjectionResult & { cuts: any[] } {
-        const meshes = this.shapes();
-        const merged: EdgeProjectionResult & { cuts: any[] } = { visible: new CurveCollection(), hidden: new CurveCollection(), cuts: [] };
-        for (const mesh of meshes) {
-            const other = meshes.filter(m => m !== mesh);
-            const r = mesh.projectSection(options, other);
-            r.visible.curves().forEach(c => merged.visible.add(c));
-            r.hidden.curves().forEach(c => merged.hidden.add(c));
-            if (r.cutJs) merged.cuts.push(r.cutJs);
-        }
-        return merged;
+    //// OUTPUTS ////
+
+    /** Output Shapes as an array */
+    toArray(): Array<Mesh>
+    {
+        return this._shapes as Array<Mesh>;
     }
+
 }
 
 
@@ -814,7 +797,7 @@ export class CurveCollection extends Collection
     {
         if(args.length === 1 && args[0] instanceof Collection)
         {
-            return new CurveCollection(...args[0].curves());
+            return new CurveCollection(args[0].curves());
         }
         else if(Array.isArray(args[0]) && args[0].every(c => c instanceof Curve))
         {
@@ -906,15 +889,15 @@ export class CurveCollection extends Collection
         return this;
     }
 
-    forEach(callback: (shape: Curve, index: number, array: Curve[]) => void): CurveCollection
+    forEach(callback: (shape: Curve, index: number, array: Curve[]) => void): this
     {
-        (this._shapes as Array<Curve>).forEach(callback);
+        this.shapes().forEach(callback);
         return this;
     }
 
     filter(callback: (shape: Curve, index: number, array: Curve[]) => boolean): CurveCollection
     {
-        return new CurveCollection(...(this._shapes as Array<Curve>).filter(callback));
+        return new CurveCollection(...this.shapes().filter(callback));
     }
 
     /** Replicate this CurveCollection a given number of times, applying a transform to each copy */
@@ -926,7 +909,7 @@ export class CurveCollection extends Collection
         {
             const copy = this.copy();
             const transformed = transform(copy, i, prev);
-            results.push(...transformed.curves());
+            results.push(...transformed.curves().toArray());
             prev = transformed;
         }
         return new CurveCollection(...results);
@@ -937,10 +920,10 @@ export class CurveCollection extends Collection
     {
         const curves = super.curves();
         if (curves.length === 0) return null;
-        let result: Array<Curve> = [curves[0]];
+        let result: Array<Curve> = [curves.get(0)!];
         for (let i = 1; i < curves.length; i++)
         {
-            const next = result[0]?.union(curves[i]) as Array<Curve> | null;
+            const next = result[0]?.union(curves.get(i)!) as Array<Curve> | null;
             if (next) result = next;
         }
         return result;

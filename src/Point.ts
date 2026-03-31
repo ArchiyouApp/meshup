@@ -35,15 +35,15 @@ export class Point
             this._y = y;
             this._z = z || 0;
         }
-        else if (Array.isArray(x) && x.length >= 2)
+        else if (Array.isArray(x) && x.length >= 1 && x.every(c => typeof c === 'number'))
         {
             this._x = x[0];
-            this._y = x[1];
+            this._y = x[1] || 0;
             this._z = x[2] || 0;
         }
         else if(x instanceof Point || x instanceof Vector || x instanceof Vertex)
         {
-            this._x = x.x;// ...existing code...
+            this._x = x.x;
             this._y = x.y;
             if(typeof x.z === 'number') this._z = x.z;
         }
@@ -71,7 +71,7 @@ export class Point
         }
         else
         {
-            throw new Error(`Point(): Invalid parameters: (${x}, ${y}, ${z})`);
+            throw new Error(`Point(): Invalid parameters: (${x}, ${y}, ${z}). Please use [x,?y,?z], {x,?y,?z} or instance of Point/Vector/Vertex/Point3Js/Vector3Js`);
         }
     }
 
