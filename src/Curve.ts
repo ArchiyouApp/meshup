@@ -3,7 +3,7 @@
  *
  *  Wrapper around the csgrs NurbsCurve3DJs or CompoundCurve3DJs (see meshup.rs)
  *
- *  A BSpline consists of:
+ *  A NurbsCurve consists of:
  *
  *  - Control Points: the points that define the shape of the curve
  *  - Weights: higher is closer to control point
@@ -32,6 +32,7 @@ import { OBbox } from './OBbox';
 import { Polygon } from './Polygon';
 
 import { toBase64, rad } from "./utils";
+import { Style } from "./Style";
 
 
 export class Curve
@@ -41,8 +42,9 @@ export class Curve
     /** Interior hole curves (e.g. from boolean difference where one curve contains the other) */
     private _holes: Array<Curve> = [];
 
+    style: Style = new Style();
     metadata: Record<string, any> = {};
-
+    
     constructor()
     {
         // TODO
@@ -65,15 +67,21 @@ export class Curve
         return this._curve;
     }
 
+    /** Get inner WASM pointer as id for debugging purposes */
+    id(): number
+    {
+        return (this.inner() as any).__wbg_ptr;
+    }
+
     /** Update internal curve */
-    update(c:NurbsCurve3DJs|CompoundCurve3DJs|Curve): this
+    update(c:Curve|NurbsCurve3DJs|CompoundCurve3DJs): this
     {
         if(c instanceof Curve)
         {
             this._curve = c._curve;
             this._holes = c._holes.map(h => h.copy());
         }
-        else
+        else if(c instanceof NurbsCurve3DJs || c instanceof CompoundCurve3DJs)
         {
             this._curve = c;
         }
@@ -110,13 +118,16 @@ export class Curve
     /** Replicate this Curve a given number of times and return in a CurveCollection */
     replicate(num: number, transform: (curve: Curve, index: number, prev:Curve|undefined) => Curve): CurveCollection
     {
-        const newCurves = new Array(num).fill(0).map((_, i, arr) => 
+        const newCurves = new CurveCollection();
+        new Array(num).fill(0).map((_, i) => 
         {
-            const newCurve = transform(this.copy(), i, i > 0 ? arr[i - 1] : undefined);
-            return newCurve;
+            const newCurve = transform(
+                                this.copy(), 
+                                i, 
+                                i > 0 ? newCurves.get(i - 1) : undefined);
+            if(newCurve) newCurves.add(newCurve);
         });
-
-        return new CurveCollection(...newCurves);
+        return newCurves;
     }   
 
     //// CREATION ////
@@ -554,6 +565,30 @@ export class Curve
         const compound = new CompoundCurve3DJs(spans);
         return Curve.fromCsgrs(compound);
     }
+
+    //// STYLING ////
+    /** Forwards to Style instance */
+
+    /** Set color (both stroke and fill) of (closed) Curve */
+    color(color: number|string, g?: number, b?: number): this
+    {
+        if (typeof color === 'number' && typeof g === 'number' && typeof b === 'number') {
+            this.style.color = [color, g, b];
+        } else {
+            this.style.color = color as string;
+        }
+        return this;
+    }
+
+    /** Set opacity of (closed) Curve */
+    opacity(opacity: number): this
+    {
+        this.style.opacity = opacity;
+        return this;
+    }
+
+
+
     //// PROPERTIES ////
 
     /** Classify this curve as 'line', 'arc', 'circle', 'rect', 'polyline', 'spline', or 'compound'. */
@@ -1052,6 +1087,34 @@ export class Curve
     moveX(dx: number): this { return this.translate(dx, 0, 0); }
     moveY(dy: number): this { return this.translate(0, dy, 0); }
     moveZ(dz: number): this { return this.translate(0, 0, dz); }
+
+    /** Move the curve so its bbox center lands at the given point */
+    moveTo(target: PointLike): this
+    {
+        const bb = this.bbox();
+        if (!bb) return this;
+        const c = bb.center();
+        const t = Point.from(target);
+        return this.translate(t.x - c.x, t.y - c.y, t.z - c.z);
+    }
+
+    moveToX(x: number): this
+    {
+        const bb = this.bbox();
+        return bb ? this.translate(x - bb.center().x, 0, 0) : this;
+    }
+
+    moveToY(y: number): this
+    {
+        const bb = this.bbox();
+        return bb ? this.translate(0, y - bb.center().y, 0) : this;
+    }
+
+    moveToZ(z: number): this
+    {
+        const bb = this.bbox();
+        return bb ? this.translate(0, 0, z - bb.center().z) : this;
+    }
 
     /** Rotate the given curve a specified angle (in degrees) around an axis through the world origin */
     rotate(angle: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
@@ -1900,9 +1963,11 @@ export class Curve
             meshes: [{
                 primitives: [{
                     attributes: { POSITION: 0 },
-                    mode: 3 // LINE_STRIP
+                    mode: 3, // LINE_STRIP
+                    material: 0,
                 }]
             }],
+            materials: [this.style.toGltfMaterial('curve_material', true)],
             accessors: [{
                 bufferView: 0,
                 byteOffset: 0,
@@ -1954,7 +2019,7 @@ export class Curve
                 const vbY = fmt(cy - r - pad);
                 const vbW = fmt(2 * r + 2 * pad);
                 const vbH = fmt(2 * r + 2 * pad);
-                return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}"><circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="black" stroke-width="1"/></svg>`;
+                return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}"><circle cx="${cx}" cy="${cy}" r="${r}" ${this.style.toSvgAttrs(true)}/></svg>`;
             }
         }
 
@@ -2064,7 +2129,7 @@ export class Curve
         }
 
         const d = pathParts.join(' ');
-        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}"><path d="${d}" fill="none" stroke="black" stroke-width="1"/></svg>`;
+        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}"><path d="${d}" ${this.style.toSvgAttrs(this.isClosed())}/></svg>`;
     }
 
     /** Collect all individual NurbsCurve3DJs spans from this curve (compound or single).

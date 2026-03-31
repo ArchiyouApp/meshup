@@ -11,49 +11,15 @@ import { Mesh } from "./Mesh";
 import { Curve } from "./Curve";
 import { Point } from "./Point";
 import { Vector } from "./Vector";
+import { Bbox } from "./Bbox";
 
 import { toBase64, fromBase64 } from "./utils";
-
-// ── Projection types (defined here to avoid circular imports via types.ts) ────
-
-/** Plane specification for projection and section operations. */
-export interface PlaneSpec {
-  origin: [number, number, number];
-  normal: [number, number, number];
-}
-
-/** Options for `Mesh.projectEdges` / `MeshCollection.projectEdges`. */
-export interface ProjectionOptions {
-  viewDirection: [number, number, number];
-  plane: PlaneSpec;
-  /** Minimum crease angle in degrees. @default 15 */
-  featureAngle?: number;
-  /** HLR ray samples per edge. @default 8 */
-  samples?: number;
-}
-
-/** Options for `Mesh.projectSection` / `MeshCollection.projectSection`. */
-export interface SectionOptions extends ProjectionOptions {
-  sectionPlane: PlaneSpec;
-}
-
-/** Result of an edge projection with hidden-line removal. */
-export interface EdgeProjectionResult {
-  /** Curves visible from the view direction. */
-  visible: CurveCollection;
-  /** Occluded curves. */
-  hidden: CurveCollection;
-}
-
-/** Combined section + edge-projection result. */
-export interface SectionElevationResult extends EdgeProjectionResult {
-  cut: import('./Sketch').Sketch;
-}
-import { ANGLE_COMPARE_TOLERANCE } from "./constants";
 
 export class Collection
 {
     _shapes = new Array<Mesh|Curve>();
+    // We can have multiple groups in a collection, each group is a named subset of shapes. Shapes can belong to multiple groups.
+    _groups = new Map<string, Collection>(); 
 
     constructor(...args: Array<Mesh|Curve|Array<any>|Collection>)
     {
@@ -90,27 +56,66 @@ export class Collection
     }
 
     /** Add shapes to the collection */
-    add(shapes: Mesh|Curve|Collection|CurveCollection|MeshCollection|Array<Mesh|Curve>): void
+    add(shapes: Mesh|Curve|Collection|CurveCollection|MeshCollection|Array<Mesh|Curve>): Collection
     {
-        if(!(shapes instanceof Mesh) && !(shapes instanceof Curve) 
-                && !(Collection.isCollection(shapes)) 
-                && !(Array.isArray(shapes) && shapes.every(s => s instanceof Mesh || s instanceof Curve)))
-        {
-            console.error(`Collection::add(): Invalid shape(s). Supply something [<Mesh>|<Curve>|<Collection>|<CurveCollection>|<MeshCollection>|Array<Mesh|Curve>]. Skipping it!:`, shapes);
-            return;
-        }
-        
         if (shapes instanceof Mesh || shapes instanceof Curve)
         {
             this._shapes.push(shapes);
+            return new Collection(shapes);
+        }
+        else if (Array.isArray(shapes) || Collection.isCollection(shapes))
+        {
+            const addShapes = (Collection.isCollection(shapes) 
+                                    ? shapes.toArray() : 
+                                    shapes.filter(s => s instanceof Mesh || s instanceof Curve) as Array<Mesh|Curve>);
+            this._shapes.push(...addShapes);
+            return new Collection(addShapes);
         }
         else
         {
-            this._shapes.push(
-                ...(Collection.isCollection(shapes) ? shapes.toArray() : shapes as Array<Mesh|Curve>)
-            );
+            console.error(`Collection::add(): Invalid shape(s). Supply something [<Mesh>|<Curve>|<Collection>|<CurveCollection>|<MeshCollection>|Array<Mesh|Curve>]. Skipping it!:`, shapes);
+            return new Collection();
         }
+    }
 
+    /** Add Shape (Mesh or Curve) to Collection under a group 
+     *  @returns the added shape(s) as a new Collection for chaining
+    */
+    addGroup(groupName: string, shapes: Mesh|Curve|Collection|CurveCollection|MeshCollection ): Collection
+    {
+        console.log('==== ADD GROUP ====', groupName, (shapes as Collection)?.length);
+        const addedShapes = this.add(shapes);
+        console.log(addedShapes.length);
+        
+        if(!this._groups.has(groupName))
+        {
+            this._groups.set(groupName, new Collection());
+        }
+        const group = this._groups.get(groupName);
+        
+        if(group)
+        {
+            group.add(addedShapes);
+        }
+        return addedShapes;
+    }
+
+    removeGroup(groupName: string): void
+    {
+        const groupedShapes = this._groups.get(groupName);
+        if(!groupedShapes){ console.error(`Collection::removeGroup(): No group with name '${groupName}' found. Available groups:`, Array.from(this._groups.keys())); return; }
+        this.remove(groupedShapes);
+        this._groups.delete(groupName); // remove group in map
+    }
+
+    group(groupName: string): Collection | undefined
+    {
+        const groupColl = this._groups.get(groupName);
+        if(!groupColl){ 
+            console.error(`Collection::group(): No group with name '${groupName}' found. Available groups:`, Array.from(this._groups.keys())); 
+            return undefined; 
+        }
+        return groupColl;
     }
 
     /** Return a deep copy of this Collection (all members are independently copied) */
@@ -125,9 +130,16 @@ export class Collection
         return new Collection(...this._shapes);
     }
 
-    remove(shape: Mesh|Curve): void
+    remove(shape: Mesh|Curve|Collection|MeshCollection|CurveCollection): void
     {
-        this._shapes = this._shapes.filter(s => s !== shape);
+        if(Collection.isCollection(shape))
+        {
+            shape.shapes().forEach(s => this.remove(s));   
+        }
+        else if(shape instanceof Mesh || shape instanceof Curve)
+        {
+            this._shapes = this._shapes.filter(s => s !== shape);
+        }
     }
 
     /** Get a shape by its index */
@@ -232,6 +244,56 @@ export class Collection
     moveY(dy: number): this { return this.translate(0, dy, 0); }
     moveZ(dz: number): this { return this.translate(0, 0, dz); }
 
+    /** Compute the union bounding box over all shapes in this collection, or undefined if empty */
+    bbox(): Bbox | undefined
+    {
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+        for (const shape of this._shapes)
+        {
+            const bb = shape instanceof Mesh ? shape.bbox() : (shape as Curve).bbox();
+            if (!bb) continue;
+            const mn = bb.min(), mx = bb.max();
+            if (mn.x < minX) minX = mn.x;  if (mx.x > maxX) maxX = mx.x;
+            if (mn.y < minY) minY = mn.y;  if (mx.y > maxY) maxY = mx.y;
+            if (mn.z < minZ) minZ = mn.z;  if (mx.z > maxZ) maxZ = mx.z;
+        }
+        if (!isFinite(minX)) return undefined;
+        return new Bbox([minX, minY, minZ], [maxX, maxY, maxZ]);
+    }
+
+    /** Move the collection so its bbox center lands at the given point */
+    moveTo(...args: any[]): this
+    {
+        const target = Point.from(args);
+        console.log('MOVE TO ===')
+        console.log(target);
+
+        const bb = this.bbox();
+        if (!bb) return this;
+        const c = bb.center();
+        const t = Point.from(target);
+        return this.translate(t.x - c.x, t.y - c.y, t.z - c.z);
+    }
+
+    moveToX(x: number): this
+    {
+        const bb = this.bbox();
+        return bb ? this.translate(x - bb.center().x, 0, 0) : this;
+    }
+
+    moveToY(y: number): this
+    {
+        const bb = this.bbox();
+        return bb ? this.translate(0, y - bb.center().y, 0) : this;
+    }
+
+    moveToZ(z: number): this
+    {
+        const bb = this.bbox();
+        return bb ? this.translate(0, 0, z - bb.center().z) : this;
+    }
+
     rotateX(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'x', origin); }
     rotateY(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'y', origin); }
     rotateZ(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'z', origin); }
@@ -267,16 +329,6 @@ export class Collection
     {
         this._shapes.forEach(
             shape => shape.mirror(dir, pos));
-        return this;
-    }
-
-    /** Reorient all shapes in the collection from their current plane onto the plane defined by `normal` and `offset` */
-    reorient(normal: PointLike, offset: PointLike = [0,0,0]): this
-    {
-        this.curves()
-            .forEach((shape,i) => {
-                return shape.reorient(normal, offset)
-            });
         return this;
     }
 
@@ -360,6 +412,7 @@ export class Collection
         const gltfNodes:       any[] = [];
         const gltfAccessors:   any[] = [];
         const gltfBufferViews: any[] = [];
+        const gltfMaterials:   any[] = [];
 
         /** Append a typed-array chunk, adding 4-byte padding if needed, return buffer-view index */
         const addChunk = (data: Uint8Array, target: number): number =>
@@ -441,9 +494,11 @@ export class Collection
                 const normAcc = addAccessor(normView, 5126, vertexCount, "VEC3");
                 const idxAcc  = addAccessor(idxView,  5125, indexCount,  "SCALAR");
 
+                const meshMatIdx = gltfMaterials.length;
+                gltfMaterials.push(shape.style.toGltfMaterial(`mesh_${i}_material`, false));
                 gltfMeshes.push({
                     name: `mesh_${i}`,
-                    primitives: [{ attributes: { POSITION: posAcc, NORMAL: normAcc }, indices: idxAcc, mode: 4 }]
+                    primitives: [{ attributes: { POSITION: posAcc, NORMAL: normAcc }, indices: idxAcc, mode: 4, material: meshMatIdx }]
                 });
             }
             else if (shape instanceof Curve)
@@ -458,13 +513,15 @@ export class Collection
                 const maxArr = buf.max ? [buf.max.x, buf.max.y, buf.max.z] : undefined;
                 const posAcc = addAccessor(viewIdx, 5126, buf.count, "VEC3", minArr, maxArr);
 
+                const curveMatIdx = gltfMaterials.length;
+                gltfMaterials.push(shape.style.toGltfMaterial(`curve_${i}_material`, true));
                 gltfMeshes.push({
                     name: `curve_${i}`,
-                    primitives: [{ attributes: { POSITION: posAcc }, mode: 3 }] // LINE_STRIP
+                    primitives: [{ attributes: { POSITION: posAcc }, mode: 3, material: curveMatIdx }] // LINE_STRIP
                 });
                 gltfNodes.push({ mesh: gltfMeshes.length - 1, name: `curve_${i}` });
 
-                // Also export interior hole curves as separate line strips
+                // Also export interior hole curves as separate line strips (share parent material)
                 if (shape.hasHoles())
                 {
                     for (let h = 0; h < shape.holes().length; h++)
@@ -479,7 +536,7 @@ export class Collection
                         const holeAcc = addAccessor(holeViewIdx, 5126, holeBuf.count, "VEC3", holeMinArr, holeMaxArr);
                         gltfMeshes.push({
                             name: `curve_${i}_hole_${h}`,
-                            primitives: [{ attributes: { POSITION: holeAcc }, mode: 3 }]
+                            primitives: [{ attributes: { POSITION: holeAcc }, mode: 3, material: curveMatIdx }]
                         });
                         gltfNodes.push({ mesh: gltfMeshes.length - 1, name: `curve_${i}_hole_${h}` });
                     }
@@ -506,7 +563,7 @@ export class Collection
         let pos = 0;
         for (const chunk of chunks) { combined.set(chunk, pos); pos += chunk.byteLength; }
 
-        const gltf = {
+        const gltf: Record<string, any> = {
             asset: { version: "2.0" },
             scene: 0,
             scenes: [{ nodes: gltfNodes.map((_, idx) => idx) }],
@@ -516,6 +573,7 @@ export class Collection
             bufferViews: gltfBufferViews,
             buffers: [{ byteLength: totalByteLength, uri: `data:application/octet-stream;base64,${toBase64(combined)}` }]
         };
+        if (gltfMaterials.length > 0) gltf.materials = gltfMaterials;
 
         return JSON.stringify(gltf);
     }
@@ -535,17 +593,17 @@ export class MeshCollection extends Collection
 {
     constructor(...args: Array<Mesh|Array<any>|Collection|MeshCollection>)
     {
-        super(args);
+        super(...(args as Array<Mesh|Array<any>|Collection>));
     }
 
-    add(shape: Mesh|MeshCollection|Array<Mesh>): void
+    add(shapes: Mesh|MeshCollection|Array<Mesh>): Collection
     {
-        if (!(shape instanceof Mesh) && !(shape instanceof MeshCollection) && !(Array.isArray(shape) && shape.every(s => s instanceof Mesh)))
+        if (!(shapes instanceof Mesh) && !(shapes instanceof MeshCollection) && !(Array.isArray(shapes) && shapes.every(s => s instanceof Mesh)))
         {
             console.error(`MeshCollection::add(): Only Mesh instances are allowed.`);
-            return;
+            return this;
         }
-        super.add(shape);
+        return super.add(shapes as any);
     }
 
     /** Return a deep copy of this MeshCollection (all members are independently copied) */
@@ -585,9 +643,10 @@ export class MeshCollection extends Collection
         return this;
     }
 
-    forEach(callback: (shape: Mesh, index: number, array: Mesh[]) => void): void
+    forEach(callback: (shape: Mesh, index: number, array: Mesh[]) => void): this
     {
         (this._shapes as Array<Mesh>).forEach(callback);
+        return this;
     }
 
     filter(callback: (shape: Mesh, index: number, array: Mesh[]) => boolean): MeshCollection
@@ -747,7 +806,7 @@ export class CurveCollection extends Collection
 {
     constructor(...args: Array<Curve|Array<any>|Collection|CurveCollection>)
     {
-        super(args);
+        super(...args);
     }
 
     /** Create a CurveCollection from from array of Curves or the curves of a Collection */
@@ -803,15 +862,19 @@ export class CurveCollection extends Collection
         return new CurveCollection(...this._shapes as Array<Curve>);
     }
 
-    add(shapes: Curve|CurveCollection): void
+    /** Add Curves or CurveCollections to this collection
+     *  @returns a new CurveCollection with the added curves (does not modify original collection)
+     */
+    add(shapes: Curve|CurveCollection): CurveCollection
     {
         if (!(shapes instanceof Curve) && !(shapes instanceof CurveCollection))
         {
             console.error(`CurveCollection::add(): Only Curve(Collection) instances are allowed.`);
-            return;
-        }
+            return new CurveCollection();
+        }   
         
-        super.add(shapes);
+        const addedCurves = super.add(shapes);
+        return new CurveCollection(addedCurves);
     }
 
     /** Alias for add (like an Array) */
@@ -898,7 +961,7 @@ export class CurveCollection extends Collection
         const curves = this.curves();
         if(curves.length <= 1) return this;
 
-        const chains = this._buildChains(curves.map(c => [c])); // start with each curve as its own chain
+        const chains = this._buildChains(curves.map(c => [c]) as Curve[][]); // start with each curve as its own chain
         const combined = chains.map(chain => this._chainToCurve(chain));
         this.update(new CurveCollection(...combined));
         // Try to combine Compound curves with line segments
@@ -1193,7 +1256,7 @@ export class CurveCollection extends Collection
 
     toMesh(): MeshCollection
     {
-        const meshes = this.curves()
+        const meshes = this.curves().toArray()
                 .map(curve => curve.toMesh())
                 .filter(mesh => mesh?.validate()) as Mesh[]; // filter out empty meshes
         return new MeshCollection(...meshes);

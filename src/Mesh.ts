@@ -9,7 +9,7 @@
  * 
  */
 
-import type { CsgrsModule, Axis, PointLike, RaycastHit, ClosestPointResult, SdfSample } from './types';
+import type { CsgrsModule, Axis, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions } from './types';
 import { isPointLike } from './types';
 
 import { Curve, getCsgrs } from './index';
@@ -18,21 +18,25 @@ import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { Vector } from './Vector'
 import { rad, deg } from './utils';
+import { Style } from './Style';
 
 import { MeshJs, PolygonJs, PlaneJs, Vector3Js, NurbsCurve3DJs, CompoundCurve3DJs } from './wasm/csgrs';
 import { Polygon } from './Polygon';
+import { Collection, CurveCollection, MeshCollection } from './Collection';
 
 // Settings
-import { SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT, 
-    SHAPES_CYLINDER_SEGMENTS_RADIAL } from './constants';
-import { Collection, CurveCollection } from './Collection';
-import type { EdgeProjectionResult, SectionElevationResult, ProjectionOptions, SectionOptions } from './Collection';
+import { TOLERANCE, SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT, 
+    SHAPES_CYLINDER_SEGMENTS_RADIAL,EDGE_PROJECTION_DEFAULTS } from './constants';
+
+    
 
 export class Mesh
 {
     _mesh: MeshJs | undefined;
 
     metadata: Record<string, any> = {};
+
+    style: Style = new Style();
 
     constructor()
     {
@@ -385,6 +389,22 @@ export class Mesh
     {
         return this.translate(vecOrX, dy, dz);
     }
+
+    moveX(dx: number): this { return this.translate(dx, 0, 0); }
+    moveY(dy: number): this { return this.translate(0, dy, 0); }
+    moveZ(dz: number): this { return this.translate(0, 0, dz); }
+
+    /** Move the mesh so its bbox center lands at the given point */
+    moveTo(target: PointLike): this
+    {
+        const c = this.bbox().center();
+        const t = Point.from(target);
+        return this.translate(t.x - c.x, t.y - c.y, t.z - c.z);
+    }
+
+    moveToX(x: number): this { return this.translate(x - this.bbox().center().x, 0, 0); }
+    moveToY(y: number): this { return this.translate(0, y - this.bbox().center().y, 0); }
+    moveToZ(z: number): this { return this.translate(0, 0, z - this.bbox().center().z); }
 
     /** Rotate Mesh by angle (degrees) around an axis through the world origin */
     rotate(angle: number, axis: Axis | PointLike = 'z'): this
@@ -795,8 +815,24 @@ export class Mesh
      */
     toGLTF(up:Axis='z'): string | undefined
     {
-        // TODO: GLTF has up = Y instead of Z
-        return this.inner()?.toGLTF('model', up);
+        const raw = this.inner()?.toGLTF('model', up);
+        if (!raw) return undefined;
+
+        const gltf = JSON.parse(raw);
+
+        // Inject style as material 0 and wire every primitive to it
+        gltf.materials = [this.style.toGltfMaterial('mesh_material', false)];
+        if (Array.isArray(gltf.meshes)) {
+            for (const mesh of gltf.meshes) {
+                if (Array.isArray(mesh.primitives)) {
+                    for (const prim of mesh.primitives) {
+                        prim.material = 0;
+                    }
+                }
+            }
+        }
+
+        return JSON.stringify(gltf);
     }
     toAMF(): string | undefined
     {
@@ -984,7 +1020,56 @@ export class Mesh
         return Mesh.from(meshJs);
     }
 
-    // ── Edge Projection (HLR) ────────────────────────────────────────────────
+    //// EDGE PROJECTION AND SECTIONING ////
+
+
+    /** Isometric projection */
+    isometry(cam:PointLike = [-1,-1,1], includeHidden:boolean=true):CurveCollection
+    {
+        // from cam position to origin
+        const camDirVec = (isPointLike(cam))
+                        ? Point.from(cam).toVector().normalize()// .reverse()
+                        : Vector.from([-1,-1,1]).normalize() // .reverse(); // default direction
+        const planeNormal = camDirVec.copy().reverse();
+
+        const iso = this._projectEdges(
+            { 
+                // NOTE: why is it called viewDirection - you would expect -cam? TODO: check in Rust layer
+                viewDirection: camDirVec.toArray(),
+                planeNormal: planeNormal.toArray(),
+                planeOrigin: [0, 0, 0],
+                // featureAngle: use default
+                // samples: use default,
+            });
+
+        if(!includeHidden){ iso.removeGroup('hidden'); }
+
+        // Isometric project is on plane normal
+
+        // Flatten the 3D projection onto the 2D XY plane (Z = [0,0,1])
+        const flattenedIso = iso.rotateQuaternion(
+                planeNormal.rotationBetween(new Vector(0, 0, 1)));
+        
+        // Find where the original 3D UP [0,0,1] landed after flattening.
+        // A shortest arc rotation to [0,0,1] geometrically forces the original Z-axis 
+        // to map exactly to the inverted X and Y components of the original normal!
+        const mappedUpVec = planeNormal.copy().reverse().setZ(0);
+        
+        // Fallback: If looking perfectly straight down/up, X and Y are 0.
+        // In that case, we can assume it's already oriented properly.
+        if (mappedUpVec.x * mappedUpVec.x + mappedUpVec.y * mappedUpVec.y < TOLERANCE)
+        {
+            mappedUpVec.setX(0);
+            mappedUpVec.setY(1);
+        }
+
+        // Twist the flattened curves so the 3D Up aligns perfectly with 2D Screen Up [0,1,0]
+        const twistRot = mappedUpVec.rotationBetween(new Vector(0, 1, 0));
+        
+        return flattenedIso.rotateQuaternion(twistRot)
+                .moveTo(0,0,0); // ensure centered at origin
+        
+    }
 
     /**
      * Project visible and hidden edges of this mesh onto a plane.
@@ -993,22 +1078,49 @@ export class Mesh
      * @param occluders Other meshes that may occlude this mesh's edges.
      * @returns `{ visible, hidden }` — each a `CurveCollection` of polyline curves.
      */
-    projectEdges(
-        options: ProjectionOptions,
-        occluders: Mesh[] = [],
-    ): EdgeProjectionResult {
-        const { viewDirection: [vx, vy, vz], plane: { origin: [ox, oy, oz], normal: [nx, ny, nz] } } = options;
-        const fa = options.featureAngle ?? 15;
-        const ns = options.samples ?? 8;
+    _projectEdges(options: ProjectEdgeOptions, occluders: MeshCollection = new MeshCollection()): CurveCollection
+    {
+        const optionsWithDefaults = { 
+            ...EDGE_PROJECTION_DEFAULTS, 
+            ...((options instanceof Object) ? options: {}) };
+
+        const [ vx, vy, vz ] = Point.from(optionsWithDefaults.viewDirection).toArray();
+        const [ ox, oy, oz ] = Point.from(optionsWithDefaults.planeOrigin!).toArray();
+        const [ nx, ny, nz ] = Point.from(optionsWithDefaults.planeNormal).toArray();
+        const fa = optionsWithDefaults.featureAngle;
+        const ns = optionsWithDefaults.samples;
+
         const occJs = occluders.map(m => m.inner()).filter((m): m is MeshJs => m !== undefined);
-        const res = this.inner()?.projectEdges(vx, vy, vz, ox, oy, oz, nx, ny, nz, fa, ns, occJs);
-        if (!res) return { visible: new CurveCollection(), hidden: new CurveCollection() };
-        const result: EdgeProjectionResult = {
-            visible: polylinesToCurveCollection(res.visiblePolylines() as Array<[number,number,number][]>),
-            hidden:  polylinesToCurveCollection(res.hiddenPolylines()  as Array<[number,number,number][]>),
-        };
-        res.free?.();
+        const r = this.inner()?.projectEdges(vx, vy, vz || 0, ox, oy, oz || 0, nx, ny, nz || 0, fa, ns, occJs);
+        if (!r)
+        {
+            console.error(`Mesh::projectEdges(): Projection failed. Check if the mesh is valid and the options are correct.`);
+            return new CurveCollection(); // empty result on failure
+        }
+        
+        console.log('==== PROJECT EDGES =====');
+        console.log(this._projectedPolylinesToCurveCollection(r.visiblePolylines()).length);
+        console.log(this._projectedPolylinesToCurveCollection(r.hiddenPolylines()).length);
+        
+        const result = new CurveCollection();
+        result.addGroup('visible', this._projectedPolylinesToCurveCollection(r.visiblePolylines()));
+        result.addGroup('hidden',  this._projectedPolylinesToCurveCollection(r.hiddenPolylines()));
+
+        r.free?.();
         return result;
+    }
+
+    _projectedPolylinesToCurveCollection(polylines: Array<[number, number, number][]>): CurveCollection
+    {
+        const curves = new CurveCollection();
+        polylines.forEach(points => {
+            curves.add(
+                (points.length === 2) 
+                    ? Curve.Line(points[0], points[1]) 
+                    : Curve.Polyline(points)
+                )
+        });
+        return curves;
     }
 
     /**
@@ -1018,6 +1130,7 @@ export class Mesh
      * @param occluders Other meshes that may occlude edges.
      * @returns `{ cut, visible, hidden }` where `cut` is the cross-section `Sketch`.
      */
+    /*
     projectSection(
         options: SectionOptions,
         occluders: Mesh[] = [],
@@ -1044,53 +1157,8 @@ export class Mesh
         res.free?.();
         return result;
     }
-
-    /** Isometric projection */
-    isometry(cam:PointLike=[1,1,1], includeHidden:boolean=true):CurveCollection
-    {
-        const camVec = (isPointLike(cam))
-                        ? Point.from(cam).toVector().normalize()
-                        : Vector.from([1,1,1]).normalize();
-
-        const { visible, hidden } = this.projectEdges(
-            { 
-                viewDirection: camVec.toArray() as [number, number, number],
-                plane: { origin: [0, 0, 0], normal: camVec.copy().reverse().toArray() as [number, number, number] },
-                featureAngle: 15,
-                samples: 8,
-            });
-        const xy = camVec.copy().setZ(0);
-        const ax = xy.cross(camVec);
-        // Rotate in steps from projection plane parallel to camera
-        // TODO: can this be better? Quaternion with keeping the up direction parallel to Z maybe?
-
-        return visible.rotateAround(-xy.angle(camVec), ax)
-                   .rotateZ(-xy.angle(new Vector(1, 0, 0)))
-                   .rotateX(-90);
-
-        // TODO: add Collection grouping for isometry results, to keep visible/hidden curves of the same mesh together
-        
-        
-    }
+    */
 
 
-}
 
-// ── module-private helpers ────────────────────────────────────────────────────
-
-/**
- * Convert the raw `[[x,y,z], ...][]` polylines returned by the WASM layer into
- * a `CurveCollection` where each polyline becomes a single `Curve.Polyline`.
- * Two-point polylines become `Curve.Line`; shorter ones are skipped.
- */
-function polylinesToCurveCollection(polylines: Array<[number,number,number][]>): CurveCollection {
-    const col = new CurveCollection();
-    for (const pts of polylines) {
-        if (pts.length < 2) continue;
-        const curve = pts.length === 2
-            ? Curve.Line(pts[0], pts[1])
-            : Curve.Polyline(pts as Array<[number,number,number]>);
-        if (curve) col.add(curve);
-    }
-    return col;
 }

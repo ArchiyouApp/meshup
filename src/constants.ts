@@ -26,3 +26,10 @@ export const BASE_PLANE_NAME_TO_PLANE = {
 // Follow BREP terminology for subshapes. Face = Polygon, Wire = Curve
 export const SELECTOR_SHAPES = ['mesh', 'curve', 'face', 'edge', 'wire','vertex'];
 
+export const EDGE_PROJECTION_DEFAULTS = {
+    viewDirection: [-1, -1, 1], // direction to project along (e.g. camera view direction)
+    planeNormal: [1,1,1], // normal of the projection plane
+    featureAngle: 15, // degrees. Max angle between adjacent faces to be considered a "feature edge" and projected.
+    samples: 8, // number of rays to cast per edge for hidden-line removal
+}
+

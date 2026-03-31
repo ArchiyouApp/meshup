@@ -10,7 +10,7 @@ beforeAll(async () => {
 
 /** View straight down (-Z) onto the XY plane. */
 const topViewOptions: ProjectionOptions = {
-    viewDirection: [0, 0, -1],
+    viewPosition: [0, 0, -1],
     plane: { origin: [0, 0, -100], normal: [0, 0, 1] },
     featureAngle: 15,
     samples: 4,

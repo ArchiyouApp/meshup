@@ -17,28 +17,29 @@ describe('Example: Isometric projection with hidden lines', () =>
 {
     it('can do basic isometric projection', () => 
     {
-        const c1 = Mesh.Cube(10);
-
-        const boxIso = c1.isometry();
+        const box = Mesh.Cube(10);
+        const boxIso = box.isometry();
         expect(boxIso).toBeTruthy();
-        expect(boxIso.length).toBe(9);
-        //expect(boxIso.hidden.length).toBe(3);
+        expect(boxIso.length).toBe(12); // all edges
+        expect(boxIso.group('hidden')?.length).toBe(3);
+        expect(boxIso.group('visible')?.length).toBe(9);
         
-        
-        save('isometry.box.gltf', c1.isometry().toGLTF()); // OK
+        save('isometry.box.gltf', new Collection(box.move(-20), boxIso.group('visible')!).toGLTF()); // OK
+    });
 
-        
-        const c2 = Mesh.Box(2)!.move(-5,-5,5);
-        const sub = c1.subtract(c2);
-        expect(sub).toBeTruthy();
+    it('can do isometric projection of boxes difference', () =>
+    {
+        const bigbox = Mesh.Cube(50);
+        const smallbox = Mesh.Cube(20).moveTo(bigbox.bbox().corner('leftfronttop'));
+        const diff = bigbox.subtract(smallbox)!;
+        const diffIso = diff.isometry([-1,-1,1]);
 
-        const iso = sub!.isometry([-1,-1,1]);
+        expect(diffIso).toBeTruthy();
+        //expect(diffIso.group('hidden')?.length).toBe(9);
+        //expect(diffIso.group('visible')?.length).toBe(15);
 
-        expect(iso.length).toBe(18);
-
-        save('isometry.sub.gltf', new Collection(
-            sub.move(-20), iso).toGLTF()); // 
-        
+        save('isometry.diff.gltf', new Collection(
+            diff.move(-bigbox.bbox().width()*2), diffIso.group('visible')!).toGLTF()); // OK
 
     });
 

@@ -116,10 +116,10 @@ export class Point
     }
 
     /** Translate this point by the given offset */
-    move(offset: PointLike): Point
+    move(pntOrDx: PointLike | number, dy?: number, dz?: number): Point
     {
-        if(!isPointLike(offset)){ throw new Error(`Point::move(): Invalid parameter: ${offset}`); }
-        const d = new Point(offset);
+        if(!isPointLike(pntOrDx) && typeof pntOrDx !== 'number'){ throw new Error(`Point::move(): Invalid parameter: ${pntOrDx}`); }
+        const d = isPointLike(pntOrDx) ? new Point(pntOrDx) : new Point(pntOrDx, dy || 0, dz || 0);
         this._x += d.x;
         this._y += d.y;
         this._z += d.z;

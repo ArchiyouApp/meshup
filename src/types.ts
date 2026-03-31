@@ -70,7 +70,7 @@ export interface GLTFBuffer
         max?: Point; // bbox max
 }
 
-// ── BVH Spatial-Query Result Types ───────────────────────────────────────────
+//// BVH AND RELATED METHODS ////
 
 /** Result of a BVH-accelerated first-hit raycast. */
 export interface RaycastHit {
@@ -95,6 +95,12 @@ export interface SdfSample {
   closestX: number; closestY: number; closestZ: number;
 }
 
-// ── Edge Projection Result Types ─────────────────────────────────────────────
-// Defined in Collection.ts (alongside CurveCollection) to avoid circular imports.
-// Re-exported from there for external consumers.
+export interface ProjectEdgeOptions 
+{
+  viewPosition?: PointLike;
+  planeOrigin?: PointLike;
+  planeNormal?: PointLike; // for elevation and section
+  featureAngle?: number; // Minimum crease angle in degrees
+  samples?: number; // HLR ray samples per edge
+}
+

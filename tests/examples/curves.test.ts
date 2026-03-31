@@ -57,14 +57,25 @@ describe('Example: Curves', () =>
         const un = cc.copy().union(rect)?.moveY(-150);
         expect(un).toBeTruthy();
 
-        /*
-        // NOT WORKING
-        const unOffsets = (un as Curve).replicate(3, (c,i) => c.offset((i+1)*10)?.moveZ(i*10)!);
-        expect(unOffsets).toBeTruthy();
-        expect(unOffsets.length).toBe(3);
-        */
+        const offset = (un as Curve).copy()!.offset(20)?.moveZ(50); // <== scrambled result 
 
-        save('test.curves.ops.gltf', new CurveCollection(circles, rect, cc, un!, sub!.moveZ(10)).toGLTF());
+        /*
+        const offsets = (un as Curve).replicate(3, (c,i) => { 
+            console.log(i); 
+            const l = c.offset((i+1)*10)?.moveZ(i*10)!;
+            console.log(l.bbox());
+            console.log(l.type());
+            console.log(l.isClosed());
+            console.log(l.points());
+            return l;
+        });
+        expect(offsets).toBeTruthy();
+        expect(offsets.length).toBe(3);
+        */
+        
+        
+
+        save('test.curves.ops.gltf', new CurveCollection(circles, rect, cc, un!, sub!.moveZ(10), offset).toGLTF());
         //save('test.curves.ops.svg', new CurveCollection(circles, rect, cc, /*un!, unOffsets*/).toSVG());
     });
 
