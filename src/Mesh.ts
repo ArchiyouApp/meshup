@@ -1094,13 +1094,9 @@ export class Mesh
         const r = this.inner()?.projectEdges(vx, vy, vz || 0, ox, oy, oz || 0, nx, ny, nz || 0, fa, ns, occJs);
         if (!r)
         {
-            console.error(`Mesh::projectEdges(): Projection failed. Check if the mesh is valid and the options are correct.`);
+            console.error(`Mesh::_projectEdges(): Projection failed. Check if the mesh is valid and the options are correct.`);
             return new CurveCollection(); // empty result on failure
         }
-        
-        console.log('==== PROJECT EDGES =====');
-        console.log(this._projectedPolylinesToCurveCollection(r.visiblePolylines()).length);
-        console.log(this._projectedPolylinesToCurveCollection(r.hiddenPolylines()).length);
         
         const result = new CurveCollection();
         result.addGroup('visible', this._projectedPolylinesToCurveCollection(r.visiblePolylines()));
@@ -1142,7 +1138,7 @@ export class Mesh
         const fa = options.featureAngle ?? 15;
         const ns = options.samples ?? 8;
         const occJs = occluders.map(m => m.inner()).filter((m): m is MeshJs => m !== undefined);
-        const res = (this.inner() as any)?.projectEdgesSection(
+        const res = (this.inner() as any)?._projectEdgesSection(
             snx, sny, snz, sOffset,
             vx, vy, vz,
             ox, oy, oz, nx, ny, nz,

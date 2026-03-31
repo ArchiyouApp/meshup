@@ -97,7 +97,7 @@ export interface SdfSample {
 
 export interface ProjectEdgeOptions 
 {
-  viewPosition?: PointLike;
+  viewDirection?: PointLike;
   planeOrigin?: PointLike;
   planeNormal?: PointLike; // for elevation and section
   featureAngle?: number; // Minimum crease angle in degrees

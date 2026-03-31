@@ -767,12 +767,12 @@ export class MeshCollection extends Collection
      * @param options  View direction, projection plane, feature angle, samples.
      * @returns Merged `{ visible, hidden }` polyline arrays.
      */
-    projectEdges(options: ProjectionOptions): EdgeProjectionResult {
+    _projectEdges(options: ProjectionOptions): EdgeProjectionResult {
         const meshes = this.shapes();
         const merged: EdgeProjectionResult = { visible: new CurveCollection(), hidden: new CurveCollection() };
         for (const mesh of meshes) {
             const other = meshes.filter(m => m !== mesh);
-            const r = mesh.projectEdges(options, other);
+            const r = mesh._projectEdges(options, other);
             r.visible.curves().forEach(c => merged.visible.add(c));
             r.hidden.curves().forEach(c => merged.hidden.add(c));
         }

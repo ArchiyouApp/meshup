@@ -767,7 +767,8 @@ export class CompoundCurve3DJs {
         return ret;
     }
     /**
-     * Offset the compound curve by a distance with the specified corner type ('sharp','round','smooth')
+     * Offset the compound curve by a distance with the specified corner type ('sharp','round','smooth').
+     * The curve must already lie in the XY plane (z = 0).
      * @param {number} distance
      * @param {string} corner_type
      * @returns {CompoundCurve3DJs}
@@ -2507,7 +2508,8 @@ export class NurbsCurve3DJs {
         return ret;
     }
     /**
-     * Offset the curve by a distance in the specified corner type ('sharp','round', 'smooth')
+     * Offset the curve by a distance in the specified corner type ('sharp','round', 'smooth').
+     * The curve must already lie in the XY plane (z = 0).
      * @param {number} distance
      * @param {string} corner_type
      * @returns {CompoundCurve3DJs}
