@@ -13,6 +13,7 @@ import { Point } from "./Point";
 import { Vector } from "./Vector";
 import { Bbox } from "./Bbox";
 
+import { MeshJs, PolygonJs } from "./wasm/csgrs";
 import { toBase64, fromBase64 } from "./utils";
 
 export class Collection
@@ -335,6 +336,30 @@ export class Collection
 
     //// BOOLEAN OPERATIONS ////
 
+    /** Merge all Meshes in this collection into a single Mesh by concatenating
+     *  their polygon arrays.  No CSG boolean is performed — the result is just
+     *  one mesh whose polygon list is the union of all input polygon lists.
+     *  Curves are silently skipped.
+     */
+    merge(): Mesh
+    {
+        const allPolygons: PolygonJs[] = [];
+        for (const shape of this._shapes) {
+            if (shape instanceof Mesh) {
+                const inner = shape.inner();
+                if (inner) {
+                    allPolygons.push(...inner.polygons());
+                }
+            }
+        }
+        if (allPolygons.length === 0)
+        {
+            console.error(`Collection::merge(): No meshes to merge. Returning empty mesh.`);
+            return new Mesh();
+        }
+        return Mesh.from(MeshJs.fromPolygons(allPolygons, {}));
+    }
+
     /** Union all shapes into one shape or collection 
      *  NOTE: For now only Meshes can be unioned
     */
@@ -395,6 +420,8 @@ export class Collection
 
         return this;
     }
+
+
 
     //// EXPORT ////
 
