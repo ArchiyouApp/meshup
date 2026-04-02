@@ -6,7 +6,7 @@ import { beforeAll, describe, it, expect, should } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { save } from '../../src/utils';
-import { Collection } from '../../src/Collection';
+import { Collection, MeshCollection } from '../../src/Collection';
 
 beforeAll(async () => 
 {
@@ -65,6 +65,31 @@ describe('Example: Isometric projection with hidden lines', () =>
                     box.isometry()?.group('visible')!,
                     box.move(-100)
                     ).toGLTF());
+
+        // NOTE: some wrong edge near rectangular hole
+    });
+
+    it('collection of multiple objects', () =>
+    {
+
+        const box = Mesh.Cube(50);
+
+        const t1 = performance.now();
+        const boxes = box.grid(6, 6, 6, 60) as MeshCollection;
+        const merged = boxes.union();
+        console.log('Created boxes grid in', performance.now(), 'ms');
+        
+        const t = performance.now();
+        const iso = merged.isometry()?.group('visible')!;
+        console.log('Created boxes grid isometry in', performance.now() - t, 'ms');
+
+        save('isometry.boxes.gltf', 
+                new Collection( 
+                    iso,
+                    boxes.move(-500)
+                    ).toGLTF());
+
+        
 
         // NOTE: some wrong edge near rectangular hole
     });

@@ -6,6 +6,8 @@
  */
 
 import type { Axis, BasePlane, PointLike, ProjectEdgeOptions, RaycastHit } from "./types";
+import type { MeshJs } from './wasm/csgrs';
+import { isometricProjectionCollection, projectEdges, polylinesToCurveCollection, resolveProjectEdgesOptions } from './projections';
 
 import { Mesh } from "./Mesh";
 import { Curve } from "./Curve";
@@ -760,17 +762,51 @@ export class MeshCollection extends Collection
 
     /**
      * Project the visible and hidden edges of every mesh in this collection
-     * onto a plane, using all meshes in the collection as mutual occluders.
-     *
-     * The results from individual meshes are merged into a single
-     * `EdgeProjectionResult`.
+     * onto a plane. Each mesh is self-occluded; results are merged into a
+     * single `CurveCollection` with `'visible'` and `'hidden'` groups.
      *
      * @param options  View direction, projection plane, feature angle, samples.
-     * @returns Merged `{ visible, hidden }` polyline arrays.
      */
-    _projectEdges(options: ProjectEdgeOptions) // CurveCollection
+    _projectEdges(options: ProjectEdgeOptions): CurveCollection
     {
-        // TODO
+        const resolved = resolveProjectEdgesOptions(options);
+        const allVisible: ReturnType<typeof polylinesToCurveCollection> = new CurveCollection();
+        const allHidden:  ReturnType<typeof polylinesToCurveCollection> = new CurveCollection();
+
+        for (const mesh of this._shapes as Array<import('./Mesh').Mesh>) {
+            const meshJs = mesh.inner();
+            if (!meshJs) continue;
+            const pr = projectEdges(meshJs, resolved);
+            allVisible.add(polylinesToCurveCollection(pr.visiblePolylines()));
+            allHidden.add(polylinesToCurveCollection(pr.hiddenPolylines()));
+            pr.free();
+        }
+
+        const result = new CurveCollection();
+        result.addGroup('visible', allVisible);
+        result.addGroup('hidden',  allHidden);
+        return result;
+    }
+
+    /**
+     * Isometric projection of every mesh in this collection.
+     *
+     * Equivalent to calling `Mesh.isometry()` on each member and merging the
+     * results. A single flatten + twist is applied to the combined output so
+     * all curves share the same 2-D coordinate frame.
+     *
+     * @param cam           Camera position / direction (default `[-1, -1, 1]`).
+     * @param includeHidden Whether to include hidden-line curves (default `true`).
+     */
+    isometry(cam: PointLike = [-1, -1, 1], includeHidden: boolean = true): CurveCollection
+    {
+        const meshJsArray = (this._shapes as Array<import('./Mesh').Mesh>)
+            .map(m => m.inner())
+            .filter((m): m is MeshJs => m !== undefined);
+
+        const result = isometricProjectionCollection(meshJsArray, cam);
+        if (!includeHidden) { result.removeGroup('hidden'); }
+        return result;
     }
 
     //// OUTPUTS ////

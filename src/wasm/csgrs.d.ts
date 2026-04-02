@@ -358,6 +358,21 @@ export class MeshJs {
   projectEdgesSection(snx: number, sny: number, snz: number, section_offset: number, vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, feature_angle_deg: number, n_samples: number, occluders: MeshJs[]): SectionElevationResultJs;
   containsVertexComponents(x: number, y: number, z: number): boolean;
   filterPolygonsByMetadata(needle: any): MeshJs;
+  /**
+   * Batch first-hit visibility test.
+   *
+   * `origins` — flat `Float64Array` with 3×N floats (x₀,y₀,z₀, x₁,y₁,z₁, …).
+   * `dx, dy, dz` — shared ray direction (need not be normalised).
+   * `max_dist` — maximum hit distance.
+   *
+   * Returns a `Uint8Array` of length N: `1` = ray hit something (occluded),
+   * `0` = no hit (visible).
+   *
+   * This is the batch companion to `raycastFirst` for the TypeScript HLR pipeline:
+   * it builds the BVH once and does all raycasts inside Rust, eliminating N
+   * JS→WASM round-trips.
+   */
+  raycastBatchVisibility(origins: Float64Array, dx: number, dy: number, dz: number, max_dist: number): Uint8Array;
   distributeLinearComponents(count: number, dx: number, dy: number, dz: number, spacing: number): MeshJs;
   static egg(width: number, length: number, revolve_segments: number, outline_segments: number, metadata: any): MeshJs;
   constructor();
@@ -1033,6 +1048,7 @@ export interface InitOutput {
   readonly meshjs_projectEdgesSection: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => number;
   readonly meshjs_projectToPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
   readonly meshjs_raycastAll: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+  readonly meshjs_raycastBatchVisibility: (a: number, b: any, c: number, d: number, e: number, f: number) => any;
   readonly meshjs_raycastFirst: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
   readonly meshjs_removePoorTriangles: (a: number, b: number) => number;
   readonly meshjs_renormalize: (a: number) => number;

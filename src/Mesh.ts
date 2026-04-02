@@ -11,6 +11,7 @@
 
 import type { CsgrsModule, Axis, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions } from './types';
 import { isPointLike } from './types';
+import { projectEdges, isometricProjection, isometricProjectionTS, polylinesToCurveCollection, resolveProjectEdgesOptions } from './projections';
 
 import { Curve, getCsgrs } from './index';
 import { Point } from './Point';
@@ -25,8 +26,8 @@ import { Polygon } from './Polygon';
 import { Collection, CurveCollection, MeshCollection } from './Collection';
 
 // Settings
-import { TOLERANCE, SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT, 
-    SHAPES_CYLINDER_SEGMENTS_RADIAL,EDGE_PROJECTION_DEFAULTS } from './constants';
+import { SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT,
+    SHAPES_CYLINDER_SEGMENTS_RADIAL } from './constants';
 
     
 
@@ -795,6 +796,8 @@ export class Mesh
         return meshes;
     }
 
+    // TODO: array
+
     //// OUTPUT ////
 
     toPolygons(): undefined|Array<PolygonJs>
@@ -895,6 +898,24 @@ export class Mesh
             hit.free?.();
             return result;
         }
+    }
+
+    /**
+     * Batch first-hit visibility test for the TypeScript HLR pipeline.
+     *
+     * Pass all sample origins as a flat `Float64Array` (x₀,y₀,z₀, x₁,y₁,z₁, …)
+     * together with a shared ray direction and max distance.  The BVH is built
+     * once in Rust and all raycasts run there — one JS→WASM call instead of N.
+     *
+     * Returns a `Uint8Array` of length N: `1` = hit (occluded), `0` = no hit (visible).
+     */
+    raycastBatchVisibility(
+        origins: Float64Array,
+        dx: number, dy: number, dz: number,
+        maxDist: number,
+    ): Uint8Array {
+        return this.inner()?.raycastBatchVisibility(origins, dx, dy, dz, maxDist)
+            ?? new Uint8Array(origins.length / 3);
     }
 
     /**
@@ -1027,50 +1048,32 @@ export class Mesh
     //// EDGE PROJECTION AND SECTIONING ////
 
 
-    /** Isometric projection */
+    /** Isometric projection via the Rust/WASM pipeline. */
     isometry(cam:PointLike = [-1,-1,1], includeHidden:boolean=true):CurveCollection
     {
-        // from cam position to origin
-        const camDirVec = (isPointLike(cam))
-                        ? Point.from(cam).toVector().normalize()// .reverse()
-                        : Vector.from([-1,-1,1]).normalize() // .reverse(); // default direction
-        const planeNormal = camDirVec.copy().reverse();
+        const meshJs = this.inner();
+        if (!meshJs) { return new CurveCollection(); }
+        const result = isometricProjection(meshJs, cam);
+        if (!includeHidden) { result.removeGroup('hidden'); }
+        return result;
+    }
 
-        const iso = this._projectEdges(
-            { 
-                // NOTE: why is it called viewDirection - you would expect -cam? TODO: check in Rust layer
-                viewDirection: camDirVec.toArray(),
-                planeNormal: planeNormal.toArray(),
-                planeOrigin: [0, 0, 0]
-            });
-
-        if(!includeHidden){ iso.removeGroup('hidden'); }
-
-        // Isometric project is on plane normal
-
-        // Flatten the 3D projection onto the 2D XY plane (Z = [0,0,1])
-        const flattenedIso = iso.rotateQuaternion(
-                planeNormal.rotationBetween(new Vector(0, 0, 1)));
-        
-        // Find where the original 3D UP [0,0,1] landed after flattening.
-        // A shortest arc rotation to [0,0,1] geometrically forces the original Z-axis 
-        // to map exactly to the inverted X and Y components of the original normal!
-        const mappedUpVec = planeNormal.copy().reverse().setZ(0);
-        
-        // Fallback: If looking perfectly straight down/up, X and Y are 0.
-        // In that case, we can assume it's already oriented properly.
-        if (mappedUpVec.x * mappedUpVec.x + mappedUpVec.y * mappedUpVec.y < TOLERANCE)
-        {
-            mappedUpVec.setX(0);
-            mappedUpVec.setY(1);
-        }
-
-        // Twist the flattened curves so the 3D Up aligns perfectly with 2D Screen Up [0,1,0]
-        const twistRot = mappedUpVec.rotationBetween(new Vector(0, 1, 0));
-        
-        return flattenedIso.rotateQuaternion(twistRot)
-                .moveTo(0,0,0); // ensure centered at origin
-        
+    /**
+     * Isometric projection via the TypeScript-layer pipeline.
+     *
+     * Equivalent to `isometry()` but every step of the edge-projection
+     * algorithm runs in TypeScript for ease of debugging and introspection.
+     * BVH ray-casting is still delegated to Rust/WASM via `Mesh.raycast()`.
+     *
+     * @param cam           Camera position / direction (default: `[-1, -1, 1]`).
+     * @param includeHidden When `false`, hidden polylines are removed from the result.
+     * @param occluders     Additional meshes that can occlude edges of this mesh.
+     */
+    isometryTS(cam: PointLike = [-1, -1, 1], includeHidden: boolean = true, occluders: Mesh[] = []): CurveCollection
+    {
+        const result = isometricProjectionTS(this, cam, occluders);
+        if (!includeHidden) { result.removeGroup('hidden'); }
+        return result;
     }
 
     /**
@@ -1082,43 +1085,22 @@ export class Mesh
      */
     _projectEdges(options: ProjectEdgeOptions, occluders: MeshCollection = new MeshCollection()): CurveCollection
     {
-        const optionsWithDefaults = { 
-            ...EDGE_PROJECTION_DEFAULTS, 
-            ...((options instanceof Object) ? options: {}) };
-
-        const [ vx, vy, vz ] = Point.from(optionsWithDefaults.viewDirection).toArray();
-        const [ ox, oy, oz ] = Point.from(optionsWithDefaults.planeOrigin!).toArray();
-        const [ nx, ny, nz ] = Point.from(optionsWithDefaults.planeNormal).toArray();
-        const fa = optionsWithDefaults.featureAngle;
-        const ns = optionsWithDefaults.samples;
-
-        const occJs = occluders.map(m => m.inner()).filter((m): m is MeshJs => m !== undefined);
-        const r = this.inner()?.projectEdges(vx, vy, vz || 0, ox, oy, oz || 0, nx, ny, nz || 0, fa, ns, occJs);
-        if (!r)
+        const meshJs = this.inner();
+        if (!meshJs)
         {
-            console.error(`Mesh::_projectEdges(): Projection failed. Check if the mesh is valid and the options are correct.`);
-            return new CurveCollection(); // empty result on failure
+            console.error(`Mesh::_projectEdges(): Mesh has no inner WASM object.`);
+            return new CurveCollection();
         }
-        
+
+        const resolved = resolveProjectEdgesOptions(options);
+        const occJs    = occluders.map(m => m.inner()).filter((m): m is MeshJs => m !== undefined);
+        const pr       = projectEdges(meshJs, resolved, occJs);
+
         const result = new CurveCollection();
-        result.addGroup('visible', this._projectedPolylinesToCurveCollection(r.visiblePolylines()));
-        result.addGroup('hidden',  this._projectedPolylinesToCurveCollection(r.hiddenPolylines()));
-
-        r.free?.();
+        result.addGroup('visible', polylinesToCurveCollection(pr.visiblePolylines()));
+        result.addGroup('hidden',  polylinesToCurveCollection(pr.hiddenPolylines()));
+        pr.free();
         return result;
-    }
-
-    _projectedPolylinesToCurveCollection(polylines: Array<[number, number, number][]>): CurveCollection
-    {
-        const curves = new CurveCollection();
-        polylines.forEach(points => {
-            curves.add(
-                (points.length === 2) 
-                    ? Curve.Line(points[0], points[1]) 
-                    : Curve.Polyline(points)
-                )
-        });
-        return curves;
     }
 
     /**

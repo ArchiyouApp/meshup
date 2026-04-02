@@ -30,6 +30,6 @@ export const EDGE_PROJECTION_DEFAULTS = {
     viewDirection: [-1, -1, 1], // direction to project along (e.g. camera view direction)
     planeNormal: [1,1,1], // normal of the projection plane
     featureAngle: 10, // degrees. Max angle between adjacent faces to be considered a "feature edge" and projected.
-    samples: 32, // number of rays to cast per edge for hidden-line removal
+    samples: 16, // number of rays to cast per edge for hidden-line removal
 }
 

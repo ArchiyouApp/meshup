@@ -1673,6 +1673,30 @@ export class MeshJs {
         return MeshJs.__wrap(ret);
     }
     /**
+     * Batch first-hit visibility test.
+     *
+     * `origins` — flat `Float64Array` with 3×N floats (x₀,y₀,z₀, x₁,y₁,z₁, …).
+     * `dx, dy, dz` — shared ray direction (need not be normalised).
+     * `max_dist` — maximum hit distance.
+     *
+     * Returns a `Uint8Array` of length N: `1` = ray hit something (occluded),
+     * `0` = no hit (visible).
+     *
+     * This is the batch companion to `raycastFirst` for the TypeScript HLR pipeline:
+     * it builds the BVH once and does all raycasts inside Rust, eliminating N
+     * JS→WASM round-trips.
+     * @param {Float64Array} origins
+     * @param {number} dx
+     * @param {number} dy
+     * @param {number} dz
+     * @param {number} max_dist
+     * @returns {Uint8Array}
+     */
+    raycastBatchVisibility(origins, dx, dy, dz, max_dist) {
+        const ret = wasm.meshjs_raycastBatchVisibility(this.__wbg_ptr, origins, dx, dy, dz, max_dist);
+        return ret;
+    }
+    /**
      * @param {number} count
      * @param {number} dx
      * @param {number} dy
@@ -4600,6 +4624,10 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbg_new_from_slice_db0691b69e9d3891 = function(arg0, arg1) {
         const ret = new Uint32Array(getArrayU32FromWasm0(arg0, arg1));
+        return ret;
+    };
+    imports.wbg.__wbg_new_from_slice_f9c22b9153b26992 = function(arg0, arg1) {
+        const ret = new Uint8Array(getArrayU8FromWasm0(arg0, arg1));
         return ret;
     };
     imports.wbg.__wbg_new_no_args_cb138f77cf6151ee = function(arg0, arg1) {

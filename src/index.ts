@@ -78,3 +78,15 @@ export { Collection, MeshCollection, CurveCollection } from './Collection';
 export { Sketch } from './Sketch';
 export { Bbox } from './Bbox';
 export { OBbox } from './OBbox';
+export {
+    projectEdges,
+    projectEdgesSection,
+    isometricProjection,
+    isometricProjectionCollection,
+    polylinesToCurveCollection,
+    ProjectionResult,
+    SectionProjectionResult,
+    resolveProjectEdgesOptions,
+    type ProjectEdgesOptions,
+    type ProjectSectionOptions,
+} from './projections';

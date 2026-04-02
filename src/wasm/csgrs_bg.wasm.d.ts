@@ -118,6 +118,7 @@ export const meshjs_projectEdges: (a: number, b: number, c: number, d: number, e
 export const meshjs_projectEdgesSection: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => number;
 export const meshjs_projectToPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
 export const meshjs_raycastAll: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+export const meshjs_raycastBatchVisibility: (a: number, b: any, c: number, d: number, e: number, f: number) => any;
 export const meshjs_raycastFirst: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
 export const meshjs_removePoorTriangles: (a: number, b: number) => number;
 export const meshjs_renormalize: (a: number) => number;
