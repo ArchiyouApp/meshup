@@ -31,9 +31,12 @@ describe('Example: Offsets', () =>
         const c1 = Curve.Circle(100);
         const c2 = c1.copy().move(100*1.5,0);
         const circles = c1.union(c2) as Curve;
-        console.log(circles.isCompound());
+        expect(circles.isCompound()).toBe(true);
+
+        const circlesOffset = circles.offset(20);
     
-        save('test.offsets.circles.gltf', new CurveCollection(circles!, circles!.copy().offset(20)!.color('yellow')).toGLTF());
+        save('test.offsets.circles.gltf', new CurveCollection(circles!, 
+            /* circles!.copy().offset(20)!.color('yellow')*/).toGLTF());
         //save('test.curves.ops.svg', new CurveCollection(circles, rect, cc, /*un!, unOffsets*/).toSVG());
     });
 
