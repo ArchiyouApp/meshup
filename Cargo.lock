@@ -1079,6 +1079,7 @@ dependencies = [
  "either",
  "fast-surface-nets",
  "geo",
+ "geo-buf",
  "getrandom 0.3.4",
  "hashbrown 0.15.5",
  "hershey",
@@ -1562,6 +1563,14 @@ dependencies = [
  "rstar 0.12.2",
  "serde",
  "spade",
+]
+
+[[package]]
+name = "geo-buf"
+version = "0.1.0"
+dependencies = [
+ "geo",
+ "geo-types",
 ]
 
 [[package]]

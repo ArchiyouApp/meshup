@@ -6,14 +6,14 @@ import { beforeAll, describe, it, expect, should } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { save } from '../../src/utils';
-import { Collection } from '../../src/Collection';
+import { Collection, MeshCollection } from '../../src/Collection';
 
 beforeAll(async () => 
 {
     await initAsync();
 });
 
-describe('Example: Isometric projection with hidden lines', () => 
+describe('Example: Isometric projection with hidden lines', async () => 
 {
     it('can do basic isometric projection', async () => 
     {
@@ -27,7 +27,7 @@ describe('Example: Isometric projection with hidden lines', () =>
         await save('isometry.box.gltf', new Collection(box.move(-20), boxIso.group('visible')!).toGLTF()); // OK
     });
 
-    it('can do isometric projection of boxes difference', () =>
+    it('can do isometric projection of boxes difference', async () =>
     {
         const bigbox = Mesh.Cube(50);
         const smallbox = Mesh.Cube(20).moveTo(bigbox.bbox().corner('leftfronttop'));
@@ -70,31 +70,23 @@ describe('Example: Isometric projection with hidden lines', () =>
     });
 
 
-    it('collection of multiple objects', async () =>
+    it('isometry of a lot of boxes', async () =>
     {
 
         const box = Mesh.Cube(50);
-
         const boxes = box.grid(10, 10, 10, 60) as MeshCollection;
-        const t1 = performance.now();
-        const merged = boxes.merge(); // <==== union = SLOW ! 2800ms ==> with merge() = 2 ms
-        
-        console.log('=== BBOXES GRID ===');
-        //console.log(merged.bbox());
-        console.log('Created merged boxes grid in', performance.now() - t1, 'ms');
         
         const t = performance.now();
-        const iso = merged.isometry()?.group('visible')!;
+        const iso = boxes.isometry()?.group('visible')!;
         console.log('Created boxes grid isometry in', performance.now() - t, 'ms');
 
         await save('isometry.boxes.gltf', 
                 new Collection( 
-                    merged,
+                    boxes,
                     iso.move(1000),
                     ).toGLTF());
 
-        
-
-        // NOTE: some wrong edge near rectangular hole
+        await save('isometry.boxes.svg', 
+                iso.toSVG());
     });
 });       

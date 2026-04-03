@@ -22,6 +22,7 @@
     "test:example:offsets": "vitest run tests/examples/offsets.test.ts",
     "test:example:svg": "vitest run tests/examples/svg.test.ts",
     "test:example:isometry": "vitest run tests/examples/isometry.test.ts",
+    "test:example:alignments": "vitest run tests/examples/alignments.test.ts",
     "test:unit:compare": "vitest run tests/unit/compare.test.ts",
     "test:selector": "vitest run tests/unit/Selector.test.ts",
     "build:wasm": "tsx buildscripts/build-wasm.ts",

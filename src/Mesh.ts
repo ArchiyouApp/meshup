@@ -481,100 +481,177 @@ export class Mesh
         return this;
     }
 
+    /** Rotate so `fromDir` maps to `toDir`, with no roll (up stays stable).
+     *  @param up  The world direction that should remain as "upright" as possible after rotation (default [0,0,1]).
+     */
+    rotateSwing(fromDir: PointLike, toDir: PointLike, up: PointLike = [0, 0, 1]): this
+    {
+        const from = Vector.from(fromDir).normalize();
+        const to   = Vector.from(toDir).normalize();
+        const upV  = Vector.from(up).normalize();
+
+        // Step 1: shortest-arc rotation from→to
+        const q    = from.rotationBetween(to);
+        const qVec = new Vector(q.x, q.y, q.z);
+
+        // Step 2: find where `up` ends up after the shortest-arc rotation
+        const mappedUp = upV.rotateQuaternion(q);
+
+        // Step 3: project both mappedUp and desired up onto the plane ⊥ to `to`
+        const mappedUpPerp = mappedUp.subtract(to.scale(mappedUp.dot(to)));
+        const upPerp       = upV.subtract(to.scale(upV.dot(to)));
+
+        if (upPerp.length() < 1e-10 || mappedUpPerp.length() < 1e-10)
+        {
+            // `up` is parallel to `to` — no twist correction possible
+            return this.rotateQuaternion(q.w, q.x, q.y, q.z);
+        }
+
+        // Step 4: twist around `to` to align mappedUpPerp → upPerp
+        const twist = mappedUpPerp.normalize().rotationBetween(upPerp.normalize());
+        const tVec  = new Vector(twist.x, twist.y, twist.z);
+
+        // Step 5: compose twist * q  (Hamilton product, q applied first)
+        const swingVec = qVec.scale(twist.w).add(tVec.scale(q.w)).add(tVec.cross(qVec));
+        return this.rotateQuaternion(
+            twist.w * q.w - tVec.dot(qVec),
+            swingVec.x, swingVec.y, swingVec.z,
+        );
+    }
+
     /** Align this Mesh by mapping 3 source points onto 3 target points.
      *
      *  - **withScale:** if true, apply a uniform scale (centered at q1) so edge lengths match.
      *
-     *  @param sourcePoints - 3 reference points on the mesh (current space)
-     *  @param targetPoints - 3 corresponding destination points
+     *  @param sourcePoints - 2 or 3 reference points on the mesh (current space)
+     *  @param targetPoints - 2 or 3 corresponding destination points
      *  @param withScale    - optionally scale uniformly to match first-edge length
      */
     alignByPoints(
-        sourcePoints: [PointLike, PointLike, PointLike],
-        targetPoints: [PointLike, PointLike, PointLike],
+        sourcePoints: [PointLike, PointLike] | [PointLike, PointLike, PointLike],
+        targetPoints: [PointLike, PointLike] | [PointLike, PointLike, PointLike],
         withScale = false
     ): this
     {
+        if( !Array.isArray(sourcePoints) || sourcePoints.length < 2 || sourcePoints.length > 3 || !sourcePoints.every(p => isPointLike(p)) )
+        {
+            throw new Error('Mesh.alignByPoints(): sourcePoints must be an array of 2 or 3 PointLike objects');
+        }
+
         if (sourcePoints.length !== targetPoints.length)
         {
             throw new Error('Mesh.alignByPoints(): sourcePoints and targetPoints must have the same length.');
         }
 
-        const p1 = Point.from(sourcePoints[0]);
-        const p2 = Point.from(sourcePoints[1]);
-        const q1 = Point.from(targetPoints[0]);
-        const q2 = Point.from(targetPoints[1]);
+        const p1 = Vector.from(sourcePoints[0]);
+        const p2 = Vector.from(sourcePoints[1]);
+        const q1 = Vector.from(targetPoints[0]);
+        const q2 = Vector.from(targetPoints[1]);
 
-        // Step 1: translate so p1 → q1
-        this.translate(q1.x - p1.x, q1.y - p1.y, q1.z - p1.z);
-
-        // Edge vectors (source and target)
-        const srcEdge = new Vector(p2.x - p1.x, p2.y - p1.y, p2.z - p1.z);
-        const tgtEdge = new Vector(q2.x - q1.x, q2.y - q1.y, q2.z - q1.z);
-
-        // Step 2: optional uniform scale (before rotation, centered at q1)
-        let scaleFactor = 1;
-        if (withScale)
+        /* Align by two points: This is underconstrained, but we keep the same up direction
+             (world z) to avoid unexpected twisting. */
+        if(sourcePoints.length === 2)
         {
-            const srcLen = srcEdge.length();
-            const tgtLen = tgtEdge.length();
-            if (srcLen > 1e-10)
+            // Step 1: translate so p1 → q1
+            this.translate(q1.subtract(p1));
+
+            // Step 2: optional uniform scale (before rotation, centered at q1)
+            if (withScale)
             {
-                scaleFactor = tgtLen / srcLen;
-                this.translate(-q1.x, -q1.y, -q1.z);
-                this.scale(scaleFactor);
-                this.translate(q1.x, q1.y, q1.z);
-            }
-        }
+                const srcLen = p2.subtract(p1).length();
+                const tgtLen = q2.subtract(q1).length();
 
-        // Step 3: rotate around q1 to align srcEdge → tgtEdge
-        const R1 = srcEdge.rotationBetween(tgtEdge);
-        this.translate(-q1.x, -q1.y, -q1.z);
-        this.rotateQuaternion(R1.w, R1.x, R1.y, R1.z);
-        this.translate(q1.x, q1.y, q1.z);
-
-        // Step 4: twist around the now-aligned edge axis to place p3 → q3
-        const p3 = Point.from(sourcePoints[2]);
-        const q3 = Point.from(targetPoints[2]);
-
-        // Where p3 ended up after translate + scale + R1 (relative to q1):
-        const rel = new Vector(p3.x - p1.x, p3.y - p1.y, p3.z - p1.z)
-                        .scale(scaleFactor)
-                        .rotateQuaternion(R1.w, R1.x, R1.y, R1.z);
-
-        // Where q3 sits relative to q1:
-        const goal = new Vector(q3.x - q1.x, q3.y - q1.y, q3.z - q1.z);
-
-        // Twist axis = the aligned first edge (unit)
-        const axLen = tgtEdge.length();
-        if (axLen > 1e-10)
-        {
-            const axis = tgtEdge.scale(1 / axLen);
-
-            // Project both vectors onto the plane perpendicular to axis
-            const u1 = rel.subtract(axis.scale(rel.dot(axis)));
-            const u2 = goal.subtract(axis.scale(goal.dot(axis)));
-
-            const len1 = u1.length(), len2 = u2.length();
-            if (len1 > 1e-10 && len2 > 1e-10)
-            {
-                const cosA = Math.max(-1, Math.min(1, u1.dot(u2) / (len1 * len2)));
-                const crossVec = u1.cross(u2);
-                const sinA = crossVec.dot(axis) / (len1 * len2);
-                const angle = Math.atan2(sinA, cosA);
-
-                if (Math.abs(angle) > 1e-10)
+                if (srcLen > TOLERANCE)
                 {
-                    const half = angle / 2;
-                    const sh = Math.sin(half);
-                    this.translate(-q1.x, -q1.y, -q1.z);
-                    this.rotateQuaternion(Math.cos(half), axis.x * sh, axis.y * sh, axis.z * sh);
-                    this.translate(q1.x, q1.y, q1.z);
+                    this.translate(q1.reverse()); // move to origin for scaling
+                    this.scale(tgtLen / srcLen);
+                    this.translate(q1); // move back
                 }
             }
+            // Step 3: rotate around q1 to align p2 → q2, keeping world z as up
+            const srcDir = p2.subtract(p1).normalize();
+            const tgtDir = q2.subtract(q1).normalize();
+            this.rotateSwing(srcDir, tgtDir, [0,0,1]);
+
+            return this;
         }
 
-        return this;
+        else 
+        {
+
+            // Three point alignment
+
+            // Step 1: translate so p1 → q1
+            this.translate(q1.subtract(p1));
+
+            // Edge vectors (source and target)
+            const srcEdge = p2.subtract(p1);
+            const tgtEdge = q2.subtract(q1);
+
+            // Step 2: optional uniform scale (before rotation, centered at q1)
+            let scaleFactor = 1;
+            if (withScale)
+            {
+                const srcLen = srcEdge.length();
+                const tgtLen = tgtEdge.length();
+                if (srcLen > 1e-10)
+                {
+                    scaleFactor = tgtLen / srcLen;
+                    this.translate(q1.reverse()); // move to origin for scaling
+                    this.scale(scaleFactor);
+                    this.translate(q1);
+                }
+            }
+
+            // Step 3: rotate around q1 to align srcEdge → tgtEdge
+            const R1 = srcEdge.rotationBetween(tgtEdge);
+            this.translate(q1.reverse()); // move to origin for rotation
+            this.rotateQuaternion(R1.w, R1.x, R1.y, R1.z);
+            this.translate(q1);
+
+            // Step 4: twist around the now-aligned edge axis to place p3 → q3
+            const p3 = Vector.from(sourcePoints[2]);
+            const q3 = Vector.from(targetPoints[2]!); // we know this exists because of the earlier length check
+
+            // Where p3 ended up after translate + scale + R1 (relative to q1):
+            const rel = new Vector(p3.subtract(p1))
+                            .scale(scaleFactor)
+                            .rotateQuaternion(R1.w, R1.x, R1.y, R1.z);
+
+            // Where q3 sits relative to q1:
+            const goal = new Vector(q3.subtract(q1));
+
+            // Twist axis = the aligned first edge (unit)
+            const axLen = tgtEdge.length();
+            if (axLen > 1e-10)
+            {
+                const axis = tgtEdge.scale(1 / axLen);
+
+                // Project both vectors onto the plane perpendicular to axis
+                const u1 = rel.subtract(axis.scale(rel.dot(axis)));
+                const u2 = goal.subtract(axis.scale(goal.dot(axis)));
+
+                const len1 = u1.length(), len2 = u2.length();
+                if (len1 > 1e-10 && len2 > 1e-10)
+                {
+                    const cosA = Math.max(-1, Math.min(1, u1.dot(u2) / (len1 * len2)));
+                    const crossVec = u1.cross(u2);
+                    const sinA = crossVec.dot(axis) / (len1 * len2);
+                    const angle = Math.atan2(sinA, cosA);
+
+                    if (Math.abs(angle) > 1e-10)
+                    {
+                        const half = angle / 2;
+                        const sh = Math.sin(half);
+                        this.translate(-q1.x, -q1.y, -q1.z);
+                        this.rotateQuaternion(Math.cos(half), axis.x * sh, axis.y * sh, axis.z * sh);
+                        this.translate(q1.x, q1.y, q1.z);
+                    }
+                }
+            }
+
+            return this;
+        }
     }
 
     /** Scale Mesh with a uniform factor or per-axis [sx, sy, sz]. Optionally around an origin point. */
@@ -794,6 +871,29 @@ export class Mesh
         }
         return meshes;
     }
+
+    //// STYLE ////
+
+    /** Shortcut for `Mesh.style.color`. Accepts `'red'`, `'#ff0000'`, or `r, g, b` (0–255). */
+    color(color: number | string, g?: number, b?: number): this
+    {
+        if (typeof color === 'number' && typeof g === 'number' && typeof b === 'number') {
+            this.style.color = [color, g, b];
+        } else {
+            this.style.color = color as string;
+        }
+        return this;
+    }
+
+    /** Shortcut for `Mesh.style.opacity`. Value between 0 (transparent) and 1 (opaque). */
+    opacity(opacity: number): this
+    {
+        this.style.opacity = opacity;
+        return this;
+    }
+
+    /** Alias for `opacity()`. */
+    alpha(a: number): this { return this.opacity(a); }
 
     //// OUTPUT ////
 
@@ -1027,8 +1127,17 @@ export class Mesh
     //// EDGE PROJECTION AND SECTIONING ////
 
 
-    /** Isometric projection */
-    isometry(cam:PointLike = [-1,-1,1], includeHidden:boolean=true):CurveCollection
+    /** Isometric projection with hidden lines
+     *  
+     * @param cam normalizaed 3D position of the camera (default: [-1,-1,1], a common isometric view direction) 
+     * @param all Whether to include hidden edges (default: true)
+     * @param samples Number of samples of edges to determine visibility (default: 16)
+     * @param featureAngle Optional angle threshold to treat edges as "features" and always show them
+     * 
+     * @return CurveColection with groups 'visible' and 'hidden' for the respective edges
+     *   use isometryResult.group('visible') and isometryResult.group('hidden') to access each separately
+     */
+    isometry(cam:PointLike = [-1,-1,1], all:boolean=true, samples: number = 16, featureAngle: number=10):CurveCollection
     {
         // from cam position to origin
         const camDirVec = (isPointLike(cam))
@@ -1041,12 +1150,14 @@ export class Mesh
                 // NOTE: why is it called viewDirection - you would expect -cam? TODO: check in Rust layer
                 viewDirection: camDirVec.toArray(),
                 planeNormal: planeNormal.toArray(),
-                planeOrigin: [0, 0, 0]
-            });
+                planeOrigin: [0, 0, 0],
+                featureAngle: featureAngle,
+                samples: samples,
+            } as ProjectEdgeOptions);
 
-        if(!includeHidden){ iso.removeGroup('hidden'); }
+        if(!all){ iso.removeGroup('hidden'); }
 
-        // Isometric project is on plane normal
+        // Isometric projection result is on plane normal: place on XY plane
 
         // Flatten the 3D projection onto the 2D XY plane (Z = [0,0,1])
         const flattenedIso = iso.rotateQuaternion(
@@ -1121,41 +1232,7 @@ export class Mesh
         return curves;
     }
 
-    /**
-     * Slice the mesh at a section plane and project its visible/hidden edges.
-     *
-     * @param options  View direction, projection plane, section plane, optional angle and samples.
-     * @param occluders Other meshes that may occlude edges.
-     * @returns `{ cut, visible, hidden }` where `cut` is the cross-section `Sketch`.
-     */
-    /*
-    projectSection(
-        options: SectionOptions,
-        occluders: Mesh[] = [],
-    ): Omit<SectionElevationResult, 'cut'> & { cutJs: any } {
-        const { viewDirection: [vx, vy, vz], plane: { origin: [ox, oy, oz], normal: [nx, ny, nz] } } = options;
-        const { sectionPlane: { origin: [sox, soy, soz], normal: [snx, sny, snz] } } = options;
-        // Convert plane-normal + point to d-offset: d = dot(normal, origin)
-        const sOffset = snx * sox + sny * soy + snz * soz;
-        const fa = options.featureAngle ?? 15;
-        const ns = options.samples ?? 8;
-        const occJs = occluders.map(m => m.inner()).filter((m): m is MeshJs => m !== undefined);
-        const res = (this.inner() as any)?._projectEdgesSection(
-            snx, sny, snz, sOffset,
-            vx, vy, vz,
-            ox, oy, oz, nx, ny, nz,
-            fa, ns, occJs,
-        );
-        if (!res) return { visible: new CurveCollection(), hidden: new CurveCollection(), cutJs: null };
-        const result = {
-            visible: polylinesToCurveCollection(res.visiblePolylines() as Array<[number,number,number][]>),
-            hidden:  polylinesToCurveCollection(res.hiddenPolylines()  as Array<[number,number,number][]>),
-            cutJs:   res.cutSketch(),
-        };
-        res.free?.();
-        return result;
-    }
-    */
+    // TODO: projectEdgesSection
 
 
 

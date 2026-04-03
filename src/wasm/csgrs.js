@@ -472,6 +472,21 @@ export class CompoundCurve3DJs {
         wasm.__wbg_compoundcurve3djs_free(ptr, 0);
     }
     /**
+     * Offset the compound curve using the geo-buf / Sketch polygon offset as a fallback.
+     * Tessellates to a polyline, closes it to form a polygon, offsets via geo-buf's
+     * straight-skeleton algorithm, then returns the exterior boundary as a degree-1 curve.
+     * The curve must lie in the XY plane (z ≈ 0).
+     * @param {number} distance
+     * @returns {CompoundCurve3DJs}
+     */
+    offsetGeo(distance) {
+        const ret = wasm.compoundcurve3djs_offsetGeo(this.__wbg_ptr, distance);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return CompoundCurve3DJs.__wrap(ret[0]);
+    }
+    /**
      * @param {number} param
      * @returns {Vector3Js}
      */
@@ -1673,6 +1688,30 @@ export class MeshJs {
         return MeshJs.__wrap(ret);
     }
     /**
+     * Batch first-hit visibility test.
+     *
+     * `origins` — flat `Float64Array` with 3×N floats (x₀,y₀,z₀, x₁,y₁,z₁, …).
+     * `dx, dy, dz` — shared ray direction (need not be normalised).
+     * `max_dist` — maximum hit distance.
+     *
+     * Returns a `Uint8Array` of length N: `1` = ray hit something (occluded),
+     * `0` = no hit (visible).
+     *
+     * This is the batch companion to `raycastFirst` for the TypeScript HLR pipeline:
+     * it builds the BVH once and does all raycasts inside Rust, eliminating N
+     * JS→WASM round-trips.
+     * @param {Float64Array} origins
+     * @param {number} dx
+     * @param {number} dy
+     * @param {number} dz
+     * @param {number} max_dist
+     * @returns {Uint8Array}
+     */
+    raycastBatchVisibility(origins, dx, dy, dz, max_dist) {
+        const ret = wasm.meshjs_raycastBatchVisibility(this.__wbg_ptr, origins, dx, dy, dz, max_dist);
+        return ret;
+    }
+    /**
      * @param {number} count
      * @param {number} dx
      * @param {number} dy
@@ -2076,6 +2115,21 @@ export class NurbsCurve3DJs {
     free() {
         const ptr = this.__destroy_into_raw();
         wasm.__wbg_nurbscurve3djs_free(ptr, 0);
+    }
+    /**
+     * Offset the curve using the geo-buf / Sketch polygon offset as a fallback.
+     * Tessellates to a polyline, closes it to form a polygon, offsets via geo-buf's
+     * straight-skeleton algorithm, then returns the exterior boundary as a degree-1 curve.
+     * The curve must lie in the XY plane (z ≈ 0).
+     * @param {number} distance
+     * @returns {CompoundCurve3DJs}
+     */
+    offsetGeo(distance) {
+        const ret = wasm.nurbscurve3djs_offsetGeo(this.__wbg_ptr, distance);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return CompoundCurve3DJs.__wrap(ret[0]);
     }
     /**
      * @param {number} param
@@ -3506,6 +3560,15 @@ export class SketchJs {
         return SketchJs.__wrap(ret);
     }
     /**
+     * @param {number} order
+     * @param {number} padding
+     * @returns {SketchJs}
+     */
+    hilbertCurve(order, padding) {
+        const ret = wasm.sketchjs_hilbertCurve(this.__wbg_ptr, order, padding);
+        return SketchJs.__wrap(ret);
+    }
+    /**
      * @param {number} module_
      * @param {number} teeth
      * @param {number} pressure_angle_deg
@@ -3554,6 +3617,14 @@ export class SketchJs {
         _assertClass(dir, Vector3Js);
         const ret = wasm.sketchjs_extrudeVector(this.__wbg_ptr, dir.__wbg_ptr);
         return MeshJs.__wrap(ret);
+    }
+    /**
+     * @param {number} distance
+     * @returns {SketchJs}
+     */
+    offsetRounded(distance) {
+        const ret = wasm.sketchjs_offsetRounded(this.__wbg_ptr, distance);
+        return SketchJs.__wrap(ret);
     }
     /**
      * @param {number} width
@@ -3609,6 +3680,14 @@ export class SketchJs {
      */
     static roundedRectangle(width, height, corner_radius, corner_segments, metadata) {
         const ret = wasm.sketchjs_roundedRectangle(width, height, corner_radius, corner_segments, metadata);
+        return SketchJs.__wrap(ret);
+    }
+    /**
+     * @param {boolean} orientation
+     * @returns {SketchJs}
+     */
+    straightSkeleton(orientation) {
+        const ret = wasm.sketchjs_straightSkeleton(this.__wbg_ptr, orientation);
         return SketchJs.__wrap(ret);
     }
     /**
@@ -3808,6 +3887,14 @@ export class SketchJs {
      */
     static circle(radius, segments, metadata) {
         const ret = wasm.sketchjs_circle(radius, segments, metadata);
+        return SketchJs.__wrap(ret);
+    }
+    /**
+     * @param {number} distance
+     * @returns {SketchJs}
+     */
+    offset(distance) {
+        const ret = wasm.sketchjs_offset(this.__wbg_ptr, distance);
         return SketchJs.__wrap(ret);
     }
     /**
@@ -4600,6 +4687,10 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbg_new_from_slice_db0691b69e9d3891 = function(arg0, arg1) {
         const ret = new Uint32Array(getArrayU32FromWasm0(arg0, arg1));
+        return ret;
+    };
+    imports.wbg.__wbg_new_from_slice_f9c22b9153b26992 = function(arg0, arg1) {
+        const ret = new Uint8Array(getArrayU8FromWasm0(arg0, arg1));
         return ret;
     };
     imports.wbg.__wbg_new_no_args_cb138f77cf6151ee = function(arg0, arg1) {

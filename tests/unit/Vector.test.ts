@@ -51,8 +51,11 @@ describe('Vector.length()', () => {
         expect(new Vector(0, 0, 1).length()).toBeCloseTo(1);
     });
 
-    it('returns correct length for arbitrary vector', () => {
-        expect(new Vector(3, 4, 0).length()).toBeCloseTo(5);
+    it('returns correct length for arbitrary vector', () => 
+    {
+        expect(new Vector(3, 4, 0).length()).toBeCloseTo(Math.sqrt(3*3+4*4)); // 5
+        expect(new Vector(100, 50, 50).length()).toBeCloseTo(Math.sqrt(100*100+50*50+50*50)); // 125
+
     });
 
     it('returns 0 for zero vector', () => {

@@ -40,6 +40,13 @@ export class ClosestPointResultJs {
 export class CompoundCurve3DJs {
   free(): void;
   [Symbol.dispose](): void;
+  /**
+   * Offset the compound curve using the geo-buf / Sketch polygon offset as a fallback.
+   * Tessellates to a polyline, closes it to form a polygon, offsets via geo-buf's
+   * straight-skeleton algorithm, then returns the exterior boundary as a degree-1 curve.
+   * The curve must lie in the XY plane (z ≈ 0).
+   */
+  offsetGeo(distance: number): CompoundCurve3DJs;
   tangentAt(param: number): Vector3Js;
   /**
    * Tessellate curve into evenly spaced points by count
@@ -358,6 +365,21 @@ export class MeshJs {
   projectEdgesSection(snx: number, sny: number, snz: number, section_offset: number, vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, feature_angle_deg: number, n_samples: number, occluders: MeshJs[]): SectionElevationResultJs;
   containsVertexComponents(x: number, y: number, z: number): boolean;
   filterPolygonsByMetadata(needle: any): MeshJs;
+  /**
+   * Batch first-hit visibility test.
+   *
+   * `origins` — flat `Float64Array` with 3×N floats (x₀,y₀,z₀, x₁,y₁,z₁, …).
+   * `dx, dy, dz` — shared ray direction (need not be normalised).
+   * `max_dist` — maximum hit distance.
+   *
+   * Returns a `Uint8Array` of length N: `1` = ray hit something (occluded),
+   * `0` = no hit (visible).
+   *
+   * This is the batch companion to `raycastFirst` for the TypeScript HLR pipeline:
+   * it builds the BVH once and does all raycasts inside Rust, eliminating N
+   * JS→WASM round-trips.
+   */
+  raycastBatchVisibility(origins: Float64Array, dx: number, dy: number, dz: number, max_dist: number): Uint8Array;
   distributeLinearComponents(count: number, dx: number, dy: number, dz: number, spacing: number): MeshJs;
   static egg(width: number, length: number, revolve_segments: number, outline_segments: number, metadata: any): MeshJs;
   constructor();
@@ -418,6 +440,13 @@ export class MeshJs {
 export class NurbsCurve3DJs {
   free(): void;
   [Symbol.dispose](): void;
+  /**
+   * Offset the curve using the geo-buf / Sketch polygon offset as a fallback.
+   * Tessellates to a polyline, closes it to form a polygon, offsets via geo-buf's
+   * straight-skeleton algorithm, then returns the exterior boundary as a degree-1 curve.
+   * The curve must lie in the XY plane (z ≈ 0).
+   */
+  offsetGeo(distance: number): CompoundCurve3DJs;
   tangentAt(param: number): Vector3Js;
   tessellate(tol?: number | null): Point3Js[];
   /**
@@ -800,6 +829,7 @@ export class SketchJs {
   intersection(other: SketchJs): SketchJs;
   static regularNGon(sides: number, radius: number, metadata: any): SketchJs;
   static airfoilNACA4(max_camber: number, camber_position: number, thickness: number, chord: number, samples: number, metadata: any): SketchJs;
+  hilbertCurve(order: number, padding: number): SketchJs;
   static involuteGear(module_: number, teeth: number, pressure_angle_deg: number, clearance: number, backlash: number, segments_per_flank: number, metadata: any): SketchJs;
   /**
    * Return a human-readable summary of every ring coordinate in the
@@ -817,11 +847,13 @@ export class SketchJs {
    */
   debugGeometry(): string;
   extrudeVector(dir: Vector3Js): MeshJs;
+  offsetRounded(distance: number): SketchJs;
   static rightTriangle(width: number, height: number, metadata: any): SketchJs;
   toMultiPolygon(): string;
   static circleWithFlat(radius: number, segments: number, flat_dist: number, metadata: any): SketchJs;
   sweepComponents(path: any): MeshJs;
   static roundedRectangle(width: number, height: number, corner_radius: number, corner_segments: number, metadata: any): SketchJs;
+  straightSkeleton(orientation: boolean): SketchJs;
   static circleWithKeyway(radius: number, segments: number, key_width: number, key_depth: number, metadata: any): SketchJs;
   transformComponents(m00: number, m01: number, m02: number, m03: number, m10: number, m11: number, m12: number, m13: number, m20: number, m21: number, m22: number, m23: number, m30: number, m31: number, m32: number, m33: number): SketchJs;
   translateComponents(dx: number, dy: number, dz: number): SketchJs;
@@ -841,6 +873,7 @@ export class SketchJs {
   static bezier(control: any, segments: number, metadata: any): SketchJs;
   center(): SketchJs;
   static circle(radius: number, segments: number, metadata: any): SketchJs;
+  offset(distance: number): SketchJs;
   rotate(rx: number, ry: number, rz: number): SketchJs;
   static square(width: number, metadata: any): SketchJs;
   toSVG(): string;
@@ -962,6 +995,7 @@ export interface InitOutput {
   readonly compoundcurve3djs_mergeColinearLines: (a: number, b: number) => number;
   readonly compoundcurve3djs_new: (a: number, b: number) => [number, number, number];
   readonly compoundcurve3djs_offset: (a: number, b: number, c: number, d: number) => [number, number, number];
+  readonly compoundcurve3djs_offsetGeo: (a: number, b: number) => [number, number, number];
   readonly compoundcurve3djs_paramClosestToPoint: (a: number, b: number) => [number, number, number];
   readonly compoundcurve3djs_pointAtParam: (a: number, b: number) => number;
   readonly compoundcurve3djs_reverse: (a: number) => number;
@@ -1033,6 +1067,7 @@ export interface InitOutput {
   readonly meshjs_projectEdgesSection: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => number;
   readonly meshjs_projectToPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
   readonly meshjs_raycastAll: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+  readonly meshjs_raycastBatchVisibility: (a: number, b: any, c: number, d: number, e: number, f: number) => any;
   readonly meshjs_raycastFirst: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
   readonly meshjs_removePoorTriangles: (a: number, b: number) => number;
   readonly meshjs_renormalize: (a: number) => number;
@@ -1093,6 +1128,7 @@ export interface InitOutput {
   readonly nurbscurve3djs_makePolyline: (a: number, b: number, c: number) => number;
   readonly nurbscurve3djs_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
   readonly nurbscurve3djs_offset: (a: number, b: number, c: number, d: number) => [number, number, number];
+  readonly nurbscurve3djs_offsetGeo: (a: number, b: number) => [number, number, number];
   readonly nurbscurve3djs_paramAtLength: (a: number, b: number) => [number, number, number];
   readonly nurbscurve3djs_paramClosestToPoint: (a: number, b: number) => [number, number, number];
   readonly nurbscurve3djs_pointAtParam: (a: number, b: number) => number;
@@ -1178,11 +1214,14 @@ export interface InitOutput {
   readonly sketchjs_fromMesh: (a: number) => number;
   readonly sketchjs_fromSVG: (a: number, b: number, c: any) => [number, number, number];
   readonly sketchjs_heart: (a: number, b: number, c: number, d: any) => number;
+  readonly sketchjs_hilbertCurve: (a: number, b: number, c: number) => number;
   readonly sketchjs_intersection: (a: number, b: number) => number;
   readonly sketchjs_inverse: (a: number) => number;
   readonly sketchjs_involuteGear: (a: number, b: number, c: number, d: number, e: number, f: number, g: any) => number;
   readonly sketchjs_isEmpty: (a: number) => number;
   readonly sketchjs_keyhole: (a: number, b: number, c: number, d: number, e: any) => number;
+  readonly sketchjs_offset: (a: number, b: number) => number;
+  readonly sketchjs_offsetRounded: (a: number, b: number) => number;
   readonly sketchjs_pieSlice: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly sketchjs_polygon: (a: any, b: any) => [number, number, number];
   readonly sketchjs_rectangle: (a: number, b: number, c: any) => number;
@@ -1198,6 +1237,7 @@ export interface InitOutput {
   readonly sketchjs_square: (a: number, b: any) => number;
   readonly sketchjs_squircle: (a: number, b: number, c: number, d: any) => number;
   readonly sketchjs_star: (a: number, b: number, c: number, d: any) => number;
+  readonly sketchjs_straightSkeleton: (a: number, b: number) => number;
   readonly sketchjs_supershape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any) => number;
   readonly sketchjs_sweep: (a: number, b: number, c: number) => number;
   readonly sketchjs_sweepComponents: (a: number, b: any) => number;

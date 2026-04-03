@@ -587,6 +587,8 @@ export class Curve
         return this;
     }
 
+    /** Alias for `opacity()`. */
+    alpha(a: number): this { return this.opacity(a); }
 
 
     //// PROPERTIES ////
@@ -847,9 +849,28 @@ export class Curve
             return (this.inner() as NurbsCurve3DJs)?.degree();
         }
         else {
-            console.warn(`Curve::degree(): Curve is compound. Use specific span to get degree`);
+            console.warn(`Curve::degree(): Curve is compound. Use specific span to get degree or use maxDegree()`);
             return null;
         }
+    }
+
+    /** Get maximum degree of the compound curve */
+    maxDegree(): number|null
+    {
+        if(!this.isCompound())
+        {
+            return (this.inner() as NurbsCurve3DJs)?.degree();
+        }
+        else {
+            return (this.inner() as CompoundCurve3DJs).spans().reduce((maxDeg, span) => Math.max(maxDeg, span.degree()), 0);
+        }
+    }
+
+    /** If current Curve is a compound curve with mixed degrees 
+     *  Used to avoid offsetting mixed degree compounds */
+    compoundMixedDegrees(): boolean
+    {
+        return this.isCompound() && (this.inner() as CompoundCurve3DJs).spans().some(s => s.degree() !== (this.inner() as CompoundCurve3DJs).spans()[0].degree());
     }
 
     paramAtLength(length: number): number|null
@@ -1062,6 +1083,22 @@ export class Curve
     {
         return this.inner().tessellate(tol)
             .map(p => Point.from(p));
+    }
+
+    /** Create new Curve by tessellating any (compound) curve with degree > 1 into a degree-1 polyline,
+     *  then run `mergeColinearLines()` to collapse redundant collinear segments.
+     *  Curves that are already fully degree-1 are returned unchanged.
+     *  @param tol - tessellation tolerance (default: TESSELATION_TOLERANCE)
+     */
+    toDegree1(tol: number = TESSELATION_TOLERANCE): Curve
+    {
+        const maxDeg = this.maxDegree();
+        if (maxDeg !== null && maxDeg <= 1) return this;
+
+        const pts = this.tessellate(tol);
+        if (pts.length < 2) return this;
+
+        return Curve.Polyline(pts).mergeColinearLines();
     }
 
 
@@ -1490,11 +1527,42 @@ export class Curve
     /** Offset a Curve a given amount (+ or -) and optionally provide corner type (default:sharp) */
     offset(distance: number, cornerType:'sharp'|'round'|'smooth'='sharp'): Curve|null
     {
-        if(!this.isPlanar()){ throw new Error(`Curve:offset(): Cannot offset a 3D curve!`);}
-        // If compound with all-line spans, combine into a single polyline first
-        const curve = this.isCompound() ? this.mergeColinearLines() : this;
+        if(!this.isPlanar()){ throw new Error(`Curve:offset(): Cannot offset a 2D curve!`);}
+        
+        // Avoid Curvo's problem with offsetting degree > 1 curves
+        const isMixedDegreeCompound = this.isCompound() || this.maxDegree() > 1;
+        if(isMixedDegreeCompound)
+        { 
+            console.warn(`Curve::offset(): Offsetting a compound curve with mixed degrees may produce unexpected results. We converted it to degree 1. Quality loss!`); 
+        }
+        
+        const curve = (isMixedDegreeCompound) 
+                        ? this.toDegree1() 
+                        : (this.isCompound())
+                            ? this.mergeColinearLines() // merge collinear lines to avoid Curvo's offset issues with consecutive lines
+                            : this; // original
+        
+        console.log('=== MAX')
+        console.log(curve.maxDegree());
+
         return this.update(Curve.fromCsgrs(curve.inner()?.offset(distance, cornerType)));
     }
+
+    /** Fallback offset using the geo crate's OffsetCurve algorithm via a tessellated polyline.
+     *  Use when Curvo's NURBS offset fails or produces degenerate results.
+     *  Always tessellates to a degree-1 polyline first.
+     *  Curve must be planar (in the XY plane).
+     */
+    offsetFallback(distance: number): Curve|null
+    {
+        if(!this.isPlanar()){ throw new Error(`Curve:offsetFallback(): Cannot offset a non-planar curve!`); }
+
+        // Tessellate to degree-1 polyline for geo-based offsetting
+        const curve = this.toDegree1();
+
+        return this.update(Curve.fromCsgrs(curve.inner()?.offsetGeo(distance)));
+    }
+    
 
     /** Trim the curve to a sub-curve between parameters t0 and t1.
      *  Returns an array of Curves (typically one for inside trim).
@@ -1531,6 +1599,8 @@ export class Curve
             return null;
         }
     }
+
+
     
     //// INTERACTION WITH OTHER CURVES ////
 

@@ -79,14 +79,15 @@ export class Collection
         }
     }
 
+    //// GROUPS ////
+    /** One can have subgroups within the Collection */
+
     /** Add Shape (Mesh or Curve) to Collection under a group 
      *  @returns the added shape(s) as a new Collection for chaining
     */
     addGroup(groupName: string, shapes: Mesh|Curve|Collection|CurveCollection|MeshCollection ): Collection
     {
-        console.log('==== ADD GROUP ====', groupName, (shapes as Collection)?.length);
         const addedShapes = this.add(shapes);
-        console.log(addedShapes.length);
         
         if(!this._groups.has(groupName))
         {
@@ -334,13 +335,18 @@ export class Collection
         return this;
     }
 
-    //// BOOLEAN OPERATIONS ////
+    /** Shortcut for `style.opacity` on every shape. Value between 0 (transparent) and 1 (opaque). */
+    opacity(opacity: number): this
+    {
+        this._shapes.forEach(shape => shape.opacity(opacity));
+        return this;
+    }
+
+    /** Alias for `opacity()`. */
+    alpha(a: number): this { return this.opacity(a); }
 
     /** Merge all Meshes in this collection into a single Mesh by concatenating
-     *  their polygon arrays.  No CSG boolean is performed — the result is just
-     *  one mesh whose polygon list is the union of all input polygon lists.
-     *  Curves are silently skipped.
-     */
+    *  their polygon arrays */
     merge(): Mesh
     {
         const allPolygons: PolygonJs[] = [];
@@ -359,6 +365,8 @@ export class Collection
         }
         return Mesh.from(MeshJs.fromPolygons(allPolygons, {}));
     }
+
+    //// BOOLEAN OPERATIONS ////
 
     /** Union all shapes into one shape or collection 
      *  NOTE: For now only Meshes can be unioned
@@ -421,9 +429,35 @@ export class Collection
         return this;
     }
 
+    //// EDGE PROJECTION AND SECTIONING ////
+
+    /** Isometric projection with hidden lines
+     *  
+     * @param cam normalizaed 3D position of the camera (default: [-1,-1,1], a common isometric view direction) 
+     * @param includeHidden Whether to include hidden edges (default: true)
+     * @return CurveColection with groups 'visible' and 'hidden' for the respective edges
+     *   use isometryResult.group('visible') and isometryResult.group('hidden') to access each separately
+     */
+    isometry(cam:PointLike = [-1,-1,1], includeHidden:boolean=true):CurveCollection
+    {
+        // Just simple merge all meshes and project the resulting mesh.
+        const mergedMesh = this.merge();
+        return mergedMesh.isometry(cam, includeHidden);
+    }
 
 
     //// EXPORT ////
+
+    toSVG(): string|null
+    {
+        if(this.meshes().length === 0)
+        {
+            console.warn(`Collection::toSVG(): Exporting a (mixed) collection with ${this.meshes().length} meshes and ${this.curves().length} curves. Only curves will be exported to SVG.`);
+        }
+
+        return this.curves().toSVG();
+
+    }
 
     /** Export the entire collection to a single GLTF file.
      *  Each Mesh becomes a TRIANGLES node; each Curve becomes a LINE_STRIP node.
@@ -644,6 +678,13 @@ export class MeshCollection extends Collection
     clone(): MeshCollection
     {
         return new MeshCollection(...this._shapes as Array<Mesh>);
+    }
+
+    /** Override to return a typed MeshCollection for the named group. */
+    group(groupName: string): MeshCollection | undefined
+    {
+        const g = super.group(groupName);
+        return g ? new MeshCollection(...g.meshes().toArray()) : undefined;
     }
 
     shapes(): Array<Mesh>  { return this._shapes as Array<Mesh>; }
@@ -891,6 +932,13 @@ export class CurveCollection extends Collection
     push(shapes:Curve|CurveCollection): void
     {
         this.add(shapes);
+    }
+
+    /** Override to return a typed CurveCollection for the named group. */
+    group(groupName: string): CurveCollection | undefined
+    {
+        const g = super.group(groupName);
+        return g ? new CurveCollection(...g.curves().toArray()) : undefined;
     }
 
     shapes(): Array<Curve>  { return this._shapes as Array<Curve>; }
@@ -1231,7 +1279,9 @@ export class CurveCollection extends Collection
         const curves = this.curves();
         if (curves.length === 0)
         {
-            return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"></svg>`;
+            console.warn('CurveCollection::toSVG(): No curves to export. Returned null');
+            return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 20">
+                            <text x="4" y="15" font-size="12" fill="red">CurveCollection::toSVG() — no curves</text></svg>`;
         }
 
         const paths: string[] = [];

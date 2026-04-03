@@ -33,9 +33,11 @@ describe('Example: Offsets', () =>
         const circles = c1.union(c2) as Curve;
         expect(circles.isCompound()).toBe(true);
 
-        const circlesOffset = circles.offset(20);
+        const deg1 = circles.copy().toDegree1();
+        const circlesOffset = circles.copy().offset(-20); // inward OK, outward produces self-intersections
+        const circleOffsetFallback = circles.copy().offsetFallback(20);
     
-        save('test.offsets.circles.gltf', new CurveCollection(circles!, 
+        save('test.offsets.circles.gltf', new CurveCollection(circles!, deg1.moveZ(10), circlesOffset!.moveZ(20), circleOffsetFallback!.moveZ(30)
             /* circles!.copy().offset(20)!.color('yellow')*/).toGLTF());
         //save('test.curves.ops.svg', new CurveCollection(circles, rect, cc, /*un!, unOffsets*/).toSVG());
     });
