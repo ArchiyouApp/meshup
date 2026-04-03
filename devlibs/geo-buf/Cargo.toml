@@ -1,0 +1,16 @@
+[package]
+name = "geo-buf"
+version = "0.1.0"
+edition = "2021"
+authors = [
+    "Nicholas Witthoeft<njwitthoeft@gmail.com>",
+    "Teneleven Corp<1011@1011.co.kr>",
+    "Inseop Youn<pinebananais@gmail.com>",
+]
+description = "geo-buf patched to use geo 0.31 (local fork for csgrs compatibility)"
+license = "Apache-2.0"
+repository = "https://github.com/njwitthoeft/geo-buf"
+
+[dependencies]
+geo = { version = "0.31.0", default-features = false }
+geo-types = "0.7.17"

@@ -1,0 +1,22 @@
+name: checks
+
+run-name: Testing ${{ github.ref_name }} by @${{ github.actor }}
+on: [push]
+jobs:
+  lint-typecheck-test-ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2.7.2
+
+      - name: Lint
+        run: cargo fmt --check && cargo install cargo-sort && cargo sort -c
+
+      - name: Test
+        env:
+          RUSTFLAGS: "-D warnings"
+          CARGO_NET_GIT_FETCH_WITH_CLI: true
+        run: cargo test --color always

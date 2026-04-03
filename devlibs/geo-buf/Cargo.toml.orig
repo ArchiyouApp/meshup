@@ -1,0 +1,20 @@
+[package]
+name = "geo-buf"
+version = "0.1.0"
+description = "This crate provides methods to buffer (to inflate or deflate) certain primitive geometric types in the GeoRust ecosystem via a straight skeleton. This crate builds upon the (presumably abandoned) geo-buffer crate."
+edition = "2021"
+authors = ["Nicholas Witthoeft<njwitthoeft@gmail.com>", "Teneleven Corp<1011@1011.co.kr>", "Inseop Youn<pinebananais@gmail.com>"]
+keywords =  ["buffer", "offset", "straight-skeleton", "setback", "padding"]
+categories = ["algorithms", "graphics", "mathematics", "multimedia::images"]
+license = "Apache-2.0"
+repository = "https://github.com/njwitthoeft/geo-buf"
+readme = "README.md"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+geo = "0.29.3"
+geo-types = "0.7.15"
+
+[dev-dependencies]
+geo-svg = "0.5.0"
+wkt = "0.10.3"
