@@ -10,6 +10,7 @@
  */
 
 import type { CsgrsModule, Axis, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions } from './types';
+import type { Container } from './Container';
 import { isPointLike } from './types';
 
 import { Curve, getCsgrs } from './index';
@@ -17,7 +18,8 @@ import { Point } from './Point';
 import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { Vector } from './Vector'
-import { rad, deg } from './utils';
+import { rad, deg, remapAxis } from './utils';
+import { Document, NodeIO, Accessor, Primitive, Node as GltfNode } from '@gltf-transform/core';
 import { Style } from './Style';
 
 import { MeshJs, PolygonJs, PlaneJs, Vector3Js, NurbsCurve3DJs, CompoundCurve3DJs } from './wasm/csgrs';
@@ -37,6 +39,12 @@ export class Mesh
     metadata: Record<string, any> = {};
 
     style: Style = new Style();
+
+    /** The Container this mesh belongs to, or null if not in a container. */
+    _container: Container | null = null;
+
+    /** Return the Container this mesh belongs to, or null. */
+    container(): Container | null { return this._container; }
 
     constructor()
     {
@@ -362,7 +370,10 @@ export class Mesh
     copy():undefined|Mesh
     {
         const c = this?.inner()?.clone();
-        return c ? Mesh.from(c) : undefined; 
+        if (!c) return undefined;
+        const m = Mesh.from(c);
+        m.style.merge(this.style.toData());
+        return m;
     }
 
     /** Check if the Mesh is valid (has vertices) */
@@ -914,29 +925,161 @@ export class Mesh
         return this.inner()?.toSTLASCII();
     }
 
-    /** Export Mesh to GLTF format
-     *  @param up Up axis of the model (default Z)
+    /**
+     * Build a gltf-transform Node for this mesh within an existing Document.
+     * Used by Container.toGLTF() for composing hierarchical scenes.
+     * @internal
      */
-    toGLTF(up:Axis='z'): string | undefined
+    _buildGLTFNode(doc: Document, up: Axis = 'z', name = 'mesh'): GltfNode
     {
-        const raw = this.inner()?.toGLTF('model', up);
-        if (!raw) return undefined;
+        const posRaw  = this._mesh?.positions() ?? new Float64Array(0);
+        const normRaw = this._mesh?.normals()   ?? new Float64Array(0);
+        const idxRaw  = this._mesh?.indices()   ?? new Uint32Array(0);
 
-        const gltf = JSON.parse(raw);
+        const vertexCount = posRaw.length / 3;
 
-        // Inject style as material 0 and wire every primitive to it
-        gltf.materials = [this.style.toGltfMaterial('mesh_material', false)];
-        if (Array.isArray(gltf.meshes)) {
-            for (const mesh of gltf.meshes) {
-                if (Array.isArray(mesh.primitives)) {
-                    for (const prim of mesh.primitives) {
-                        prim.material = 0;
-                    }
-                }
-            }
+        const posF32 = new Float32Array(posRaw.length);
+        for (let v = 0; v < vertexCount; v++) {
+            const [rx, ry, rz] = remapAxis(posRaw[v*3], posRaw[v*3+1], posRaw[v*3+2], up);
+            posF32[v*3] = rx; posF32[v*3+1] = ry; posF32[v*3+2] = rz;
         }
 
-        return JSON.stringify(gltf);
+        const normVertexCount = normRaw.length / 3;
+        const normF32 = new Float32Array(normRaw.length);
+        for (let v = 0; v < normVertexCount; v++) {
+            const [rx, ry, rz] = remapAxis(normRaw[v*3], normRaw[v*3+1], normRaw[v*3+2], up);
+            normF32[v*3] = rx; normF32[v*3+1] = ry; normF32[v*3+2] = rz;
+        }
+
+        const idxCopy = new Uint32Array(idxRaw.length);
+        idxCopy.set(idxRaw);
+
+        const gtBuf = doc.createBuffer();
+
+        const posAcc = doc.createAccessor()
+            .setType(Accessor.Type.VEC3)
+            .setArray(posF32)
+            .setBuffer(gtBuf);
+
+        const normAcc = doc.createAccessor()
+            .setType(Accessor.Type.VEC3)
+            .setArray(normF32)
+            .setBuffer(gtBuf);
+
+        const idxAcc = doc.createAccessor()
+            .setType(Accessor.Type.SCALAR)
+            .setArray(idxCopy)
+            .setBuffer(gtBuf);
+
+        const matDef = this.style.toGltfMaterial('mesh_material', false) as any;
+        const [r, g, b, a] = matDef.pbrMetallicRoughness.baseColorFactor;
+        const material = doc.createMaterial('mesh_material')
+            .setBaseColorFactor([r, g, b, a])
+            .setMetallicFactor(matDef.pbrMetallicRoughness.metallicFactor)
+            .setRoughnessFactor(matDef.pbrMetallicRoughness.roughnessFactor)
+            .setDoubleSided(matDef.doubleSided ?? true);
+        if (matDef.alphaMode) material.setAlphaMode(matDef.alphaMode as 'BLEND' | 'OPAQUE' | 'MASK');
+
+        const prim = doc.createPrimitive()
+            .setAttribute('POSITION', posAcc)
+            .setAttribute('NORMAL', normAcc)
+            .setIndices(idxAcc)
+            .setMode(Primitive.Mode.TRIANGLES)
+            .setMaterial(material);
+
+        const gltfMesh = doc.createMesh(name).addPrimitive(prim);
+        return doc.createNode(name).setMesh(gltfMesh);
+    }
+
+    /** Export Mesh to GLTF JSON (binary=false) or GLB binary (binary=true) using gltf-transform.
+     *  @param binary  true → GLB (Uint8Array), false → GLTF JSON string
+     *  @param up      Up axis of the source model (default Z)
+     */
+    private async _toGLTF(binary: boolean, up: Axis = 'z'): Promise<string | Uint8Array>
+    {
+        const posRaw  = this._mesh?.positions() ?? new Float64Array(0);
+        const normRaw = this._mesh?.normals()   ?? new Float64Array(0);
+        const idxRaw  = this._mesh?.indices()   ?? new Uint32Array(0);
+
+        const vertexCount = posRaw.length / 3;
+        if (vertexCount === 0) throw new Error('Mesh::_toGLTF(): No geometry to export!');
+
+        const posF32 = new Float32Array(posRaw.length);
+        for (let v = 0; v < vertexCount; v++) {
+            const [rx, ry, rz] = remapAxis(posRaw[v*3], posRaw[v*3+1], posRaw[v*3+2], up);
+            posF32[v*3] = rx; posF32[v*3+1] = ry; posF32[v*3+2] = rz;
+        }
+
+        const normF32 = new Float32Array(normRaw.length);
+        const normVertexCount = normRaw.length / 3;
+        for (let v = 0; v < normVertexCount; v++) {
+            const [rx, ry, rz] = remapAxis(normRaw[v*3], normRaw[v*3+1], normRaw[v*3+2], up);
+            normF32[v*3] = rx; normF32[v*3+1] = ry; normF32[v*3+2] = rz;
+        }
+
+        const idxCopy = new Uint32Array(idxRaw.length);
+        idxCopy.set(idxRaw);
+
+        // Build gltf-transform Document
+        const doc = new Document();
+        const gtBuf = doc.createBuffer();
+
+        const posAcc = doc.createAccessor()
+            .setType(Accessor.Type.VEC3)
+            .setArray(posF32)
+            .setBuffer(gtBuf);
+
+        const normAcc = doc.createAccessor()
+            .setType(Accessor.Type.VEC3)
+            .setArray(normF32)
+            .setBuffer(gtBuf);
+
+        const idxAcc = doc.createAccessor()
+            .setType(Accessor.Type.SCALAR)
+            .setArray(idxCopy)
+            .setBuffer(gtBuf);
+
+        const matDef = this.style.toGltfMaterial('mesh_material', false) as any;
+        const [r, g, b, a] = matDef.pbrMetallicRoughness.baseColorFactor;
+        const material = doc.createMaterial('mesh_material')
+            .setBaseColorFactor([r, g, b, a])
+            .setMetallicFactor(matDef.pbrMetallicRoughness.metallicFactor)
+            .setRoughnessFactor(matDef.pbrMetallicRoughness.roughnessFactor)
+            .setDoubleSided(matDef.doubleSided ?? true);
+        if (matDef.alphaMode) material.setAlphaMode(matDef.alphaMode as 'BLEND' | 'OPAQUE' | 'MASK');
+
+        const prim = doc.createPrimitive()
+            .setAttribute('POSITION', posAcc)
+            .setAttribute('NORMAL', normAcc)
+            .setIndices(idxAcc)
+            .setMode(Primitive.Mode.TRIANGLES)
+            .setMaterial(material);
+
+        const mesh = doc.createMesh('mesh').addPrimitive(prim);
+        const node = doc.createNode('node').setMesh(mesh);
+        const scene = doc.createScene('scene').addChild(node);
+        doc.getRoot().setDefaultScene(scene);
+
+        const io = new NodeIO();
+        return binary ? io.writeBinary(doc) : io.writeJSON(doc).then(d => JSON.stringify(d.json));
+    }
+
+    /** Export Mesh to GLTF JSON string.
+     *  @param up Up axis of the model (default Z)
+     */
+    async toGLTF(up: Axis = 'z'): Promise<string | undefined>
+    {
+        if (!this._mesh) return undefined;
+        return this._toGLTF(false, up) as Promise<string>;
+    }
+
+    /** Export Mesh to GLB binary (Uint8Array).
+     *  @param up Up axis of the model (default Z)
+     */
+    async toGLB(up: Axis = 'z'): Promise<Uint8Array | undefined>
+    {
+        if (!this._mesh) return undefined;
+        return this._toGLTF(true, up) as Promise<Uint8Array>;
     }
     toAMF(): string | undefined
     {
@@ -1189,7 +1332,7 @@ export class Mesh
      *
      * @param options  View direction, projection plane, optional feature angle and sample count.
      * @param occluders Other meshes that may occlude this mesh's edges.
-     * @returns `{ visible, hidden }` — each a `CurveCollection` of polyline curves.
+     * @returns CurveCollection with two groups: 'visible' and 'hidden', containing the respective projected edges as Curves.
      */
     _projectEdges(options: ProjectEdgeOptions, occluders: MeshCollection = new MeshCollection()): CurveCollection
     {
@@ -1212,8 +1355,10 @@ export class Mesh
         }
         
         const result = new CurveCollection();
-        result.addGroup('visible', this._projectedPolylinesToCurveCollection(r.visiblePolylines()));
+        // First add hidden edges, so they are rendered below visible ones by default
         result.addGroup('hidden',  this._projectedPolylinesToCurveCollection(r.hiddenPolylines()));
+        result.addGroup('visible', this._projectedPolylinesToCurveCollection(r.visiblePolylines()));
+        
 
         r.free?.();
         return result;

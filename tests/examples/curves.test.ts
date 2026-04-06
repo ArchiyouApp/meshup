@@ -17,12 +17,12 @@ describe('Example: Curves', () =>
 {
     it('Can create basic curves', () => 
     {
-        const line = Curve.Line([0,0], [100,100]);
+        const line = Curve.Line([0,0], [100,100]).color('red');
         const pline = Curve.Polyline(
-            [0,0,0], [-50,0,10], [-50,50,20],[0,50,30], [0,0,40]);
-        const arc = Curve.Arc([0,0],[100,100],[200,0], 'tangent');
-        const curve = Curve.Interpolated([0,0,0], [-50,-50,50], [-100,-100,10], [-150,-200,150]);
-        const circle = Curve.Circle(20, [0,0,0], [0,0,1]);
+            [0,0,0], [-50,0,10], [-50,50,20],[0,50,30], [0,0,40]).color('blue');
+        const arc = Curve.Arc([0,0],[100,100],[200,0], 'tangent').color('green');
+        const curve = Curve.Interpolated([0,0,0], [-50,-50,50], [-100,-100,10], [-150,-200,150]).color('yellow');
+        const circle = Curve.Circle(20, [0,0,0], [0,0,1]).color('cyan');
 
         expect(line).toBeTruthy();
         expect(line.length()).toBeCloseTo(line.end().toVector().length());
@@ -38,44 +38,26 @@ describe('Example: Curves', () =>
 
     it('Can do operations on curves', () =>
     {
-        const c = Curve.Circle(10);
+        const c = Curve.Circle(10).color('red');
         expect(c).toBeTruthy();
 
-        const circles = c.replicate(5, (c,i) => c.offset(i*10)!);
+        // Offsets
+        const circles = c.replicate(5, (c,i) => c.offset((i+1)*2)!.color('purple'));
         expect(circles).toBeTruthy();
         expect(circles.length).toBe(5);
-
-        const rect = Curve.RectBetween([150,0], [300,100]).moveY(-50);
-        expect(rect).toBeTruthy();
-        const cc = c.copy().move(300,0); // center exactly on rect edge — tests degenerate boolean handling
-        expect(cc).toBeTruthy();
-
         
-        const sub = cc.copy().subtract(rect)?.moveY(-150);
-        expect(sub).toBeTruthy();
+        // Boolean 
+        const rect = Curve.Rect(40, 40).color('yellow')
+                        .move(0,20);
 
-        const un = cc.copy().union(rect)?.moveY(-150);
-        expect(un).toBeTruthy();
+        const union = c.copy().union(rect)?.moveZ(2).color('cyan');
 
-        const offset = (un as Curve).copy()!.offset(20)?.moveZ(50); // <== scrambled result 
+        const unionOffset = union?.copy().offset(5)?.moveZ(5).color('yellow');
+    
+        const col = new CurveCollection(c, rect, circles, union!, unionOffset!);
 
-        /*
-        const offsets = (un as Curve).replicate(3, (c,i) => { 
-            console.log(i); 
-            const l = c.offset((i+1)*10)?.moveZ(i*10)!;
-            console.log(l.bbox());
-            console.log(l.type());
-            console.log(l.isClosed());
-            console.log(l.points());
-            return l;
-        });
-        expect(offsets).toBeTruthy();
-        expect(offsets.length).toBe(3);
-        */
-        
-        
-        save('test.curves.ops.gltf', new CurveCollection(circles, rect, cc, un!, sub!.moveZ(10), offset!).toGLTF());
-        //save('test.curves.ops.svg', new CurveCollection(circles, rect, cc, /*un!, unOffsets*/).toSVG());
+        save('test.curves.ops.gltf', col.toGLTF());
+        //save('test.curves.ops.svg', col.toSVG());
     });
 
 

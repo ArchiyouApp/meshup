@@ -23,6 +23,7 @@ import { ANGLE_COMPARE_TOLERANCE, TESSELATION_TOLERANCE, BASE_PLANE_NAME_TO_PLAN
 import { NurbsCurve3DJs, CompoundCurve3DJs, Vector3Js, BooleanRegionJs } from "./wasm/csgrs";
 
 import { MeshCollection, CurveCollection, getCsgrs, Mesh } from './index';
+import type { Container } from './Container';
 import type { CsgrsModule, PointLike, Axis, GLTFBuffer, BasePlane } from './types';
 import { isPointLike, isBasePlane } from './types'
 import { Point } from './Point';
@@ -31,7 +32,8 @@ import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { Polygon } from './Polygon';
 
-import { toBase64, rad } from "./utils";
+import { toBase64, fromBase64, rad, remapAxis } from "./utils";
+import { Document, NodeIO, Accessor, Primitive, Node as GltfNode } from '@gltf-transform/core';
 import { Style } from "./Style";
 
 
@@ -44,6 +46,12 @@ export class Curve
 
     style: Style = new Style();
     metadata: Record<string, any> = {};
+
+    /** The Container this curve belongs to, or null if not in a container. */
+    _container: Container | null = null;
+
+    /** Return the Container this curve belongs to, or null. */
+    container(): Container | null { return this._container; }
     
     constructor()
     {
@@ -112,6 +120,7 @@ export class Curve
         const newCurve = new Curve();
         newCurve._curve = this._curve?.clone();
         newCurve._holes = this._holes.map(h => h.copy());
+        newCurve.style.merge(this.style.toData());
         return newCurve;
     }
 
@@ -590,6 +599,13 @@ export class Curve
     /** Alias for `opacity()`. */
     alpha(a: number): this { return this.opacity(a); }
 
+    /** Set stroke dash pattern. Defaults to [2, 2] when called with no arguments. */
+    dashed(dash: number[] = [2, 2]): this
+    {
+        this.style.strokeDash = dash;
+        return this;
+    }
+
 
     //// PROPERTIES ////
 
@@ -855,7 +871,7 @@ export class Curve
     }
 
     /** Get maximum degree of the compound curve */
-    maxDegree(): number|null
+    maxDegree(): number
     {
         if(!this.isCompound())
         {
@@ -1528,24 +1544,54 @@ export class Curve
     offset(distance: number, cornerType:'sharp'|'round'|'smooth'='sharp'): Curve|null
     {
         if(!this.isPlanar()){ throw new Error(`Curve:offset(): Cannot offset a 2D curve!`);}
-        
-        // Avoid Curvo's problem with offsetting degree > 1 curves
-        const isMixedDegreeCompound = this.isCompound() || this.maxDegree() > 1;
-        if(isMixedDegreeCompound)
+
+        // Fast path for circles: offsetting a circle just changes its radius.
+        if(this.type() === 'circle')
+        {
+            const bb = this.bbox();
+            if(bb)
+            {
+                const r = (bb.max().x - bb.min().x) / 2;
+                const center = bb.center();
+                const normal = this.normal() ?? undefined;
+                const newRadius = r + distance;
+                if(newRadius <= 0) return null;
+                return this.update(Curve.Circle(newRadius, center, normal));
+            }
+        }
+
+        // Curvo offsetting of Compound Curves with degree > 1 is not not robust
+        // Use fallback method with geo-buf crate which tesselates the curve to degree 1 before offsetting
+        if(this.isCompound() && this.maxDegree() > 1)
         { 
-            console.warn(`Curve::offset(): Offsetting a compound curve with mixed degrees may produce unexpected results. We converted it to degree 1. Quality loss!`); 
+            console.warn(`Curve::offset(): You are offsetting a CompoundCurve with degree > 1. This is currently not robust, so we tesselated the Curve. This results is loss of quality!`);
+            return this.offsetFallback(distance);
         }
         
-        const curve = (isMixedDegreeCompound) 
-                        ? this.toDegree1() 
-                        : (this.isCompound())
-                            ? this.mergeColinearLines() // merge collinear lines to avoid Curvo's offset issues with consecutive lines
-                            : this; // original
-        
-        console.log('=== MAX')
-        console.log(curve.maxDegree());
+        let offsettedCurve;
+        try {
+            if(this.isCompound())
+            { 
+                console.info(`Curve::offset(): Merging collinear lines before offsetting to improve Curvo's handling of consecutive line segments in CompoundCurves.`);
+                this.mergeColinearLines();
+            }
+            // merge collinear lines to avoid Curvo's offset issues with consecutive lines
+            const t = performance.now();
+            offsettedCurve = Curve.fromCsgrs(this.inner().offset(distance, cornerType));
+            console.log(`Curve::offset(): Curvo offset completed in ${(performance.now() - t).toFixed(2)} ms.`);
+        }
+        catch (e)        {
+            console.error(`Curve::offset(): Error during offset: "${e}". Trying fallback offset method.`);
+            offsettedCurve = this.offsetFallback(distance);
+        }
 
-        return this.update(Curve.fromCsgrs(curve.inner()?.offset(distance, cornerType)));
+        if(!offsettedCurve)
+        {
+            console.error(`Curve::offset(): Offset failed and fallback method also failed. Returning original curve.`);
+            return this;
+        }
+
+        return this.update(offsettedCurve);  
     }
 
     /** Fallback offset using the geo crate's OffsetCurve algorithm via a tessellated polyline.
@@ -2021,45 +2067,192 @@ export class Curve
         };
     }
 
-    /** Serialize this curve as a self-contained GLTF JSON string (LINE_STRIP). */
-    toGLTF(up: Axis = 'z'): string
+    /** Export this curve to GLTF JSON (binary=false) or GLB binary (binary=true) using gltf-transform (LINE_STRIP). */
+    /**
+     * Build a gltf-transform Node for this curve within an existing Document.
+     * Used by Container.toGLTF() for composing hierarchical scenes.
+     * @internal
+     */
+    _buildGLTFNode(doc: Document, up: Axis = 'z', name = 'curve'): GltfNode
     {
         const buf = this.toGLTFBuffer(up);
+        const posF32 = new Float32Array(fromBase64(buf.data).slice().buffer);
 
-        const gltf = {
-            asset: { version: "2.0" },
-            scenes: [{ nodes: [0] }],
-            nodes: [{ mesh: 0 }],
-            meshes: [{
-                primitives: [{
-                    attributes: { POSITION: 0 },
-                    mode: 3, // LINE_STRIP
-                    material: 0,
-                }]
-            }],
-            materials: [this.style.toGltfMaterial('curve_material', true)],
-            accessors: [{
-                bufferView: 0,
-                byteOffset: 0,
-                componentType: 5126, // FLOAT
-                count: buf.count,
-                type: "VEC3",
-                max: buf.max,
-                min: buf.min,
-            }],
-            bufferViews: [{
-                buffer: 0,
-                byteOffset: 0,
-                byteLength: buf.byteLength,
-                target: 34962 // ARRAY_BUFFER
-            }],
-            buffers: [{
-                byteLength: buf.byteLength,
-                uri: `data:application/octet-stream;base64,${buf.data}`
-            }]
-        };
+        const gtBuf = doc.createBuffer();
 
-        return JSON.stringify(gltf);
+        const posAcc = doc.createAccessor()
+            .setType(Accessor.Type.VEC3)
+            .setArray(posF32)
+            .setBuffer(gtBuf);
+
+        const matDef = this.style.toGltfMaterial('curve_material', true) as any;
+        const [r, g, b, a] = matDef.pbrMetallicRoughness.baseColorFactor;
+        const material = doc.createMaterial('curve_material')
+            .setBaseColorFactor([r, g, b, a])
+            .setMetallicFactor(matDef.pbrMetallicRoughness.metallicFactor)
+            .setRoughnessFactor(matDef.pbrMetallicRoughness.roughnessFactor)
+            .setDoubleSided(matDef.doubleSided ?? true);
+        if (matDef.alphaMode) material.setAlphaMode(matDef.alphaMode as 'BLEND' | 'OPAQUE' | 'MASK');
+
+        const prim = doc.createPrimitive()
+            .setAttribute('POSITION', posAcc)
+            .setMode(Primitive.Mode.LINE_STRIP)
+            .setMaterial(material);
+
+        const gltfMesh = doc.createMesh(name).addPrimitive(prim);
+        return doc.createNode(name).setMesh(gltfMesh);
+    }
+
+    /**
+     * Return just the SVG element(s) for this curve (a `<path>` or `<circle>` element string),
+     * without the outer `<svg>` wrapper. Used by Container.toSVG().
+     * @internal
+     */
+    _toSVGElement(plane: BasePlane = 'xy'): string
+    {
+        const projected = this.copy().projectOnto(plane);
+
+        const fmt = (n: number) => +n.toFixed(6);
+        const to2D = (p: { x: number; y: number; z: number }): [number, number] => [p.x, -p.y];
+
+        if (this.type() === 'circle')
+        {
+            const bb = projected.bbox();
+            if (bb)
+            {
+                const cx = fmt((bb.min().x + bb.max().x) / 2);
+                const cy = fmt(-((bb.min().y + bb.max().y) / 2));
+                const r  = fmt((bb.max().x - bb.min().x) / 2);
+                return `<circle cx="${cx}" cy="${cy}" r="${r}" ${this.style.toSvgAttrs(true)}/>`;
+            }
+        }
+
+        const pathParts: string[] = [];
+        const spans = projected._getSvgSpans();
+
+        for (let si = 0; si < spans.length; si++)
+        {
+            const spanCurve = Curve.fromCsgrs(spans[si]);
+            const cps = spanCurve.controlPoints();
+            const curveType = spanCurve.type();
+
+            if (si === 0)
+            {
+                const [sx, sy] = to2D(cps[0]);
+                pathParts.push(`M${fmt(sx)} ${fmt(sy)}`);
+            }
+
+            switch (curveType)
+            {
+                case 'line':
+                case 'polyline':
+                case 'rect':
+                {
+                    for (let i = 1; i < cps.length; i++)
+                    {
+                        const [x, y] = to2D(cps[i]);
+                        pathParts.push(`L${fmt(x)} ${fmt(y)}`);
+                    }
+                    break;
+                }
+                case 'arc':
+                case 'circle':
+                {
+                    _appendArcSvg(spans[si], to2D, fmt, pathParts);
+                    break;
+                }
+                case 'spline':
+                {
+                    const span = spans[si];
+                    const deg = span.degree();
+                    const weights = Array.from(span.weights());
+                    const bezierSegs = _bsplineToBezierSegments(
+                        span.controlPoints(), Array.from(span.knots()), weights, deg);
+
+                    if (deg === 2)
+                    {
+                        for (const seg of bezierSegs)
+                        {
+                            const [, cp1, end] = seg.map(to2D);
+                            pathParts.push(`Q${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(end[0])} ${fmt(end[1])}`);
+                        }
+                    }
+                    else
+                    {
+                        for (const seg of bezierSegs)
+                        {
+                            const [, cp1, cp2, end] = seg.map(to2D);
+                            pathParts.push(`C${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(cp2[0])} ${fmt(cp2[1])} ${fmt(end[0])} ${fmt(end[1])}`);
+                        }
+                    }
+                    break;
+                }
+                default:
+                {
+                    const pts = spanCurve.tessellate();
+                    for (let i = 1; i < pts.length; i++)
+                    {
+                        const [x, y] = to2D(pts[i]);
+                        pathParts.push(`L${fmt(x)} ${fmt(y)}`);
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (this.isClosed()) pathParts.push('Z');
+
+        const d = pathParts.join(' ');
+        return `<path d="${d}" ${this.style.toSvgAttrs(this.isClosed())}/>`;
+    }
+
+    private async _toGLTF(binary: boolean, up: Axis = 'z'): Promise<string | Uint8Array>
+    {
+        const buf = this.toGLTFBuffer(up);
+        // slice() copies into a plain ArrayBuffer, avoiding SharedArrayBuffer issues with Node Buffer
+        const posF32 = new Float32Array(fromBase64(buf.data).slice().buffer);
+
+        const doc = new Document();
+        const gtBuf = doc.createBuffer();
+
+        const posAcc = doc.createAccessor()
+            .setType(Accessor.Type.VEC3)
+            .setArray(posF32)
+            .setBuffer(gtBuf);
+
+        const matDef = this.style.toGltfMaterial('curve_material', true) as any;
+        const [r, g, b, a] = matDef.pbrMetallicRoughness.baseColorFactor;
+        const material = doc.createMaterial('curve_material')
+            .setBaseColorFactor([r, g, b, a])
+            .setMetallicFactor(matDef.pbrMetallicRoughness.metallicFactor)
+            .setRoughnessFactor(matDef.pbrMetallicRoughness.roughnessFactor)
+            .setDoubleSided(matDef.doubleSided ?? true);
+        if (matDef.alphaMode) material.setAlphaMode(matDef.alphaMode as 'BLEND' | 'OPAQUE' | 'MASK');
+
+        const prim = doc.createPrimitive()
+            .setAttribute('POSITION', posAcc)
+            .setMode(Primitive.Mode.LINE_STRIP)
+            .setMaterial(material);
+
+        const mesh = doc.createMesh('curve').addPrimitive(prim);
+        const node = doc.createNode('node').setMesh(mesh);
+        const scene = doc.createScene('scene').addChild(node);
+        doc.getRoot().setDefaultScene(scene);
+
+        const io = new NodeIO();
+        return binary ? io.writeBinary(doc) : io.writeJSON(doc).then(d => JSON.stringify(d.json));
+    }
+
+    /** Export this curve as a self-contained GLTF JSON string (LINE_STRIP). */
+    async toGLTF(up: Axis = 'z'): Promise<string>
+    {
+        return this._toGLTF(false, up) as Promise<string>;
+    }
+
+    /** Export this curve as a GLB binary (Uint8Array, LINE_STRIP). */
+    async toGLB(up: Axis = 'z'): Promise<Uint8Array>
+    {
+        return this._toGLTF(true, up) as Promise<Uint8Array>;
     }
 
     /** Export this curve as an SVG string, projecting onto the given named plane.

@@ -104,3 +104,19 @@ export interface ProjectEdgeOptions
   samples?: number; // HLR ray samples per edge
 }
 
+//// CONTAINER TYPES ////
+
+/** Union of all concrete shape classes usable in a Container. */
+// Note: the concrete Mesh / Curve types are imported by Container.ts at runtime;
+// here we use a structural alias to avoid circular imports.
+export type ShapeType = 'mesh' | 'curve';
+
+/** Plain-object representation of a Container node for inspection/serialisation. */
+export interface ContainerGraphNode {
+  name: string;
+  isLayer: boolean;
+  shapeCount: number;
+  shapeTypes: ShapeType[];
+  children: ContainerGraphNode[];
+}
+

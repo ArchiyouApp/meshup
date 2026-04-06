@@ -78,3 +78,5 @@ export { Collection, MeshCollection, CurveCollection } from './Collection';
 export { Sketch } from './Sketch';
 export { Bbox } from './Bbox';
 export { OBbox } from './OBbox';
+export { Container } from './Container';
+export type { Shape as ContainerShape } from './Container';

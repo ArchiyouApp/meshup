@@ -8,6 +8,20 @@ export function deg(radians: number): number
   return radians * 180 / Math.PI;
 }
 
+/**
+ * Remap a 3-D point/vector from the source coordinate space (where `up` is the
+ * up-axis) to GLTF's Y-up convention.
+ *
+ *   up='z'  (default) : [x,  z, -y]
+ *   up='x'            : [y,  x,  z]
+ *   up='y'            : [x,  z,  y]  (already Y-up, just reorder)
+ */
+export function remapAxis(x: number, y: number, z: number, up: 'x' | 'y' | 'z' = 'z'): [number, number, number] {
+    if (up === 'z') return [x,  z, -y];
+    if (up === 'x') return [y,  x,  z];
+    return [x, z,  y];
+}
+
 //// UUID ////
 
 export function uuid(): string

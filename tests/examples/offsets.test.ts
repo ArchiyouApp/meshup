@@ -3,10 +3,9 @@
  *
  */
 import { beforeAll, describe, it, expect, should } from 'vitest';
-import { Collection, CurveCollection, initAsync } from '../../src/index';
+import { CurveCollection, initAsync } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { save } from '../../src/utils';
-import { TOLERANCE } from '../../src/constants';
 
 beforeAll(async () => 
 {

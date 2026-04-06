@@ -17,14 +17,22 @@ describe('Example: Isometric projection with hidden lines', async () =>
 {
     it('can do basic isometric projection', async () => 
     {
-        const box = Mesh.Cube(10);
+        const box = Mesh.Cube(100);
         const boxIso = box.isometry();
         expect(boxIso).toBeTruthy();
         expect(boxIso.length).toBe(12); // all edges
         expect(boxIso.group('hidden')?.length).toBe(3);
         expect(boxIso.group('visible')?.length).toBe(9);
+
+        // style
+        boxIso.group('hidden')?.color('blue').dashed();
+        boxIso.group('visible')?.color('red');
+
+        const col = new Collection(box.move(-200), boxIso!)
         
-        await save('isometry.box.gltf', new Collection(box.move(-20), boxIso.group('visible')!).toGLTF()); // OK
+        await save('isometry.box.gltf', col.toGLTF()); 
+        await save('isometry.box.svg', boxIso.toSVG());
+
     });
 
     it('can do isometric projection of boxes difference', async () =>

@@ -26,22 +26,7 @@ export class Collection
     {
         args.forEach(arg => 
         {
-            if(arg instanceof Mesh || arg instanceof Curve)
-            {
-                this._shapes.push(arg);
-            }
-            else if(arg instanceof Collection)
-            {
-                this._shapes.push(...arg.shapes());
-            }
-            else if(Array.isArray(arg))
-            {
-                this._shapes.push(...arg.flat());
-            }
-            else
-            {
-                console.warn(`Collection::constructor(): Given Shape is not a Mesh or Curve. Skipping it!:`, arg);
-            }
+            this.add(arg)
         });
     }
 
@@ -62,7 +47,6 @@ export class Collection
         if (shapes instanceof Mesh || shapes instanceof Curve)
         {
             this._shapes.push(shapes);
-            return new Collection(shapes);
         }
         else if (Array.isArray(shapes) || Collection.isCollection(shapes))
         {
@@ -70,13 +54,12 @@ export class Collection
                                     ? shapes.toArray() : 
                                     shapes.filter(s => s instanceof Mesh || s instanceof Curve) as Array<Mesh|Curve>);
             this._shapes.push(...addShapes);
-            return new Collection(addShapes);
         }
         else
         {
             console.error(`Collection::add(): Invalid shape(s). Supply something [<Mesh>|<Curve>|<Collection>|<CurveCollection>|<MeshCollection>|Array<Mesh|Curve>]. Skipping it!:`, shapes);
-            return new Collection();
         }
+        return this;
     }
 
     //// GROUPS ////
@@ -87,7 +70,7 @@ export class Collection
     */
     addGroup(groupName: string, shapes: Mesh|Curve|Collection|CurveCollection|MeshCollection ): Collection
     {
-        const addedShapes = this.add(shapes);
+        this.add(shapes);
         
         if(!this._groups.has(groupName))
         {
@@ -97,9 +80,9 @@ export class Collection
         
         if(group)
         {
-            group.add(addedShapes);
+            group.add(shapes);
         }
-        return addedShapes;
+        return this;
     }
 
     removeGroup(groupName: string): void
@@ -332,6 +315,13 @@ export class Collection
     {
         this._shapes.forEach(
             shape => shape.mirror(dir, pos));
+        return this;
+    }
+
+    /** Shortcut for `style.color` on every shape. Sets both fill and stroke color. */
+    color(c: string | [number, number, number]): this
+    {
+        this._shapes.forEach(shape => shape.color(c as any));
         return this;
     }
 
@@ -913,19 +903,17 @@ export class CurveCollection extends Collection
         return new CurveCollection(...this._shapes as Array<Curve>);
     }
 
-    /** Add Curves or CurveCollections to this collection
-     *  @returns a new CurveCollection with the added curves (does not modify original collection)
+    /** Add Curves or CurveCollections to this collection. Mutates this collection in place.
+     *  @returns this CurveCollection (for chaining)
      */
     add(shapes: Curve|CurveCollection): CurveCollection
     {
         if (!(shapes instanceof Curve) && !(shapes instanceof CurveCollection))
         {
             console.error(`CurveCollection::add(): Only Curve(Collection) instances are allowed.`);
-            return new CurveCollection();
-        }   
-        
-        const addedCurves = super.add(shapes);
-        return new CurveCollection(addedCurves);
+            return this;
+        }
+        return super.add(shapes) as CurveCollection;
     }
 
     /** Alias for add (like an Array) */
@@ -1002,6 +990,28 @@ export class CurveCollection extends Collection
             if (next) result = next;
         }
         return result;
+    }
+
+    /** Offset every curve in this collection by `distance`.
+     *  Curves for which offset returns null are silently dropped.
+     *  @returns a new CurveCollection with the offset results.
+     */
+    offset(distance: number, cornerType: 'sharp'|'round'|'smooth' = 'sharp'): CurveCollection
+    {
+        const results: Curve[] = [];
+        for (const curve of this._shapes as Curve[])
+        {
+            const r = curve.offset(distance, cornerType);
+            if (r) results.push(r);
+        }
+        return new CurveCollection(...results);
+    }
+
+    /** Set stroke dash pattern on every curve in this collection. Defaults to [2, 2]. */
+    dashed(dash: number[] = [2, 2]): this
+    {
+        (this._shapes as Curve[]).forEach(curve => curve.dashed(dash));
+        return this;
     }
 
     //// COMBINED CURVE OPERATIONS ////

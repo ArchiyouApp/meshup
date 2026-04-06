@@ -78,6 +78,8 @@ function isValidOpacity(v: number): boolean {
 export class Style
 {
     _style: StyleData;
+    /** Tracks which top-level StyleData keys were explicitly set (not just defaults). */
+    private _explicit = new Set<keyof StyleData>();
 
     constructor(init?: StyleData)
     {
@@ -100,7 +102,21 @@ export class Style
         return this;
     }
 
-    //// GETTERS AND SETTERS ////
+    /**
+     * Return only the properties that were explicitly set on this Style instance
+     * (i.e. set via setters or merge(), not just constructor defaults).
+     * Used for style cascading in Container.effectiveStyle().
+     */
+    explicitData(): Partial<StyleData> {
+        const d: Partial<StyleData> = {};
+        if (this._explicit.has('visible')) d.visible = this.visible;
+        if (this._explicit.has('color')) d.color = this.color;
+        if (this._explicit.has('opacity')) d.opacity = this.opacity;
+        if (this._explicit.has('fill')) d.fill = { ...this._style.fill };
+        if (this._explicit.has('stroke')) d.stroke = { ...this._style.stroke };
+        if (this._explicit.has('material')) d.material = this._style.material;
+        return d;
+    }
 
     get visible(): boolean {
         return this._style.visible ?? true;
@@ -108,6 +124,7 @@ export class Style
     set visible(v: boolean) {
         if (typeof v !== 'boolean') throw new TypeError(`Style.visible must be a boolean, got: ${v}`);
         this._style.visible = v;
+        this._explicit.add('visible');
     }
 
     /**
@@ -123,6 +140,7 @@ export class Style
         this._style.color = n;
         this._style.fill!.color = n;
         this._style.stroke!.color = n;
+        this._explicit.add('color');
     }
 
     /** Overall opacity (0–1). Also sets fill.opacity and stroke.opacity. */
@@ -134,6 +152,7 @@ export class Style
         this._style.opacity = v;
         this._style.fill!.opacity = v;
         this._style.stroke!.opacity = v;
+        this._explicit.add('opacity');
     }
 
     //// FILL ////
@@ -154,6 +173,7 @@ export class Style
             update.opacity = v.opacity;
         }
         this._style.fill = { ...this._style.fill, ...update };
+        this._explicit.add('fill');
     }
 
     get fillColor(): StyleColor {
@@ -163,6 +183,7 @@ export class Style
         const n = normalizeColor(v);
         if (!isValidCssColor(n)) throw new Error(`Style.fillColor: invalid CSS color: "${v}"`);
         this._style.fill!.color = n;
+        this._explicit.add('fill');
     }
 
     get fillOpacity(): number {
@@ -171,6 +192,7 @@ export class Style
     set fillOpacity(v: number) {
         if (!isValidOpacity(v)) throw new RangeError(`Style.fillOpacity must be between 0 and 1, got: ${v}`);
         this._style.fill!.opacity = v;
+        this._explicit.add('fill');
     }
 
     //// STROKE ////
@@ -207,6 +229,7 @@ export class Style
             update.join = v.join;
         }
         this._style.stroke = { ...this._style.stroke, ...update };
+        this._explicit.add('stroke');
     }
 
     get strokeColor(): StyleColor {
@@ -216,6 +239,7 @@ export class Style
         const n = normalizeColor(v);
         if (!isValidCssColor(n)) throw new Error(`Style.strokeColor: invalid CSS color: "${v}"`);
         this._style.stroke!.color = n;
+        this._explicit.add('stroke');
     }
 
     get strokeOpacity(): number {
@@ -224,6 +248,7 @@ export class Style
     set strokeOpacity(v: number) {
         if (!isValidOpacity(v)) throw new RangeError(`Style.strokeOpacity must be between 0 and 1, got: ${v}`);
         this._style.stroke!.opacity = v;
+        this._explicit.add('stroke');
     }
 
     get strokeWidth(): number {
@@ -233,6 +258,7 @@ export class Style
         if (typeof v !== 'number' || v < 0)
             throw new RangeError(`Style.strokeWidth must be a non-negative number, got: ${v}`);
         this._style.stroke!.width = v;
+        this._explicit.add('stroke');
     }
 
     get strokeDash(): number[] {
@@ -242,6 +268,7 @@ export class Style
         if (!Array.isArray(v) || v.some(n => typeof n !== 'number' || n < 0))
             throw new TypeError(`Style.strokeDash must be an array of non-negative numbers`);
         this._style.stroke!.dash = v;
+        this._explicit.add('stroke');
     }
 
     get strokeCap(): 'butt' | 'round' | 'square' {
@@ -251,6 +278,7 @@ export class Style
         if (!['butt', 'round', 'square'].includes(v))
             throw new TypeError(`Style.strokeCap must be 'butt', 'round', or 'square', got: "${v}"`);
         this._style.stroke!.cap = v;
+        this._explicit.add('stroke');
     }
 
     get strokeJoin(): 'bevel' | 'round' | 'miter' {
@@ -260,6 +288,7 @@ export class Style
         if (!['bevel', 'round', 'miter'].includes(v))
             throw new TypeError(`Style.strokeJoin must be 'bevel', 'round', or 'miter', got: "${v}"`);
         this._style.stroke!.join = v;
+        this._explicit.add('stroke');
     }
 
     //// APPLY ////
