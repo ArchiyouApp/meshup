@@ -1569,7 +1569,8 @@ export class Curve
         }
         
         let offsettedCurve;
-        try {
+        try 
+        {
             if(this.isCompound())
             { 
                 console.info(`Curve::offset(): Merging collinear lines before offsetting to improve Curvo's handling of consecutive line segments in CompoundCurves.`);
@@ -1580,7 +1581,8 @@ export class Curve
             offsettedCurve = Curve.fromCsgrs(this.inner().offset(distance, cornerType));
             console.log(`Curve::offset(): Curvo offset completed in ${(performance.now() - t).toFixed(2)} ms.`);
         }
-        catch (e)        {
+        catch (e)
+        {
             console.error(`Curve::offset(): Error during offset: "${e}". Trying fallback offset method.`);
             offsettedCurve = this.offsetFallback(distance);
         }

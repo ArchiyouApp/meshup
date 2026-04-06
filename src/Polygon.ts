@@ -49,9 +49,11 @@ export class Polygon
     static from(p: PolygonJs | Array<PointLike>): Polygon
     {
         const poly = Object.create(Polygon.prototype) as Polygon;
-        if (p instanceof PolygonJs) {
+        if (p instanceof PolygonJs)
+        {
             poly._polygon = p;
-        } else {
+        }
+        else {
             poly._polygon = new PolygonJs(p.map(v => new Vertex(v as PointLike)), {});
         }
         return poly;

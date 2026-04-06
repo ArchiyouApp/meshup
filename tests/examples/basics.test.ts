@@ -51,10 +51,6 @@ describe('Example: sketch-to-solid workflow', () => {
             .close()
             .extrude(10);
 
-        console.log('==== MESH ====');
-        console.log(mesh);
-
-
         expect(mesh).toBeTruthy();
         expect((mesh as Mesh).polygons().length).toBeGreaterThan(0);
     });
