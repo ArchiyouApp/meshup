@@ -75,10 +75,21 @@ export class Point
         }
     }
 
+    //// STATIC FACTORY METHODS ////
+
     /** Create a new Point instance from the given parameters */
     static from(x: PointLike|number, y?: number, z?: number):Point
     {
         return new Point(x, y, z);
+    }
+
+    static random(range: number): Point
+    {
+        const point = new Point(0, 0, 0);
+        point._x += (Math.random() - 0.5) * range;
+        point._y += (Math.random() - 0.5) * range;
+        point._z += (Math.random() - 0.5) * range;
+        return point;
     }
 
     //// GETTERS / SETTERS
@@ -125,11 +136,6 @@ export class Point
         this._z += d.z;
         return this;
     }
-
-
-    //// CALCULATED PROPS ////
-
-    // TODO
 
     //// RELATIONSHIPS WITH OTHER POINTS ////
 

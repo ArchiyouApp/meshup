@@ -23,7 +23,7 @@ describe('Example: House', () =>
     const ROOF_OVERHANG_FRONT = 50;
     const THICKNESS = 20;
 
-    it('Build a simple house', () => 
+    it('Build a simple house', async () => 
     {
         const roofLinePoints = [
             [WIDTH/2, HEIGHT+Math.round(Math.tan(rad(ROOF_ANGLE)) * WIDTH/2)], [WIDTH,HEIGHT]];
@@ -56,9 +56,9 @@ describe('Example: House', () =>
         
         const house = new Collection(frontFacade!, backFacade!, wallLeft, wallRight, roof!);
 
-        const gltf = house!.toGLTF();
+        const gltf = await house!.toGLTF();
         expect(house).toBeTruthy();
-        save('house.gltf', gltf );
+        save('test.house.gltf', gltf );
         
     });
 

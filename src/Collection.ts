@@ -14,7 +14,9 @@ import { Vector } from "./Vector";
 import { Bbox } from "./Bbox";
 
 import { MeshJs, PolygonJs } from "./wasm/csgrs";
-import { toBase64, fromBase64 } from "./utils";
+
+import { Document, NodeIO } from '@gltf-transform/core';
+import { GLTFJsonDocumentToString } from './utils';
 
 export class Collection
 {
@@ -60,6 +62,14 @@ export class Collection
             console.error(`Collection::add(): Invalid shape(s). Supply something [<Mesh>|<Curve>|<Collection>|<CurveCollection>|<MeshCollection>|Array<Mesh|Curve>]. Skipping it!:`, shapes);
         }
         return this;
+    }
+
+    //// STATIC FACTORY METHODS ////
+
+    static generate(count: number, generator: (index: number) => Mesh|Curve): Collection
+    {
+        const shapes = new Array(count).fill(null).map((_, i) => generator(i));
+        return new Collection(...shapes);
     }
 
     //// GROUPS ////
@@ -445,174 +455,65 @@ export class Collection
 
     }
 
-    /** Export the entire collection to a single GLTF file.
+    /** Export the entire collection to a single GLTF file (JSON) or GLB binary using gltf-transform.
      *  Each Mesh becomes a TRIANGLES node; each Curve becomes a LINE_STRIP node.
-     *  All shapes share one binary buffer, with a separate buffer view per node.
      *
-     *  @param up - Source up-axis ('z' default, 'y', 'x'). Remapped to GLTF Y-up.
+     *  @param binary  true → GLB (Uint8Array), false → GLTF JSON string
+     *  @param up      Source up-axis ('z' default, 'y', 'x'). Remapped to GLTF Y-up.
      */
-    toGLTF(up: Axis = 'z'): string
+    private async _toGLTF(binary: boolean, up: Axis = 'z'): Promise<string | Uint8Array>
     {
-        const chunks: Uint8Array[] = [];
-        let byteOffset = 0;
-
-        const gltfMeshes:      any[] = [];
-        const gltfNodes:       any[] = [];
-        const gltfAccessors:   any[] = [];
-        const gltfBufferViews: any[] = [];
-        const gltfMaterials:   any[] = [];
-
-        /** Append a typed-array chunk, adding 4-byte padding if needed, return buffer-view index */
-        const addChunk = (data: Uint8Array, target: number): number =>
-        {
-            const padding = byteOffset % 4 === 0 ? 0 : 4 - (byteOffset % 4);
-            if (padding > 0) { chunks.push(new Uint8Array(padding)); byteOffset += padding; }
-            const viewIdx = gltfBufferViews.length;
-            gltfBufferViews.push({ buffer: 0, byteOffset, byteLength: data.byteLength, target });
-            chunks.push(data);
-            byteOffset += data.byteLength;
-            return viewIdx;
-        };
-
-        /** Append an accessor and return its index */
-        const addAccessor = (viewIdx: number, componentType: number, count: number,
-            type: string, min?: number[], max?: number[]): number =>
-        {
-            const idx = gltfAccessors.length;
-            const acc: any = { bufferView: viewIdx, byteOffset: 0, componentType, count, type };
-            if (min) acc.min = min;
-            if (max) acc.max = max;
-            gltfAccessors.push(acc);
-            return idx;
-        };
-
-        /** Remap from source coordinate space to GLTF Y-up */
-        const remap = (x: number, y: number, z: number): [number, number, number] =>
-        {
-            if (up === 'z') return [x,  z, -y];
-            if (up === 'x') return [y,  x,  z];
-            return [x, z,  y]; // already y-up
-        };
+        const doc = new Document();
+        const scene = doc.createScene('scene');
 
         this._shapes.forEach((shape, i) =>
         {
             if (shape instanceof Mesh)
             {
-                // Raw WASM buffers: positions/normals are Float64, indices are Uint32
-                const posRaw  = shape._mesh?.positions() ?? new Float64Array(0);
-                const normRaw = shape._mesh?.normals()   ?? new Float64Array(0);
-                const idxRaw  = shape._mesh?.indices()   ?? new Uint32Array(0);
-
-                const vertexCount = posRaw.length / 3;
-                const indexCount  = idxRaw.length;
-                if (vertexCount === 0) return;
-
-                // Convert positions: Float64 → Float32, remap axis, compute bbox
-                const posF32 = new Float32Array(posRaw.length);
-                const posMin = [Infinity,  Infinity,  Infinity];
-                const posMax = [-Infinity, -Infinity, -Infinity];
-                for (let v = 0; v < vertexCount; v++) // perf: keep as loop
-                {
-                    const [rx, ry, rz] = remap(posRaw[v*3], posRaw[v*3+1], posRaw[v*3+2]);
-                    posF32[v*3] = rx; posF32[v*3+1] = ry; posF32[v*3+2] = rz;
-                    if (rx < posMin[0]) posMin[0] = rx;  if (rx > posMax[0]) posMax[0] = rx;
-                    if (ry < posMin[1]) posMin[1] = ry;  if (ry > posMax[1]) posMax[1] = ry;
-                    if (rz < posMin[2]) posMin[2] = rz;  if (rz > posMax[2]) posMax[2] = rz;
-                }
-
-                // Convert normals: Float64 → Float32, remap axis
-                const normF32 = new Float32Array(normRaw.length);
-                for (let v = 0; v < vertexCount; v++) // perf: keep as loop
-                {
-                    const [rx, ry, rz] = remap(normRaw[v*3], normRaw[v*3+1], normRaw[v*3+2]);
-                    normF32[v*3] = rx; normF32[v*3+1] = ry; normF32[v*3+2] = rz;
-                }
-
-                // Copy Uint32 indices into a fresh buffer (avoids WASM-memory aliasing)
-                const idxCopy  = new Uint32Array(indexCount);
-                idxCopy.set(idxRaw);
-
-                const posView  = addChunk(new Uint8Array(posF32.buffer),   34962); // ARRAY_BUFFER
-                const normView = addChunk(new Uint8Array(normF32.buffer),  34962);
-                const idxView  = addChunk(new Uint8Array(idxCopy.buffer),  34963); // ELEMENT_ARRAY_BUFFER
-
-                const posAcc  = addAccessor(posView,  5126, vertexCount, "VEC3",   posMin, posMax);
-                const normAcc = addAccessor(normView, 5126, vertexCount, "VEC3");
-                const idxAcc  = addAccessor(idxView,  5125, indexCount,  "SCALAR");
-
-                const meshMatIdx = gltfMaterials.length;
-                gltfMaterials.push(shape.style.toGltfMaterial(`mesh_${i}_material`, false));
-                gltfMeshes.push({
-                    name: `mesh_${i}`,
-                    primitives: [{ attributes: { POSITION: posAcc, NORMAL: normAcc }, indices: idxAcc, mode: 4, material: meshMatIdx }]
-                });
-                gltfNodes.push({ mesh: gltfMeshes.length - 1, name: `mesh_${i}` });
+                if (!shape._mesh || shape.vertices().length === 0) return;
+                const node = shape._buildGLTFNode(doc, up, `mesh_${i}`);
+                scene.addChild(node);
             }
             else if (shape instanceof Curve)
             {
-                // toGLTFBuffer already gives us a Y-up-remapped Float32 buffer as base64
-                const buf     = shape.toGLTFBuffer(up);
-                if (buf.count < 2) return;
-                const bytes   = fromBase64(buf.data);
-                const viewIdx = addChunk(bytes, 34962); // ARRAY_BUFFER
+                const node = shape._buildGLTFNode(doc, up, `curve_${i}`);
+                scene.addChild(node);
 
-                const minArr = buf.min ? [buf.min.x, buf.min.y, buf.min.z] : undefined;
-                const maxArr = buf.max ? [buf.max.x, buf.max.y, buf.max.z] : undefined;
-                const posAcc = addAccessor(viewIdx, 5126, buf.count, "VEC3", minArr, maxArr);
-
-                const curveMatIdx = gltfMaterials.length;
-                gltfMaterials.push(shape.style.toGltfMaterial(`curve_${i}_material`, true));
-                gltfMeshes.push({
-                    name: `curve_${i}`,
-                    primitives: [{ attributes: { POSITION: posAcc }, mode: 3, material: curveMatIdx }] // LINE_STRIP
-                });
-                gltfNodes.push({ mesh: gltfMeshes.length - 1, name: `curve_${i}` });
-
-                // Also export interior hole curves as separate line strips (share parent material)
                 if (shape.hasHoles())
                 {
                     shape.holes().forEach((holeCurve, h) =>
                     {
-                        const holeBuf = holeCurve.toGLTFBuffer(up);
-                        if (holeBuf.count < 2) return;
-                        const holeBytes = fromBase64(holeBuf.data);
-                        const holeViewIdx = addChunk(holeBytes, 34962);
-                        const holeMinArr = holeBuf.min ? [holeBuf.min.x, holeBuf.min.y, holeBuf.min.z] : undefined;
-                        const holeMaxArr = holeBuf.max ? [holeBuf.max.x, holeBuf.max.y, holeBuf.max.z] : undefined;
-                        const holeAcc = addAccessor(holeViewIdx, 5126, holeBuf.count, "VEC3", holeMinArr, holeMaxArr);
-                        gltfMeshes.push({
-                            name: `curve_${i}_hole_${h}`,
-                            primitives: [{ attributes: { POSITION: holeAcc }, mode: 3, material: curveMatIdx }]
-                        });
-                        gltfNodes.push({ mesh: gltfMeshes.length - 1, name: `curve_${i}_hole_${h}` });
+                        const holeNode = holeCurve._buildGLTFNode(doc, up, `curve_${i}_hole_${h}`);
+                        scene.addChild(holeNode);
                     });
                 }
             }
         });
 
-        if (gltfNodes.length === 0)
+        if (scene.listChildren().length === 0)
         {
             console.warn('Collection::toGLTF(): No exportable shapes found.');
         }
 
-        // Pack all chunks into one binary buffer
-        const totalByteLength = chunks.reduce((s, c) => s + c.byteLength, 0);
-        const combined = new Uint8Array(totalByteLength);
-        chunks.reduce((pos, chunk) => { combined.set(chunk, pos); return pos + chunk.byteLength; }, 0);
+        doc.getRoot().setDefaultScene(scene);
+        const io = new NodeIO();
+        return binary ? io.writeBinary(doc) : io.writeJSON(doc).then(GLTFJsonDocumentToString);
+    }
 
-        const gltf: Record<string, any> = {
-            asset: { version: "2.0" },
-            scene: 0,
-            scenes: [{ nodes: gltfNodes.map((_, idx) => idx) }],
-            nodes: gltfNodes,
-            meshes: gltfMeshes,
-            accessors: gltfAccessors,
-            bufferViews: gltfBufferViews,
-            buffers: [{ byteLength: totalByteLength, uri: `data:application/octet-stream;base64,${toBase64(combined)}` }]
-        };
-        if (gltfMaterials.length > 0) gltf.materials = gltfMaterials;
+    /** Export the collection to a GLTF JSON string.
+     *  @param up Source up-axis ('z' default, 'y', 'x'). Remapped to GLTF Y-up.
+     */
+    async toGLTF(up: Axis = 'z'): Promise<string>
+    {
+        return this._toGLTF(false, up) as Promise<string>;
+    }
 
-        return JSON.stringify(gltf);
+    /** Export the collection to a GLB binary (Uint8Array).
+     *  @param up Source up-axis ('z' default, 'y', 'x'). Remapped to GLTF Y-up.
+     */
+    async toGLB(up: Axis = 'z'): Promise<Uint8Array>
+    {
+        return this._toGLTF(true, up) as Promise<Uint8Array>;
     }
 
     /** Output Shapes as an array */

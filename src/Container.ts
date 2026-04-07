@@ -20,6 +20,8 @@ import type { StyleData } from './Style';
 import type { Axis, ContainerGraphNode, BasePlane } from './types';
 import { Document, NodeIO } from '@gltf-transform/core';
 import type { Node as GltfNode } from '@gltf-transform/core';
+import { Collection } from './Collection';
+import { GLTFJsonDocumentToString } from './utils';
 
 /** Union of all concrete shape classes that can live inside a Container. */
 export type Shape = Mesh | Curve;
@@ -28,15 +30,10 @@ export class Container
 {
     name: string;
     style: Style;
-
-    /** Shapes held directly in this container (not in child containers). */
-    private _shapes: Shape[] = [];
-
-    /** Child containers (sub-groups / layers). */
-    private _children: Container[] = [];
-
-    /** Back-reference to the parent container; null if this is the root. */
-    private _parent: Container | null = null;
+    
+    private _shapes: Shape[] = []; // Shapes held directly in this container (not in child containers)
+    private _children: Container[] = []; // Child containers (sub-groups / layers)
+    private _parent: Container | null = null; // Back-reference to the parent container; null if this is the root
 
     constructor(name = 'container')
     {
@@ -61,6 +58,45 @@ export class Container
     }
 
     //// SHAPE MANAGEMENT ////
+
+     /**
+     * Convenience method: adds a child Container or a Shape to this container
+     *   - String → addChild(new Container(string)) - new child container with given name
+     *   - Container → addChild()
+     *   - Mesh | Curve → addShape()
+     */
+    add(...items: Array<string|Container|Shape|Collection>): this
+    {
+        for (const item of items)
+        {
+            if (typeof item === 'string')
+            {
+                // Name of new Container: create it and add as child
+                this.addChild(new Container(item));  
+            } 
+            else if (item instanceof Container) this.addChild(item);
+            else if (item instanceof Collection) item.forEach(shape => this.addShape(shape));
+            else this.addShape(item);
+        }
+        return this;
+    }
+
+    /** Add new Container (layer) and populate it with the given shape(s) */
+    addLayer(name: string, item: Shape|Collection): Container
+    {
+        const layer = new Container(name);
+        this.addChild(layer);
+        if (item instanceof Collection)
+        {
+          item.forEach(shape => layer.addShape(shape));
+        } 
+        else 
+        {
+          layer.addShape(item);
+        }
+
+        return layer;
+    }
 
     /** Add a shape to this container. Returns `this` for chaining. */
     addShape(shape: Shape): this
@@ -92,7 +128,7 @@ export class Container
     shapes(recursive = false): Shape[]
     {
         if (!recursive) return [...this._shapes];
-        return this._bfsContainers().flatMap(c => c._shapes);
+        return this._traverse().flatMap(c => c._shapes);
     }
 
     /** Return only Mesh shapes (optionally recursive). */
@@ -145,17 +181,6 @@ export class Container
         return this;
     }
 
-    /**
-     * Convenience method: adds a child Container or a Shape to this container.
-     *   - Container → addChild()
-     *   - Mesh | Curve → addShape()
-     */
-    add(item: Container | Shape): this
-    {
-        if (item instanceof Container) return this.addChild(item);
-        return this.addShape(item);
-    }
-
     /** Remove a child Container or a Shape from this container. */
     remove(item: Container | Shape): this
     {
@@ -196,7 +221,7 @@ export class Container
     descendants(): Container[]
     {
         // Skip `this` itself — start from children
-        const all = this._bfsContainers();
+        const all = this._traverse();
         return all.slice(1); // first element is `this`
     }
 
@@ -342,7 +367,7 @@ export class Container
         if (rootNode) scene.addChild(rootNode);
         doc.getRoot().setDefaultScene(scene);
         const io = new NodeIO();
-        return io.writeJSON(doc).then(d => JSON.stringify(d.json));
+        return io.writeJSON(doc).then(GLTFJsonDocumentToString);
     }
 
     /** Export this container hierarchy as a GLB binary (Uint8Array). */
@@ -434,8 +459,8 @@ export class Container
 
     //// INTERNAL HELPERS ////
 
-    /** BFS traversal that includes `this` as the first element. */
-    private _bfsContainers(): Container[]
+    /** traversal (BFS) that includes `this` as the first element. */
+    private _traverse(): Container[]
     {
         const bfs = (queue: Container[], acc: Container[]): Container[] =>
         {

@@ -18,7 +18,7 @@ import { Point } from './Point';
 import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { Vector } from './Vector'
-import { rad, deg, remapAxis } from './utils';
+import { rad, deg, remapAxis, GLTFJsonDocumentToString } from './utils';
 import { Document, NodeIO, Accessor, Primitive, Node as GltfNode } from '@gltf-transform/core';
 import { Style } from './Style';
 
@@ -34,14 +34,13 @@ import { TOLERANCE, SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT,
 
 export class Mesh
 {
-    _mesh: MeshJs | undefined;
+    _mesh: MeshJs | undefined; // Underlying MeshJs geometry
 
+    style: Style = new Style(); // Style properties for export (color, lineWidth, etc)
+    
+    _container: Container | null = null; // The Container this mesh belongs to, or null if not in a container
     metadata: Record<string, any> = {};
 
-    style: Style = new Style();
-
-    /** The Container this mesh belongs to, or null if not in a container. */
-    _container: Container | null = null;
 
     /** Return the Container this mesh belongs to, or null. */
     container(): Container | null { return this._container; }
@@ -368,6 +367,21 @@ export class Mesh
         const m = Mesh.from(c);
         m.style.merge(this.style.toData());
         return m;
+    }
+
+    /** Replicate this Mesh a given number of times and return in a MeshCollection */
+    replicate(num: number, transform: (mesh: Mesh, index: number, prev: Mesh | undefined) => Mesh): MeshCollection
+    {
+        const newMeshes = new MeshCollection();
+        new Array(num).fill(0).map((_, i) =>
+        {
+            const newMesh = transform(
+                                this.copy() as Mesh,
+                                i,
+                                i > 0 ? newMeshes.get(i - 1) as Mesh : undefined);
+            if (newMesh) newMeshes.add(newMesh);
+        });
+        return newMeshes;
     }
 
     /** Check if the Mesh is valid (has vertices) */
@@ -953,7 +967,7 @@ export class Mesh
         const idxCopy = new Uint32Array(idxRaw.length);
         idxCopy.set(idxRaw);
 
-        const gtBuf = doc.createBuffer();
+        const gtBuf = doc.getRoot().listBuffers()[0] ?? doc.createBuffer();
 
         const posAcc = doc.createAccessor()
             .setType(Accessor.Type.VEC3)
@@ -1062,7 +1076,7 @@ export class Mesh
         doc.getRoot().setDefaultScene(scene);
 
         const io = new NodeIO();
-        return binary ? io.writeBinary(doc) : io.writeJSON(doc).then(d => JSON.stringify(d.json));
+        return binary ? io.writeBinary(doc) : io.writeJSON(doc).then(GLTFJsonDocumentToString);
     }
 
     /** Export Mesh to GLTF JSON string.
@@ -1082,6 +1096,7 @@ export class Mesh
         if (!this._mesh) return undefined;
         return this._toGLTF(true, up) as Promise<Uint8Array>;
     }
+    
     toAMF(): string | undefined
     {
         return this.inner()?.toAMF('model', 'mm');

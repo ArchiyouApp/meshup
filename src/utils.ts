@@ -125,12 +125,39 @@ export function fromBase64(b64: string): Uint8Array
 {
     if (typeof Buffer !== 'undefined')
     {
-        return Buffer.from(b64, 'base64');
+        // Buffer.from().buffer returns the shared pool ArrayBuffer (wrong size).
+        // Copy into a plain Uint8Array so .buffer is exactly the decoded bytes.
+        const buf = Buffer.from(b64, 'base64');
+        const result = new Uint8Array(buf.length);
+        result.set(buf);
+        return result;
     }
     const bin = atob(b64);
     const bytes = new Uint8Array(bin.length);
     Array.from({ length: bin.length }, (_, i) => { bytes[i] = bin.charCodeAt(i); });
     return bytes;
+}
+
+/**
+ * Serialize a gltf-transform JSONDocument to a self-contained GLTF JSON string.
+ * Converts all external buffer resources (e.g. "buffer.bin") to inline base64 data URIs
+ * so the result can be used standalone without companion binary files.
+ */
+export function GLTFJsonDocumentToString(jsonDoc: { json: any; resources: Record<string, Uint8Array> }): string
+{
+    const json = jsonDoc.json;
+    if (Array.isArray(json.buffers))
+    {
+        json.buffers.forEach((bufDef: any) =>
+        {
+            const data = jsonDoc.resources[bufDef.uri];
+            if (data)
+            {
+                bufDef.uri = `data:application/octet-stream;base64,${toBase64(data)}`;
+            }
+        });
+    }
+    return JSON.stringify(json);
 }
 
 /**

@@ -32,7 +32,7 @@ import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { Polygon } from './Polygon';
 
-import { toBase64, fromBase64, rad, remapAxis } from "./utils";
+import { toBase64, fromBase64, rad, remapAxis, GLTFJsonDocumentToString } from "./utils";
 import { Document, NodeIO, Accessor, Primitive, Node as GltfNode } from '@gltf-transform/core';
 import { Style } from "./Style";
 
@@ -1563,7 +1563,8 @@ export class Curve
     {
         if(!this.isPlanar()){ throw new Error(`Curve:offset(): Cannot offset a 2D curve!`);}
 
-        // Fast path for circles: offsetting a circle just changes its radius.
+        // Fast path for circles: offsetting a circle just changes its radius 
+        // Curvo offsetting is quite slow 
         if(this.type() === 'circle')
         {
             const bb = this.bbox();
@@ -1591,10 +1592,10 @@ export class Curve
         {
             if(this.isCompound())
             { 
+                // merge collinear lines to avoid Curvo's offset issues with consecutive lines
                 console.info(`Curve::offset(): Merging collinear lines before offsetting to improve Curvo's handling of consecutive line segments in CompoundCurves.`);
                 this.mergeColinearLines();
             }
-            // merge collinear lines to avoid Curvo's offset issues with consecutive lines
             const t = performance.now();
             offsettedCurve = Curve.fromCsgrs(this.inner().offset(distance, cornerType));
             console.log(`Curve::offset(): Curvo offset completed in ${(performance.now() - t).toFixed(2)} ms.`);
@@ -2095,7 +2096,7 @@ export class Curve
         const buf = this.toGLTFBuffer(up);
         const posF32 = new Float32Array(fromBase64(buf.data).slice().buffer);
 
-        const gtBuf = doc.createBuffer();
+        const gtBuf = doc.getRoot().listBuffers()[0] ?? doc.createBuffer();
 
         const posAcc = doc.createAccessor()
             .setType(Accessor.Type.VEC3)
@@ -2255,7 +2256,7 @@ export class Curve
         doc.getRoot().setDefaultScene(scene);
 
         const io = new NodeIO();
-        return binary ? io.writeBinary(doc) : io.writeJSON(doc).then(d => JSON.stringify(d.json));
+        return binary ? io.writeBinary(doc) : io.writeJSON(doc).then(GLTFJsonDocumentToString);
     }
 
     /** Export this curve as a self-contained GLTF JSON string (LINE_STRIP). */
