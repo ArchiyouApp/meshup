@@ -171,7 +171,8 @@ export class Curve
         {
             controlPoints = [controlPoints, ...(args?.filter(p => isPointLike(p)) || [])];
         }
-        else {
+        else
+        {
             controlPoints = controlPoints as Array<PointLike>; // already in correct format
         }
 
@@ -581,9 +582,12 @@ export class Curve
     /** Set color (both stroke and fill) of (closed) Curve */
     color(color: number|string, g?: number, b?: number): this
     {
-        if (typeof color === 'number' && typeof g === 'number' && typeof b === 'number') {
+        if (typeof color === 'number' && typeof g === 'number' && typeof b === 'number')
+        {
             this.style.color = [color, g, b];
-        } else {
+        }
+        else
+        {
             this.style.color = color as string;
         }
         return this;
@@ -678,17 +682,14 @@ export class Curve
         const corners = (n === 5) ? pts.slice(0, 4) : pts;
         if (corners.length !== 4) return false;
 
-        for (let i = 0; i < 4; i++)
+        return corners.every((a, i) =>
         {
-            const a = corners[i];
             const b = corners[(i + 1) % 4];
             const c = corners[(i + 2) % 4];
             const ab = new Vector(b.x - a.x, b.y - a.y, b.z - a.z);
             const bc = new Vector(c.x - b.x, c.y - b.y, c.z - b.z);
-            if (Math.abs(ab.dot(bc)) > ANGLE_COMPARE_TOLERANCE) return false;
-        }
-
-        return true;
+            return Math.abs(ab.dot(bc)) <= ANGLE_COMPARE_TOLERANCE;
+        });
     }
 
     isCompound():boolean
@@ -717,7 +718,8 @@ export class Curve
         {
             return (this.inner() as NurbsCurve3DJs).knots();
         }
-        else {
+        else
+        {
             console.warn(`Curve::knots(): Curve is compound. Use specific span to get knots`);
         }
     }
@@ -728,7 +730,8 @@ export class Curve
         {
             return Array.from(this.inner()?.knotsDomain());
         }
-        else {
+        else
+        {
             console.warn(`Curve::knots(): Curve is compound. Use specific span to get knots`);
         }
     }
@@ -739,7 +742,8 @@ export class Curve
         {
             return Array.from((this.inner() as NurbsCurve3DJs)?.weights());
         }
-        else {
+        else
+        {
             console.warn(`Curve::weights(): Curve is compound. Use specific span to get weights`);
         }
     }
@@ -751,7 +755,8 @@ export class Curve
             // If not compound, return self as single span for consistent API
             return [this];
         }
-        else {
+        else
+        {
             return (this.inner() as CompoundCurve3DJs).spans().map(span => Curve.fromCsgrs(span));
         }
     }
@@ -770,7 +775,8 @@ export class Curve
 
     isPlanar(): boolean
     {
-        if (this._curve instanceof NurbsCurve3DJs) {
+        if (this._curve instanceof NurbsCurve3DJs)
+        {
             return this._curve.isPlanar();
         }
         // For compound curves, check via getOnPlane
@@ -802,10 +808,12 @@ export class Curve
             const firstResult = spans[0].getOnPlane(tolerance);
             if (!firstResult || firstResult.length === 0) return null;
             // Verify all spans share the same plane
-            for (let i = 1; i < spans.length; i++) {
-                const r = spans[i].getOnPlane(tolerance);
-                if (!r || r.length === 0) return null;
-            }
+            const allSpansOnPlane = spans.slice(1).every(span =>
+            {
+                const r = span.getOnPlane(tolerance);
+                return r && r.length > 0;
+            });
+            if (!allSpansOnPlane) return null;
             return {
                 normal: new Vector(firstResult[0].x, firstResult[0].y, firstResult[0].z),
                 x: new Vector(firstResult[1].x, firstResult[1].y, firstResult[1].z),
@@ -864,7 +872,8 @@ export class Curve
         {
             return (this.inner() as NurbsCurve3DJs)?.degree();
         }
-        else {
+        else
+        {
             console.warn(`Curve::degree(): Curve is compound. Use specific span to get degree or use maxDegree()`);
             return null;
         }
@@ -877,7 +886,8 @@ export class Curve
         {
             return (this.inner() as NurbsCurve3DJs)?.degree();
         }
-        else {
+        else
+        {
             return (this.inner() as CompoundCurve3DJs).spans().reduce((maxDeg, span) => Math.max(maxDeg, span.degree()), 0);
         }
     }
@@ -895,7 +905,8 @@ export class Curve
         {
             return (this.inner() as NurbsCurve3DJs)?.paramAtLength(length);
         }
-        else {
+        else
+        {
             console.warn(`Curve::paramAtLength(): Curve is compound. Use specific span to get parameter at length`);
             return null;
         }
@@ -979,19 +990,19 @@ export class Curve
         const samplesA: Array<{ param: number, pt: Point }> = [];
         const samplesB: Array<{ param: number, pt: Point }> = [];
 
-        for (let i = 0; i <= NUM_SAMPLES; i++)
+        Array.from({ length: NUM_SAMPLES + 1 }, (_, i) =>
         {
             const tA = domainA[0] + (domainA[1] - domainA[0]) * i / NUM_SAMPLES;
             const tB = domainB[0] + (domainB[1] - domainB[0]) * i / NUM_SAMPLES;
             samplesA.push({ param: tA, pt: this.pointAtParam(tA) });
             samplesB.push({ param: tB, pt: other.pointAtParam(tB) });
-        }
+        });
 
         // 2. Find top-k closest pairs as seeds
         const seeds: Array<{ distSq: number, paramA: number, paramB: number }> = [];
-        for (const a of samplesA)
+        samplesA.forEach(a =>
         {
-            for (const b of samplesB)
+            samplesB.forEach(b =>
             {
                 const dx = a.pt.x - b.pt.x;
                 const dy = a.pt.y - b.pt.y;
@@ -1008,8 +1019,8 @@ export class Curve
                     seeds[0] = { distSq, paramA: a.param, paramB: b.param };
                     seeds.sort((a, b) => b.distSq - a.distSq);
                 }
-            }
-        }
+            });
+        });
 
         if (seeds.length === 0) return null;
 
@@ -1017,13 +1028,13 @@ export class Curve
         let bestDist = Infinity;
         let bestPair: [Point, Point]|null = null;
 
-        for (const seed of seeds)
+        seeds.forEach(seed =>
         {
             let ptA = this.pointAtParam(seed.paramA);
             let ptB = other.pointAtParam(seed.paramB);
             let prevDist = Infinity;
 
-            for (let i = 0; i < MAX_ACI_ITER; i++)
+            for (let i = 0; i < MAX_ACI_ITER; i++) // perf: keep as loop (convergence with break)
             {
                 const paramB = other.paramClosestToPoint(ptA);
                 if (paramB === null) break;
@@ -1043,7 +1054,7 @@ export class Curve
                 bestDist = prevDist;
                 bestPair = [ptA, ptB];
             }
-        }
+        });
 
         return bestPair;
     }
@@ -1228,9 +1239,12 @@ export class Curve
      */
     rotateQuaternion(wOrObj: number | {w: number, x: number, y: number, z: number}, x?: number, y?: number, z?: number): this
     {
-        if (typeof wOrObj === 'object' && wOrObj !== null && 'w' in wOrObj && 'x' in wOrObj && 'y' in wOrObj && 'z' in wOrObj) {
+        if (typeof wOrObj === 'object' && wOrObj !== null && 'w' in wOrObj && 'x' in wOrObj && 'y' in wOrObj && 'z' in wOrObj)
+        {
             return this.update(this.inner().rotateQuaternion(wOrObj.w, wOrObj.x, wOrObj.y, wOrObj.z));
-        } else {
+        }
+        else
+        {
             return this.update(this.inner().rotateQuaternion(wOrObj, x!, y!, z!));
         }
     }
@@ -1378,13 +1392,15 @@ export class Curve
                             : this.bbox()?.center() ?? new Point([0, 0, 0]);
 
         // Reflect a single point: P' = P - 2·dot(P−Q, n)·n
-        const mirrorPoint = (p: Point): Point => {
+        const mirrorPoint = (p: Point): Point =>
+        {
             const dot2 = 2 * ((p.x - planePos.x) * n.x + (p.y - planePos.y) * n.y + (p.z - planePos.z) * n.z);
             return new Point([p.x - dot2 * n.x, p.y - dot2 * n.y, p.z - dot2 * n.z]);
         };
 
         // Reflect a single NURBS span and return a new NurbsCurve3DJs
-        const mirrorSpan = (span: NurbsCurve3DJs): NurbsCurve3DJs => {
+        const mirrorSpan = (span: NurbsCurve3DJs): NurbsCurve3DJs =>
+        {
             const mirroredPoints = span.controlPoints().map(p => mirrorPoint(Point.from(p)).toPoint3Js());
             return new NurbsCurve3DJs(span.degree(), mirroredPoints, span.weights(), span.knots());
         };
@@ -1427,12 +1443,14 @@ export class Curve
         const n = normal.normalize();
 
         // Project a single point onto the plane: P' = P - dot(P - Q, N) * N
-        const projectPoint = (p: Point): Point => {
+        const projectPoint = (p: Point): Point =>
+        {
             const dot = (p.x - origin.x) * n.x + (p.y - origin.y) * n.y + (p.z - origin.z) * n.z;
             return new Point(p.x - dot * n.x, p.y - dot * n.y, p.z - dot * n.z);
         };
 
-        const projectSpan = (span: NurbsCurve3DJs): NurbsCurve3DJs => {
+        const projectSpan = (span: NurbsCurve3DJs): NurbsCurve3DJs =>
+        {
             const projectedPoints = span.controlPoints().map(p => projectPoint(Point.from(p)).toPoint3Js());
             return new NurbsCurve3DJs(span.degree(), projectedPoints, span.weights(), span.knots());
         };
@@ -1754,18 +1772,13 @@ export class Curve
                     ? (this.inner() as NurbsCurve3DJs).booleanCurve(other.inner() as NurbsCurve3DJs, operation)
                     : (this.inner() as NurbsCurve3DJs).booleanCompoundCurve(other.inner() as CompoundCurve3DJs, operation));
 
-            const curves: Array<Curve> = [];
-            for (const region of (regions || []))
+            const curves = (regions || []).map(region =>
             {
                 const exterior = Curve.fromCsgrs(region.exterior);
                 // Attach hole curves to the exterior curve
-                const holeCurves = region.holes || [];
-                for (const hole of holeCurves)
-                {
-                    exterior.addHole(Curve.fromCsgrs(hole));
-                }
-                curves.push(exterior);
-            }
+                (region.holes || []).forEach(hole => exterior.addHole(Curve.fromCsgrs(hole)));
+                return exterior;
+            });
             return new CurveCollection(...curves);
         }
         catch (e)
@@ -1975,14 +1988,14 @@ export class Curve
 
         if (this.hasHoles())
         {
-            for (const hole of this._holes)
+            this._holes.forEach(hole =>
             {
                 const holePoints = hole.tessellate(tolerance);
                 if (holePoints.length >= 3)
                 {
                     poly.addHole(holePoints);
                 }
-            }
+            });
         }
         return poly;
     }
@@ -2025,7 +2038,8 @@ export class Curve
         const points = this.tessellate();
         const pointsFlat = new Float32Array(
             points
-                .map(p => {
+                .map(p =>
+                {
                     const arr = p.toArray();
                     if (up === 'z')
                     {
@@ -2035,7 +2049,8 @@ export class Curve
                     {
                         return [arr[1], arr[0], arr[2]];
                     }
-                    else {
+                    else
+                    {
                         // GLTF is Y-up
                         return [arr[0], arr[2], arr[1]];
                     }
@@ -2051,9 +2066,9 @@ export class Curve
         // Compute min/max from the already-remapped positions in the buffer
         const minArr = [Infinity, Infinity, Infinity];
         const maxArr = [-Infinity, -Infinity, -Infinity];
-        for (let i = 0; i < pointsFlat.length; i += 3)
+        for (let i = 0; i < pointsFlat.length; i += 3) // perf: keep as loop
         {
-            for (let c = 0; c < 3; c++)
+            for (let c = 0; c < 3; c++) // perf: keep as loop
             {
                 if (pointsFlat[i + c] < minArr[c]) minArr[c] = pointsFlat[i + c];
                 if (pointsFlat[i + c] > maxArr[c]) maxArr[c] = pointsFlat[i + c];
@@ -2132,9 +2147,9 @@ export class Curve
         const pathParts: string[] = [];
         const spans = projected._getSvgSpans();
 
-        for (let si = 0; si < spans.length; si++)
+        spans.forEach((spanRaw, si) =>
         {
-            const spanCurve = Curve.fromCsgrs(spans[si]);
+            const spanCurve = Curve.fromCsgrs(spanRaw);
             const cps = spanCurve.controlPoints();
             const curveType = spanCurve.type();
 
@@ -2150,57 +2165,55 @@ export class Curve
                 case 'polyline':
                 case 'rect':
                 {
-                    for (let i = 1; i < cps.length; i++)
+                    cps.slice(1).forEach(cp =>
                     {
-                        const [x, y] = to2D(cps[i]);
+                        const [x, y] = to2D(cp);
                         pathParts.push(`L${fmt(x)} ${fmt(y)}`);
-                    }
+                    });
                     break;
                 }
                 case 'arc':
                 case 'circle':
                 {
-                    _appendArcSvg(spans[si], to2D, fmt, pathParts);
+                    _appendArcSvg(spanRaw, to2D, fmt, pathParts);
                     break;
                 }
                 case 'spline':
                 {
-                    const span = spans[si];
-                    const deg = span.degree();
-                    const weights = Array.from(span.weights());
+                    const deg = spanRaw.degree();
+                    const weights = Array.from(spanRaw.weights());
                     const bezierSegs = _bsplineToBezierSegments(
-                        span.controlPoints(), Array.from(span.knots()), weights, deg);
+                        spanRaw.controlPoints(), Array.from(spanRaw.knots()), weights, deg);
 
                     if (deg === 2)
                     {
-                        for (const seg of bezierSegs)
+                        bezierSegs.forEach(seg =>
                         {
                             const [, cp1, end] = seg.map(to2D);
                             pathParts.push(`Q${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(end[0])} ${fmt(end[1])}`);
-                        }
+                        });
                     }
                     else
                     {
-                        for (const seg of bezierSegs)
+                        bezierSegs.forEach(seg =>
                         {
                             const [, cp1, cp2, end] = seg.map(to2D);
                             pathParts.push(`C${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(cp2[0])} ${fmt(cp2[1])} ${fmt(end[0])} ${fmt(end[1])}`);
-                        }
+                        });
                     }
                     break;
                 }
                 default:
                 {
-                    const pts = spanCurve.tessellate();
-                    for (let i = 1; i < pts.length; i++)
+                    spanCurve.tessellate().slice(1).forEach(pt =>
                     {
-                        const [x, y] = to2D(pts[i]);
+                        const [x, y] = to2D(pt);
                         pathParts.push(`L${fmt(x)} ${fmt(y)}`);
-                    }
+                    });
                     break;
                 }
             }
-        }
+        });
 
         if (this.isClosed()) pathParts.push('Z');
 
@@ -2291,9 +2304,9 @@ export class Curve
         const pathParts: string[] = [];
         const spans = projected._getSvgSpans();
 
-        for (let si = 0; si < spans.length; si++)
+        spans.forEach((spanRaw, si) =>
         {
-            const spanCurve = Curve.fromCsgrs(spans[si]);
+            const spanCurve = Curve.fromCsgrs(spanRaw);
             const cps = spanCurve.controlPoints();
             const curveType = spanCurve.type();
 
@@ -2310,59 +2323,57 @@ export class Curve
                 case 'polyline':
                 case 'rect':
                 {
-                    for (let i = 1; i < cps.length; i++)
+                    cps.slice(1).forEach(cp =>
                     {
-                        const [x, y] = to2D(cps[i]);
+                        const [x, y] = to2D(cp);
                         pathParts.push(`L${fmt(x)} ${fmt(y)}`);
-                    }
+                    });
                     break;
                 }
                 case 'arc':
                 case 'circle':
                 {
-                    _appendArcSvg(spans[si], to2D, fmt, pathParts);
+                    _appendArcSvg(spanRaw, to2D, fmt, pathParts);
                     break;
                 }
                 case 'spline':
                 {
-                    const span = spans[si];
-                    const deg = span.degree();
-                    const weights = Array.from(span.weights());
+                    const deg = spanRaw.degree();
+                    const weights = Array.from(spanRaw.weights());
                     const bezierSegs = _bsplineToBezierSegments(
-                        span.controlPoints(), Array.from(span.knots()), weights, deg);
+                        spanRaw.controlPoints(), Array.from(spanRaw.knots()), weights, deg);
 
                     if (deg === 2)
                     {
-                        for (const seg of bezierSegs)
+                        bezierSegs.forEach(seg =>
                         {
                             const [, cp1, end] = seg.map(to2D);
                             pathParts.push(`Q${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(end[0])} ${fmt(end[1])}`);
-                        }
+                        });
                     }
                     else
                     {
                         // degree 3 (cubic) is the common case
-                        for (const seg of bezierSegs)
+                        bezierSegs.forEach(seg =>
                         {
                             const [, cp1, cp2, end] = seg.map(to2D);
                             pathParts.push(`C${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(cp2[0])} ${fmt(cp2[1])} ${fmt(end[0])} ${fmt(end[1])}`);
-                        }
+                        });
                     }
                     break;
                 }
                 default:
                 {
                     // compound or unsupported: tessellate fallback
-                    const pts = spanCurve.tessellate();
-                    for (let i = 1; i < pts.length; i++)
+                    spanCurve.tessellate().slice(1).forEach(pt =>
                     {
-                        const [x, y] = to2D(pts[i]);
+                        const [x, y] = to2D(pt);
                         pathParts.push(`L${fmt(x)} ${fmt(y)}`);
-                    }
+                    });
                     break;
                 }
             }
-        }
+        });
 
         // Close path if the curve is closed
         if (this.isClosed())
@@ -2414,8 +2425,7 @@ export class Curve
         }
 
         // Split any geometrically-closed rational degree-2 span (full circle) into two open arcs
-        const result: NurbsCurve3DJs[] = [];
-        for (const span of rawSpans)
+        return rawSpans.flatMap(span =>
         {
             if (span.degree() === 2
                 && Array.from(span.weights()).some(w => Math.abs(w - 1.0) > 1e-8))
@@ -2433,14 +2443,11 @@ export class Curve
                     // Closed circle/arc: split at midpoint so each half is an open arc
                     const [lo, hi] = Array.from(span.knotsDomain());
                     const mid = (lo + hi) / 2;
-                    const halves = span.split(mid);
-                    result.push(...halves);
-                    continue;
+                    return span.split(mid);
                 }
             }
-            result.push(span);
-        }
-        return result;
+            return [span];
+        });
     }
 }
 
@@ -2472,35 +2479,29 @@ function _bsplineToBezierSegments(
     const p = degree;
     const interiorKnots = _distinctInteriorKnots(U, p);
 
-    for (const { value, multiplicity } of interiorKnots)
+    interiorKnots.forEach(({ value, multiplicity }) =>
     {
         const timesToInsert = p - multiplicity;
-        for (let t = 0; t < timesToInsert; t++)
+        Array.from({ length: timesToInsert }, () =>
         {
             const result = _boehmInsert(pts, U, p, value);
             pts = result.points;
             U = result.knots;
-        }
-    }
+        });
+    });
 
     // After full knot insertion, each Bezier segment spans (p+1) control points
     // with overlap at boundary points.
     const numSegments = (pts.length - 1) / p;
-    const segments: Array<Array<{ x: number; y: number; z: number }>> = [];
 
-    for (let i = 0; i < numSegments; i++)
-    {
-        const seg: Array<{ x: number; y: number; z: number }> = [];
-        for (let j = 0; j <= p; j++)
+    return Array.from({ length: numSegments }, (_, i) =>
+        Array.from({ length: p + 1 }, (_, j) =>
         {
             const h = pts[i * p + j];
             const invW = h.w !== 0 ? 1 / h.w : 1;
-            seg.push({ x: h.x * invW, y: h.y * invW, z: h.z * invW });
-        }
-        segments.push(seg);
-    }
-
-    return segments;
+            return { x: h.x * invW, y: h.y * invW, z: h.z * invW };
+        })
+    );
 }
 
 /** Get the distinct interior knots and their multiplicities. */
@@ -2517,14 +2518,14 @@ function _distinctInteriorKnots(
     const hi = knots[n - degree - 1];
 
     let i = degree + 1;
-    while (i < n - degree - 1)
+    while (i < n - degree - 1) // perf: keep as loop (stateful index advance)
     {
         const val = knots[i];
         if (val > lo && val < hi)
         {
             let mult = 0;
             let j = i;
-            while (j < n - degree - 1 && Math.abs(knots[j] - val) < 1e-12)
+            while (j < n - degree - 1 && Math.abs(knots[j] - val) < 1e-12) // perf: keep as loop
             {
                 mult++;
                 j++;
@@ -2555,42 +2556,35 @@ function _boehmInsert(
     const p = degree;
 
     // Find knot span k such that knots[k] <= u < knots[k+1]
-    let k = -1;
-    for (let i = p; i < knots.length - 1; i++)
-    {
-        if (knots[i] <= u + 1e-12 && u < knots[i + 1] - 1e-12)
-        {
-            k = i;
-            break;
-        }
-    }
-    if (k === -1) k = knots.length - p - 2; // fallback for end
+    const kIdx = knots.slice(p, knots.length - 1).findIndex((kv, off) =>
+        kv <= u + 1e-12 && u < knots[p + off + 1] - 1e-12
+    );
+    const k = kIdx === -1 ? knots.length - p - 2 : p + kIdx;
 
     // Compute new control points
-    const newPts: Array<{ x: number; y: number; z: number; w: number }> = [];
-    for (let i = 0; i <= n; i++)
+    const newPts = Array.from({ length: n + 1 }, (_, i) =>
     {
         if (i <= k - p)
         {
-            newPts.push({ ...pts[i] });
+            return { ...pts[i] };
         }
         else if (i >= k + 1)
         {
-            newPts.push({ ...pts[i - 1] });
+            return { ...pts[i - 1] };
         }
         else
         {
             // k-p+1 <= i <= k
             const denom = knots[i + p] - knots[i];
             const alpha = denom > 1e-14 ? (u - knots[i]) / denom : 0;
-            newPts.push({
+            return {
                 x: (1 - alpha) * pts[i - 1].x + alpha * pts[i].x,
                 y: (1 - alpha) * pts[i - 1].y + alpha * pts[i].y,
                 z: (1 - alpha) * pts[i - 1].z + alpha * pts[i].z,
                 w: (1 - alpha) * pts[i - 1].w + alpha * pts[i].w,
-            });
+            };
         }
-    }
+    });
 
     // Insert knot value into knot vector
     const newKnots = [...knots.slice(0, k + 1), u, ...knots.slice(k + 1)];

@@ -92,9 +92,7 @@ export class Container
     shapes(recursive = false): Shape[]
     {
         if (!recursive) return [...this._shapes];
-        const result: Shape[] = [];
-        for (const c of this._bfsContainers()) result.push(...c._shapes);
-        return result;
+        return this._bfsContainers().flatMap(c => c._shapes);
     }
 
     /** Return only Mesh shapes (optionally recursive). */
@@ -189,14 +187,9 @@ export class Container
     /** Return all ancestors from immediate parent up to (and including) the root. */
     ancestors(): Container[]
     {
-        const result: Container[] = [];
-        let cur = this._parent;
-        while (cur)
-        {
-            result.push(cur);
-            cur = cur._parent;
-        }
-        return result;
+        const collect = (node: Container | null, acc: Container[]): Container[] =>
+            node ? collect(node._parent, [...acc, node]) : acc;
+        return collect(this._parent, []);
     }
 
     /** Return all descendant containers in BFS order (not including this). */
@@ -210,10 +203,9 @@ export class Container
     /** Return the root container (walk up _parent chain). */
     root(): Container
     {
-        // eslint-disable-next-line @typescript-eslint/no-this-alias
-        let cur: Container = this;
-        while (cur._parent) cur = cur._parent;
-        return cur;
+        const walk = (node: Container): Container =>
+            node._parent ? walk(node._parent) : node;
+        return walk(this);
     }
 
     /** True when this container has no parent. */
@@ -225,25 +217,22 @@ export class Container
     /** Find the first descendant (DFS) whose name matches. */
     find(name: string): Container | undefined
     {
-        for (const child of this._children)
+        return this._children.reduce<Container | undefined>((found, child) =>
         {
-            if (child.name === name) return child;
-            const found = child.find(name);
             if (found) return found;
-        }
-        return undefined;
+            if (child.name === name) return child;
+            return child.find(name);
+        }, undefined);
     }
 
     /** Return all descendants (DFS) matching the predicate. */
     findAll(pred: (c: Container) => boolean): Container[]
     {
-        const result: Container[] = [];
-        for (const child of this._children)
+        return this._children.flatMap(child =>
         {
-            if (pred(child)) result.push(child);
-            result.push(...child.findAll(pred));
-        }
-        return result;
+            const here = pred(child) ? [child] : [];
+            return [...here, ...child.findAll(pred)];
+        });
     }
 
     //// STYLE ////
@@ -286,7 +275,7 @@ export class Container
     {
         const chain = [...this.ancestors().reverse(), this];
         const merged = new Style();
-        for (const c of chain) merged.merge(c.style.explicitData() as any);
+        chain.forEach(c => merged.merge(c.style.explicitData() as any));
         return merged;
     }
 
@@ -298,7 +287,7 @@ export class Container
     applyStyle(): this
     {
         const eff = this.effectiveStyle();
-        for (const shape of this.shapes(true)) shape.style.merge(eff.toData());
+        this.shapes(true).forEach(shape => shape.style.merge(eff.toData()));
         return this;
     }
 
@@ -329,18 +318,17 @@ export class Container
 
         const node = doc.createNode(this.name);
 
-        for (let i = 0; i < this._shapes.length; i++)
+        this._shapes.forEach((shape, i) =>
         {
-            const shape = this._shapes[i];
             const shapeNode = shape._buildGLTFNode(doc, up, `${this.name}_shape_${i}`);
             node.addChild(shapeNode);
-        }
+        });
 
-        for (const child of this._children)
+        this._children.forEach(child =>
         {
             const childNode = child._buildGLTFNode(doc, up);
             if (childNode) node.addChild(childNode);
-        }
+        });
 
         return node;
     }
@@ -383,21 +371,21 @@ export class Container
         const displayAttr = eff.visible ? '' : ' display="none"';
         const lines: string[] = [`<g id="${this.name}"${displayAttr}>`];
 
-        for (const shape of this._shapes)
+        this._shapes.forEach(shape =>
         {
             if (shape instanceof Mesh)
             {
                 console.warn(`Container.toSVG(): Mesh shapes are not exported to SVG (container "${this.name}"). Use Curve shapes for SVG export.`);
-                continue;
+                return;
             }
             lines.push('  ' + shape._toSVGElement(plane));
-        }
+        });
 
-        for (const child of this._children)
+        this._children.forEach(child =>
         {
             const childGroup = child._toSVGGroup(plane);
             lines.push(...childGroup.split('\n').map(l => '  ' + l));
-        }
+        });
 
         lines.push('</g>');
         return lines.join('\n');
@@ -414,16 +402,16 @@ export class Container
 
         // Compute union viewBox
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const curve of allCurves)
+        allCurves.forEach(curve =>
         {
             const bb = curve.copy().projectOnto(plane).bbox();
-            if (!bb) continue;
+            if (!bb) return;
             // SVG Y-axis is flipped
             minX = Math.min(minX, bb.min().x);
             minY = Math.min(minY, -bb.max().y);
             maxX = Math.max(maxX, bb.max().x);
             maxY = Math.max(maxY, -bb.min().y);
-        }
+        });
 
         if (!isFinite(minX))
         {
@@ -449,14 +437,12 @@ export class Container
     /** BFS traversal that includes `this` as the first element. */
     private _bfsContainers(): Container[]
     {
-        const queue: Container[] = [this];
-        const result: Container[] = [];
-        while (queue.length)
+        const bfs = (queue: Container[], acc: Container[]): Container[] =>
         {
-            const cur = queue.shift()!;
-            result.push(cur);
-            queue.push(...cur._children);
-        }
-        return result;
+            if (queue.length === 0) return acc;
+            const [cur, ...rest] = queue;
+            return bfs([...rest, ...cur._children], [...acc, cur]);
+        };
+        return bfs([this], []);
     }
 }

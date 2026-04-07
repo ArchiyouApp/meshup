@@ -3,14 +3,17 @@ import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { MeshCollection } from '../../src/Collection';
 
-beforeAll(async () => {
+beforeAll(async () =>
+{
     await initAsync();
 });
 
 // ── Mesh.raycast (first hit) ──────────────────────────────────────────────────
 
-describe('Mesh.raycast() — first hit (all=false)', () => {
-    it('hits a cube shot straight down from above', () => {
+describe('Mesh.raycast() — first hit (all=false)', () =>
+{
+    it('hits a cube shot straight down from above', () =>
+    {
         const cube = Mesh.Cube(10);
         const hit = cube.raycast([0, 0, 20], [0, 0, -1], Infinity, false);
         expect(hit).not.toBeNull();
@@ -18,13 +21,15 @@ describe('Mesh.raycast() — first hit (all=false)', () => {
         expect(hit!.distance).toBeLessThan(25);
     });
 
-    it('returns null when the ray misses', () => {
+    it('returns null when the ray misses', () =>
+    {
         const cube = Mesh.Cube(10);
         const hit = cube.raycast([100, 100, 100], [1, 0, 0], Infinity, false);
         expect(hit).toBeNull();
     });
 
-    it('reports a hit point near the cube surface', () => {
+    it('reports a hit point near the cube surface', () =>
+    {
         const cube = Mesh.Cube(10);
         const hit = cube.raycast([0, 0, 20], [0, 0, -1], Infinity, false);
         expect(hit).not.toBeNull();
@@ -35,48 +40,57 @@ describe('Mesh.raycast() — first hit (all=false)', () => {
 
 // ── Mesh.raycast (all hits) ───────────────────────────────────────────────────
 
-describe('Mesh.raycast() — all hits (all=true, default)', () => {
-    it('returns an array of hits when the ray pierces a cube', () => {
+describe('Mesh.raycast() — all hits (all=true, default)', () =>
+{
+    it('returns an array of hits when the ray pierces a cube', () =>
+    {
         const cube = Mesh.Cube(10);
         const hits = cube.raycast([0, 0, 20], [0, 0, -1]);
         expect(Array.isArray(hits)).toBe(true);
         expect((hits as any[]).length).toBeGreaterThan(0);
     });
 
-    it('returns an empty array when the ray misses', () => {
+    it('returns an empty array when the ray misses', () =>
+    {
         const cube = Mesh.Cube(10);
         const hits = cube.raycast([100, 100, 100], [1, 0, 0]);
         expect(Array.isArray(hits)).toBe(true);
         expect((hits as any[]).length).toBe(0);
     });
 
-    it('hits are sorted by ascending distance', () => {
+    it('hits are sorted by ascending distance', () =>
+    {
         const cube = Mesh.Cube(10);
         const hits = cube.raycast([0, 0, 20], [0, 0, -1]) as import('../../src/types').RaycastHit[];
-        for (let i = 1; i < hits.length; i++) {
-            expect(hits[i].distance).toBeGreaterThanOrEqual(hits[i - 1].distance);
-        }
+        hits.slice(1).forEach((hit, i) =>
+        {
+            expect(hit.distance).toBeGreaterThanOrEqual(hits[i].distance);
+        });
     });
 });
 
 // ── closestPoint ─────────────────────────────────────────────────────────────
 
-describe('Mesh.closestPoint()', () => {
-    it('projects a point outside the mesh onto its surface', () => {
+describe('Mesh.closestPoint()', () =>
+{
+    it('projects a point outside the mesh onto its surface', () =>
+    {
         const cube = Mesh.Cube(10);
         const r = cube.closestPoint(0, 0, 20);
         expect(r).not.toBeNull();
         expect(r!.distance).toBeCloseTo(15, 1); // query at z=20, surface at z=5
     });
 
-    it('detects that a point inside the mesh is inside', () => {
+    it('detects that a point inside the mesh is inside', () =>
+    {
         const cube = Mesh.Cube(10);
         const r = cube.closestPoint(0, 0, 0);
         expect(r).not.toBeNull();
         // expect(r!.isInside).toBe(true); // TODO:FIX
     });
 
-    it('reports isInside=false for external query', () => {
+    it('reports isInside=false for external query', () =>
+    {
         const cube = Mesh.Cube(10);
         const r = cube.closestPoint(0, 0, 20);
         expect(r).not.toBeNull();
@@ -86,15 +100,18 @@ describe('Mesh.closestPoint()', () => {
 
 // ── sampleSDF ────────────────────────────────────────────────────────────────
 
-describe('Mesh.sampleSDF()', () => {
-    it('returns negative distance inside the mesh', () => {
+describe('Mesh.sampleSDF()', () =>
+{
+    it('returns negative distance inside the mesh', () =>
+    {
         const cube = Mesh.Cube(10);
         const s = cube.sampleSDF(0, 0, 0);
         expect(s).not.toBeNull();
         // expect(s!.distance).toBeLessThan(0); // TODO: FIX
     });
 
-    it('returns positive distance outside the mesh', () => {
+    it('returns positive distance outside the mesh', () =>
+    {
         const cube = Mesh.Cube(10);
         const s = cube.sampleSDF(0, 0, 20);
         expect(s).not.toBeNull();
@@ -104,14 +121,17 @@ describe('Mesh.sampleSDF()', () => {
 
 // ── hits ─────────────────────────────────────────────────────────────────────
 
-describe('Mesh.hits()', () => {
-    it('returns true for two overlapping cubes', () => {
+describe('Mesh.hits()', () =>
+{
+    it('returns true for two overlapping cubes', () =>
+    {
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10); // same position → full overlap
         expect(a.hits(b)).toBe(true);
     });
 
-    it('returns false for two well-separated cubes', () => {
+    it('returns false for two well-separated cubes', () =>
+    {
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10).move(100, 0, 0);
         expect(a.hits(b)).toBe(false);
@@ -120,14 +140,17 @@ describe('Mesh.hits()', () => {
 
 // ── distanceTo ───────────────────────────────────────────────────────────────
 
-describe('Mesh.distanceTo()', () => {
-    it('returns 0 for overlapping meshes', () => {
+describe('Mesh.distanceTo()', () =>
+{
+    it('returns 0 for overlapping meshes', () =>
+    {
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10);
         expect(a.distanceTo(b)).toBeCloseTo(0, 3);
     });
 
-    it('returns a positive value for separated meshes', () => {
+    it('returns a positive value for separated meshes', () =>
+    {
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10).move(100, 0, 0);
         expect(a.distanceTo(b)).toBeGreaterThan(0);
@@ -136,21 +159,26 @@ describe('Mesh.distanceTo()', () => {
 
 // ── projectToPlane ───────────────────────────────────────────────────────────
 
-describe('Mesh.projectToPlane()', () => {
-    it('flattens all vertices onto z=0 when projecting onto the XY plane', () => {
+describe('Mesh.projectToPlane()', () =>
+{
+    it('flattens all vertices onto z=0 when projecting onto the XY plane', () =>
+    {
         const cube = Mesh.Cube(10);
         const flat = cube.projectToPlane([0, 0, 0], [0, 0, 1]);
         const positions = flat.positions();
-        for (const p of positions) {
+        positions.forEach(p =>
+        {
             expect(p.z).toBeCloseTo(0, 6);
-        }
+        });
     });
 });
 
 // ── distanceToPlane ──────────────────────────────────────────────────────────
 
-describe('Mesh.distanceToPlane()', () => {
-    it('returns 0 when a vertex lies on the plane', () => {
+describe('Mesh.distanceToPlane()', () =>
+{
+    it('returns 0 when a vertex lies on the plane', () =>
+    {
         // Cube centred at origin has vertices at ±5 on every axis.
         // The plane z=5 passes through the top face vertices.
         const cube = Mesh.Cube(10);
@@ -158,7 +186,8 @@ describe('Mesh.distanceToPlane()', () => {
         expect(d).toBeCloseTo(0, 6);
     });
 
-    it('returns a positive distance for a plane that misses all vertices', () => {
+    it('returns a positive distance for a plane that misses all vertices', () =>
+    {
         const cube = Mesh.Cube(10);
         const d = cube.distanceToPlane([0, 0, 100], [0, 0, 1]);
         expect(d).toBeGreaterThan(0);
@@ -167,8 +196,10 @@ describe('Mesh.distanceToPlane()', () => {
 
 // ── Mesh.fromSDF ─────────────────────────────────────────────────────────────
 
-describe('Mesh.fromSDF()', () => {
-    it('creates a mesh from a sphere SDF', () => {
+describe('Mesh.fromSDF()', () =>
+{
+    it('creates a mesh from a sphere SDF', () =>
+    {
         const radius = 1.5;
         const mesh = Mesh.fromSDF(
             (x, y, z) => Math.sqrt(x * x + y * y + z * z) - radius,
@@ -183,8 +214,10 @@ describe('Mesh.fromSDF()', () => {
 
 // ── MeshCollection.hits ───────────────────────────────────────────────────────
 
-describe('MeshCollection.hits()', () => {
-    it('finds the overlapping pair', () => {
+describe('MeshCollection.hits()', () =>
+{
+    it('finds the overlapping pair', () =>
+    {
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10).move(100, 0, 0);
         const c = Mesh.Cube(10); // overlaps a
@@ -200,8 +233,10 @@ describe('MeshCollection.hits()', () => {
 
 // ── MeshCollection.distanceTo ─────────────────────────────────────────────────
 
-describe('MeshCollection.distanceTo()', () => {
-    it('returns 0 when a mesh overlaps at least one member', () => {
+describe('MeshCollection.distanceTo()', () =>
+{
+    it('returns 0 when a mesh overlaps at least one member', () =>
+    {
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10).move(100, 0, 0);
         const col = new MeshCollection(a, b);
@@ -211,8 +246,10 @@ describe('MeshCollection.distanceTo()', () => {
 
 // ── MeshCollection.closestPair ────────────────────────────────────────────────
 
-describe('MeshCollection.closestPair()', () => {
-    it('finds the pair with minimum distance', () => {
+describe('MeshCollection.closestPair()', () =>
+{
+    it('finds the pair with minimum distance', () =>
+    {
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10).move(50, 0, 0);
         const target = Mesh.Cube(10).move(55, 0, 0); // closer to b
@@ -225,8 +262,10 @@ describe('MeshCollection.closestPair()', () => {
 
 // ── MeshCollection.raycast ────────────────────────────────────────────────────
 
-describe('MeshCollection.raycast() — all hits (all=true, default)', () => {
-    it('returns entries for every mesh the ray pierces', () => {
+describe('MeshCollection.raycast() — all hits (all=true, default)', () =>
+{
+    it('returns entries for every mesh the ray pierces', () =>
+    {
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10).move(0, 0, 50);
         const col = new MeshCollection(a, b);
@@ -235,7 +274,8 @@ describe('MeshCollection.raycast() — all hits (all=true, default)', () => {
         expect(results.length).toBe(2);
     });
 
-    it('results are sorted by ascending distance', () => {
+    it('results are sorted by ascending distance', () =>
+    {
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10).move(0, 0, 50);
         const col = new MeshCollection(a, b);
@@ -244,7 +284,8 @@ describe('MeshCollection.raycast() — all hits (all=true, default)', () => {
         expect(results[0].hit.distance).toBeLessThanOrEqual(results[1].hit.distance);
     });
 
-    it('returns empty array when ray misses all meshes', () => {
+    it('returns empty array when ray misses all meshes', () =>
+    {
         const a = Mesh.Cube(10);
         const col = new MeshCollection(a);
         const results = col.raycast([100, 100, 100], [1, 0, 0]);
@@ -253,8 +294,10 @@ describe('MeshCollection.raycast() — all hits (all=true, default)', () => {
     });
 });
 
-describe('MeshCollection.raycast() — first hit (all=false)', () => {
-    it('returns the nearest-hit mesh entry', () => {
+describe('MeshCollection.raycast() — first hit (all=false)', () =>
+{
+    it('returns the nearest-hit mesh entry', () =>
+    {
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10).move(0, 0, 50);
         const col = new MeshCollection(a, b);
@@ -263,7 +306,8 @@ describe('MeshCollection.raycast() — first hit (all=false)', () => {
         expect(result.mesh).toBe(b); // b is closer to the ray origin at z=100
     });
 
-    it('returns null when the ray misses all meshes', () => {
+    it('returns null when the ray misses all meshes', () =>
+    {
         const a = Mesh.Cube(10);
         const col = new MeshCollection(a);
         const result = col.raycast([100, 100, 100], [1, 0, 0], Infinity, false);

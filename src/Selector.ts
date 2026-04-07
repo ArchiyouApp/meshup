@@ -93,7 +93,8 @@ const SHAPE_SHORTCUTS: Record<string, string> = {
 
 type SelectorType = keyof typeof SELECTORS;
 
-interface SlotMatch {
+interface SlotMatch
+{
     /** Which parameter name the value matched (e.g. 'shape', 'axis', 'plane') */
     param: string;
     raw: string; // The raw captured string
@@ -178,14 +179,11 @@ export class Selector
         const items = this._subshapesFromTarget(target);
         if (items.length === 0) return null;
 
-        let best: any = null;
-        let bestDist = Infinity;
-        for (const item of items)
+        return items.reduce((best: { item: any; dist: number }, item) =>
         {
             const d = this._distanceToRef(this._shapeCenter(item));
-            if (d < bestDist) { bestDist = d; best = item; }
-        }
-        return best;
+            return d < best.dist ? { item, dist: d } : best;
+        }, { item: null, dist: Infinity }).item;
     }
 
     /**
@@ -197,14 +195,11 @@ export class Selector
         const items = this._subshapesFromTarget(target);
         if (items.length === 0) return null;
 
-        let best: any = null;
-        let bestDist = -Infinity;
-        for (const item of items)
+        return items.reduce((best: { item: any; dist: number }, item) =>
         {
             const d = this._distanceToRef(this._shapeCenter(item));
-            if (d > bestDist) { bestDist = d; best = item; }
-        }
-        return best;
+            return d > best.dist ? { item, dist: d } : best;
+        }, { item: null, dist: -Infinity }).item;
     }
 
     /**
@@ -237,9 +232,7 @@ export class Selector
         if (target instanceof Mesh) return target.polygons();
         if (target instanceof Collection)
         {
-            const faces: Polygon[] = [];
-            for (const m of target.meshes()) faces.push(...m.polygons());
-            return faces;
+            return target.meshes().toArray().flatMap(m => m.polygons());
         }
         return [];
     }
@@ -251,10 +244,10 @@ export class Selector
         if (target instanceof Curve) return target.controlPoints();
         if (target instanceof Collection)
         {
-            const pts: Point[] = [];
-            for (const m of target.meshes()) pts.push(...m.vertices());
-            for (const c of target.curves()) pts.push(...c.controlPoints());
-            return pts;
+            return [
+                ...target.meshes().toArray().flatMap(m => m.vertices()),
+                ...target.curves().toArray().flatMap(c => c.controlPoints()),
+            ];
         }
         return [];
     }
@@ -270,12 +263,12 @@ export class Selector
             case 'vertex':
                 return this._verticesFromTarget(target);
             case 'mesh':
-                if (target instanceof Collection) return target.meshes();
+                if (target instanceof Collection) return target.meshes().toArray();
                 if (target instanceof Mesh) return [target];
                 return [];
             case 'curve':
             case 'wire':
-                if (target instanceof Collection) return target.curves();
+                if (target instanceof Collection) return target.curves().toArray();
                 if (target instanceof Curve) return [target];
                 return [];
             case 'edge':
@@ -317,7 +310,8 @@ export class Selector
     /** Get the coordinate of a point along an axis */
     private _axisCoord(p: Point, axis: Axis): number
     {
-        switch (axis) {
+        switch (axis)
+        {
             case 'x': return p.x;
             case 'y': return p.y;
             case 'z': return p.z;
@@ -368,12 +362,11 @@ export class Selector
         const slotNames: string[][] = [];
         const parts: string[] = [];
         let lastIndex = 0;
-        let match: RegExpExecArray | null;
 
-        while ((match = slotPattern.exec(pattern)) !== null)
+        Array.from(pattern.matchAll(slotPattern)).forEach(match =>
         {
             // Escape the literal text between slots
-            if (match.index > lastIndex)
+            if (match.index! > lastIndex)
             {
                 parts.push(this._escapeRegex(pattern.slice(lastIndex, match.index)));
             }
@@ -385,7 +378,7 @@ export class Selector
             const allValues: string[] = [];
             let hasFunction = false;
 
-            for (const paramName of names)
+            names.forEach(paramName =>
             {
                 const def = paramDefs[paramName];
                 if (typeof def === 'function') { hasFunction = true; }
@@ -398,7 +391,7 @@ export class Selector
                     }
                 }
                 else if (typeof def === 'object' && def !== null) { allValues.push(...Object.keys(def)); }
-            }
+            });
 
             // If any alternative is a function validator, use a catch-all group;
             // otherwise enumerate the concrete values.
@@ -411,8 +404,8 @@ export class Selector
                 parts.push(`(${allValues.map(v => this._escapeRegex(v)).join('|')})`);
             }
 
-            lastIndex = match.index + match[0].length;
-        }
+            lastIndex = match.index! + match[0].length;
+        });
 
         // Trailing literal
         if (lastIndex < pattern.length)
@@ -437,14 +430,15 @@ export class Selector
         // (e.g. "x" should match axis before falling through to isPointLike)
         const deferred: string[] = [];
 
-        for (const paramName of names)
+        const nonFunctionResult = names.reduce<SlotMatch | null>((found, paramName) =>
         {
+            if (found) return found;
             const def = paramDefs[paramName];
             const resolvedValue = paramName === 'shape' ? this._normalizeShape(value) : value;
             if (typeof def === 'function')
             {
                 deferred.push(paramName);
-                continue;
+                return null;
             }
             if (Array.isArray(def) && def.includes(resolvedValue))
             {
@@ -454,11 +448,15 @@ export class Selector
             {
                 return { param: paramName, raw: value, value: def[value] };
             }
-        }
+            return null;
+        }, null);
+
+        if (nonFunctionResult) return nonFunctionResult;
 
         // Fall back to function validators (e.g. isPointLike)
-        for (const paramName of deferred)
+        return deferred.reduce<SlotMatch | null>((found, paramName) =>
         {
+            if (found) return found;
             const validator = paramDefs[paramName] as Function;
             // Try JSON-parsing first (handles "[1,2,3]" or "{x:1,...}" style strings)
             try
@@ -475,9 +473,8 @@ export class Selector
             {
                 return { param: paramName, raw: value, value };
             }
-        }
-
-        return null;
+            return null;
+        }, null);
     }
 
     /**
@@ -486,35 +483,37 @@ export class Selector
      */
     private _parse(input: string): void
     {
-        for (const [name, config] of Object.entries(SELECTORS))
+        const found = Object.entries(SELECTORS).some(([name, config]) =>
         {
             const { pattern, ...paramDefs } = config;
             const { regex, slotNames } = this._buildRegex(pattern, paramDefs);
             const match = regex.exec(input);
 
-            if (!match) continue;
+            if (!match) return false;
 
             // Validate each captured group
             const resolved: Record<string, any> = {};
-            let valid = true;
-
-            for (let i = 0; i < slotNames.length; i++)
+            const valid = slotNames.every((names, i) =>
             {
                 const captured = match[i + 1];
-                const slot = this._resolveSlot(captured, slotNames[i], paramDefs);
-                if (!slot) { valid = false; break; }
+                const slot = this._resolveSlot(captured, names, paramDefs);
+                if (!slot) return false;
                 resolved[slot.param] = slot.value;
-            }
+                return true;
+            });
 
-            if (!valid) continue;
+            if (!valid) return false;
 
             this.type = name as SelectorType;
             this.params = resolved;
             this._parsed = true;
-            return;
-        }
+            return true;
+        });
 
-        throw new Error(`Selector: Unrecognized selector string: "${input}"`);
+        if (!found)
+        {
+            throw new Error(`Selector: Unrecognized selector string: "${input}"`);
+        }
     }
 
     //// UTILS ////

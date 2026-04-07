@@ -53,7 +53,8 @@ export class Polygon
         {
             poly._polygon = p;
         }
-        else {
+        else
+        {
             poly._polygon = new PolygonJs(p.map(v => new Vertex(v as PointLike)), {});
         }
         return poly;
@@ -103,8 +104,9 @@ export class Polygon
     center(): Point
     {
         const verts = this.vertices();
-        let sx = 0, sy = 0, sz = 0;
-        for (const v of verts) { sx += v.x; sy += v.y; sz += v.z; }
+        const sx = verts.reduce((acc, v) => acc + v.x, 0);
+        const sy = verts.reduce((acc, v) => acc + v.y, 0);
+        const sz = verts.reduce((acc, v) => acc + v.z, 0);
         const n = verts.length;
         return new Point(sx / n, sy / n, sz / n);
     }
@@ -188,11 +190,11 @@ export class Polygon
         faces.push([...top]);
         // Side walls
         const n = bottom.length;
-        for (let i = 0; i < n; i++)
+        Array.from({ length: n }, (_, i) =>
         {
             const j = (i + 1) % n;
             faces.push([bottom[i], bottom[j], top[j], top[i]]);
-        }
+        });
 
         return Mesh.fromPolygons(faces);
     }

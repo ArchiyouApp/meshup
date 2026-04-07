@@ -12,18 +12,22 @@ import { Sketch } from '../../src/Sketch';
 import { Vector } from '../../src/Vector';
 import { Collection } from '../../src/Collection';
 
-beforeAll(async () => {
+beforeAll(async () =>
+{
     await initAsync();
 });
 
-describe('Example: primitive meshes', () => {
-    it('builds a cube and checks it has geometry', () => {
+describe('Example: primitive meshes', () =>
+{
+    it('builds a cube and checks it has geometry', () =>
+    {
         const cube = Mesh.Cube(10);
         expect(cube.positions().length).toBeGreaterThan(0);
         expect(cube.polygons().length).toBeGreaterThan(0);
     });
 
-    it('builds a sphere and checks it has more faces than a cube', () => {
+    it('builds a sphere and checks it has more faces than a cube', () =>
+    {
         const sphere = Mesh.Sphere(5);
         const cube = Mesh.Cube(10);
         expect(sphere.polygons().length).toBeGreaterThan(
@@ -32,8 +36,10 @@ describe('Example: primitive meshes', () => {
     });
 });
 
-describe('Example: boolean modeling workflow', () => {
-    it('punches a hole by subtracting a smaller cube', () => {
+describe('Example: boolean modeling workflow', () =>
+{
+    it('punches a hole by subtracting a smaller cube', () =>
+    {
         const box = Mesh.Cuboid(20, 20, 20);
         const hole = Mesh.Cube(8);
         box.difference(hole);
@@ -41,8 +47,10 @@ describe('Example: boolean modeling workflow', () => {
     });
 });
 
-describe('Example: sketch-to-solid workflow', () => {
-    it('draws a closed rectangle and extrudes it', () => {
+describe('Example: sketch-to-solid workflow', () =>
+{
+    it('draws a closed rectangle and extrudes it', () =>
+    {
         const mesh = new Sketch()
             .moveTo(0, 0)
             .lineTo(30, 0)
@@ -56,40 +64,49 @@ describe('Example: sketch-to-solid workflow', () => {
     });
 });
 
-describe('Example: curve operations', () => {
-    it('creates a 3D polyline and measures its length', () => {
+describe('Example: curve operations', () =>
+{
+    it('creates a 3D polyline and measures its length', () =>
+    {
         const c = Curve.Polyline([[0,0,0], [10,0,0], [10,10,0], [10,10,10]]);
         // Total path length: 10 + 10 + 10 = 30
         expect(c.length()).toBeCloseTo(30, 0);
     });
 
-    it('samples points on a circle curve', () => {
+    it('samples points on a circle curve', () =>
+    {
         const circle = Curve.Circle(5);
         const pts = circle.tessellate();
         expect(pts.length).toBeGreaterThan(4);
         // All points should be approximately 5 units from the origin
-        pts.forEach(p => {
+        pts.forEach(p =>
+        {
             const r = Math.sqrt(p.x * p.x + p.y * p.y);
             expect(r).toBeCloseTo(5, 0);
         });
     });
 });
 
-describe('Example: vector math', () => {
-    it('normalizes a vector and checks it is unit length', () => {
+describe('Example: vector math', () =>
+{
+    it('normalizes a vector and checks it is unit length', () =>
+    {
         const v = new Vector(3, 4, 0).normalize();
         expect(v.length()).toBeCloseTo(1);
     });
 
-    it('computes dot product of known vectors', () => {
+    it('computes dot product of known vectors', () =>
+    {
         const a = new Vector(1, 0, 0);
         const b = new Vector(0, 0, 1);
         expect(a.dot(b.toVector3Js())).toBeCloseTo(0); // perpendicular
     });
 });
 
-describe('Example: collection workflow', () => {
-    it('collects two meshes and iterates over them', () => {
+describe('Example: collection workflow', () =>
+{
+    it('collects two meshes and iterates over them', () =>
+    {
         const a = Mesh.Cube(5);
         const b = Mesh.Cube(5);
         b.translate([10, 0, 0]);
@@ -98,7 +115,8 @@ describe('Example: collection workflow', () => {
         expect(col.count()).toBe(2);
 
         let totalVertices = 0;
-        col.shapes().forEach(s => {
+        col.shapes().forEach(s =>
+        {
             totalVertices += (s as Mesh).positions().length;
         });
         expect(totalVertices).toBeGreaterThan(0);

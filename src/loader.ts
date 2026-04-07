@@ -9,15 +9,16 @@ export type WasmModule = typeof WasmExports;
 
 const decodeBase64 = (str: string): Uint8Array => 
 {
-  if (typeof Buffer !== 'undefined') {
+  if (typeof Buffer !== 'undefined')
+  {
     return Buffer.from(str, 'base64');
-  } else {
+  }
+  else
+  {
     // Browser fallback
     const binaryString = atob(str);
     const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
+    Array.from({ length: binaryString.length }, (_, i) => { bytes[i] = binaryString.charCodeAt(i); });
     return bytes;
   }
 };
@@ -31,12 +32,14 @@ let wasmReady: WasmModule|Promise<WasmModule>|null = null;
  */
 export const loadAsync = async (): Promise<WasmModule> => 
 {
-  if (wasmReady){
+  if (wasmReady)
+  {
     console.info('WASM module already loaded, returning existing instance.');
     return wasmReady;
   }
 
-  wasmReady = (async () => {
+  wasmReady = (async () =>
+  {
     const bytes = decodeBase64(WASM_BASE64);
     
     // MAGIC MOMENT: 

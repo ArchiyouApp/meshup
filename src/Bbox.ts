@@ -23,7 +23,8 @@ export class Bbox
             this._min = new Point(min[0]);
             this._max = new Point(min[1]);
         }
-        else {
+        else
+        {
             throw new Error('Bbox::constructor(): Invalid parameters. Please supply (min:PointLike, max:PointLike) or ([min:PointLike, max:PointLike])');
         }
     }
@@ -31,7 +32,8 @@ export class Bbox
     static fromMesh(m:Mesh): Bbox
     {
         const bbox = m?._mesh?.boundingBox();
-        if (!bbox) {
+        if (!bbox)
+        {
             throw new Error('Mesh has no bounding box.');
         }
         return new Bbox(bbox.min, bbox.max);

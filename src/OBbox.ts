@@ -36,7 +36,7 @@ function jacobi3(
         [0, 0, 1],
     ];
 
-    for (let iter = 0; iter < 50; iter++)
+    for (let iter = 0; iter < 50; iter++) // perf: keep as loop
     {
         // Find the off-diagonal element with largest absolute value
         let p = 0, q = 1;
@@ -63,7 +63,7 @@ function jacobi3(
         A[q][p] = 0;
 
         // Update the remaining rows/columns (r ≠ p, r ≠ q)
-        for (let r = 0; r < 3; r++)
+        for (let r = 0; r < 3; r++) // perf: keep as loop
         {
             if (r !== p && r !== q)
             {
@@ -77,7 +77,7 @@ function jacobi3(
         }
 
         // Accumulate eigenvectors (update columns p and q of V)
-        for (let r = 0; r < 3; r++)
+        for (let r = 0; r < 3; r++) // perf: keep as loop
         {
             const Vrp = V[r][p];
             const Vrq = V[r][q];
@@ -160,22 +160,19 @@ export class OBbox
         const n = pts.length;
 
         // Centroid
-        let cx = 0, cy = 0, cz = 0;
-        for (const p of pts)
-        {
-            cx += p.x; cy += p.y; cz += p.z;
-        }
-        cx /= n; cy /= n; cz /= n;
+        const cx = pts.reduce((s, p) => s + p.x, 0) / n;
+        const cy = pts.reduce((s, p) => s + p.y, 0) / n;
+        const cz = pts.reduce((s, p) => s + p.z, 0) / n;
 
         // Covariance matrix (symmetric, upper-triangle)
         let c00 = 0, c01 = 0, c02 = 0, c11 = 0, c12 = 0, c22 = 0;
-        for (const p of pts)
+        pts.forEach(p =>
         {
             const dx = p.x - cx, dy = p.y - cy, dz = p.z - cz;
             c00 += dx * dx; c01 += dx * dy; c02 += dx * dz;
             c11 += dy * dy; c12 += dy * dz;
             c22 += dz * dz;
-        }
+        });
         c00 /= n; c01 /= n; c02 /= n; c11 /= n; c12 /= n; c22 /= n;
 
         // PCA via Jacobi
@@ -187,7 +184,7 @@ export class OBbox
         let min1 = Infinity, max1 = -Infinity;
         let min2 = Infinity, max2 = -Infinity;
 
-        for (const p of pts)
+        pts.forEach(p =>
         {
             const dx = p.x - cx, dy = p.y - cy, dz = p.z - cz;
             const proj0 = dx * a0[0] + dy * a0[1] + dz * a0[2];
@@ -199,7 +196,7 @@ export class OBbox
             if (proj1 > max1) max1 = proj1;
             if (proj2 < min2) min2 = proj2;
             if (proj2 > max2) max2 = proj2;
-        }
+        });
 
         // OBB centre shifted from point-cloud centroid by the mid-projections
         const mid0 = (min0 + max0) / 2;
@@ -346,17 +343,16 @@ export class OBbox
         const c = this._center;
         const [a0, a1, a2] = this._axes;
         const [h0, h1, h2] = this._halfExtents;
-        const result: Array<Point> = [];
-        for (const s0 of [-1, 1])
-        for (const s1 of [-1, 1])
-        for (const s2 of [-1, 1])
-        {
-            result.push(new Point(
-                c.x + s0 * a0.x * h0 + s1 * a1.x * h1 + s2 * a2.x * h2,
-                c.y + s0 * a0.y * h0 + s1 * a1.y * h1 + s2 * a2.y * h2,
-                c.z + s0 * a0.z * h0 + s1 * a1.z * h1 + s2 * a2.z * h2,
-            ));
-        }
-        return result;
+        return [-1, 1].flatMap(s0 =>
+            [-1, 1].flatMap(s1 =>
+                [-1, 1].map(s2 =>
+                    new Point(
+                        c.x + s0 * a0.x * h0 + s1 * a1.x * h1 + s2 * a2.x * h2,
+                        c.y + s0 * a0.y * h0 + s1 * a1.y * h1 + s2 * a2.y * h2,
+                        c.z + s0 * a0.z * h0 + s1 * a1.z * h1 + s2 * a2.z * h2,
+                    )
+                )
+            )
+        );
     }
 }

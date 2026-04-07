@@ -34,12 +34,14 @@ export function getCsgrs(): CsgrsModule
 
 export function init(): void 
 {
-    if (!_csgrs) {
+    if (!_csgrs)
+    {
         const t = performance.now();
         _csgrs = loadSync();
         // ...existing code...
     }
-    else {
+    else
+    {
         // ...existing code...
     }
 }
@@ -52,7 +54,8 @@ export async function initAsync(): Promise<void>
         _csgrs = await loadAsync();
         // ...existing code...
     }
-    else {
+    else
+    {
         console.info('Meshup already initialized. Returning existing instance.');
     }
 }

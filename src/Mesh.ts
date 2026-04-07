@@ -117,7 +117,8 @@ export class Mesh
             newMesh._mesh = mesh._mesh;
             return newMesh;
         }
-        else {
+        else
+        {
             throw new Error('Mesh::from(): Unsupported mesh type');
         }
     }
@@ -140,8 +141,8 @@ export class Mesh
     /** Get all positions of vertices of Mesh as an iterable */
     *_positionsIter(): IterableIterator<Point>
     {
-        const buffer = this.inner()?.positions() || [];   
-        for (let i = 0; i < buffer.length; i += 3)
+        const buffer = this.inner()?.positions() || [];
+        for (let i = 0; i < buffer.length; i += 3) // perf: keep as loop
         {
             yield new Point(buffer[i], buffer[i + 1], buffer[i + 2]);
         }
@@ -157,7 +158,7 @@ export class Mesh
     *_normalsIter(): IterableIterator<Vector>
     {
         const buffer = this.inner()?.normals() || [];
-        for (let i = 0; i < buffer.length; i += 3)
+        for (let i = 0; i < buffer.length; i += 3) // perf: keep as loop
         {
             yield new Vector(buffer[i], buffer[i + 1], buffer[i + 2]);
         }
@@ -217,23 +218,15 @@ export class Mesh
         }
 
         // Flatten outer points to Float64Array [x, y, z, x, y, z, ...]
-        const outerFlat: number[] = [];
-        for (const p of outerPoints) {
-            const pt = Point.from(p);
-            outerFlat.push(pt.x, pt.y, pt.z);
-        }
+        const outerFlat = outerPoints.flatMap(p => { const pt = Point.from(p); return [pt.x, pt.y, pt.z]; });
         const outerFloat64 = new Float64Array(outerFlat);
 
         // Flatten each hole to Float64Array
-        const holeArrays: Float64Array[] = [];
-        for (const hole of (holes || [])) {
-            const holeFlat: number[] = [];
-            for (const p of hole) {
-                const pt = Point.from(p);
-                holeFlat.push(pt.x, pt.y, pt.z);
-            }
-            holeArrays.push(new Float64Array(holeFlat));
-        }
+        const holeArrays = (holes || []).map(hole =>
+        {
+            const holeFlat = hole.flatMap(p => { const pt = Point.from(p); return [pt.x, pt.y, pt.z]; });
+            return new Float64Array(holeFlat);
+        });
 
         const meshJs = getCsgrs().MeshJs.fromPointsWithHoles(outerFloat64, holeArrays, {});
 
@@ -259,7 +252,8 @@ export class Mesh
             {
                 console.warn(`Mesh::fromVertices(): Invalid polygon at index ${i}. Supply something [<PointLike>,<PointLike>,<PointLike>]`);
             }
-            else {
+            else
+            {
                 const polyVerts = poly.map(v => Point.from(v).toVertex());
                 polygons.push(new PolygonJs(polyVerts, {}));
             }
@@ -888,9 +882,12 @@ export class Mesh
     /** Shortcut for `Mesh.style.color`. Accepts `'red'`, `'#ff0000'`, or `r, g, b` (0–255). */
     color(color: number | string, g?: number, b?: number): this
     {
-        if (typeof color === 'number' && typeof g === 'number' && typeof b === 'number') {
+        if (typeof color === 'number' && typeof g === 'number' && typeof b === 'number')
+        {
             this.style.color = [color, g, b];
-        } else {
+        }
+        else
+        {
             this.style.color = color as string;
         }
         return this;
@@ -939,14 +936,16 @@ export class Mesh
         const vertexCount = posRaw.length / 3;
 
         const posF32 = new Float32Array(posRaw.length);
-        for (let v = 0; v < vertexCount; v++) {
+        for (let v = 0; v < vertexCount; v++) // perf: keep as loop
+        {
             const [rx, ry, rz] = remapAxis(posRaw[v*3], posRaw[v*3+1], posRaw[v*3+2], up);
             posF32[v*3] = rx; posF32[v*3+1] = ry; posF32[v*3+2] = rz;
         }
 
         const normVertexCount = normRaw.length / 3;
         const normF32 = new Float32Array(normRaw.length);
-        for (let v = 0; v < normVertexCount; v++) {
+        for (let v = 0; v < normVertexCount; v++) // perf: keep as loop
+        {
             const [rx, ry, rz] = remapAxis(normRaw[v*3], normRaw[v*3+1], normRaw[v*3+2], up);
             normF32[v*3] = rx; normF32[v*3+1] = ry; normF32[v*3+2] = rz;
         }
@@ -1005,14 +1004,16 @@ export class Mesh
         if (vertexCount === 0) throw new Error('Mesh::_toGLTF(): No geometry to export!');
 
         const posF32 = new Float32Array(posRaw.length);
-        for (let v = 0; v < vertexCount; v++) {
+        for (let v = 0; v < vertexCount; v++) // perf: keep as loop
+        {
             const [rx, ry, rz] = remapAxis(posRaw[v*3], posRaw[v*3+1], posRaw[v*3+2], up);
             posF32[v*3] = rx; posF32[v*3+1] = ry; posF32[v*3+2] = rz;
         }
 
         const normF32 = new Float32Array(normRaw.length);
         const normVertexCount = normRaw.length / 3;
-        for (let v = 0; v < normVertexCount; v++) {
+        for (let v = 0; v < normVertexCount; v++) // perf: keep as loop
+        {
             const [rx, ry, rz] = remapAxis(normRaw[v*3], normRaw[v*3+1], normRaw[v*3+2], up);
             normF32[v*3] = rx; normF32[v*3+1] = ry; normF32[v*3+2] = rz;
         }
@@ -1106,13 +1107,15 @@ export class Mesh
         maxDist = Infinity,
         all = true,
     ): RaycastHit[] | RaycastHit | null {
-        if (all) {
+        if (all)
+        {
             const hits = this.inner()?.raycastAll(
                 origin[0], origin[1], origin[2],
                 direction[0], direction[1], direction[2],
                 maxDist,
             ) ?? [];
-            return hits.map(hit => {
+            return hits.map(hit =>
+            {
                 const result: RaycastHit = {
                     pointX: hit.pointX, pointY: hit.pointY, pointZ: hit.pointZ,
                     normalX: hit.normalX, normalY: hit.normalY, normalZ: hit.normalZ,
@@ -1122,7 +1125,9 @@ export class Mesh
                 hit.free?.();
                 return result;
             });
-        } else {
+        }
+        else
+        {
             const hit = this.inner()?.raycastFirst(
                 origin[0], origin[1], origin[2],
                 direction[0], direction[1], direction[2],
@@ -1247,9 +1252,12 @@ export class Mesh
         const dz = (maxZ - minZ) / (Math.max(nz, 2) - 1);
         const total = nx * ny * nz;
         const values = new Float64Array(total);
-        for (let iz = 0; iz < nz; iz++) {
-            for (let iy = 0; iy < ny; iy++) {
-                for (let ix = 0; ix < nx; ix++) {
+        for (let iz = 0; iz < nz; iz++) // perf: keep as loop
+        {
+            for (let iy = 0; iy < ny; iy++) // perf: keep as loop
+            {
+                for (let ix = 0; ix < nx; ix++) // perf: keep as loop
+                {
                     values[iz * ny * nx + iy * nx + ix] = sdfFn(
                         minX + ix * dx,
                         minY + iy * dy,
@@ -1367,7 +1375,8 @@ export class Mesh
     _projectedPolylinesToCurveCollection(polylines: Array<[number, number, number][]>): CurveCollection
     {
         const curves = new CurveCollection();
-        polylines.forEach(points => {
+        polylines.forEach(points =>
+        {
             curves.add(
                 (points.length === 2) 
                     ? Curve.Line(points[0], points[1]) 

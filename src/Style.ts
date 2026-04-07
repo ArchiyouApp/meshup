@@ -53,7 +53,8 @@ const DEFAULT_STYLE: StyleData = {
  *  - string        → returned unchanged
  */
 function normalizeColor(color: ColorInput): string {
-    if (Array.isArray(color)) {
+    if (Array.isArray(color))
+    {
         const [r, g, b] = (color as [number, number, number])
             .map(v => Math.max(0, Math.min(255, Math.round(v))));
         return `rgb(${r},${g},${b})`;
@@ -121,7 +122,8 @@ export class Style
     get visible(): boolean {
         return this._style.visible ?? true;
     }
-    set visible(v: boolean) {
+    set visible(v: boolean)
+    {
         if (typeof v !== 'boolean') throw new TypeError(`Style.visible must be a boolean, got: ${v}`);
         this._style.visible = v;
         this._explicit.add('visible');
@@ -134,7 +136,8 @@ export class Style
     get color(): StyleColor {
         return this._style.color ?? DEFAULT_STYLE.color!;
     }
-    set color(v: ColorInput) {
+    set color(v: ColorInput)
+    {
         const n = normalizeColor(v);
         if (!isValidCssColor(n)) throw new Error(`Style.color: invalid CSS color: "${v}"`);
         this._style.color = n;
@@ -147,7 +150,8 @@ export class Style
     get opacity(): number {
         return this._style.opacity ?? 1;
     }
-    set opacity(v: number) {
+    set opacity(v: number)
+    {
         if (!isValidOpacity(v)) throw new RangeError(`Style.opacity must be between 0 and 1, got: ${v}`);
         this._style.opacity = v;
         this._style.fill!.opacity = v;
@@ -160,15 +164,18 @@ export class Style
     get fill(): NonNullable<StyleData['fill']> {
         return this._style.fill!;
     }
-    set fill(v: { color?: ColorInput; opacity?: number }) {
+    set fill(v: { color?: ColorInput; opacity?: number })
+    {
         if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new TypeError('Style.fill must be an object');
         const update: NonNullable<StyleData['fill']> = {};
-        if (v.color !== undefined) {
+        if (v.color !== undefined)
+        {
             const n = normalizeColor(v.color);
             if (!isValidCssColor(n)) throw new Error(`Style.fill.color: invalid CSS color: "${v.color}"`);
             update.color = n;
         }
-        if (v.opacity !== undefined) {
+        if (v.opacity !== undefined)
+        {
             if (!isValidOpacity(v.opacity)) throw new RangeError(`Style.fill.opacity must be between 0 and 1, got: ${v.opacity}`);
             update.opacity = v.opacity;
         }
@@ -179,7 +186,8 @@ export class Style
     get fillColor(): StyleColor {
         return this._style.fill!.color ?? DEFAULT_STYLE.fill!.color!;
     }
-    set fillColor(v: ColorInput) {
+    set fillColor(v: ColorInput)
+    {
         const n = normalizeColor(v);
         if (!isValidCssColor(n)) throw new Error(`Style.fillColor: invalid CSS color: "${v}"`);
         this._style.fill!.color = n;
@@ -189,7 +197,8 @@ export class Style
     get fillOpacity(): number {
         return this._style.fill!.opacity ?? 1;
     }
-    set fillOpacity(v: number) {
+    set fillOpacity(v: number)
+    {
         if (!isValidOpacity(v)) throw new RangeError(`Style.fillOpacity must be between 0 and 1, got: ${v}`);
         this._style.fill!.opacity = v;
         this._explicit.add('fill');
@@ -200,31 +209,38 @@ export class Style
     get stroke(): NonNullable<StyleData['stroke']> {
         return this._style.stroke!;
     }
-    set stroke(v: { color?: ColorInput; opacity?: number; width?: number; dash?: number[]; cap?: 'butt'|'round'|'square'; join?: 'bevel'|'round'|'miter' }) {
+    set stroke(v: { color?: ColorInput; opacity?: number; width?: number; dash?: number[]; cap?: 'butt'|'round'|'square'; join?: 'bevel'|'round'|'miter' })
+    {
         if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new TypeError('Style.stroke must be an object');
         const update: NonNullable<StyleData['stroke']> = {};
-        if (v.color !== undefined) {
+        if (v.color !== undefined)
+        {
             const n = normalizeColor(v.color);
             if (!isValidCssColor(n)) throw new Error(`Style.stroke.color: invalid CSS color: "${v.color}"`);
             update.color = n;
         }
-        if (v.opacity !== undefined) {
+        if (v.opacity !== undefined)
+        {
             if (!isValidOpacity(v.opacity)) throw new RangeError(`Style.stroke.opacity must be between 0 and 1, got: ${v.opacity}`);
             update.opacity = v.opacity;
         }
-        if (v.width !== undefined) {
+        if (v.width !== undefined)
+        {
             if (typeof v.width !== 'number' || v.width < 0) throw new RangeError(`Style.stroke.width must be a non-negative number, got: ${v.width}`);
             update.width = v.width;
         }
-        if (v.dash !== undefined) {
+        if (v.dash !== undefined)
+        {
             if (!Array.isArray(v.dash) || v.dash.some(n => typeof n !== 'number' || n < 0)) throw new TypeError(`Style.stroke.dash must be an array of non-negative numbers`);
             update.dash = v.dash;
         }
-        if (v.cap !== undefined) {
+        if (v.cap !== undefined)
+        {
             if (!['butt', 'round', 'square'].includes(v.cap)) throw new TypeError(`Style.stroke.cap must be 'butt', 'round', or 'square', got: "${v.cap}"`);
             update.cap = v.cap;
         }
-        if (v.join !== undefined) {
+        if (v.join !== undefined)
+        {
             if (!['bevel', 'round', 'miter'].includes(v.join)) throw new TypeError(`Style.stroke.join must be 'bevel', 'round', or 'miter', got: "${v.join}"`);
             update.join = v.join;
         }
@@ -235,7 +251,8 @@ export class Style
     get strokeColor(): StyleColor {
         return this._style.stroke!.color ?? DEFAULT_STYLE.stroke!.color!;
     }
-    set strokeColor(v: ColorInput) {
+    set strokeColor(v: ColorInput)
+    {
         const n = normalizeColor(v);
         if (!isValidCssColor(n)) throw new Error(`Style.strokeColor: invalid CSS color: "${v}"`);
         this._style.stroke!.color = n;
@@ -245,7 +262,8 @@ export class Style
     get strokeOpacity(): number {
         return this._style.stroke!.opacity ?? 1;
     }
-    set strokeOpacity(v: number) {
+    set strokeOpacity(v: number)
+    {
         if (!isValidOpacity(v)) throw new RangeError(`Style.strokeOpacity must be between 0 and 1, got: ${v}`);
         this._style.stroke!.opacity = v;
         this._explicit.add('stroke');
@@ -254,7 +272,8 @@ export class Style
     get strokeWidth(): number {
         return this._style.stroke!.width ?? 1;
     }
-    set strokeWidth(v: number) {
+    set strokeWidth(v: number)
+    {
         if (typeof v !== 'number' || v < 0)
             throw new RangeError(`Style.strokeWidth must be a non-negative number, got: ${v}`);
         this._style.stroke!.width = v;
@@ -264,7 +283,8 @@ export class Style
     get strokeDash(): number[] {
         return this._style.stroke!.dash ?? [];
     }
-    set strokeDash(v: number[]) {
+    set strokeDash(v: number[])
+    {
         if (!Array.isArray(v) || v.some(n => typeof n !== 'number' || n < 0))
             throw new TypeError(`Style.strokeDash must be an array of non-negative numbers`);
         this._style.stroke!.dash = v;
@@ -274,7 +294,8 @@ export class Style
     get strokeCap(): 'butt' | 'round' | 'square' {
         return this._style.stroke!.cap ?? 'butt';
     }
-    set strokeCap(v: 'butt' | 'round' | 'square') {
+    set strokeCap(v: 'butt' | 'round' | 'square')
+    {
         if (!['butt', 'round', 'square'].includes(v))
             throw new TypeError(`Style.strokeCap must be 'butt', 'round', or 'square', got: "${v}"`);
         this._style.stroke!.cap = v;
@@ -284,7 +305,8 @@ export class Style
     get strokeJoin(): 'bevel' | 'round' | 'miter' {
         return this._style.stroke!.join ?? 'miter';
     }
-    set strokeJoin(v: 'bevel' | 'round' | 'miter') {
+    set strokeJoin(v: 'bevel' | 'round' | 'miter')
+    {
         if (!['bevel', 'round', 'miter'].includes(v))
             throw new TypeError(`Style.strokeJoin must be 'bevel', 'round', or 'miter', got: "${v}"`);
         this._style.stroke!.join = v;
@@ -305,42 +327,51 @@ export class Style
 
         // fill
         const fillColor = this._style.fill?.color;
-        if (fillColor !== undefined) {
+        if (fillColor !== undefined)
+        {
             elem.setAttribute('fill', fillColor);
         }
         const fillOpacity = this._style.fill?.opacity;
-        if (fillOpacity !== undefined && fillOpacity !== 1) {
+        if (fillOpacity !== undefined && fillOpacity !== 1)
+        {
             elem.setAttribute('fill-opacity', String(fillOpacity));
         }
 
         // stroke
         const strokeColor = this._style.stroke?.color;
-        if (strokeColor !== undefined) {
+        if (strokeColor !== undefined)
+        {
             elem.setAttribute('stroke', strokeColor);
         }
         const strokeOpacity = this._style.stroke?.opacity;
-        if (strokeOpacity !== undefined && strokeOpacity !== 1) {
+        if (strokeOpacity !== undefined && strokeOpacity !== 1)
+        {
             elem.setAttribute('stroke-opacity', String(strokeOpacity));
         }
         const strokeWidth = this._style.stroke?.width;
-        if (strokeWidth !== undefined) {
+        if (strokeWidth !== undefined)
+        {
             elem.setAttribute('stroke-width', String(strokeWidth));
         }
         const dash = this._style.stroke?.dash;
-        if (dash && dash.length > 0) {
+        if (dash && dash.length > 0)
+        {
             elem.setAttribute('stroke-dasharray', dash.join(' '));
         }
         const cap = this._style.stroke?.cap;
-        if (cap) {
+        if (cap)
+        {
             elem.setAttribute('stroke-linecap', cap);
         }
         const join = this._style.stroke?.join;
-        if (join) {
+        if (join)
+        {
             elem.setAttribute('stroke-linejoin', join);
         }
 
         // overall opacity
-        if (this._style.opacity !== undefined && this._style.opacity !== 1) {
+        if (this._style.opacity !== undefined && this._style.opacity !== 1)
+        {
             elem.setAttribute('opacity', String(this._style.opacity));
         }
     }
@@ -359,7 +390,8 @@ export class Style
         if (!node) return;
 
         // Visibility
-        if ('visible' in node) {
+        if ('visible' in node)
+        {
             node.visible = this.visible;
         }
 
@@ -372,10 +404,13 @@ export class Style
             ? (this._style.stroke?.color ?? this._style.color)
             : (this._style.fill?.color ?? this._style.color);
 
-        if (colorStr !== undefined) {
-            try {
+        if (colorStr !== undefined)
+        {
+            try
+            {
                 const colorInt = Style._cssToInt(colorStr);
-                if (mat.color && typeof mat.color.set === 'function') {
+                if (mat.color && typeof mat.color.set === 'function')
+                {
                     mat.color.set(colorInt);
                 }
             } catch { /* unsupported color format — skip */ }
@@ -383,20 +418,24 @@ export class Style
 
         // Opacity
         const opacity = this._style.opacity ?? 1;
-        if ('opacity' in mat) {
+        if ('opacity' in mat)
+        {
             mat.opacity = opacity;
         }
-        if ('transparent' in mat) {
+        if ('transparent' in mat)
+        {
             mat.transparent = opacity < 1;
         }
 
         // Emissive (optional — zero it out so the diffuse color shows cleanly)
-        if (mat.emissive && typeof mat.emissive.set === 'function') {
+        if (mat.emissive && typeof mat.emissive.set === 'function')
+        {
             mat.emissive.set(0x000000);
         }
 
         // Mark material as needing update
-        if ('needsUpdate' in mat) {
+        if ('needsUpdate' in mat)
+        {
             mat.needsUpdate = true;
         }
     }
@@ -411,11 +450,14 @@ export class Style
         const parts: string[] = [];
 
         // fill
-        if (closed && this._style.fill?.color) {
+        if (closed && this._style.fill?.color)
+        {
             parts.push(`fill="${this._style.fill.color}"`);
             const fo = this._style.fill.opacity;
             if (fo !== undefined && fo !== 1) parts.push(`fill-opacity="${fo}"`);
-        } else {
+        }
+        else
+        {
             parts.push('fill="none"');
         }
 
@@ -458,7 +500,8 @@ export class Style
             : (this._style.fill?.color ?? this._style.color ?? 'red');
 
         let r = 1, g = 0, b = 0;
-        try {
+        try
+        {
             const hex = Style._cssToHex(colorStr ?? 'red');
             r = parseInt(hex.slice(1, 3), 16) / 255;
             g = parseInt(hex.slice(3, 5), 16) / 255;
@@ -504,18 +547,21 @@ export class Style
         const c = color.trim().toLowerCase();
 
         // #RGB → #RRGGBB
-        if (/^#[0-9a-f]{3}$/.test(c)) {
+        if (/^#[0-9a-f]{3}$/.test(c))
+        {
             return '#' + c[1].repeat(2) + c[2].repeat(2) + c[3].repeat(2);
         }
 
         // #RRGGBB (already valid hex)
-        if (/^#[0-9a-f]{6}$/.test(c)) {
+        if (/^#[0-9a-f]{6}$/.test(c))
+        {
             return c;
         }
 
         // rgb() / rgba() — values may be 0-255 integers
         const rgbMatch = c.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
-        if (rgbMatch) {
+        if (rgbMatch)
+        {
             const clamp = (n: number) => Math.max(0, Math.min(255, n));
             const r = clamp(parseInt(rgbMatch[1])).toString(16).padStart(2, '0');
             const g = clamp(parseInt(rgbMatch[2])).toString(16).padStart(2, '0');

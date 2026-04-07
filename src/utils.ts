@@ -26,7 +26,8 @@ export function remapAxis(x: number, y: number, z: number, up: 'x' | 'y' | 'z' =
 
 export function uuid(): string
 {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c =>
+    {
         const r = crypto.getRandomValues(new Uint8Array(1))[0] % 16;
         const v = c === 'x' ? r : (r & 0x3 | 0x8);
         return v.toString(16);
@@ -61,15 +62,20 @@ export async function save(filepath: string,
         const fullPath = path.resolve(filepath);
         console.info(`utils::save(): File saved to "${fullPath}"`);
     } 
-    else {
+    else
+    {
         // Browser
         let blob: Blob;
         
-        if (data instanceof Blob) {
+        if (data instanceof Blob)
+        {
             blob = data;
-        } else if (data instanceof ArrayBuffer || data instanceof Uint8Array) {
+        } else if (data instanceof ArrayBuffer || data instanceof Uint8Array)
+        {
             blob = new Blob([data as any]); // NOTE: suppress type warning TODO: fix
-        } else {
+        }
+        else
+        {
             blob = new Blob([data as any], { type: 'text/plain' });
         }
         
@@ -91,18 +97,24 @@ export function toBase64(data: string | Uint8Array | Float32Array | Float64Array
 {
     let bytes: Uint8Array;
     
-    if (typeof data === 'string') {
+    if (typeof data === 'string')
+    {
         bytes = new TextEncoder().encode(data);
-    } else if (data instanceof ArrayBuffer) {
+    } else if (data instanceof ArrayBuffer)
+    {
         bytes = new Uint8Array(data);
-    } else if (data instanceof Uint8Array) {
+    } else if (data instanceof Uint8Array)
+    {
         bytes = data;
-    } else {
+    }
+    else
+    {
         // Float32Array, Float64Array, etc. - get underlying bytes
         bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
     }
     
-    if (typeof Buffer !== 'undefined') {
+    if (typeof Buffer !== 'undefined')
+    {
         return Buffer.from(bytes).toString('base64');
     }
     return btoa(String.fromCharCode(...bytes));
@@ -111,12 +123,13 @@ export function toBase64(data: string | Uint8Array | Float32Array | Float64Array
 /** Decode a base64 string back to a Uint8Array */
 export function fromBase64(b64: string): Uint8Array
 {
-    if (typeof Buffer !== 'undefined') {
+    if (typeof Buffer !== 'undefined')
+    {
         return Buffer.from(b64, 'base64');
     }
     const bin = atob(b64);
     const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    Array.from({ length: bin.length }, (_, i) => { bytes[i] = bin.charCodeAt(i); });
     return bytes;
 }
 
@@ -155,12 +168,12 @@ export function debugGLTFNormals(gltfJson: string): Float32Array[]
 
     const results: Float32Array[] = [];
 
-    for (const mesh of (gltf.meshes ?? []))
+    (gltf.meshes ?? []).forEach((mesh: any) =>
     {
-        for (const prim of (mesh.primitives ?? []))
+        (mesh.primitives ?? []).forEach((prim: any) =>
         {
             const normalAccIdx = prim.attributes?.NORMAL;
-            if (normalAccIdx == null) continue;
+            if (normalAccIdx == null) return;
 
             const acc        = gltf.accessors[normalAccIdx];
             const bufView    = gltf.bufferViews[acc.bufferView];
@@ -170,8 +183,8 @@ export function debugGLTFNormals(gltfJson: string): Float32Array[]
             const byteLength = acc.count * 3 * 4; // VEC3 of FLOAT (4 bytes each)
 
             results.push(new Float32Array(raw.buffer, raw.byteOffset + byteOffset, acc.count * 3));
-        }
-    }
+        });
+    });
 
     return results;
 }

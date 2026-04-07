@@ -144,7 +144,8 @@ export class Sketch
     {
         this._popAllCursors()
         .forEach(
-            (cur) => {
+            (cur) =>
+            {
                 const p = Point.fromSketchCoords(cur, coords);
                 if(!isPointLike(p)){ throw new Error('Sketch::moveTo(): Invalid point. Please supply a PointLike like [x,y], [x,y,z], Point(x,y), Vector(x,y) etc');}
                 this._pushCursor(new Point(p));
@@ -217,7 +218,8 @@ export class Sketch
     {
         this._popAllCursors()
         .forEach(
-            (cur) => {
+            (cur) =>
+            {
                 const p = Point.fromSketchCoords(cur, coords);
                 if(p)
                 { 
@@ -247,7 +249,8 @@ export class Sketch
         {
             throw new Error('Sketch::arcTo(): Please supply PointLike for mid and end.');
         }
-        this._popAllCursors().forEach((cur) => {
+        this._popAllCursors().forEach((cur) =>
+        {
             const midPt = Point.from(mid);
             const endPt = Point.from(end);
             const arc = Curve.Arc(cur.at, midPt, endPt);
@@ -268,7 +271,8 @@ export class Sketch
             console.warn('Sketch::polyline(): Empty or invalid point array');
             return this;
         }
-        this._popAllCursors().forEach((cur) => {
+        this._popAllCursors().forEach((cur) =>
+        {
             const allPoints = [cur.at, ...pnts.map(p => Point.from(p))];
             const poly = Curve.Polyline(allPoints);
             this._curves.add(poly);
@@ -286,7 +290,8 @@ export class Sketch
             console.warn('Sketch::curveTo(): Empty or invalid point array');
             return this;
         }
-        this._popAllCursors().forEach((cur) => {
+        this._popAllCursors().forEach((cur) =>
+        {
             const endPt = Point.from(pnts[pnts.length - 1]);
             const allPoints = [cur.at, ...pnts.map(p => Point.from(p))];
             const curve = Curve.Interpolated(allPoints);
@@ -312,7 +317,8 @@ export class Sketch
         {
             this._curves.first()?.close();
         }
-        else {
+        else
+        {
             // Multiple shapes, try to connect them into one closed curve
             this._curves.connect();
         }
@@ -457,7 +463,8 @@ export class Sketch
     _localToWorld():CurveCollection
     {
         return this._curves.copy()
-            .forEach((curve) => {
+            .forEach((curve) =>
+            {
                 // NOTE: normal alone is not enough for non-XY planes, we use xDir and yDir
                 curve.alignByPoints(
                     [[0,0,0], [1,0,0], [0,1,0]], // source points in local sketch coordinates

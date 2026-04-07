@@ -5,7 +5,8 @@ import { Mesh } from '../../src/Mesh';
 import { Bbox } from '../../src/Bbox';
 import { OBbox } from '../../src/OBbox';
 
-beforeAll(async () => {
+beforeAll(async () =>
+{
     await initAsync();
 });
 
@@ -22,18 +23,22 @@ const TRIANGLE: Array<[number, number, number]> = [
     [1, 2, 0],
 ];
 
-describe('Polygon construction', () => {
-    it('creates a polygon from PointLike vertices', () => {
+describe('Polygon construction', () =>
+{
+    it('creates a polygon from PointLike vertices', () =>
+    {
         const p = new Polygon(SQUARE);
         expect(p).toBeTruthy();
         expect(p.inner).toBeTruthy();
     });
 
-    it('throws when fewer than 3 vertices are provided', () => {
+    it('throws when fewer than 3 vertices are provided', () =>
+    {
         expect(() => new Polygon([[0, 0, 0], [1, 0, 0]])).toThrow();
     });
 
-    it('Polygon.from() wraps a raw PolygonJs', () => {
+    it('Polygon.from() wraps a raw PolygonJs', () =>
+    {
         const rawPolygons = Mesh.Cube(1).polygons();
         expect(rawPolygons.length).toBeGreaterThan(0);
         const p = rawPolygons[0];
@@ -41,13 +46,16 @@ describe('Polygon construction', () => {
     });
 });
 
-describe('Polygon.vertices()', () => {
-    it('returns the correct number of vertices', () => {
+describe('Polygon.vertices()', () =>
+{
+    it('returns the correct number of vertices', () =>
+    {
         const p = new Polygon(SQUARE);
         expect(p.vertices().length).toBe(4);
     });
 
-    it('vertex positions match input', () => {
+    it('vertex positions match input', () =>
+    {
         const p = new Polygon(TRIANGLE);
         const verts = p.vertices();
         expect(verts[0].x).toBeCloseTo(0);
@@ -57,53 +65,64 @@ describe('Polygon.vertices()', () => {
     });
 });
 
-describe('Polygon.holeCount() / hasHoles()', () => {
-    it('has no holes by default', () => {
+describe('Polygon.holeCount() / hasHoles()', () =>
+{
+    it('has no holes by default', () =>
+    {
         const p = new Polygon(SQUARE);
         expect(p.holeCount()).toBe(0);
         expect(p.hasHoles()).toBe(false);
     });
 });
 
-describe('Polygon.flip()', () => {
-    it('returns this for chaining', () => {
+describe('Polygon.flip()', () =>
+{
+    it('returns this for chaining', () =>
+    {
         const p = new Polygon(TRIANGLE);
         expect(p.flip()).toBe(p);
     });
 });
 
-describe('Polygon.triangulate()', () => {
-    it('returns triangular polygons', () => {
+describe('Polygon.triangulate()', () =>
+{
+    it('returns triangular polygons', () =>
+    {
         const p = new Polygon(SQUARE);
         const tris = p.triangulate();
         expect(tris.length).toBeGreaterThan(0);
-        for (const tri of tris)
+        tris.forEach(tri =>
         {
             expect(tri.vertices().length).toBe(3);
-        }
+        });
     });
 });
 
-describe('Polygon.extrude()', () => {
-    it('returns a Mesh', () => {
+describe('Polygon.extrude()', () =>
+{
+    it('returns a Mesh', () =>
+    {
         const p = new Polygon(SQUARE);
         const m = p.extrude(2);
         expect(m).instanceOf(Mesh);
     });
 
-    it('extruded mesh has vertices', () => {
+    it('extruded mesh has vertices', () =>
+    {
         const p = new Polygon(SQUARE);
         const m = p.extrude(2);
         expect(m.vertices().length).toBeGreaterThan(0);
     });
 
-    it('extruded mesh has triangles', () => {
+    it('extruded mesh has triangles', () =>
+    {
         const p = new Polygon(SQUARE);
         const m = p.extrude(2);
         expect(m.inner().triangleCount()).toBeGreaterThan(0);
     });
 
-    it('respects custom direction', () => {
+    it('respects custom direction', () =>
+    {
         const p = new Polygon(SQUARE);
         const m = p.extrude(3, [0, 1, 0]);
         const bbox = m.bbox();
@@ -112,28 +131,33 @@ describe('Polygon.extrude()', () => {
     });
 });
 
-describe('Mesh.polygons()', () => {
-    it('returns Polygon instances', () => {
+describe('Mesh.polygons()', () =>
+{
+    it('returns Polygon instances', () =>
+    {
         const m = Mesh.Cube(2);
         const polys = m.polygons();
         expect(polys.length).toBeGreaterThan(0);
-        for (const p of polys)
+        polys.forEach(p =>
         {
             expect(p).instanceOf(Polygon);
-        }
+        });
     });
 
-    it('each polygon has at least 3 vertices', () => {
+    it('each polygon has at least 3 vertices', () =>
+    {
         const m = Mesh.Cube(2);
-        for (const p of m.polygons())
+        m.polygons().forEach(p =>
         {
             expect(p.vertices().length).toBeGreaterThanOrEqual(3);
-        }
+        });
     });
 });
 
-describe('Polygon.center()', () => {
-    it('returns centroid of a unit square at origin', () => {
+describe('Polygon.center()', () =>
+{
+    it('returns centroid of a unit square at origin', () =>
+    {
         const p = new Polygon(SQUARE);
         const c = p.center();
         expect(c.x).toBeCloseTo(0.5);
@@ -141,7 +165,8 @@ describe('Polygon.center()', () => {
         expect(c.z).toBeCloseTo(0);
     });
 
-    it('returns centroid of a triangle', () => {
+    it('returns centroid of a triangle', () =>
+    {
         const tri: Array<[number, number, number]> = [[0,0,0],[3,0,0],[0,3,0]];
         const p = new Polygon(tri);
         const c = p.center();
@@ -151,13 +176,16 @@ describe('Polygon.center()', () => {
     });
 });
 
-describe('Polygon.bbox()', () => {
-    it('returns a Bbox instance', () => {
+describe('Polygon.bbox()', () =>
+{
+    it('returns a Bbox instance', () =>
+    {
         const p = new Polygon(SQUARE);
         expect(p.bbox()).toBeInstanceOf(Bbox);
     });
 
-    it('min and max match vertex extents of the unit square', () => {
+    it('min and max match vertex extents of the unit square', () =>
+    {
         const p = new Polygon(SQUARE);
         const bb = p.bbox();
         expect(bb.min().x).toBeCloseTo(0);
@@ -166,7 +194,8 @@ describe('Polygon.bbox()', () => {
         expect(bb.max().y).toBeCloseTo(1);
     });
 
-    it('width and depth are 1 for the unit square', () => {
+    it('width and depth are 1 for the unit square', () =>
+    {
         const p = new Polygon(SQUARE);
         const bb = p.bbox();
         expect(bb.width()).toBeCloseTo(1);
@@ -174,13 +203,16 @@ describe('Polygon.bbox()', () => {
     });
 });
 
-describe('Polygon.obbox()', () => {
-    it('returns an OBbox instance', () => {
+describe('Polygon.obbox()', () =>
+{
+    it('returns an OBbox instance', () =>
+    {
         const p = new Polygon(SQUARE);
         expect(p.obbox()).toBeInstanceOf(OBbox);
     });
 
-    it('OBbox center matches centroid of the unit square', () => {
+    it('OBbox center matches centroid of the unit square', () =>
+    {
         const p = new Polygon(SQUARE);
         const ob = p.obbox();
         expect(ob.center().x).toBeCloseTo(0.5);

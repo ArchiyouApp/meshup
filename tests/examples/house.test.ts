@@ -9,7 +9,8 @@ import { Sketch } from '../../src/Sketch';
 import { save } from '../../src/utils';
 import { rad } from '../../src/utils';
 
-beforeAll(async () => {
+beforeAll(async () =>
+{
     await initAsync();
 });
 

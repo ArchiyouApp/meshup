@@ -73,7 +73,8 @@ export interface GLTFBuffer
 //// BVH AND RELATED METHODS ////
 
 /** Result of a BVH-accelerated first-hit raycast. */
-export interface RaycastHit {
+export interface RaycastHit
+{
   pointX: number; pointY: number; pointZ: number;
   normalX: number; normalY: number; normalZ: number;
   distance: number;
@@ -81,7 +82,8 @@ export interface RaycastHit {
 }
 
 /** Result of a closest-surface-point query. */
-export interface ClosestPointResult {
+export interface ClosestPointResult
+{
   pointX: number; pointY: number; pointZ: number;
   normalX: number; normalY: number; normalZ: number;
   distance: number;
@@ -89,7 +91,8 @@ export interface ClosestPointResult {
 }
 
 /** Signed-distance-field sample at a query point. */
-export interface SdfSample {
+export interface SdfSample
+{
   distance: number;
   isInside: boolean;
   closestX: number; closestY: number; closestZ: number;
@@ -112,7 +115,8 @@ export interface ProjectEdgeOptions
 export type ShapeType = 'mesh' | 'curve';
 
 /** Plain-object representation of a Container node for inspection/serialisation. */
-export interface ContainerGraphNode {
+export interface ContainerGraphNode
+{
   name: string;
   isLayer: boolean;
   shapeCount: number;

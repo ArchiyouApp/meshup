@@ -96,7 +96,8 @@ export class Collection
     group(groupName: string): Collection | undefined
     {
         const groupColl = this._groups.get(groupName);
-        if(!groupColl){ 
+        if(!groupColl)
+        {
             console.error(`Collection::group(): No group with name '${groupName}' found. Available groups:`, Array.from(this._groups.keys())); 
             return undefined; 
         }
@@ -235,15 +236,15 @@ export class Collection
     {
         let minX = Infinity, minY = Infinity, minZ = Infinity;
         let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-        for (const shape of this._shapes)
+        this._shapes.forEach(shape =>
         {
             const bb = shape instanceof Mesh ? shape.bbox() : (shape as Curve).bbox();
-            if (!bb) continue;
+            if (!bb) return;
             const mn = bb.min(), mx = bb.max();
             if (mn.x < minX) minX = mn.x;  if (mx.x > maxX) maxX = mx.x;
             if (mn.y < minY) minY = mn.y;  if (mx.y > maxY) maxY = mx.y;
             if (mn.z < minZ) minZ = mn.z;  if (mx.z > maxZ) maxZ = mx.z;
-        }
+        });
         if (!isFinite(minX)) return undefined;
         return new Bbox([minX, minY, minZ], [maxX, maxY, maxZ]);
     }
@@ -339,15 +340,13 @@ export class Collection
     *  their polygon arrays */
     merge(): Mesh
     {
-        const allPolygons: PolygonJs[] = [];
-        for (const shape of this._shapes) {
-            if (shape instanceof Mesh) {
-                const inner = shape.inner();
-                if (inner) {
-                    allPolygons.push(...inner.polygons());
-                }
-            }
-        }
+        const allPolygons: PolygonJs[] = this._shapes
+            .filter(shape => shape instanceof Mesh)
+            .flatMap(shape =>
+            {
+                const inner = (shape as Mesh).inner();
+                return inner ? inner.polygons() : [];
+            });
         if (allPolygons.length === 0)
         {
             console.error(`Collection::merge(): No meshes to merge. Returning empty mesh.`);
@@ -386,12 +385,7 @@ export class Collection
         }
 
         // Perform union operation on all meshes
-        let resultMesh = meshesToUnion[0];
-        for(let i = 1; i < meshesToUnion.length; i++)
-        {
-            resultMesh = resultMesh.union(meshesToUnion[i]);
-        }
-        return resultMesh;
+        return meshesToUnion.slice(1).reduce((acc, mesh) => acc.union(mesh), meshesToUnion[0]);
     }
 
     /** Subtract all meshes in the other collection from this collection */
@@ -409,9 +403,11 @@ export class Collection
             return this;
         }
 
-        this.forEach( shape => {
+        this.forEach( shape =>
+        {
             if (!(shape instanceof Mesh)) return;
-            otherMeshes.forEach(otherMesh => {
+            otherMeshes.forEach(otherMesh =>
+            {
                 (shape as Mesh).subtract(otherMesh);
             });
         });
@@ -498,10 +494,8 @@ export class Collection
             return [x, z,  y]; // already y-up
         };
 
-        for (let i = 0; i < this._shapes.length; i++)
+        this._shapes.forEach((shape, i) =>
         {
-            const shape = this._shapes[i];
-
             if (shape instanceof Mesh)
             {
                 // Raw WASM buffers: positions/normals are Float64, indices are Uint32
@@ -511,13 +505,13 @@ export class Collection
 
                 const vertexCount = posRaw.length / 3;
                 const indexCount  = idxRaw.length;
-                if (vertexCount === 0) continue;
+                if (vertexCount === 0) return;
 
                 // Convert positions: Float64 → Float32, remap axis, compute bbox
                 const posF32 = new Float32Array(posRaw.length);
                 const posMin = [Infinity,  Infinity,  Infinity];
                 const posMax = [-Infinity, -Infinity, -Infinity];
-                for (let v = 0; v < vertexCount; v++)
+                for (let v = 0; v < vertexCount; v++) // perf: keep as loop
                 {
                     const [rx, ry, rz] = remap(posRaw[v*3], posRaw[v*3+1], posRaw[v*3+2]);
                     posF32[v*3] = rx; posF32[v*3+1] = ry; posF32[v*3+2] = rz;
@@ -528,7 +522,7 @@ export class Collection
 
                 // Convert normals: Float64 → Float32, remap axis
                 const normF32 = new Float32Array(normRaw.length);
-                for (let v = 0; v < vertexCount; v++)
+                for (let v = 0; v < vertexCount; v++) // perf: keep as loop
                 {
                     const [rx, ry, rz] = remap(normRaw[v*3], normRaw[v*3+1], normRaw[v*3+2]);
                     normF32[v*3] = rx; normF32[v*3+1] = ry; normF32[v*3+2] = rz;
@@ -552,12 +546,13 @@ export class Collection
                     name: `mesh_${i}`,
                     primitives: [{ attributes: { POSITION: posAcc, NORMAL: normAcc }, indices: idxAcc, mode: 4, material: meshMatIdx }]
                 });
+                gltfNodes.push({ mesh: gltfMeshes.length - 1, name: `mesh_${i}` });
             }
             else if (shape instanceof Curve)
             {
                 // toGLTFBuffer already gives us a Y-up-remapped Float32 buffer as base64
                 const buf     = shape.toGLTFBuffer(up);
-                if (buf.count < 2) continue;
+                if (buf.count < 2) return;
                 const bytes   = fromBase64(buf.data);
                 const viewIdx = addChunk(bytes, 34962); // ARRAY_BUFFER
 
@@ -576,11 +571,10 @@ export class Collection
                 // Also export interior hole curves as separate line strips (share parent material)
                 if (shape.hasHoles())
                 {
-                    for (let h = 0; h < shape.holes().length; h++)
+                    shape.holes().forEach((holeCurve, h) =>
                     {
-                        const holeCurve = shape.holes()[h];
                         const holeBuf = holeCurve.toGLTFBuffer(up);
-                        if (holeBuf.count < 2) continue;
+                        if (holeBuf.count < 2) return;
                         const holeBytes = fromBase64(holeBuf.data);
                         const holeViewIdx = addChunk(holeBytes, 34962);
                         const holeMinArr = holeBuf.min ? [holeBuf.min.x, holeBuf.min.y, holeBuf.min.z] : undefined;
@@ -591,18 +585,10 @@ export class Collection
                             primitives: [{ attributes: { POSITION: holeAcc }, mode: 3, material: curveMatIdx }]
                         });
                         gltfNodes.push({ mesh: gltfMeshes.length - 1, name: `curve_${i}_hole_${h}` });
-                    }
+                    });
                 }
-
-                continue; // skip the generic node push below
             }
-            else
-            {
-                continue;
-            }
-
-            gltfNodes.push({ mesh: gltfMeshes.length - 1, name: `${shape instanceof Mesh ? 'mesh' : 'curve'}_${i}` });
-        }
+        });
 
         if (gltfNodes.length === 0)
         {
@@ -612,8 +598,7 @@ export class Collection
         // Pack all chunks into one binary buffer
         const totalByteLength = chunks.reduce((s, c) => s + c.byteLength, 0);
         const combined = new Uint8Array(totalByteLength);
-        let pos = 0;
-        for (const chunk of chunks) { combined.set(chunk, pos); pos += chunk.byteLength; }
+        chunks.reduce((pos, chunk) => { combined.set(chunk, pos); return pos + chunk.byteLength; }, 0);
 
         const gltf: Record<string, any> = {
             asset: { version: "2.0" },
@@ -731,16 +716,13 @@ export class MeshCollection extends Collection
      *
      * @returns Array of `[meshFromThis, meshFromOther]` overlap pairs.
      */
-    hits(other: Mesh | MeshCollection): Array<[Mesh, Mesh]> {
+    hits(other: Mesh | MeshCollection): Array<[Mesh, Mesh]>
+    {
         const aList = this.shapes();
         const bList = other instanceof Mesh ? [other] : other.shapes();
-        const pairs: Array<[Mesh, Mesh]> = [];
-        for (const a of aList) {
-            for (const b of bList) {
-                if (a.hits(b)) pairs.push([a, b]);
-            }
-        }
-        return pairs;
+        return aList.flatMap(a =>
+            bList.filter(b => a.hits(b)).map(b => [a, b] as [Mesh, Mesh])
+        );
     }
 
     /**
@@ -761,13 +743,12 @@ export class MeshCollection extends Collection
         direction: [number, number, number],
         maxDist = Infinity,
         all = true,
-    ): Array<{ mesh: Mesh; hit: RaycastHit }> | { mesh: Mesh; hit: RaycastHit } | null {
-        const results: Array<{ mesh: Mesh; hit: RaycastHit }> = [];
-        for (const mesh of this.shapes()) {
-            const hit = mesh.raycast(origin, direction, maxDist, false);
-            if (hit) results.push({ mesh, hit });
-        }
-        results.sort((a, b) => a.hit.distance - b.hit.distance);
+    ): Array<{ mesh: Mesh; hit: RaycastHit }> | { mesh: Mesh; hit: RaycastHit } | null
+    {
+        const results = this.shapes()
+            .map(mesh => ({ mesh, hit: mesh.raycast(origin, direction, maxDist, false) }))
+            .filter((r): r is { mesh: Mesh; hit: RaycastHit } => r.hit !== null)
+            .sort((a, b) => a.hit.distance - b.hit.distance);
         if (all) return results;
         return results[0] ?? null;
     }
@@ -778,18 +759,19 @@ export class MeshCollection extends Collection
      *
      * Returns `0` if any meshes intersect, `Infinity` if either side is empty.
      */
-    distanceTo(other: Mesh | MeshCollection): number {
+    distanceTo(other: Mesh | MeshCollection): number
+    {
         const aList = this.shapes();
         const bList = other instanceof Mesh ? [other] : other.shapes();
-        let min = Infinity;
-        for (const a of aList) {
-            for (const b of bList) {
-                const d = a.distanceTo(b);
-                if (d < min) min = d;
-                if (min === 0) return 0;
-            }
-        }
-        return min;
+        return aList.reduce((minSoFar, a) =>
+        {
+            if (minSoFar === 0) return 0;
+            return bList.reduce((m, b) =>
+            {
+                if (m === 0) return 0;
+                return Math.min(m, a.distanceTo(b));
+            }, minSoFar);
+        }, Infinity);
     }
 
     /**
@@ -798,20 +780,13 @@ export class MeshCollection extends Collection
      * @returns `{ mesh1, mesh2, distance }` for the closest pair, or `null`
      *          if either collection is empty.
      */
-    closestPair(other: MeshCollection): { mesh1: Mesh; mesh2: Mesh; distance: number } | null {
+    closestPair(other: MeshCollection): { mesh1: Mesh; mesh2: Mesh; distance: number } | null
+    {
         const aList = this.shapes();
         const bList = other.shapes();
         if (aList.length === 0 || bList.length === 0) return null;
-        let best: { mesh1: Mesh; mesh2: Mesh; distance: number } | null = null;
-        for (const a of aList) {
-            for (const b of bList) {
-                const d = a.distanceTo(b);
-                if (best === null || d < best.distance) {
-                    best = { mesh1: a, mesh2: b, distance: d };
-                }
-            }
-        }
-        return best;
+        return aList.flatMap(a => bList.map(b => ({ mesh1: a, mesh2: b, distance: a.distanceTo(b) })))
+            .reduce((best, pair) => best === null || pair.distance < best.distance ? pair : best, null as { mesh1: Mesh; mesh2: Mesh; distance: number } | null);
     }
 
     // ── Edge Projection (HLR) ────────────────────────────────────────────────
@@ -865,7 +840,8 @@ export class CurveCollection extends Collection
         {
             return new CurveCollection(...args.flatMap(arg => arg instanceof Collection ? arg.curves().toArray() as Curve[] : (arg instanceof Curve ? [arg] : [])));
         }
-        else {
+        else
+        {
             throw new Error(`CurveCollection.from(): Invalid input: "${args.map(a => a.toString()).join(', ')}". Please provide a Collection or an array of Curves.`);
         }
     }
@@ -966,16 +942,15 @@ export class CurveCollection extends Collection
     /** Replicate this CurveCollection a given number of times, applying a transform to each copy */
     replicate(num: number, transform: (collection: CurveCollection, index: number, prev: CurveCollection | undefined) => CurveCollection): CurveCollection
     {
-        const results: Curve[] = [];
-        let prev: CurveCollection | undefined;
-        for (let i = 0; i < num; i++)
-        {
-            const copy = this.copy();
-            const transformed = transform(copy, i, prev);
-            results.push(...transformed.curves().toArray());
-            prev = transformed;
-        }
-        return new CurveCollection(...results);
+        const { curves } = Array.from({ length: num }, (_, i) => i).reduce<{ curves: Curve[]; prev: CurveCollection | undefined }>(
+            ({ curves, prev }, i) =>
+            {
+                const transformed = transform(this.copy(), i, prev);
+                return { curves: [...curves, ...transformed.curves().toArray()], prev: transformed };
+            },
+            { curves: [], prev: undefined }
+        );
+        return new CurveCollection(...curves);
     }
 
     /** Boolean-union all curves sequentially, returning the result curves */
@@ -983,13 +958,14 @@ export class CurveCollection extends Collection
     {
         const curves = super.curves();
         if (curves.length === 0) return null;
-        let result: Array<Curve> = [curves.get(0)!];
-        for (let i = 1; i < curves.length; i++)
-        {
-            const next = result[0]?.union(curves.get(i)!) as Array<Curve> | null;
-            if (next) result = next;
-        }
-        return result;
+        return curves.toArray().slice(1).reduce<Array<Curve>>(
+            (acc, curve) =>
+            {
+                const next = acc[0]?.union(curve) as Array<Curve> | null;
+                return next ?? acc;
+            },
+            [curves.get(0)!]
+        );
     }
 
     /** Offset every curve in this collection by `distance`.
@@ -998,13 +974,11 @@ export class CurveCollection extends Collection
      */
     offset(distance: number, cornerType: 'sharp'|'round'|'smooth' = 'sharp'): CurveCollection
     {
-        const results: Curve[] = [];
-        for (const curve of this._shapes as Curve[])
-        {
-            const r = curve.offset(distance, cornerType);
-            if (r) results.push(r);
-        }
-        return new CurveCollection(...results);
+        return new CurveCollection(
+            ...(this._shapes as Curve[])
+                .map(curve => curve.offset(distance, cornerType))
+                .filter((r): r is Curve => r !== null && r !== undefined)
+        );
     }
 
     /** Set stroke dash pattern on every curve in this collection. Defaults to [2, 2]. */
@@ -1045,7 +1019,8 @@ export class CurveCollection extends Collection
         this.combine();
 
         // Create a convenient list of endpoints with references to their curves
-        const endpoints = this.curves().toArray().flatMap(curve => {
+        const endpoints = this.curves().toArray().flatMap(curve =>
+        {
             // NOTE: references need to be consistent (don't call start()/end() 
             const start = curve.start();
             const end = curve.end();
@@ -1163,7 +1138,8 @@ export class CurveCollection extends Collection
                     {
                         newChains[i]?.push(...(otherChain.map(curve => curve.reverse()).reverse()));
                     }
-                    else {
+                    else
+                    {
                         // no connection: start new chain
                         newChains.push(otherChain);
                     }
@@ -1207,7 +1183,8 @@ export class CurveCollection extends Collection
         const result: Array<Curve> = [];
         let run: Array<Point> = [];  // accumulated polyline points
 
-        const flushRun = () => {
+        const flushRun = () =>
+        {
             if(run.length >= 2)
             {
                 result.push(Curve.Polyline(run));
@@ -1215,22 +1192,21 @@ export class CurveCollection extends Collection
             run = [];
         };
 
-        for(const curve of chain)
+        chain.forEach(curve =>
         {
             if(!curve.isCompound() && curve.degree() === 1)
             {
                 // Get all control points — handles polylines with 3+ vertices
                 const cps = curve.controlPoints();
                 // Process each consecutive pair of control points as a sub-segment
-                for(let k = 0; k < cps.length - 1; k++)
+                cps.slice(0, -1).forEach((segStart, k) =>
                 {
-                    const segStart = cps[k];
                     const segEnd   = cps[k + 1];
                     const dx = segEnd.x - segStart.x;
                     const dy = segEnd.y - segStart.y;
                     const dz = segEnd.z - segStart.z;
                     const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
-                    if(len < TOLERANCE) continue;  // skip zero-length
+                    if(len < TOLERANCE) return;  // skip zero-length
                     const segDir = new Vector(dx/len, dy/len, dz/len);
 
                     if(run.length === 0)
@@ -1247,8 +1223,8 @@ export class CurveCollection extends Collection
                         const py = last.y - prev.y;
                         const pz = last.z - prev.z;
                         const plen = Math.sqrt(px*px + py*py + pz*pz);
-                        const prevDir = plen > TOLERANCE 
-                            ? new Vector(px/plen, py/plen, pz/plen) 
+                        const prevDir = plen > TOLERANCE
+                            ? new Vector(px/plen, py/plen, pz/plen)
                             : segDir;
 
                         const cross = prevDir.cross(segDir);
@@ -1264,7 +1240,7 @@ export class CurveCollection extends Collection
                             run.push(segStart, segEnd);
                         }
                     }
-                }
+                });
             }
             else
             {
@@ -1272,7 +1248,7 @@ export class CurveCollection extends Collection
                 flushRun();
                 result.push(curve);
             }
-        }
+        });
         flushRun();
         return result;
     }
