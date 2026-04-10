@@ -2,7 +2,7 @@ import { Point3Js, PlaneJs } from './wasm/csgrs.js';
 
 import { Point } from './Point';
 import { Mesh } from './Mesh';
-import type { PointLike } from './types';
+import type { PointLike, Axis } from './types';
 import { isPointLike } from './types';
 
 /** Axis-aligned Bounding Box */
@@ -140,6 +140,91 @@ export class Bbox
         return this._max.z - this._min.z;
     }
 
+    //// AXIS ACCESSORS ////
+
+    minX(): number { return this._min.x }
+    minY(): number { return this._min.y }
+    minZ(): number { return this._min.z }
+    maxX(): number { return this._max.x }
+    maxY(): number { return this._max.y }
+    maxZ(): number { return this._max.z }
+
+    minAtAxis(axis: Axis): number { return this._min[axis] }
+    maxAtAxis(axis: Axis): number { return this._max[axis] }
+
+    /** Size (extent) along a single axis */
+    sizeAlongAxis(axis: Axis): number
+    {
+        return this._max[axis] - this._min[axis];
+    }
+
+    /** Returns the axis that has zero extent in a 2D bbox, or null for 3D bboxes */
+    axisMissingIn2D(): Axis | null
+    {
+        if (this.height() === 0) return 'z';
+        if (this.depth()  === 0) return 'y';
+        if (this.width()  === 0) return 'x';
+        return null;
+    }
+
+    /** Returns a new Bbox expanded by margin on all sides */
+    enlarged(margin: number): Bbox
+    {
+        return new Bbox(
+            new Point(this._min.x - margin, this._min.y - margin, this._min.z - margin),
+            new Point(this._max.x + margin, this._max.y + margin, this._max.z + margin),
+        );
+    }
+
+    /** Returns true if the given point is inside (or on the boundary of) this bbox */
+    containsPoint(p: PointLike): boolean
+    {
+        const pt = new Point(p);
+        return pt.x >= this._min.x && pt.x <= this._max.x
+            && pt.y >= this._min.y && pt.y <= this._max.y
+            && pt.z >= this._min.z && pt.z <= this._max.z;
+    }
+
+    /** Returns true if the given Bbox is fully inside this bbox */
+    containsBbox(other: Bbox): boolean
+    {
+        return other._min.x >= this._min.x && other._max.x <= this._max.x
+            && other._min.y >= this._min.y && other._max.y <= this._max.y
+            && other._min.z >= this._min.z && other._max.z <= this._max.z;
+    }
+
+    /** General contains check: accepts a Bbox, PointLike, or a shape with a bbox() method
+     *  TODO: extend when shape types are more fully defined
+     */
+    contains(v: Bbox | PointLike | any): boolean
+    {
+        if (v instanceof Bbox) return this.containsBbox(v);
+        if (isPointLike(v)) return this.containsPoint(v);
+        if (typeof v?.bbox === 'function') return this.containsBbox(v.bbox());
+        return false;
+    }
+
+    //// AXIS QUERIES ////
+
+    /** Returns the axes that have non-zero extent */
+    hasAxes(): Array<Axis>
+    {
+        const axes: Array<Axis> = [];
+        if (this.width()  > 0) axes.push('x');
+        if (this.depth()  > 0) axes.push('y');
+        if (this.height() > 0) axes.push('z');
+        return axes;
+    }
+
+    /** Returns the axis with the largest extent */
+    maxSizAxis(): Axis
+    {
+        const w = this.width(), d = this.depth(), h = this.height();
+        if (w >= d && w >= h) return 'x';
+        if (d >= w && d >= h) return 'y';
+        return 'z';
+    }
+
     is1D():boolean
     {
         const dims = [this.width(), this.depth(), this.height()].filter(d => d > 0);
@@ -156,16 +241,40 @@ export class Bbox
         return this.height() > 0 && this.depth() > 0 && this.width() > 0;
     }
 
-    /** Get Shape representation of current Bbox */
-    /*
-    shape():Mesh|PlaneJs|Point3Js
+    //// SHAPE REPRESENTATIONS ////
+    // NOTE: These return `any` to avoid a circular dependency (Curve imports Bbox).
+    //       Implement properly once a shape factory / dependency-inversion is in place.
+
+    /** Returns a rectangular Curve outline of this bbox on the XY plane
+     *  TODO: implement via shape factory to avoid Curve→Bbox circular dep
+     */
+    rect(): any
     {
-        if (this.is3D())
-        {
-            return new Mesh(this);
-        }
-        
+        throw new Error('Bbox.rect(): not yet implemented — requires Curve factory');
     }
-    */
+
+    /** Returns the back edge of this bbox as a Curve (max-Y side)
+     *  TODO: implement via shape factory
+     */
+    back(): any
+    {
+        throw new Error('Bbox.back(): not yet implemented — requires Curve factory');
+    }
+
+    /** Returns the left edge of this bbox as a Curve (min-X side)
+     *  TODO: implement via shape factory
+     */
+    left(): any
+    {
+        throw new Error('Bbox.left(): not yet implemented — requires Curve factory');
+    }
+
+    /** Returns the edge or vertex at the given named side of the bbox (e.g. 'bottomfront')
+     *  TODO: implement via shape factory
+     */
+    getSidesShape(_alignment: string): any
+    {
+        throw new Error('Bbox.getSidesShape(): not yet implemented — requires Curve factory');
+    }
 
 }

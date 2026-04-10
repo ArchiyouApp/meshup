@@ -70,13 +70,15 @@ export function isInitialized(): boolean
     TODO: All other classes too?
 */
 
+export type { PointLike } from './types';
 export { Point } from './Point';
 export { Vector } from './Vector';
 export { Vertex } from './Vertex';
+export { Shape } from './Shape';
 export { Mesh } from './Mesh';
 export { Polygon } from './Polygon';
 export { Curve } from './Curve';
-export { Collection, MeshCollection, CurveCollection } from './Collection';
+export { ShapeCollection, MeshCollection, CurveCollection } from './ShapeCollection';
 export { Sketch } from './Sketch';
 export { Bbox } from './Bbox';
 export { OBbox } from './OBbox';

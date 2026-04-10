@@ -12,7 +12,7 @@
  * 
  *      2. A series of commands create Shapes (using Curves) on the sketch plane. 
  * 
- *             These curves are stored in the _curves property as a Collection.
+ *             These curves are stored in the _curves property as a ShapeCollection.
  *
  *          Shapes can be of two kinds: 
  *              - linear ones (lineTo, splineTo, arcTo) - mostly used to create a contour from scratch
@@ -74,7 +74,7 @@ import { PolygonJs, SketchJs, VertexJs, Vector3Js } from "./wasm/csgrs";
 
 import { Vector } from "./Vector";
 import { Point } from "./Point";
-import { Collection, CurveCollection } from "./Collection";
+import { ShapeCollection, CurveCollection } from "./ShapeCollection";
 import { Mesh, getCsgrs } from "./index";
 
 import type { Axis, BasePlane, PointLike } from "./types";

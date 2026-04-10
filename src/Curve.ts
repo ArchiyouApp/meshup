@@ -23,11 +23,13 @@ import { ANGLE_COMPARE_TOLERANCE, TESSELATION_TOLERANCE, BASE_PLANE_NAME_TO_PLAN
 import { NurbsCurve3DJs, CompoundCurve3DJs, Vector3Js, BooleanRegionJs } from "./wasm/csgrs";
 
 import { MeshCollection, CurveCollection, getCsgrs, Mesh } from './index';
+import { Shape } from './Shape';
 import type { Container } from './Container';
 import type { CsgrsModule, PointLike, Axis, GLTFBuffer, BasePlane } from './types';
 import { isPointLike, isBasePlane } from './types'
 import { Point } from './Point';
 import { Vector } from './Vector';
+import { Vertex } from './Vertex';
 import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { Polygon } from './Polygon';
@@ -43,7 +45,7 @@ import
 import { Style } from "./Style";
 
 
-export class Curve
+export class Curve extends Shape
 {
     _curve: NurbsCurve3DJs|CompoundCurve3DJs|undefined = undefined;
 
@@ -59,8 +61,11 @@ export class Curve
     /** Return the Container this curve belongs to, or null. */
     container(): Container | null { return this._container; }
     
+    type(): 'Curve' { return 'Curve'; }
+
     constructor()
     {
+        super();
         // TODO
     }
 
@@ -81,8 +86,8 @@ export class Curve
         return this._curve;
     }
 
-    /** Get inner WASM pointer as id for debugging purposes */
-    id(): number
+    /** Get inner WASM pointer — useful for debugging only. Use id() for stable identity. */
+    wasmPtr(): number
     {
         return (this.inner() as any).__wbg_ptr;
     }
@@ -620,7 +625,7 @@ export class Curve
     //// PROPERTIES ////
 
     /** Classify this curve as 'line', 'arc', 'circle', 'rect', 'polyline', 'spline', or 'compound'. */
-    type(): 'line'|'arc'|'circle'|'rect'|'polyline'|'spline'|'compound'
+    subType(): 'line'|'arc'|'circle'|'rect'|'polyline'|'spline'|'compound'
     {
         const inner = this.inner();
 
@@ -859,19 +864,25 @@ export class Curve
     }
 
     /** Start point of the curve (at the start of the knot domain) */
-    start(): Point
+    start(): Vertex
     {
         const domain = this.inner().knotsDomain();
-        return new Point(this.inner().pointAtParam(domain[0]));
+        return new Vertex(new Point(this.inner().pointAtParam(domain[0])));
     }
 
     /** End point of the curve (at the end of the knot domain) */
-    end(): Point
+    end(): Vertex
     {
         const domain = this.inner().knotsDomain();
-        return new Point(this.inner().pointAtParam(domain[1]));
+        return new Vertex(new Point(this.inner().pointAtParam(domain[1])));
     }
-    
+
+    /** Point at the midpoint of the curve by arc length */
+    middle(): Point|null
+    {
+        return this.pointAtPerc(0.5);
+    }
+
     degree(): number|null
     {
         if(!this.isCompound())
@@ -1095,13 +1106,62 @@ export class Curve
         return OBbox.fromCurve(this);
     }
 
+    /** Whether this curve lies in a 2D plane (zero extent on one axis) */
+    is2D(): boolean
+    {
+        const bb = this.bbox();
+        if (!bb) return false;
+        return bb.width() === 0 || bb.depth() === 0 || bb.height() === 0;
+    }
+
+    /** Direction vector from start to end point (not normalised) */
+    direction(): Vector
+    {
+        return Vector.from(this.end()).subtract(Vector.from(this.start()));
+    }
+
+    /** Returns the start and end vertices as a two-element array (edge-like) */
+    vertices(): [Vertex, Vertex]
+    {
+        return [this.start(), this.end()];
+    }
+
+    /** Alias for bbox() — the boolean arg is ignored (kept for old-API compat) */
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    bboxCompat(_includeAnnotations?: boolean): Bbox | undefined
+    {
+        return this.bbox();
+    }
+
+    /** Returns constituent sub-curves (or self for simple curves)
+     *  For compound curves returns the segments; for a simple curve returns [this].
+     */
+    edges(): CurveCollection
+    {
+        const curves = this.isCompound() ? this.spans() : [this];
+        return new CurveCollection(...curves);
+    }
+
+    /** Extrude and return a Mesh — alias for extrude with argument order matching old API */
+    _extruded(length: number, direction: PointLike): Mesh | null
+    {
+        return this.extrude(length, direction);
+    }
+
+    /** Store annotations on this curve — placeholder for old-API compat */
+    addAnnotations(_annotations: any[]): this
+    {
+        // TODO: implement when annotation storage is added to geometry classes
+        return this;
+    }
+
     /** Center point of this curve's bounding box */
     center(): Point
     {
         const bb = this.bbox();
         if (bb) return bb.center();
         // Fallback: midpoint along the curve
-        return this.pointAtPerc(0.5) ?? this.start();
+        return this.pointAtPerc(0.5) ?? new Point(this.start());
     }
 
     /** Tessellate the curve into a series of points.
@@ -1571,7 +1631,7 @@ export class Curve
 
         // Fast path for circles: offsetting a circle just changes its radius 
         // Curvo offsetting is quite slow 
-        if(this.type() === 'circle')
+        if(this.subType() === 'circle')
         {
             const bb = this.bbox();
             if(bb)
@@ -1713,8 +1773,8 @@ export class Curve
     {
         if(!(other instanceof Curve)){ throw new Error(`Curve::connectTo(): Expected a Curve. Got: ${other}`); }
 
-        const curEndpoints = [{ point: this.start(), used: false }, { point: this.end(), used: false }];
-        const otherEndpoints = [{ point: other.start(), used: false }, { point: other.end(), used: false }];
+        const curEndpoints = [{ point: new Point(this.start()), used: false }, { point: new Point(this.end()), used: false }];
+        const otherEndpoints = [{ point: new Point(other.start()), used: false }, { point: new Point(other.end()), used: false }];
         
         // Find closest pair of endpoints and create extra lines
         const addedLines: Array<Curve> = [];
@@ -2150,7 +2210,7 @@ export class Curve
         const fmt = (n: number) => +n.toFixed(6);
         const to2D = (p: { x: number; y: number; z: number }): [number, number] => [p.x, -p.y];
 
-        if (this.type() === 'circle')
+        if (this.subType() === 'circle')
         {
             const bb = projected.bbox();
             if (bb)
@@ -2169,7 +2229,7 @@ export class Curve
         {
             const spanCurve = Curve.fromCsgrs(spanRaw);
             const cps = spanCurve.controlPoints();
-            const curveType = spanCurve.type();
+            const curveType = spanCurve.subType();
 
             if (si === 0)
             {
@@ -2313,7 +2373,7 @@ export class Curve
         const to2D = (p: { x: number; y: number; z: number }): [number, number] => [p.x, -p.y];
 
         // Full circle → emit a <circle> element directly instead of two arcs
-        if (this.type() === 'circle')
+        if (this.subType() === 'circle')
         {
             const bb = projected.bbox();
             if (bb)
@@ -2337,7 +2397,7 @@ export class Curve
         {
             const spanCurve = Curve.fromCsgrs(spanRaw);
             const cps = spanCurve.controlPoints();
-            const curveType = spanCurve.type();
+            const curveType = spanCurve.subType();
 
             // Move-to for the first span's start
             if (si === 0)

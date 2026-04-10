@@ -109,6 +109,16 @@ export class Point
         return this._z;
     }
 
+    /** Set the given axis component, mutating this point */
+    setComponent(axis: Axis, coord: number): Point
+    {
+        if(!isAxis(axis)){ throw new Error(`Point::setComponent(): Invalid axis: ${axis}. Use 'x', 'y' or 'z'.`); }
+        if(axis === 'x') this._x = coord;
+        else if(axis === 'y') this._y = coord;
+        else this._z = coord;
+        return this;
+    }
+
     //// TRANSFORMS ////
 
     /** Round to a given tolerance */
@@ -157,6 +167,13 @@ export class Point
         if(this._y === otherPoint._y) return 'y';
         if(this._z === otherPoint._z) return 'z';
         return null;
+    }
+
+    /** Returns true if this point is within tolerance of the given PointLike */
+    equals(other: PointLike, tolerance: number = POINT_TOLERANCE): boolean
+    {
+        if(!isPointLike(other)){ throw new Error(`Point::equals(): Invalid parameter: ${other}`); }
+        return this.distance(other) <= tolerance;
     }
 
     // NOTE: For other functions use underlying Point3Js or Vector3Js methods
@@ -251,6 +268,12 @@ export class Point
         return new Vector(this._x, this._y, this._z);
     }
 
+    /** Returns this Point as a new Point — for old-API compatibility */
+    toPoint(): Point
+    {
+        return new Point(this._x, this._y, this._z);
+    }
+
     toVertex(n?:PointLike): Vertex
     {
         const normal = isPointLike(n) ? new Point(n) : new Point([0,0,0]);
@@ -282,4 +305,4 @@ export class Point
         return `<Point(${this._x}, ${this._y}, ${this._z})>`;
     }
 
-}   
+}

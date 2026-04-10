@@ -40,7 +40,6 @@ export function isAxis(obj: any): obj is Axis {
 export type PointLike = Point | Vector | Vertex |
   Point3Js |  Vector3Js | VertexJs | Array<number> | 
   { x: number; y: number; z: number; };
-
 export function isPointLike(obj: any): obj is PointLike {
   return (
     obj instanceof Point ||
@@ -53,6 +52,7 @@ export function isPointLike(obj: any): obj is PointLike {
     typeof obj === 'object' && obj !== null && 'x' in obj && 'y' in obj && 'z' in obj
   );
 }
+
 
 export type BasePlane = 'xy' | 'yz' | 'xz' | 'front' | 'back' | 'left' | 'right';
 export function isBasePlane(obj: any): obj is BasePlane {

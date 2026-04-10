@@ -1,6 +1,6 @@
 /**
  *  Selector.ts
- *      Select (sub)shapes from Collections, Mesh and Curve objects
+ *      Select (sub)shapes from ShapeCollections, Mesh and Curve objects
  *  
  *  Shapes: 
  *      - Mesh (if collection)
@@ -11,7 +11,7 @@
  * 
  */
 
-import { Collection } from "./Collection";
+import { ShapeCollection } from "./ShapeCollection";
 import { 
     MAIN_AXIS,
     SELECTOR_SHAPES,
@@ -120,7 +120,7 @@ export class Selector
     }
 
     /** Execute the selector on a target object */
-    execute(target: Collection|Mesh|Curve): any
+    execute(target: ShapeCollection|Mesh|Curve): any
     {
         if (!this._parsed)
         {
@@ -145,7 +145,7 @@ export class Selector
      *  side: face||<side>
      *  Return faces whose normal is parallel (within tolerance) to the side plane normal.
      */
-    private _side(target: Collection | Mesh | Curve): Array<Polygon>
+    private _side(target: ShapeCollection | Mesh | Curve): Array<Polygon>
     {
         const planeNormal = new Vector(this.params.side.normal);
         return this._facesFromTarget(target)
@@ -156,7 +156,7 @@ export class Selector
      *  parallel: <shape>|<axis|plane>
      *  Return subshapes whose orientation is parallel to the given axis or plane normal.
      */
-    private _parallel(target: Collection | Mesh | Curve): Array<Polygon | Curve>
+    private _parallel(target: ShapeCollection | Mesh | Curve): Array<Polygon | Curve>
     {
         const refNormal = this._refNormal();
         const shape = this.params.shape as string;
@@ -174,7 +174,7 @@ export class Selector
      *  closest: <shape><<-><point|axis|plane>
      *  Return the single subshape whose center is closest to the reference.
      */
-    private _closest(target: Collection | Mesh | Curve): Polygon | Point | Curve | null
+    private _closest(target: ShapeCollection | Mesh | Curve): Polygon | Point | Curve | null
     {
         const items = this._subshapesFromTarget(target);
         if (items.length === 0) return null;
@@ -190,7 +190,7 @@ export class Selector
      *  furthest: <shape><->><point|axis|plane>
      *  Return the single subshape whose center is furthest from the reference.
      */
-    private _furthest(target: Collection | Mesh | Curve): Polygon | Point | Curve | null
+    private _furthest(target: ShapeCollection | Mesh | Curve): Polygon | Point | Curve | null
     {
         const items = this._subshapesFromTarget(target);
         if (items.length === 0) return null;
@@ -206,7 +206,7 @@ export class Selector
      *  positive: <shape>+<axis>
      *  Return subshapes whose center has a positive coordinate along the given axis.
      */
-    private _positive(target: Collection | Mesh | Curve): Array<Polygon | Point | Curve>
+    private _positive(target: ShapeCollection | Mesh | Curve): Array<Polygon | Point | Curve>
     {
         const axis = this.params.axis as Axis;
         return this._subshapesFromTarget(target)
@@ -217,7 +217,7 @@ export class Selector
      *  negative: <shape>-<axis>
      *  Return subshapes whose center has a negative coordinate along the given axis.
      */
-    private _negative(target: Collection | Mesh | Curve): Array<Polygon | Point | Curve>
+    private _negative(target: ShapeCollection | Mesh | Curve): Array<Polygon | Point | Curve>
     {
         const axis = this.params.axis as Axis;
         return this._subshapesFromTarget(target)
@@ -227,10 +227,10 @@ export class Selector
     //// SUBSHAPE EXTRACTION HELPERS ////
 
     /** Get all faces (Polygons) from a target */
-    private _facesFromTarget(target: Collection | Mesh | Curve): Array<Polygon>
+    private _facesFromTarget(target: ShapeCollection | Mesh | Curve): Array<Polygon>
     {
         if (target instanceof Mesh) return target.polygons();
-        if (target instanceof Collection)
+        if (target instanceof ShapeCollection)
         {
             return target.meshes().toArray().flatMap(m => m.polygons());
         }
@@ -238,11 +238,11 @@ export class Selector
     }
 
     /** Get all vertices (Points) from a target */
-    private _verticesFromTarget(target: Collection | Mesh | Curve): Array<Point>
+    private _verticesFromTarget(target: ShapeCollection | Mesh | Curve): Array<Point>
     {
         if (target instanceof Mesh) return target.vertices();
         if (target instanceof Curve) return target.controlPoints();
-        if (target instanceof Collection)
+        if (target instanceof ShapeCollection)
         {
             return [
                 ...target.meshes().toArray().flatMap(m => m.vertices()),
@@ -253,7 +253,7 @@ export class Selector
     }
 
     /** Extract subshapes of the requested shape type from the target */
-    private _subshapesFromTarget(target: Collection | Mesh | Curve): Array<any>
+    private _subshapesFromTarget(target: ShapeCollection | Mesh | Curve): Array<any>
     {
         const shape = this.params.shape as string;
         switch (shape)
@@ -263,12 +263,12 @@ export class Selector
             case 'vertex':
                 return this._verticesFromTarget(target);
             case 'mesh':
-                if (target instanceof Collection) return target.meshes().toArray();
+                if (target instanceof ShapeCollection) return target.meshes().toArray();
                 if (target instanceof Mesh) return [target];
                 return [];
             case 'curve':
             case 'wire':
-                if (target instanceof Collection) return target.curves().toArray();
+                if (target instanceof ShapeCollection) return target.curves().toArray();
                 if (target instanceof Curve) return [target];
                 return [];
             case 'edge':

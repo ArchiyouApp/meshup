@@ -14,6 +14,7 @@ import type { Container } from './Container';
 import { isPointLike } from './types';
 
 import { Curve, getCsgrs } from './index';
+import { Shape } from './Shape';
 import { Point } from './Point';
 import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
@@ -34,7 +35,7 @@ import { Style } from './Style';
 
 import { MeshJs, PolygonJs, PlaneJs, Vector3Js, NurbsCurve3DJs, CompoundCurve3DJs } from './wasm/csgrs';
 import { Polygon } from './Polygon';
-import { Collection, CurveCollection, MeshCollection } from './Collection';
+import { ShapeCollection, CurveCollection, MeshCollection } from './ShapeCollection';
 
 // Settings
 import { TOLERANCE, SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT, 
@@ -42,7 +43,7 @@ import { TOLERANCE, SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT,
 
     
 
-export class Mesh
+export class Mesh extends Shape
 {
     _mesh: MeshJs | undefined; // Underlying MeshJs geometry
 
@@ -55,8 +56,14 @@ export class Mesh
     /** Return the Container this mesh belongs to, or null. */
     container(): Container | null { return this._container; }
 
+    type(): 'Mesh' { return 'Mesh'; }
+
+    subType(): 'mesh' { return 'mesh'; }
+
+
     constructor()
     {
+        super();
         if (!this._csgrs) 
         {
             throw new Error('Mesh::constructor(): WASM module not initialized. Call init() or await initAsync() first.');
@@ -354,10 +361,35 @@ export class Mesh
         return this.inner()?.massProperties(1)?.mass;
     }
 
-    /** Calculate outer bounding box of current Mesh */
-    bbox(): Bbox
+    /** Calculate outer bounding box of current Mesh.
+     *  The optional arg is ignored — kept for old-API compatibility.
+     */
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    bbox(_includeAnnotations?: boolean): Bbox
     {
         return Bbox.fromMesh(this);
+    }
+
+    /** Whether this mesh's bounding box has zero extent on one axis */
+    is2D(): boolean
+    {
+        const bb = this.bbox();
+        return bb.width() === 0 || bb.depth() === 0 || bb.height() === 0;
+    }
+
+    /** Returns the outline edges of this mesh as Curves
+     *  TODO: implement proper edge extraction via CSGRS
+     */
+    edges(): CurveCollection
+    {
+        throw new Error('Mesh.edges(): not yet implemented — requires CSGRS edge extraction');
+    }
+
+    /** Store annotations on this mesh — placeholder for old-API compat */
+    addAnnotations(_annotations: any[]): this
+    {
+        // TODO: implement when annotation storage is added to geometry classes
+        return this;
     }
 
     /** Calculate oriented bounding box of current Mesh using PCA */
@@ -860,9 +892,9 @@ export class Mesh
      *  We don't use csgrs distribute_linear() because it merges meshes into one
      *  We want to output a collection of individual meshes
     */
-    row(count:number, spacing:number, direction:PointLike|Axis='x'):Collection
+    row(count:number, spacing:number, direction:PointLike|Axis='x'):ShapeCollection
     {
-        const meshes = new Collection();
+        const meshes = new ShapeCollection();
         const dirVec = Vector.from(direction).normalize(); // auto converts Axis
         for(let i=0; i<count; i++)
         {
@@ -876,13 +908,13 @@ export class Mesh
         return meshes;
     }
 
-    grid(cx:number=2, cy:number=2, cz:number=1, spacing:number=2):Collection
+    grid(cx:number=2, cy:number=2, cz:number=1, spacing:number=2):ShapeCollection
     {
         if(typeof cx !== 'number' || typeof cy !== 'number' || typeof cz !== 'number' || typeof spacing !== 'number')
         {
             throw new Error("Mesh::grid(): Please supply valid numbers for counts along each axes!");
         }
-        const meshes = new Collection();
+        const meshes = new ShapeCollection();
         for(let x=0; x<cx; x++)
         {
             for(let y=0; y<cy; y++)

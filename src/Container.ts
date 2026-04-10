@@ -2,7 +2,7 @@
  *  Container.ts
  *
  *  Manages a nested scene hierarchy of Shapes (Meshes / Curves), similar to
- *  a Blender Collection or a GLTF Node.  Every shape on the scene can be
+ *  a Blender ShapeCollection or a GLTF Node.  Every shape on the scene can be
  *  wrapped in a Container.  The scene root is also a Container.
  *
  *  Key concepts:
@@ -21,7 +21,7 @@ import type { Axis, ContainerGraphNode, BasePlane } from './types';
 import { Document } from '@gltf-transform/core';
 import { createNodeIO } from './GLTFExtensions';
 import type { Node as GltfNode } from '@gltf-transform/core';
-import { Collection } from './Collection';
+import { ShapeCollection } from './ShapeCollection';
 import { GLTFJsonDocumentToString } from './utils';
 
 /** Union of all concrete shape classes that can live inside a Container. */
@@ -66,7 +66,7 @@ export class Container
      *   - Container → addChild()
      *   - Mesh | Curve → addShape()
      */
-    add(...items: Array<string|Container|Shape|Collection>): this
+    add(...items: Array<string|Container|Shape|ShapeCollection>): this
     {
         for (const item of items)
         {
@@ -76,7 +76,7 @@ export class Container
                 this.addChild(new Container(item));  
             } 
             else if (item instanceof Container) this.addChild(item);
-            else if (item instanceof Collection) item.forEach(shape => this.addShape(shape));
+            else if (item instanceof ShapeCollection) item.forEach(shape => this.addShape(shape));
             else this.addShape(item);
         }
         return this;
@@ -86,7 +86,7 @@ export class Container
      *  Dot-notation creates nested layers: 'walls.inner' finds or creates 'walls',
      *  then finds or creates 'inner' inside it, and adds the item to the bottom layer.
      */
-    addLayer(name: string, item: Shape|Collection): Container
+    addLayer(name: string, item: Shape|ShapeCollection): Container
     {
         const parts = name.split('.');
         const bottomName = parts.pop()!;
@@ -113,7 +113,7 @@ export class Container
         const layer = existing ?? new Container(bottomName);
         if (!existing) parent.addChild(layer);
 
-        if (item instanceof Collection)
+        if (item instanceof ShapeCollection)
         {
             item.forEach(shape => layer.addShape(shape));
         }
@@ -414,7 +414,7 @@ export class Container
     /**
      * Build a `<g>` SVG group element (with nested children) for this container.
      * Invisible containers emit `<g display="none">` to preserve structure while hiding content.
-     * Mesh shapes are skipped with a warning (SVG is curves-only, matching Collection.toSVG()).
+     * Mesh shapes are skipped with a warning (SVG is curves-only, matching ShapeCollection.toSVG()).
      * @internal
      */
     _toSVGGroup(plane: BasePlane = 'xy'): string

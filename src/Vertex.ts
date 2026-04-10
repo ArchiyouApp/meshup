@@ -49,4 +49,14 @@ export class Vertex extends VertexJs
     return this?.inner?.position()?.z;
   }
 
+  toPoint(): Point
+  {
+    return new Point(this.x, this.y, this.z);
+  }
+
+  toVector(): Vector
+  {
+    return new Vector(this.x, this.y, this.z);
+  }
+
 }

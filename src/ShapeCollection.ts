@@ -1,5 +1,5 @@
 /**
- *  Collection.ts
+ *  ShapeCollection.ts
  *      a collection of multiple Mesh or Curve instances
  *      Provides methods to manage, order and query the collection
  *      
@@ -11,6 +11,7 @@ import { Mesh } from "./Mesh";
 import { Curve } from "./Curve";
 import { Point } from "./Point";
 import { Vector } from "./Vector";
+import { Vertex } from "./Vertex";
 import { Bbox } from "./Bbox";
 
 import { MeshJs, PolygonJs } from "./wasm/csgrs";
@@ -19,13 +20,13 @@ import { Document } from '@gltf-transform/core';
 import { createNodeIO } from './GLTFExtensions';
 import { GLTFJsonDocumentToString } from './utils';
 
-export class Collection
+export class ShapeCollection
 {
     _shapes = new Array<Mesh|Curve>();
     // We can have multiple groups in a collection, each group is a named subset of shapes. Shapes can belong to multiple groups.
-    _groups = new Map<string, Collection>(); 
+    _groups = new Map<string, ShapeCollection>(); 
 
-    constructor(...args: Array<Mesh|Curve|Array<any>|Collection>)
+    constructor(...args: Array<Mesh|Curve|Array<any>|ShapeCollection>)
     {
         args.forEach(arg => 
         {
@@ -33,59 +34,59 @@ export class Collection
         });
     }
 
-    static isCollection(obj: any): obj is Collection
+    static isShapeCollection(obj: any): obj is ShapeCollection
     {
-        return obj instanceof Collection;
+        return obj instanceof ShapeCollection;
     }
 
     /** Replace the current shapes with new ones */
-    update(shapes: Array<Mesh|Curve>|Collection|MeshCollection|CurveCollection): void
+    update(shapes: Array<Mesh|Curve>|ShapeCollection|MeshCollection|CurveCollection): void
     {
-        this._shapes = Collection.isCollection(shapes) ? shapes.toArray() : shapes as Array<Mesh|Curve>;
+        this._shapes = ShapeCollection.isShapeCollection(shapes) ? shapes.toArray() : shapes as Array<Mesh|Curve>;
     }
 
     /** Add shapes to the collection */
-    add(shapes: Mesh|Curve|Collection|CurveCollection|MeshCollection|Array<Mesh|Curve>): Collection
+    add(shapes: Mesh|Curve|ShapeCollection|CurveCollection|MeshCollection|Array<Mesh|Curve>): ShapeCollection
     {
         if (shapes instanceof Mesh || shapes instanceof Curve)
         {
             this._shapes.push(shapes);
         }
-        else if (Array.isArray(shapes) || Collection.isCollection(shapes))
+        else if (Array.isArray(shapes) || ShapeCollection.isShapeCollection(shapes))
         {
-            const addShapes = (Collection.isCollection(shapes) 
+            const addShapes = (ShapeCollection.isShapeCollection(shapes) 
                                     ? shapes.toArray() : 
                                     shapes.filter(s => s instanceof Mesh || s instanceof Curve) as Array<Mesh|Curve>);
             this._shapes.push(...addShapes);
         }
         else
         {
-            console.error(`Collection::add(): Invalid shape(s). Supply something [<Mesh>|<Curve>|<Collection>|<CurveCollection>|<MeshCollection>|Array<Mesh|Curve>]. Skipping it!:`, shapes);
+            console.error(`ShapeCollection::add(): Invalid shape(s). Supply something [<Mesh>|<Curve>|<ShapeCollection>|<CurveCollection>|<MeshCollection>|Array<Mesh|Curve>]. Skipping it!:`, shapes);
         }
         return this;
     }
 
     //// STATIC FACTORY METHODS ////
 
-    static generate(count: number, generator: (index: number) => Mesh|Curve): Collection
+    static generate(count: number, generator: (index: number) => Mesh|Curve): ShapeCollection
     {
         const shapes = new Array(count).fill(null).map((_, i) => generator(i));
-        return new Collection(...shapes);
+        return new ShapeCollection(...shapes);
     }
 
     //// GROUPS ////
-    /** One can have subgroups within the Collection */
+    /** One can have subgroups within the ShapeCollection */
 
-    /** Add Shape (Mesh or Curve) to Collection under a group 
-     *  @returns the added shape(s) as a new Collection for chaining
+    /** Add Shape (Mesh or Curve) to ShapeCollection under a group 
+     *  @returns the added shape(s) as a new ShapeCollection for chaining
     */
-    addGroup(groupName: string, shapes: Mesh|Curve|Collection|CurveCollection|MeshCollection ): Collection
+    addGroup(groupName: string, shapes: Mesh|Curve|ShapeCollection|CurveCollection|MeshCollection ): ShapeCollection
     {
         this.add(shapes);
         
         if(!this._groups.has(groupName))
         {
-            this._groups.set(groupName, new Collection());
+            this._groups.set(groupName, new ShapeCollection());
         }
         const group = this._groups.get(groupName);
         
@@ -99,37 +100,37 @@ export class Collection
     removeGroup(groupName: string): void
     {
         const groupedShapes = this._groups.get(groupName);
-        if(!groupedShapes){ console.error(`Collection::removeGroup(): No group with name '${groupName}' found. Available groups:`, Array.from(this._groups.keys())); return; }
+        if(!groupedShapes){ console.error(`ShapeCollection::removeGroup(): No group with name '${groupName}' found. Available groups:`, Array.from(this._groups.keys())); return; }
         this.remove(groupedShapes);
         this._groups.delete(groupName); // remove group in map
     }
 
-    group(groupName: string): Collection | undefined
+    group(groupName: string): ShapeCollection | undefined
     {
         const groupColl = this._groups.get(groupName);
         if(!groupColl)
         {
-            console.error(`Collection::group(): No group with name '${groupName}' found. Available groups:`, Array.from(this._groups.keys())); 
+            console.error(`ShapeCollection::group(): No group with name '${groupName}' found. Available groups:`, Array.from(this._groups.keys())); 
             return undefined; 
         }
         return groupColl;
     }
 
-    /** Return a deep copy of this Collection (all members are independently copied) */
-    copy(): Collection|MeshCollection|CurveCollection
+    /** Return a deep copy of this ShapeCollection (all members are independently copied) */
+    copy(): ShapeCollection|MeshCollection|CurveCollection
     {
-        return new Collection(...this._shapes.map(s => s.copy() as Mesh|Curve));
+        return new ShapeCollection(...this._shapes.map(s => s.copy() as Mesh|Curve));
     }
 
-    /** Return a shallow copy of this Collection (new container, same member references) */
-    clone(): Collection|MeshCollection|CurveCollection
+    /** Return a shallow copy of this ShapeCollection (new container, same member references) */
+    clone(): ShapeCollection|MeshCollection|CurveCollection
     {
-        return new Collection(...this._shapes);
+        return new ShapeCollection(...this._shapes);
     }
 
-    remove(shape: Mesh|Curve|Collection|MeshCollection|CurveCollection): void
+    remove(shape: Mesh|Curve|ShapeCollection|MeshCollection|CurveCollection): void
     {
-        if(Collection.isCollection(shape))
+        if(ShapeCollection.isShapeCollection(shape))
         {
             shape.shapes().forEach(s => this.remove(s));   
         }
@@ -153,13 +154,13 @@ export class Collection
 
     first(): Mesh | Curve
     {
-        if(this._shapes.length === 0){ throw new Error(`Collection::first(): Collection is empty.`); }
+        if(this._shapes.length === 0){ throw new Error(`ShapeCollection::first(): ShapeCollection is empty.`); }
         return this._shapes[0] as Mesh | Curve;
     }
 
     last(): Mesh | Curve
     {
-        if(this._shapes.length === 0){ throw new Error(`Collection::last(): Collection is empty.`); }
+        if(this._shapes.length === 0){ throw new Error(`ShapeCollection::last(): ShapeCollection is empty.`); }
         return this._shapes[this._shapes.length - 1] as Mesh | Curve;
     }
 
@@ -195,7 +196,7 @@ export class Collection
         return  this._shapes.length;
     }
 
-    /** Collection.length for Array compatibility */
+    /** ShapeCollection.length for Array compatibility */
     get length(): number
     {
         return this._shapes.length ?? 0;
@@ -210,10 +211,10 @@ export class Collection
         return this;
     }
 
-    filter(callback: (shape: Mesh|Curve, index: number, array: (Mesh|Curve)[]) => boolean): Collection
+    filter(callback: (shape: Mesh|Curve, index: number, array: (Mesh|Curve)[]) => boolean): ShapeCollection
     {
         const filtered = this._shapes.filter(callback);
-        return new Collection(...filtered);
+        return new ShapeCollection(...filtered);
     }
 
     map<T>(callback: (shape: Mesh|Curve, index: number, array: (Mesh|Curve)[]) => T): T[]
@@ -221,9 +222,47 @@ export class Collection
         return this._shapes.map(callback);
     }
 
+    /** Returns true if the given shape is in the collection (by reference) */
+    has(shape: Mesh|Curve): boolean
+    {
+        return this._shapes.includes(shape);
+    }
+
+    /** Add shapes only if not already present (by reference) */
+    addUnique(shapes: Mesh|Curve|ShapeCollection|Array<Mesh|Curve>): this
+    {
+        const incoming = shapes instanceof ShapeCollection
+            ? shapes.toArray()
+            : Array.isArray(shapes) ? shapes : [shapes];
+        incoming.forEach(s => { if (!this.has(s)) this._shapes.push(s); });
+        return this;
+    }
+
+    /** Remove and return the last shape */
+    pop(): Mesh|Curve|undefined
+    {
+        return this._shapes.pop();
+    }
+
+    /** Center point of the collection's bounding box */
+    center(): Point
+    {
+        const bb = this.bbox();
+        if (!bb) throw new Error('ShapeCollection::center(): collection is empty');
+        return bb.center();
+    }
+
+    /** Returns intersections of all shapes in the collection with the given shape
+     *  TODO: implement proper intersection logic per shape type
+     */
+    _intersections(_shape: Mesh|Curve): Array<Mesh|Curve>
+    {
+        throw new Error('ShapeCollection::_intersections(): not yet implemented');
+    }
+
     //// BASIC TRANSFORMATIONS ////
 
-    /** Translate all shapes in Collection */
+    /** Translate all shapes in ShapeCollection */
     translate(vecOrX: PointLike | number, dy?: number, dz?: number): this
     {
         
@@ -242,8 +281,11 @@ export class Collection
     moveY(dy: number): this { return this.translate(0, dy, 0); }
     moveZ(dz: number): this { return this.translate(0, 0, dz); }
 
-    /** Compute the union bounding box over all shapes in this collection, or undefined if empty */
-    bbox(): Bbox | undefined
+    /** Compute the union bounding box over all shapes in this collection, or undefined if empty.
+     *  The optional arg is ignored — kept for old-API compatibility.
+     */
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    bbox(_includeAnnotations?: boolean): Bbox | undefined
     {
         let minX = Infinity, minY = Infinity, minZ = Infinity;
         let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
@@ -358,7 +400,7 @@ export class Collection
             });
         if (allPolygons.length === 0)
         {
-            console.error(`Collection::merge(): No meshes to merge. Returning empty mesh.`);
+            console.error(`ShapeCollection::merge(): No meshes to merge. Returning empty mesh.`);
             return new Mesh();
         }
         return Mesh.from(MeshJs.fromPolygons(allPolygons, {}));
@@ -369,7 +411,7 @@ export class Collection
     /** Union all shapes into one shape or collection 
      *  NOTE: For now only Meshes can be unioned
     */
-    union(other?: Mesh|Collection): Mesh
+    union(other?: Mesh|ShapeCollection): Mesh
     {
         // We can only union meshes for now, so we filter out curves and other non-mesh shapes
         const meshesToUnion = this.meshes().toArray();
@@ -378,18 +420,18 @@ export class Collection
         {
             meshesToUnion.push(other);
         }
-        else if(other instanceof Collection)
+        else if(other instanceof ShapeCollection)
         {
             meshesToUnion.push(...other.meshes().toArray());
         }
         else if(other !== undefined)
         {
-            console.warn(`Collection::union(): Invalid argument. Only Mesh or Collection instances are allowed. Ignoring:`, other);
+            console.warn(`ShapeCollection::union(): Invalid argument. Only Mesh or ShapeCollection instances are allowed. Ignoring:`, other);
         }
 
         if(meshesToUnion.length === 0)
         {
-            console.warn(`Collection::union(): No meshes to union. Returning empty mesh.`);
+            console.warn(`ShapeCollection::union(): No meshes to union. Returning empty mesh.`);
             return new Mesh();
         }
 
@@ -398,9 +440,9 @@ export class Collection
     }
 
     /** Subtract all meshes in the other collection from this collection */
-    subtract(other: Mesh|Collection): this
+    subtract(other: Mesh|ShapeCollection): this
     {
-        const otherMeshes = (other instanceof Collection) 
+        const otherMeshes = (other instanceof ShapeCollection) 
             ? other.meshes() 
             : (other instanceof Mesh)
                 ? [other]
@@ -447,7 +489,7 @@ export class Collection
     {
         if(this.meshes().length === 0)
         {
-            console.warn(`Collection::toSVG(): Exporting a (mixed) collection with ${this.meshes().length} meshes and ${this.curves().length} curves. Only curves will be exported to SVG.`);
+            console.warn(`ShapeCollection::toSVG(): Exporting a (mixed) collection with ${this.meshes().length} meshes and ${this.curves().length} curves. Only curves will be exported to SVG.`);
         }
 
         return this.curves().toSVG();
@@ -491,7 +533,7 @@ export class Collection
 
         if (scene.listChildren().length === 0)
         {
-            console.warn('Collection::toGLTF(): No exportable shapes found.');
+            console.warn('ShapeCollection::toGLTF(): No exportable shapes found.');
         }
 
         doc.getRoot().setDefaultScene(scene);
@@ -525,15 +567,15 @@ export class Collection
 
 //// TYPED COLLECTIONS ////
 
-/** A Collection that only holds Mesh instances. */
-export class MeshCollection extends Collection
+/** A ShapeCollection that only holds Mesh instances. */
+export class MeshCollection extends ShapeCollection
 {
-    constructor(...args: Array<Mesh|Array<any>|Collection|MeshCollection>)
+    constructor(...args: Array<Mesh|Array<any>|ShapeCollection|MeshCollection>)
     {
-        super(...(args as Array<Mesh|Array<any>|Collection>));
+        super(...(args as Array<Mesh|Array<any>|ShapeCollection>));
     }
 
-    add(shapes: Mesh|MeshCollection|Array<Mesh>): Collection
+    add(shapes: Mesh|MeshCollection|Array<Mesh>): ShapeCollection
     {
         if (!(shapes instanceof Mesh) && !(shapes instanceof MeshCollection) && !(Array.isArray(shapes) && shapes.every(s => s instanceof Mesh)))
         {
@@ -568,14 +610,14 @@ export class MeshCollection extends Collection
     first(): Mesh
     {
         const m = this._shapes[0] as Mesh;
-        if (!m) throw new Error('MeshCollection::first(): Collection is empty.');
+        if (!m) throw new Error('MeshCollection::first(): ShapeCollection is empty.');
         return m;
     }
 
     last(): Mesh 
     {
         const m = this._shapes[this._shapes.length - 1] as Mesh;
-        if (!m) throw new Error('MeshCollection::last(): Collection is empty.');
+        if (!m) throw new Error('MeshCollection::last(): ShapeCollection is empty.');
         return m;
     }
 
@@ -601,8 +643,8 @@ export class MeshCollection extends Collection
     /** Union all meshes into one */
     unionAll(): Mesh { return super.union(); }
 
-    /** Create a MeshCollection from the Mesh members of a general Collection */
-    static from(collection: Collection): MeshCollection
+    /** Create a MeshCollection from the Mesh members of a general ShapeCollection */
+    static from(collection: ShapeCollection): MeshCollection
     {
         return new MeshCollection(collection.meshes());
     }
@@ -717,18 +759,18 @@ export class MeshCollection extends Collection
 }
 
 
-/** A Collection that only holds Curve instances. */
-export class CurveCollection extends Collection
+/** A ShapeCollection that only holds Curve instances. */
+export class CurveCollection extends ShapeCollection
 {
-    constructor(...args: Array<Curve|Array<any>|Collection|CurveCollection>)
+    constructor(...args: Array<Curve|Array<any>|ShapeCollection|CurveCollection>)
     {
         super(...args);
     }
 
-    /** Create a CurveCollection from from array of Curves or the curves of a Collection */
-    static from(...args: Array<Curve|Array<any>|Collection|CurveCollection>): CurveCollection
+    /** Create a CurveCollection from from array of Curves or the curves of a ShapeCollection */
+    static from(...args: Array<Curve|Array<any>|ShapeCollection|CurveCollection>): CurveCollection
     {
-        if(args.length === 1 && args[0] instanceof Collection)
+        if(args.length === 1 && args[0] instanceof ShapeCollection)
         {
             return new CurveCollection(args[0].curves());
         }
@@ -736,26 +778,26 @@ export class CurveCollection extends Collection
         {
             return new CurveCollection(...args[0]);
         }
-        else if(args.every(c => c instanceof Curve || c instanceof Collection)) // also allow multiple Curve or Collection arguments, which are flattened
+        else if(args.every(c => c instanceof Curve || c instanceof ShapeCollection)) // also allow multiple Curve or ShapeCollection arguments, which are flattened
         {
-            return new CurveCollection(...args.flatMap(arg => arg instanceof Collection ? arg.curves().toArray() as Curve[] : (arg instanceof Curve ? [arg] : [])));
+            return new CurveCollection(...args.flatMap(arg => arg instanceof ShapeCollection ? arg.curves().toArray() as Curve[] : (arg instanceof Curve ? [arg] : [])));
         }
         else
         {
-            throw new Error(`CurveCollection.from(): Invalid input: "${args.map(a => a.toString()).join(', ')}". Please provide a Collection or an array of Curves.`);
+            throw new Error(`CurveCollection.from(): Invalid input: "${args.map(a => a.toString()).join(', ')}". Please provide a ShapeCollection or an array of Curves.`);
         }
     }
 
-    update(shapes: Array<Curve|Mesh>|Collection|MeshCollection|CurveCollection): void
+    update(shapes: Array<Curve|Mesh>|ShapeCollection|MeshCollection|CurveCollection): void
     {
-        if(!Array.isArray(shapes) && !Collection.isCollection(shapes) 
+        if(!Array.isArray(shapes) && !ShapeCollection.isShapeCollection(shapes) 
                 && !(shapes as any instanceof MeshCollection) && !(shapes as any instanceof CurveCollection))
         {
-            console.error(`CurveCollection::update(): Invalid input. Please provide an array of Curves or a Collection.`);
+            console.error(`CurveCollection::update(): Invalid input. Please provide an array of Curves or a ShapeCollection.`);
             return;
         }
         // Filter out any non-Curve shapes from the input
-        const curves = Collection.isCollection(shapes) 
+        const curves = ShapeCollection.isShapeCollection(shapes) 
             ? shapes.curves() 
             : (Array.isArray(shapes) ? shapes.filter(s => s instanceof Curve) : []);   
 
@@ -786,7 +828,7 @@ export class CurveCollection extends Collection
     {
         if (!(shapes instanceof Curve) && !(shapes instanceof CurveCollection))
         {
-            console.error(`CurveCollection::add(): Only Curve(Collection) instances are allowed.`);
+            console.error(`CurveCollection::add(): Only Curve(ShapeCollection) instances are allowed.`);
             return this;
         }
         return super.add(shapes) as CurveCollection;
@@ -811,13 +853,13 @@ export class CurveCollection extends Collection
     first(): Curve
     {
         const c = this._shapes[0] as Curve;
-        if (!c) throw new Error('CurveCollection::first(): Collection is empty.');
+        if (!c) throw new Error('CurveCollection::first(): ShapeCollection is empty.');
         return c;
     }
     last(): Curve
     {
         const c = this._shapes[this._shapes.length - 1] as Curve;
-        if (!c) throw new Error('CurveCollection::last(): Collection is empty.');
+        if (!c) throw new Error('CurveCollection::last(): ShapeCollection is empty.');
         return c;
     }
 
@@ -927,7 +969,7 @@ export class CurveCollection extends Collection
             return [ 
                 { point: start, otherPoint: end, curve: curve }, 
                 { point: end, otherPoint: start, curve: curve }
-            ] as Array<{ point: Point, otherPoint: Point, curve: Curve }|null>;
+            ] as Array<{ point: Vertex, otherPoint: Vertex, curve: Curve }|null>;
         });
 
         const connectingLines: Array<Curve> = [];
@@ -940,7 +982,7 @@ export class CurveCollection extends Collection
                 endpoint: null, 
                 dist: Infinity,
                 index: undefined as number | undefined,
-            } as { endpoint: { point: Point, curve: Curve } | null, dist: number, index: number | undefined };
+            } as { endpoint: { point: Vertex, curve: Curve } | null, dist: number, index: number | undefined };
 
             endpoints.forEach((ep, idx) => 
             {
@@ -948,8 +990,8 @@ export class CurveCollection extends Collection
 
                 if(curEndPoint.point !== ep.point && curEndPoint.otherPoint !== ep.point) // don't connect curve to itself
                 {
-                    const d1 = curEndPoint.point.distance(ep.point);
-                    const d2 = curEndPoint.otherPoint.distance(ep.point); 
+                    const d1 = new Point(curEndPoint.point).distance(new Point(ep.point));
+                    const d2 = new Point(curEndPoint.otherPoint).distance(new Point(ep.point));
                     
                     if(d1 < closest.dist && d1 !== 0 && d1 < d2) 
                     // never connect to another point, if that's closer 
@@ -1019,22 +1061,22 @@ export class CurveCollection extends Collection
                     chains[j] = []; // mark other chain as processed
 
                     // chains connect start to start - prepend to current chain in reverse
-                    if(curChainStartPoint.distance(otherChainStartPoint) <= tolerance)
+                    if(new Point(curChainStartPoint).distance(new Point(otherChainStartPoint)) <= tolerance)
                     {
                         newChains[i]?.unshift(...(otherChain.map(curve => curve.reverse()).reverse()));
                     }
                     // start to end - prepend to current chain as-is
-                    else if(curChainStartPoint.distance(otherChainEndPoint) <= tolerance)
+                    else if(new Point(curChainStartPoint).distance(new Point(otherChainEndPoint)) <= tolerance)
                     {
                         newChains[i]?.unshift(...otherChain);
                     }
                     // end to start - append to current chain as-is
-                    else if(curChainEndPoint.distance(otherChainStartPoint) <= tolerance)
+                    else if(new Point(curChainEndPoint).distance(new Point(otherChainStartPoint)) <= tolerance)
                     {
                         newChains[i]?.push(...otherChain);
-                    }   
+                    }
                     // end to end - append to current chain in reverse
-                    else if(curChainEndPoint.distance(otherChainEndPoint) <= tolerance)
+                    else if(new Point(curChainEndPoint).distance(new Point(otherChainEndPoint)) <= tolerance)
                     {
                         newChains[i]?.push(...(otherChain.map(curve => curve.reverse()).reverse()));
                     }
@@ -1198,6 +1240,22 @@ export class CurveCollection extends Collection
     toArray(): Array<Curve>
     {
         return this._shapes as Array<Curve>;
+    }
+
+    /** Filter curves that intersect (or touch) the given curve — stub for old-API compat
+     *  TODO: implement proper geometric intersection test
+     */
+    intersecting(_other: Curve): CurveCollection
+    {
+        throw new Error('CurveCollection::intersecting(): not yet implemented');
+    }
+
+    /** Returns all start/end vertices of curves in this collection as a flat array */
+    vertices(): Array<Vertex>
+    {
+        const pts: Vertex[] = [];
+        (this._shapes as Curve[]).forEach(c => { pts.push(c.start(), c.end()); });
+        return pts;
     }
 
     toMesh(): MeshCollection
