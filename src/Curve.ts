@@ -33,7 +33,13 @@ import { OBbox } from './OBbox';
 import { Polygon } from './Polygon';
 
 import { toBase64, fromBase64, rad, remapAxis, GLTFJsonDocumentToString } from "./utils";
-import { Document, NodeIO, Accessor, Primitive, Node as GltfNode } from '@gltf-transform/core';
+import { Document, Accessor, Primitive, Node as GltfNode } from '@gltf-transform/core';
+import
+{
+    BentleyLineStyleExtension,
+    dashPatternToUint16,
+    createNodeIO,
+} from './GLTFExtensions';
 import { Style } from "./Style";
 
 
@@ -2117,6 +2123,17 @@ export class Curve
             .setMode(Primitive.Mode.LINE_STRIP)
             .setMaterial(material);
 
+        // --- BENTLEY_materials_line_style ---
+        const hasStrokeWidth = (this.style.strokeWidth ?? 0) > 0;
+        const hasStrokeDash  = (this.style.strokeDash?.length ?? 0) > 0;
+        if (hasStrokeWidth || hasStrokeDash)
+        {
+            const lineStyleProp = doc.createExtension(BentleyLineStyleExtension).createProperty();
+            lineStyleProp.width   = hasStrokeWidth ? Math.round(this.style.strokeWidth!) : 1;
+            lineStyleProp.pattern = hasStrokeDash  ? dashPatternToUint16(this.style.strokeDash!) : 0xFFFF;
+            material.setExtension('BENTLEY_materials_line_style', lineStyleProp);
+        }
+
         const gltfMesh = doc.createMesh(name).addPrimitive(prim);
         return doc.createNode(name).setMesh(gltfMesh);
     }
@@ -2250,12 +2267,23 @@ export class Curve
             .setMode(Primitive.Mode.LINE_STRIP)
             .setMaterial(material);
 
+        // --- BENTLEY_materials_line_style ---
+        const hasStrokeWidth = (this.style.strokeWidth ?? 0) > 0;
+        const hasStrokeDash  = (this.style.strokeDash?.length ?? 0) > 0;
+        if (hasStrokeWidth || hasStrokeDash)
+        {
+            const lineStyleProp = doc.createExtension(BentleyLineStyleExtension).createProperty();
+            lineStyleProp.width   = hasStrokeWidth ? Math.round(this.style.strokeWidth!) : 1;
+            lineStyleProp.pattern = hasStrokeDash  ? dashPatternToUint16(this.style.strokeDash!) : 0xFFFF;
+            material.setExtension('BENTLEY_materials_line_style', lineStyleProp);
+        }
+
         const mesh = doc.createMesh('curve').addPrimitive(prim);
         const node = doc.createNode('node').setMesh(mesh);
         const scene = doc.createScene('scene').addChild(node);
         doc.getRoot().setDefaultScene(scene);
 
-        const io = new NodeIO();
+        const io = createNodeIO();
         return binary ? io.writeBinary(doc) : io.writeJSON(doc).then(GLTFJsonDocumentToString);
     }
 

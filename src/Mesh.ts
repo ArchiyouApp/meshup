@@ -19,7 +19,17 @@ import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { Vector } from './Vector'
 import { rad, deg, remapAxis, GLTFJsonDocumentToString } from './utils';
-import { Document, NodeIO, Accessor, Primitive, Node as GltfNode } from '@gltf-transform/core';
+import { Document, Accessor, Primitive, Node as GltfNode } from '@gltf-transform/core';
+import
+{
+    BentleyLineStyleExtension,
+    BentleyLineStyleProperty,
+    EdgeVisibilityExtension,
+    EdgeVisibilityProperty,
+    computeEdgeVisibilityBitfield,
+    dashPatternToUint16,
+    createNodeIO,
+} from './GLTFExtensions';
 import { Style } from './Style';
 
 import { MeshJs, PolygonJs, PlaneJs, Vector3Js, NurbsCurve3DJs, CompoundCurve3DJs } from './wasm/csgrs';
@@ -1000,6 +1010,43 @@ export class Mesh
             .setMode(Primitive.Mode.TRIANGLES)
             .setMaterial(material);
 
+        // --- EXT_mesh_primitive_edge_visibility ---
+        if (idxCopy.length > 0)
+        {
+            const bitfieldRaw = computeEdgeVisibilityBitfield(idxCopy, normF32, EDGE_PROJECTION_DEFAULTS.featureAngle);
+            const bitfield = new Uint8Array(bitfieldRaw.buffer.slice(0) as ArrayBuffer);
+            const visAcc = doc.createAccessor()
+                .setType(Accessor.Type.SCALAR)
+                .setArray(bitfield)
+                .setBuffer(gtBuf);
+
+            const edgeVisProp = doc.createExtension(EdgeVisibilityExtension).createProperty();
+            edgeVisProp.visibilityAccessor = visAcc;
+
+            // If stroke style is set, create an edge material with BENTLEY_materials_line_style
+            const hasStrokeWidth = (this.style.strokeWidth ?? 0) > 0;
+            const hasStrokeDash  = (this.style.strokeDash?.length ?? 0) > 0;
+            if (hasStrokeWidth || hasStrokeDash)
+            {
+                const edgeMatDef = this.style.toGltfMaterial('edge_material', true) as any;
+                const [er, eg, eb, ea] = edgeMatDef.pbrMetallicRoughness.baseColorFactor;
+                const edgeMat = doc.createMaterial('edge_material')
+                    .setBaseColorFactor([er, eg, eb, ea])
+                    .setMetallicFactor(0.0)
+                    .setRoughnessFactor(1.0)
+                    .setDoubleSided(true);
+
+                const lineStyleProp = doc.createExtension(BentleyLineStyleExtension).createProperty();
+                lineStyleProp.width   = hasStrokeWidth ? Math.round(this.style.strokeWidth!) : 1;
+                lineStyleProp.pattern = hasStrokeDash  ? dashPatternToUint16(this.style.strokeDash!) : 0xFFFF;
+                edgeMat.setExtension('BENTLEY_materials_line_style', lineStyleProp);
+
+                edgeVisProp.edgeMaterial = edgeMat;
+            }
+
+            prim.setExtension('EXT_mesh_primitive_edge_visibility', edgeVisProp);
+        }
+
         const gltfMesh = doc.createMesh(name).addPrimitive(prim);
         return doc.createNode(name).setMesh(gltfMesh);
     }
@@ -1070,12 +1117,48 @@ export class Mesh
             .setMode(Primitive.Mode.TRIANGLES)
             .setMaterial(material);
 
+        // --- EXT_mesh_primitive_edge_visibility ---
+        if (idxCopy.length > 0)
+        {
+            const bitfieldRaw = computeEdgeVisibilityBitfield(idxCopy, normF32, EDGE_PROJECTION_DEFAULTS.featureAngle);
+            const bitfield = new Uint8Array(bitfieldRaw.buffer.slice(0) as ArrayBuffer);
+            const visAcc = doc.createAccessor()
+                .setType(Accessor.Type.SCALAR)
+                .setArray(bitfield)
+                .setBuffer(gtBuf);
+
+            const edgeVisProp = doc.createExtension(EdgeVisibilityExtension).createProperty();
+            edgeVisProp.visibilityAccessor = visAcc;
+
+            const hasStrokeWidth = (this.style.strokeWidth ?? 0) > 0;
+            const hasStrokeDash  = (this.style.strokeDash?.length ?? 0) > 0;
+            if (hasStrokeWidth || hasStrokeDash)
+            {
+                const edgeMatDef = this.style.toGltfMaterial('edge_material', true) as any;
+                const [er, eg, eb, ea] = edgeMatDef.pbrMetallicRoughness.baseColorFactor;
+                const edgeMat = doc.createMaterial('edge_material')
+                    .setBaseColorFactor([er, eg, eb, ea])
+                    .setMetallicFactor(0.0)
+                    .setRoughnessFactor(1.0)
+                    .setDoubleSided(true);
+
+                const lineStyleProp = doc.createExtension(BentleyLineStyleExtension).createProperty();
+                lineStyleProp.width   = hasStrokeWidth ? Math.round(this.style.strokeWidth!) : 1;
+                lineStyleProp.pattern = hasStrokeDash  ? dashPatternToUint16(this.style.strokeDash!) : 0xFFFF;
+                edgeMat.setExtension('BENTLEY_materials_line_style', lineStyleProp);
+
+                edgeVisProp.edgeMaterial = edgeMat;
+            }
+
+            prim.setExtension('EXT_mesh_primitive_edge_visibility', edgeVisProp);
+        }
+
         const mesh = doc.createMesh('mesh').addPrimitive(prim);
         const node = doc.createNode('node').setMesh(mesh);
         const scene = doc.createScene('scene').addChild(node);
         doc.getRoot().setDefaultScene(scene);
 
-        const io = new NodeIO();
+        const io = createNodeIO();
         return binary ? io.writeBinary(doc) : io.writeJSON(doc).then(GLTFJsonDocumentToString);
     }
 

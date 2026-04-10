@@ -18,7 +18,8 @@ import { Curve } from './Curve';
 import { Style } from './Style';
 import type { StyleData } from './Style';
 import type { Axis, ContainerGraphNode, BasePlane } from './types';
-import { Document, NodeIO } from '@gltf-transform/core';
+import { Document } from '@gltf-transform/core';
+import { createNodeIO } from './GLTFExtensions';
 import type { Node as GltfNode } from '@gltf-transform/core';
 import { Collection } from './Collection';
 import { GLTFJsonDocumentToString } from './utils';
@@ -81,18 +82,44 @@ export class Container
         return this;
     }
 
-    /** Add new Container (layer) and populate it with the given shape(s) */
+    /** Add new Container (layer) and populate it with the given shape(s).
+     *  Dot-notation creates nested layers: 'walls.inner' finds or creates 'walls',
+     *  then finds or creates 'inner' inside it, and adds the item to the bottom layer.
+     */
     addLayer(name: string, item: Shape|Collection): Container
     {
-        const layer = new Container(name);
-        this.addChild(layer);
+        const parts = name.split('.');
+        const bottomName = parts.pop()!;
+
+        // Walk / create the intermediate layers
+        let parent: Container = this;
+        for (const part of parts)
+        {
+            const existing = parent._children.find(c => c.name === part);
+            if (existing)
+            {
+                parent = existing;
+            }
+            else
+            {
+                const intermediate = new Container(part);
+                parent.addChild(intermediate);
+                parent = intermediate;
+            }
+        }
+
+        // Find or create the bottom layer and add the item
+        const existing = parent._children.find(c => c.name === bottomName);
+        const layer = existing ?? new Container(bottomName);
+        if (!existing) parent.addChild(layer);
+
         if (item instanceof Collection)
         {
-          item.forEach(shape => layer.addShape(shape));
-        } 
-        else 
+            item.forEach(shape => layer.addShape(shape));
+        }
+        else
         {
-          layer.addShape(item);
+            layer.addShape(item);
         }
 
         return layer;
@@ -366,7 +393,7 @@ export class Container
         const scene = doc.createScene(this.name);
         if (rootNode) scene.addChild(rootNode);
         doc.getRoot().setDefaultScene(scene);
-        const io = new NodeIO();
+        const io = createNodeIO();
         return io.writeJSON(doc).then(GLTFJsonDocumentToString);
     }
 
@@ -378,7 +405,7 @@ export class Container
         const scene = doc.createScene(this.name);
         if (rootNode) scene.addChild(rootNode);
         doc.getRoot().setDefaultScene(scene);
-        const io = new NodeIO();
+        const io = createNodeIO();
         return io.writeBinary(doc);
     }
 

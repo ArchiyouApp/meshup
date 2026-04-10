@@ -15,7 +15,8 @@ import { Bbox } from "./Bbox";
 
 import { MeshJs, PolygonJs } from "./wasm/csgrs";
 
-import { Document, NodeIO } from '@gltf-transform/core';
+import { Document } from '@gltf-transform/core';
+import { createNodeIO } from './GLTFExtensions';
 import { GLTFJsonDocumentToString } from './utils';
 
 export class Collection
@@ -263,8 +264,6 @@ export class Collection
     moveTo(...args: any[]): this
     {
         const target = Point.from(args);
-        console.log('MOVE TO ===')
-        console.log(target);
 
         const bb = this.bbox();
         if (!bb) return this;
@@ -496,7 +495,7 @@ export class Collection
         }
 
         doc.getRoot().setDefaultScene(scene);
-        const io = new NodeIO();
+        const io = createNodeIO();
         return binary ? io.writeBinary(doc) : io.writeJSON(doc).then(GLTFJsonDocumentToString);
     }
 
