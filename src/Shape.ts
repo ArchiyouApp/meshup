@@ -27,11 +27,15 @@ export abstract class Shape
         return this._id;
     }
 
-    /** Broad geometry type: 'Mesh' or 'Curve'. */
+    /** Primary geometry type: 'Mesh' or 'Curve'. */
     abstract type(): 'Mesh' | 'Curve';
 
-    /** Finer classification within the type (e.g. 'nurbs', 'compound', 'open', 'closed'). */
-    abstract subType(): string;
+    /** Finer classification within the type
+     *   For Mesh: 'mesh' (generic), 'box', 'sphere', etc.
+     *   For Curve: 'line', 'arc', 'circle', 'ellipse', 'spline', etc.
+     *  Returns null if no subType or unrecognized type.
+     */
+    abstract subType(): string|null;
 
     /** Type guard — returns true for any Mesh or Curve instance. */
     static isShape(o: unknown): o is Shape

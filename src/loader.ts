@@ -2,7 +2,6 @@ import { WASM_BASE64 } from './csgrs-js-binary';
 // Import the init function and types from the generated crate
 // We use a namespace import to get all the exported types automatically
 import init, * as WasmExports from './wasm/csgrs.js';
-import initSync from './wasm/csgrs.js';
 
 // Re-export the types so your library users can use them
 export type WasmModule = typeof WasmExports;
@@ -51,19 +50,4 @@ export const loadAsync = async (): Promise<WasmModule> =>
   })();
 
   return wasmReady;
-};
-
-/** For even more simplicity: We can use the synchronous version */
-export const loadSync = (): WasmModule => 
-{
-  if (wasmReady)
-  {
-    console.info('WASM module already loaded, returning existing instance.');
-    return wasmReady as unknown as WasmModule;
-  };
-
-  const bytes = decodeBase64(WASM_BASE64);
-  initSync({ module_or_path: bytes });
-
-  return WasmExports;
 };

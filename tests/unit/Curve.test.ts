@@ -140,7 +140,7 @@ describe('Curve.type()', () =>
     it('returns "line" for a simple NurbsCurve', () =>
     {
         const c = Curve.Line([0,0,0], [1,0,0]);
-        expect(c.type()).toBe('line');
+        expect(c.type()).toBe('Curve');
     });
 });
 

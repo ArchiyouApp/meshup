@@ -5,21 +5,17 @@
  *  This makes it easier to manage the wasm loading
  * 
  *  Example usage:
- *    import { Meshup } from 'meshup';
- *    
- *  Initiate: 
- *    - Meshup.init()
- *    - await Meshup.initAsync();
+ *    import { init } from 'meshup';
+ *    await init();
  * 
  * 
  */
 
-import { Curve } from './Curve';
-import { loadSync, loadAsync } from './loader';
+import { loadAsync } from './loader'; // Loader for the WASM module
 import type { CsgrsModule } from './types';
 
 // Global state
-let _csgrs: ReturnType<typeof loadSync> | null = null;
+let _csgrs: CsgrsModule | null = null;
 
 export function getCsgrs(): CsgrsModule
 {
@@ -32,32 +28,24 @@ export function getCsgrs(): CsgrsModule
 
 //// INIT FUNCTIONS ////
 
-export function init(): void 
-{
-    if (!_csgrs)
-    {
-        const t = performance.now();
-        _csgrs = loadSync();
-        // ...existing code...
-    }
-    else
-    {
-        // ...existing code...
-    }
-}
-
-export async function initAsync(): Promise<void> 
+export async function init(): Promise<void> 
 {
     if (!_csgrs)
     {
         const t = performance.now();
         _csgrs = await loadAsync();
-        // ...existing code...
+        console.info(`Meshup WASM loaded successfully in ${Math.round(performance.now() - t)} ms.`);
     }
     else
     {
         console.info('Meshup already initialized. Returning existing instance.');
     }
+}
+
+/** @alias: init (backward compatibility) */
+export async function initAsync(): Promise<void>
+{
+    await init();
 }
 
 export function isInitialized(): boolean 
@@ -84,3 +72,6 @@ export { Bbox } from './Bbox';
 export { OBbox } from './OBbox';
 export { Container } from './Container';
 export type { Shape as ContainerShape } from './Container';
+
+/** Convenience type alias for the meshup module namespace itself. */
+export type Meshup = typeof import('./index')

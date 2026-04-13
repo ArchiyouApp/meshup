@@ -58,11 +58,6 @@ export class Curve extends Shape
     /** The Container this curve belongs to, or null if not in a container. */
     _container: Container | null = null;
 
-    /** Return the Container this curve belongs to, or null. */
-    container(): Container | null { return this._container; }
-    
-    type(): 'Curve' { return 'Curve'; }
-
     constructor()
     {
         super();
@@ -587,42 +582,12 @@ export class Curve extends Shape
         return Curve.fromCsgrs(compound);
     }
 
-    //// STYLING ////
-    /** Forwards to Style instance */
-
-    /** Set color (both stroke and fill) of (closed) Curve */
-    color(color: number|string, g?: number, b?: number): this
-    {
-        if (typeof color === 'number' && typeof g === 'number' && typeof b === 'number')
-        {
-            this.style.color = [color, g, b];
-        }
-        else
-        {
-            this.style.color = color as string;
-        }
-        return this;
-    }
-
-    /** Set opacity of (closed) Curve */
-    opacity(opacity: number): this
-    {
-        this.style.opacity = opacity;
-        return this;
-    }
-
-    /** Alias for `opacity()`. */
-    alpha(a: number): this { return this.opacity(a); }
-
-    /** Set stroke dash pattern. Defaults to [2, 2] when called with no arguments. */
-    dashed(dash: number[] = [2, 2]): this
-    {
-        this.style.strokeDash = dash;
-        return this;
-    }
-
 
     //// PROPERTIES ////
+
+    /** Return the Container this curve belongs to, or null. */
+    container(): Container | null { return this._container; }
+    type(): 'Curve' { return 'Curve'; }
 
     /** Classify this curve as 'line', 'arc', 'circle', 'rect', 'polyline', 'spline', or 'compound'. */
     subType(): 'line'|'arc'|'circle'|'rect'|'polyline'|'spline'|'compound'
@@ -691,7 +656,7 @@ export class Curve extends Shape
         if (n < 4 || n > 5) return false;
 
         const corners = (n === 5) ? pts.slice(0, 4) : pts;
-        if (corners.length !== 4) return false;
+        if (corners.lPROPEength !== 4) return false;
 
         return corners.every((a, i) =>
         {
@@ -2085,6 +2050,40 @@ export class Curve extends Shape
         return ((this.isPlanar() && this.normalOrientation()!.dot(new Vector(0, 1, 0)) < 0))
                 ? m.inverse()
                 : m;
+    }
+
+     //// STYLING ////
+    /** Forwards to Style instance */
+
+    /** Set color (both stroke and fill) of (closed) Curve */
+    color(color: number|string, g?: number, b?: number): this
+    {
+        if (typeof color === 'number' && typeof g === 'number' && typeof b === 'number')
+        {
+            this.style.color = [color, g, b];
+        }
+        else
+        {
+            this.style.color = color as string;
+        }
+        return this;
+    }
+
+    /** Set opacity of (closed) Curve */
+    opacity(opacity: number): this
+    {
+        this.style.opacity = opacity;
+        return this;
+    }
+
+    /** Alias for `opacity()`. */
+    alpha(a: number): this { return this.opacity(a); }
+
+    /** Set stroke dash pattern. Defaults to [2, 2] when called with no arguments. */
+    dashed(dash: number[] = [2, 2]): this
+    {
+        this.style.strokeDash = dash;
+        return this;
     }
     
 

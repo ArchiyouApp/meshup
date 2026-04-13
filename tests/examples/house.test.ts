@@ -3,7 +3,7 @@
  *
  */
 import { beforeAll, describe, it, expect, should } from 'vitest';
-import { Collection, initAsync } from '../../src/index';
+import { ShapeCollection, initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { Sketch } from '../../src/Sketch';
 import { save } from '../../src/utils';
@@ -54,7 +54,7 @@ describe('Example: House', () =>
         const door = Mesh.Box(100, 50, 200).move(WIDTH/2, 0, 200/2);
         frontFacade?.subtract(door);
         
-        const house = new Collection(frontFacade!, backFacade!, wallLeft, wallRight, roof!);
+        const house = new ShapeCollection(frontFacade!, backFacade!, wallLeft, wallRight, roof!);
 
         const gltf = await house!.toGLTF();
         expect(house).toBeTruthy();

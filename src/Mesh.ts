@@ -58,7 +58,12 @@ export class Mesh extends Shape
 
     type(): 'Mesh' { return 'Mesh'; }
 
-    subType(): 'mesh' { return 'mesh'; }
+    subType(): string|null 
+    { 
+        // TODO: Box, Sphere, etc subtypes
+        console.warn('Mesh::subType(): no subtypes implemented yet — returning null');
+        return null;
+    } 
 
 
     constructor()
@@ -448,9 +453,9 @@ export class Mesh extends Shape
     /** Alias for translate */
     move(px: PointLike | number, dy?: number, dz?: number): this
     {
-        const mv = (isPointLike(px)) 
-                        ? Point.from(px) 
-                        : Point.from(px, dy || 0, dz || 0); // throws is px is invalid Point
+        const mv =  (dy !== undefined || dz !== undefined)
+                    ? Point.from(px, dy || 0, dz || 0)
+                    : Point.from(px);
         
         return this.translate(mv);
     }

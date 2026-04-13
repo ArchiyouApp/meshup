@@ -18,8 +18,8 @@
  *    c.toRgb()  // [70, 130, 180]
  */
 
-/** CSS color string or [r, g, b] tuple with values 0–255 */
-export type ColorInput = string | [number, number, number];
+/** CSS color string, 0xRRGGBB integer, or [r, g, b] tuple with values 0–255 */
+export type ColorInput = string | number | [number, number, number];
 
 export class Color
 {
@@ -68,7 +68,46 @@ export class Color
         return [this._r, this._g, this._b];
     }
 
+    /** [r/255, g/255, b/255, 1] tuple suitable for WebGL */
+    toGl(): [number, number, number, number]
+    {
+        return [this._r / 255, this._g / 255, this._b / 255, 1];
+    }
+
+    /**
+     * Return a darker version of this color.
+     * @param amount  0 = unchanged, 1 = black (default 1 like chroma-js)
+     */
+    darken(amount: number = 1): Color
+    {
+        const factor = Math.max(0, 1 - amount / 3); // approximate chroma-js Lab darkening
+        return new Color([
+            Math.round(this._r * factor),
+            Math.round(this._g * factor),
+            Math.round(this._b * factor),
+        ]);
+    }
+
     // ---- static helpers ----
+
+    /**
+     * Returns true when the input can be parsed as a Color, false otherwise.
+     * Accepts the same inputs as the constructor.
+     */
+    static valid(input: any): boolean
+    {
+        try { Color._parse(input as ColorInput); return true; }
+        catch { return false; }
+    }
+
+    /** Return a Color with a random RGB value. */
+    static random(): Color
+    {
+        const r = Math.floor(Math.random() * 256);
+        const g = Math.floor(Math.random() * 256);
+        const b = Math.floor(Math.random() * 256);
+        return new Color([r, g, b]);
+    }
 
     /**
      * Parse any ColorInput to [r, g, b].
@@ -76,6 +115,13 @@ export class Color
      */
     static _parse(input: ColorInput): [number, number, number]
     {
+        // 0xRRGGBB integer
+        if (typeof input === 'number')
+        {
+            const n = Math.round(input) & 0xFFFFFF;
+            return [(n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF];
+        }
+
         if (Array.isArray(input))
         {
             return (input as [number, number, number])

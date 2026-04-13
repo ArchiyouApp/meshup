@@ -29,10 +29,10 @@ export class Point
     /** Make a Point out of different entities */
     constructor(x: PointLike|number, y?: number, z?: number)
     {
-        if (typeof x === 'number' && typeof y === 'number' && (typeof z === 'number' || z === undefined))
+        if (typeof x === 'number' && (typeof y === 'number' || y === undefined) && (typeof z === 'number' || z === undefined))
         {
             this._x = x;
-            this._y = y;
+            this._y = y || 0;
             this._z = z || 0;
         }
         else if (Array.isArray(x) && x.length >= 1 && x.every(c => typeof c === 'number'))
