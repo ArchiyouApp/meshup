@@ -1152,9 +1152,10 @@ export class Curve extends Shape
 
     translate(px: PointLike | number, dy?: number, dz?: number): this
     {
-        const vec = (isPointLike(px)) 
-                        ? Point.from(px) 
-                        : Point.from(px, dy || 0, dz || 0);
+        // NOTE: because PointLike matches [number], we need to check y and z first
+        const vec = (typeof dy === 'number' && typeof dz === 'number') 
+                        ? Point.from(px, dy || 0, dz || 0) 
+                        : Point.from(px); // throws error if invalid
 
         if(!vec){ throw new Error('Curve.translate(): Invalid translation input. Please use PointLike or valid offset coordinates.'); }
         this.update(this.inner().translate(vec.toVector3Js()));

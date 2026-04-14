@@ -262,17 +262,16 @@ export class ShapeCollection
 
     /** Translate all shapes in ShapeCollection */
     translate(vecOrX: PointLike | number, dy?: number, dz?: number): this
-    {
-        
+    {    
         this._shapes.forEach(
-            shape => shape.translate(vecOrX as any, dy as any, dz as any));   
+            shape => shape.translate(vecOrX, dy, dz));   
         return this;
     }
 
     /** Alias for translate */
     move(vecOrX: PointLike | number, dy?: number, dz?: number): this
     {
-        return this.translate(vecOrX as any, dy as any, dz as any);
+        return this.translate(vecOrX as any, dy, dz);
     }
 
     moveX(dx: number): this { return this.translate(dx, 0, 0); }

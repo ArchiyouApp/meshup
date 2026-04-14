@@ -425,9 +425,9 @@ export class Mesh extends Shape
 
     translate(px: PointLike | number, dy?: number, dz?: number): this
     {
-        const vec = (isPointLike(px)) 
-                        ? Point.from(px) 
-                        : Point.from(px, dy || 0, dz || 0); // throws is px is invalid Point
+        const vec = (typeof dy === 'number' && typeof dz === 'number') 
+                        ? Point.from(px, dy || 0, dz || 0) 
+                        : Point.from(px); // throws is px is invalid Point
 
         return this.update(this.inner()?.translate(vec.toVector3Js()));
     }
