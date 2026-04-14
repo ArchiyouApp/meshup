@@ -10,7 +10,7 @@
  */
 
 import type { CsgrsModule, Axis, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions } from './types';
-import type { Container } from './Container';
+import type { SceneNode } from './SceneNode';
 import { isPointLike } from './types';
 
 import { Curve, getCsgrs } from './index';
@@ -19,19 +19,9 @@ import { Point } from './Point';
 import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { Vector } from './Vector'
-import { rad, deg, remapAxis, GLTFJsonDocumentToString } from './utils';
-import { Document, Accessor, Primitive, Node as GltfNode } from '@gltf-transform/core';
-import
-{
-    BentleyLineStyleExtension,
-    BentleyLineStyleProperty,
-    EdgeVisibilityExtension,
-    EdgeVisibilityProperty,
-    computeEdgeVisibilityBitfield,
-    dashPatternToUint16,
-    createNodeIO,
-} from './GLTFExtensions';
+import { rad, deg } from './utils';
 import { Style } from './Style';
+import { GLTFBuilder } from './GLTFBuilder';
 
 import { MeshJs, PolygonJs, PlaneJs, Vector3Js, NurbsCurve3DJs, CompoundCurve3DJs } from './wasm/csgrs';
 import { Polygon } from './Polygon';
@@ -45,19 +35,11 @@ import { TOLERANCE, SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT,
 
 export class Mesh extends Shape
 {
+    // inherits: _id, _node, style, metadata from Shape
+
     _mesh: MeshJs | undefined; // Underlying MeshJs geometry
 
-    style: Style = new Style(); // Style properties for export (color, lineWidth, etc)
-    
-    _container: Container | null = null; // The Container this mesh belongs to, or null if not in a container
-    metadata: Record<string, any> = {};
-
-
-    /** Return the Container this mesh belongs to, or null. */
-    container(): Container | null { return this._container; }
-
     type(): 'Mesh' { return 'Mesh'; }
-
     subType(): string|null 
     { 
         // TODO: Box, Sphere, etc subtypes
@@ -983,220 +965,14 @@ export class Mesh extends Shape
         return this.inner()?.toSTLASCII();
     }
 
-    /**
-     * Build a gltf-transform Node for this mesh within an existing Document.
-     * Used by Container.toGLTF() for composing hierarchical scenes.
-     * @internal
-     */
-    _buildGLTFNode(doc: Document, up: Axis = 'z', name = 'mesh'): GltfNode
+    /** Return raw mesh geometry buffers for GLTF assembly by GLTFBuilder. */
+    toBuffer(): { positions: Float64Array; normals: Float64Array; indices: Uint32Array }
     {
-        const posRaw  = this._mesh?.positions() ?? new Float64Array(0);
-        const normRaw = this._mesh?.normals()   ?? new Float64Array(0);
-        const idxRaw  = this._mesh?.indices()   ?? new Uint32Array(0);
-
-        const vertexCount = posRaw.length / 3;
-
-        const posF32 = new Float32Array(posRaw.length);
-        for (let v = 0; v < vertexCount; v++) // perf: keep as loop
-        {
-            const [rx, ry, rz] = remapAxis(posRaw[v*3], posRaw[v*3+1], posRaw[v*3+2], up);
-            posF32[v*3] = rx; posF32[v*3+1] = ry; posF32[v*3+2] = rz;
-        }
-
-        const normVertexCount = normRaw.length / 3;
-        const normF32 = new Float32Array(normRaw.length);
-        for (let v = 0; v < normVertexCount; v++) // perf: keep as loop
-        {
-            const [rx, ry, rz] = remapAxis(normRaw[v*3], normRaw[v*3+1], normRaw[v*3+2], up);
-            normF32[v*3] = rx; normF32[v*3+1] = ry; normF32[v*3+2] = rz;
-        }
-
-        const idxCopy = new Uint32Array(idxRaw.length);
-        idxCopy.set(idxRaw);
-
-        const gtBuf = doc.getRoot().listBuffers()[0] ?? doc.createBuffer();
-
-        const posAcc = doc.createAccessor()
-            .setType(Accessor.Type.VEC3)
-            .setArray(posF32)
-            .setBuffer(gtBuf);
-
-        const normAcc = doc.createAccessor()
-            .setType(Accessor.Type.VEC3)
-            .setArray(normF32)
-            .setBuffer(gtBuf);
-
-        const idxAcc = doc.createAccessor()
-            .setType(Accessor.Type.SCALAR)
-            .setArray(idxCopy)
-            .setBuffer(gtBuf);
-
-        const matDef = this.style.toGltfMaterial('mesh_material', false) as any;
-        const [r, g, b, a] = matDef.pbrMetallicRoughness.baseColorFactor;
-        const material = doc.createMaterial('mesh_material')
-            .setBaseColorFactor([r, g, b, a])
-            .setMetallicFactor(matDef.pbrMetallicRoughness.metallicFactor)
-            .setRoughnessFactor(matDef.pbrMetallicRoughness.roughnessFactor)
-            .setDoubleSided(matDef.doubleSided ?? true);
-        if (matDef.alphaMode) material.setAlphaMode(matDef.alphaMode as 'BLEND' | 'OPAQUE' | 'MASK');
-
-        const prim = doc.createPrimitive()
-            .setAttribute('POSITION', posAcc)
-            .setAttribute('NORMAL', normAcc)
-            .setIndices(idxAcc)
-            .setMode(Primitive.Mode.TRIANGLES)
-            .setMaterial(material);
-
-        // --- EXT_mesh_primitive_edge_visibility ---
-        if (idxCopy.length > 0)
-        {
-            const bitfieldRaw = computeEdgeVisibilityBitfield(idxCopy, normF32, EDGE_PROJECTION_DEFAULTS.featureAngle);
-            const bitfield = new Uint8Array(bitfieldRaw.buffer.slice(0) as ArrayBuffer);
-            const visAcc = doc.createAccessor()
-                .setType(Accessor.Type.SCALAR)
-                .setArray(bitfield)
-                .setBuffer(gtBuf);
-
-            const edgeVisProp = doc.createExtension(EdgeVisibilityExtension).createProperty();
-            edgeVisProp.visibilityAccessor = visAcc;
-
-            // If stroke style is set, create an edge material with BENTLEY_materials_line_style
-            const hasStrokeWidth = (this.style.strokeWidth ?? 0) > 0;
-            const hasStrokeDash  = (this.style.strokeDash?.length ?? 0) > 0;
-            if (hasStrokeWidth || hasStrokeDash)
-            {
-                const edgeMatDef = this.style.toGltfMaterial('edge_material', true) as any;
-                const [er, eg, eb, ea] = edgeMatDef.pbrMetallicRoughness.baseColorFactor;
-                const edgeMat = doc.createMaterial('edge_material')
-                    .setBaseColorFactor([er, eg, eb, ea])
-                    .setMetallicFactor(0.0)
-                    .setRoughnessFactor(1.0)
-                    .setDoubleSided(true);
-
-                const lineStyleProp = doc.createExtension(BentleyLineStyleExtension).createProperty();
-                lineStyleProp.width   = hasStrokeWidth ? Math.round(this.style.strokeWidth!) : 1;
-                lineStyleProp.pattern = hasStrokeDash  ? dashPatternToUint16(this.style.strokeDash!) : 0xFFFF;
-                edgeMat.setExtension('BENTLEY_materials_line_style', lineStyleProp);
-
-                edgeVisProp.edgeMaterial = edgeMat;
-            }
-
-            prim.setExtension('EXT_mesh_primitive_edge_visibility', edgeVisProp);
-        }
-
-        const gltfMesh = doc.createMesh(name).addPrimitive(prim);
-        return doc.createNode(name).setMesh(gltfMesh);
-    }
-
-    /** Export Mesh to GLTF JSON (binary=false) or GLB binary (binary=true) using gltf-transform.
-     *  @param binary  true → GLB (Uint8Array), false → GLTF JSON string
-     *  @param up      Up axis of the source model (default Z)
-     */
-    private async _toGLTF(binary: boolean, up: Axis = 'z'): Promise<string | Uint8Array>
-    {
-        const posRaw  = this._mesh?.positions() ?? new Float64Array(0);
-        const normRaw = this._mesh?.normals()   ?? new Float64Array(0);
-        const idxRaw  = this._mesh?.indices()   ?? new Uint32Array(0);
-
-        const vertexCount = posRaw.length / 3;
-        if (vertexCount === 0) throw new Error('Mesh::_toGLTF(): No geometry to export!');
-
-        const posF32 = new Float32Array(posRaw.length);
-        for (let v = 0; v < vertexCount; v++) // perf: keep as loop
-        {
-            const [rx, ry, rz] = remapAxis(posRaw[v*3], posRaw[v*3+1], posRaw[v*3+2], up);
-            posF32[v*3] = rx; posF32[v*3+1] = ry; posF32[v*3+2] = rz;
-        }
-
-        const normF32 = new Float32Array(normRaw.length);
-        const normVertexCount = normRaw.length / 3;
-        for (let v = 0; v < normVertexCount; v++) // perf: keep as loop
-        {
-            const [rx, ry, rz] = remapAxis(normRaw[v*3], normRaw[v*3+1], normRaw[v*3+2], up);
-            normF32[v*3] = rx; normF32[v*3+1] = ry; normF32[v*3+2] = rz;
-        }
-
-        const idxCopy = new Uint32Array(idxRaw.length);
-        idxCopy.set(idxRaw);
-
-        // Build gltf-transform Document
-        const doc = new Document();
-        const gtBuf = doc.createBuffer();
-
-        const posAcc = doc.createAccessor()
-            .setType(Accessor.Type.VEC3)
-            .setArray(posF32)
-            .setBuffer(gtBuf);
-
-        const normAcc = doc.createAccessor()
-            .setType(Accessor.Type.VEC3)
-            .setArray(normF32)
-            .setBuffer(gtBuf);
-
-        const idxAcc = doc.createAccessor()
-            .setType(Accessor.Type.SCALAR)
-            .setArray(idxCopy)
-            .setBuffer(gtBuf);
-
-        const matDef = this.style.toGltfMaterial('mesh_material', false) as any;
-        const [r, g, b, a] = matDef.pbrMetallicRoughness.baseColorFactor;
-        const material = doc.createMaterial('mesh_material')
-            .setBaseColorFactor([r, g, b, a])
-            .setMetallicFactor(matDef.pbrMetallicRoughness.metallicFactor)
-            .setRoughnessFactor(matDef.pbrMetallicRoughness.roughnessFactor)
-            .setDoubleSided(matDef.doubleSided ?? true);
-        if (matDef.alphaMode) material.setAlphaMode(matDef.alphaMode as 'BLEND' | 'OPAQUE' | 'MASK');
-
-        const prim = doc.createPrimitive()
-            .setAttribute('POSITION', posAcc)
-            .setAttribute('NORMAL', normAcc)
-            .setIndices(idxAcc)
-            .setMode(Primitive.Mode.TRIANGLES)
-            .setMaterial(material);
-
-        // --- EXT_mesh_primitive_edge_visibility ---
-        if (idxCopy.length > 0)
-        {
-            const bitfieldRaw = computeEdgeVisibilityBitfield(idxCopy, normF32, EDGE_PROJECTION_DEFAULTS.featureAngle);
-            const bitfield = new Uint8Array(bitfieldRaw.buffer.slice(0) as ArrayBuffer);
-            const visAcc = doc.createAccessor()
-                .setType(Accessor.Type.SCALAR)
-                .setArray(bitfield)
-                .setBuffer(gtBuf);
-
-            const edgeVisProp = doc.createExtension(EdgeVisibilityExtension).createProperty();
-            edgeVisProp.visibilityAccessor = visAcc;
-
-            const hasStrokeWidth = (this.style.strokeWidth ?? 0) > 0;
-            const hasStrokeDash  = (this.style.strokeDash?.length ?? 0) > 0;
-            if (hasStrokeWidth || hasStrokeDash)
-            {
-                const edgeMatDef = this.style.toGltfMaterial('edge_material', true) as any;
-                const [er, eg, eb, ea] = edgeMatDef.pbrMetallicRoughness.baseColorFactor;
-                const edgeMat = doc.createMaterial('edge_material')
-                    .setBaseColorFactor([er, eg, eb, ea])
-                    .setMetallicFactor(0.0)
-                    .setRoughnessFactor(1.0)
-                    .setDoubleSided(true);
-
-                const lineStyleProp = doc.createExtension(BentleyLineStyleExtension).createProperty();
-                lineStyleProp.width   = hasStrokeWidth ? Math.round(this.style.strokeWidth!) : 1;
-                lineStyleProp.pattern = hasStrokeDash  ? dashPatternToUint16(this.style.strokeDash!) : 0xFFFF;
-                edgeMat.setExtension('BENTLEY_materials_line_style', lineStyleProp);
-
-                edgeVisProp.edgeMaterial = edgeMat;
-            }
-
-            prim.setExtension('EXT_mesh_primitive_edge_visibility', edgeVisProp);
-        }
-
-        const mesh = doc.createMesh('mesh').addPrimitive(prim);
-        const node = doc.createNode('node').setMesh(mesh);
-        const scene = doc.createScene('scene').addChild(node);
-        doc.getRoot().setDefaultScene(scene);
-
-        const io = createNodeIO();
-        return binary ? io.writeBinary(doc) : io.writeJSON(doc).then(GLTFJsonDocumentToString);
+        return {
+            positions: this._mesh?.positions() ?? new Float64Array(0),
+            normals:   this._mesh?.normals()   ?? new Float64Array(0),
+            indices:   new Uint32Array(this._mesh?.indices() ?? new Uint32Array(0)),
+        };
     }
 
     /** Export Mesh to GLTF JSON string.
@@ -1205,7 +981,7 @@ export class Mesh extends Shape
     async toGLTF(up: Axis = 'z'): Promise<string | undefined>
     {
         if (!this._mesh) return undefined;
-        return this._toGLTF(false, up) as Promise<string>;
+        return new GLTFBuilder(up).add(this).applyExtensions().toGLTF();
     }
 
     /** Export Mesh to GLB binary (Uint8Array).
@@ -1214,7 +990,7 @@ export class Mesh extends Shape
     async toGLB(up: Axis = 'z'): Promise<Uint8Array | undefined>
     {
         if (!this._mesh) return undefined;
-        return this._toGLTF(true, up) as Promise<Uint8Array>;
+        return new GLTFBuilder(up).add(this).applyExtensions().toGLB();
     }
     
     toAMF(): string | undefined

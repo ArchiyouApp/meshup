@@ -1,7 +1,7 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
-import { MeshCollection } from '../../src/Collection';
+import { MeshCollection } from '../../src/ShapeCollection';
 
 beforeAll(async () =>
 {

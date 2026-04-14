@@ -70,8 +70,9 @@ export { ShapeCollection, MeshCollection, CurveCollection } from './ShapeCollect
 export { Sketch } from './Sketch';
 export { Bbox } from './Bbox';
 export { OBbox } from './OBbox';
-export { Container } from './Container';
-export type { Shape as ContainerShape } from './Container';
+export { SceneNode } from './SceneNode';
+export type { SceneNodeShape } from './SceneNode';
+export { GLTFBuilder } from './GLTFBuilder';
 
 /** Convenience type alias for the meshup module namespace itself. */
 export type Meshup = typeof import('./index')

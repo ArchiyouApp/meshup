@@ -12,9 +12,9 @@ beforeAll(async () =>
     await initAsync();
 });
 
-describe('Example: Offsets', () => 
+describe('Example: Offsets', async () => 
 {
-    it('Can do simple offsets', () => 
+    it('Can do simple offsets', async () => 
     {
         const rect = Curve.Rect(100, 100).color('red');
         const offsets = rect.replicate(5, (c,i) => c.offset(i*10)!.moveZ((i+1)*20).color(255-i*50, 0, 0));
@@ -22,10 +22,10 @@ describe('Example: Offsets', () =>
         expect(offsets.length).toBe(5);
 
         // Save as GLTF to view in 3D 
-        save('test.offsets.basic.gltf', new CurveCollection(rect, offsets).toGLTF());
+        await save('test.offsets.basic.gltf', await new CurveCollection(rect, offsets).toGLTF());
     });
 
-    it('Can do advanced offsets', () =>
+    it('Can do advanced offsets', async () =>
     {
         const c1 = Curve.Circle(100);
         const c2 = c1.copy().move(100*1.5,0);
@@ -36,9 +36,9 @@ describe('Example: Offsets', () =>
         const circlesOffset = circles.copy().offset(-20); // inward OK, outward produces self-intersections
         const circleOffsetFallback = circles.copy().offsetFallback(20);
     
-        save('test.offsets.circles.gltf', new CurveCollection(circles!, deg1.moveZ(10), circlesOffset!.moveZ(20), circleOffsetFallback!.moveZ(30)
+        await save('test.offsets.circles.gltf', await new CurveCollection(circles!, deg1.moveZ(10), circlesOffset!.moveZ(20), circleOffsetFallback!.moveZ(30)
             /* circles!.copy().offset(20)!.color('yellow')*/).toGLTF());
-        //save('test.curves.ops.svg', new CurveCollection(circles, rect, cc, /*un!, unOffsets*/).toSVG());
+        //await save('test.curves.ops.svg', new CurveCollection(circles, rect, cc, /*un!, unOffsets*/).toSVG());
     });
 
 

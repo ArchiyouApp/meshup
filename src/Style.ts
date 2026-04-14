@@ -88,7 +88,7 @@ export class Style
     /**
      * Return only the properties that were explicitly set on this Style instance
      * (i.e. set via setters or merge(), not just constructor defaults).
-     * Used for style cascading in Container.effectiveStyle().
+     * Used for style cascading in SceneNode.effectiveStyle().
      */
     explicitData(): Partial<StyleData> {
         const d: Partial<StyleData> = {};

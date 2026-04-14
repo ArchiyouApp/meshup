@@ -2,7 +2,7 @@ import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
-import { Collection, MeshCollection, CurveCollection } from '../../src/Collection';
+import { ShapeCollection as Collection, MeshCollection, CurveCollection } from '../../src/ShapeCollection';
 
 let cube1: Mesh;
 let cube2: Mesh;

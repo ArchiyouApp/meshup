@@ -1,40 +1,55 @@
 /**
- *  Container.ts
+ *  SceneNode.ts
  *
  *  Manages a nested scene hierarchy of Shapes (Meshes / Curves), similar to
  *  a Blender ShapeCollection or a GLTF Node.  Every shape on the scene can be
- *  wrapped in a Container.  The scene root is also a Container.
+ *  wrapped in a SceneNode.  The scene root is also a SceneNode.
  *
  *  Key concepts:
- *   - A Container can hold 0..N shapes directly AND 0..N child Containers.
- *   - If a Container holds no shapes (directly) it is considered a "layer".
+ *   - A SceneNode can hold 0..N shapes directly AND 0..N child SceneNodes.
+ *   - If a SceneNode holds no shapes (directly) it is considered a "layer".
  *   - Style cascades from ancestors to descendants at export time.
- *   - Containers export to SVG as nested <g> elements and to GLTF as nested
+ *   - SceneNodes export to SVG as nested <g> elements and to GLTF as nested
  *     Nodes via gltf-transform.
+ *
+ *  The class is generic over S (the shape type it holds).
+ *  The default S = Shape (Mesh | Curve) preserves existing behaviour.
+ *  SmartSceneNode uses S = SmartShape.
  */
 
-import { Mesh } from './Mesh';
-import { Curve } from './Curve';
+import type { Shape } from './Shape';
+
 import { Style } from './Style';
 import type { StyleData } from './Style';
-import type { Axis, ContainerGraphNode, BasePlane } from './types';
-import { Document } from '@gltf-transform/core';
-import { createNodeIO } from './GLTFExtensions';
-import type { Node as GltfNode } from '@gltf-transform/core';
+import type { Axis, ShapeType, SceneNodeGraphNode, BasePlane } from './types';
 import { ShapeCollection } from './ShapeCollection';
-import { GLTFJsonDocumentToString } from './utils';
+import { GLTFBuilder } from './GLTFBuilder';
 
-/** Union of all concrete shape classes that can live inside a Container. */
-export type Shape = Mesh | Curve;
 
-export class Container
+/** Minimal interface that any shape stored in a SceneNode must satisfy. */
+export interface SceneNodeShape {
+    type(): ShapeType | string
+    subType(): string | null
+    _node: SceneNode<any> | null
+    style: Style
+    is2D(): boolean
+    bbox(): { min(): { x: number; y: number; z: number }; max(): { x: number; y: number; z: number } } | undefined
+    // OUTPUT
+    toGLTF?(): any // TODO: type
+    toGLB?(): any // TODO: type
+    toGLTFBuffer?(): any // TODO: type
+    toSVG?() : string
+    toSVGElem?(): string
+}
+
+export class SceneNode<S extends SceneNodeShape = Shape>
 {
     name: string;
     style: Style;
-    
-    private _shapes: Shape[] = []; // Shapes held directly in this container (not in child containers)
-    private _children: Container[] = []; // Child containers (sub-groups / layers)
-    private _parent: Container | null = null; // Back-reference to the parent container; null if this is the root
+
+    private _shapes: S[] = []; // Shapes held directly in this container (not in child containers)
+    private _children: SceneNode<S>[] = []; // Child containers (sub-groups / layers)
+    private _parent: SceneNode<S> | null = null; // Back-reference to the parent container; null if this is the root
 
     constructor(name = 'container')
     {
@@ -45,54 +60,64 @@ export class Container
     //// STATIC FACTORIES ////
 
     /** Create a root container (no parent). */
-    static root(name = 'root'): Container
+    static root<T extends SceneNode<any>>(this: new (name: string) => T, name = 'root'): T
     {
-        return new Container(name);
+        return new this(name);
     }
 
     /** Wrap a single shape in a new container. */
-    static from(shape: Shape, name?: string): Container
+    static from<S extends SceneNodeShape = Shape>(shape: S, name?: string): SceneNode<S>
     {
-        const c = new Container(name ?? (shape instanceof Mesh ? 'mesh' : 'curve'));
+        const label = name || `${shape.type()}: ${shape.subType() || 'shape'}`;
+        const c = new SceneNode<S>(name ?? label);
         c.addShape(shape);
         return c;
+    }
+
+    //// FACTORY HELPER (overrideable by subclasses) ////
+
+    /** Create a new child node of the same concrete type. Override in subclasses. */
+    protected _createChild(name: string): SceneNode<S>
+    {
+        return new SceneNode<S>(name);
     }
 
     //// SHAPE MANAGEMENT ////
 
      /**
-     * Convenience method: adds a child Container or a Shape to this container
-     *   - String → addChild(new Container(string)) - new child container with given name
-     *   - Container → addChild()
-     *   - Mesh | Curve → addShape()
+     * Convenience method: adds a child SceneNode or a Shape to this node
+     *   - String → addChild(new SceneNode(string)) - new child container with given name
+     *   - SceneNode<S> → addChild()
+     *   - S → addShape()
+     *   - ShapeCollection → addShape() for each (only meaningful when S = Shape)
      */
-    add(...items: Array<string|Container|Shape|ShapeCollection>): this
+    add(...items: Array<string | SceneNode<S> | S | ShapeCollection>): this
     {
         for (const item of items)
         {
             if (typeof item === 'string')
             {
-                // Name of new Container: create it and add as child
-                this.addChild(new Container(item));  
-            } 
-            else if (item instanceof Container) this.addChild(item);
-            else if (item instanceof ShapeCollection) item.forEach(shape => this.addShape(shape));
-            else this.addShape(item);
+                // Name of new SceneNode: create it and add as child
+                this.addChild(this._createChild(item));
+            }
+            else if (item instanceof SceneNode) this.addChild(item as SceneNode<S>);
+            else if (item instanceof ShapeCollection) item.forEach(shape => this.addShape(shape as unknown as S));
+            else this.addShape(item as S);
         }
         return this;
     }
 
-    /** Add new Container (layer) and populate it with the given shape(s).
+    /** Add new SceneNode (layer) and populate it with the given shape(s).
      *  Dot-notation creates nested layers: 'walls.inner' finds or creates 'walls',
      *  then finds or creates 'inner' inside it, and adds the item to the bottom layer.
      */
-    addLayer(name: string, item: Shape|ShapeCollection): Container
+    addLayer(name: string, item: S | ShapeCollection): SceneNode<S>
     {
         const parts = name.split('.');
         const bottomName = parts.pop()!;
 
         // Walk / create the intermediate layers
-        let parent: Container = this;
+        let parent: SceneNode<S> = this;
         for (const part of parts)
         {
             const existing = parent._children.find(c => c.name === part);
@@ -102,7 +127,7 @@ export class Container
             }
             else
             {
-                const intermediate = new Container(part);
+                const intermediate = this._createChild(part);
                 parent.addChild(intermediate);
                 parent = intermediate;
             }
@@ -110,12 +135,12 @@ export class Container
 
         // Find or create the bottom layer and add the item
         const existing = parent._children.find(c => c.name === bottomName);
-        const layer = existing ?? new Container(bottomName);
+        const layer = existing ?? this._createChild(bottomName);
         if (!existing) parent.addChild(layer);
 
         if (item instanceof ShapeCollection)
         {
-            item.forEach(shape => layer.addShape(shape));
+            item.forEach(shape => layer.addShape(shape as unknown as S));
         }
         else
         {
@@ -126,24 +151,24 @@ export class Container
     }
 
     /** Add a shape to this container. Returns `this` for chaining. */
-    addShape(shape: Shape): this
+    addShape(shape: S): this
     {
         if (!this._shapes.includes(shape))
         {
             this._shapes.push(shape);
-            shape._container = this;
+            shape._node = this;
         }
         return this;
     }
 
     /** Remove a shape from this container. */
-    removeShape(shape: Shape): this
+    removeShape(shape: S): this
     {
         const idx = this._shapes.indexOf(shape);
         if (idx !== -1)
         {
             this._shapes.splice(idx, 1);
-            shape._container = null;
+            shape._node = null;
         }
         return this;
     }
@@ -152,22 +177,10 @@ export class Container
      * Return shapes held by this container.
      * @param recursive  If true, collect shapes from all descendant containers too.
      */
-    shapes(recursive = false): Shape[]
+    shapes(recursive = false): S[]
     {
         if (!recursive) return [...this._shapes];
         return this._traverse().flatMap(c => c._shapes);
-    }
-
-    /** Return only Mesh shapes (optionally recursive). */
-    meshes(recursive = false): Mesh[]
-    {
-        return this.shapes(recursive).filter((s): s is Mesh => s instanceof Mesh);
-    }
-
-    /** Return only Curve shapes (optionally recursive). */
-    curves(recursive = false): Curve[]
-    {
-        return this.shapes(recursive).filter((s): s is Curve => s instanceof Curve);
     }
 
     /** True when this container holds no shapes directly (acts as a layer). */
@@ -185,7 +198,7 @@ export class Container
     //// CHILD MANAGEMENT ////
 
     /** Add a child container. Sets child._parent to this. Returns `this`. */
-    addChild(child: Container): this
+    addChild(child: SceneNode<S>): this
     {
         if (!this._children.includes(child))
         {
@@ -197,7 +210,7 @@ export class Container
     }
 
     /** Remove a child container without destroying it. */
-    removeChild(child: Container): this
+    removeChild(child: SceneNode<S>): this
     {
         const idx = this._children.indexOf(child);
         if (idx !== -1)
@@ -208,11 +221,11 @@ export class Container
         return this;
     }
 
-    /** Remove a child Container or a Shape from this container. */
-    remove(item: Container | Shape): this
+    /** Remove a child SceneNode or a Shape from this node. */
+    remove(item: SceneNode<S> | S): this
     {
-        if (item instanceof Container) return this.removeChild(item);
-        return this.removeShape(item);
+        if (item instanceof SceneNode) return this.removeChild(item as SceneNode<S>);
+        return this.removeShape(item as S);
     }
 
     /** Detach this container from its parent. Returns `this`. */
@@ -225,27 +238,27 @@ export class Container
     //// TRAVERSAL ////
 
     /** Return direct child containers. */
-    children(): Container[]
+    children(): SceneNode<S>[]
     {
         return [...this._children];
     }
 
     /** Return the parent container, or null if this is the root. */
-    parent(): Container | null
+    parent(): SceneNode<S> | null
     {
         return this._parent;
     }
 
     /** Return all ancestors from immediate parent up to (and including) the root. */
-    ancestors(): Container[]
+    ancestors(): SceneNode<S>[]
     {
-        const collect = (node: Container | null, acc: Container[]): Container[] =>
+        const collect = (node: SceneNode<S> | null, acc: SceneNode<S>[]): SceneNode<S>[] =>
             node ? collect(node._parent, [...acc, node]) : acc;
         return collect(this._parent, []);
     }
 
     /** Return all descendant containers in BFS order (not including this). */
-    descendants(): Container[]
+    descendants(): SceneNode<S>[]
     {
         // Skip `this` itself — start from children
         const all = this._traverse();
@@ -253,9 +266,9 @@ export class Container
     }
 
     /** Return the root container (walk up _parent chain). */
-    root(): Container
+    root(): SceneNode<S>
     {
-        const walk = (node: Container): Container =>
+        const walk = (node: SceneNode<S>): SceneNode<S> =>
             node._parent ? walk(node._parent) : node;
         return walk(this);
     }
@@ -267,9 +280,9 @@ export class Container
     }
 
     /** Find the first descendant (DFS) whose name matches. */
-    find(name: string): Container | undefined
+    find(name: string): SceneNode<S> | undefined
     {
-        return this._children.reduce<Container | undefined>((found, child) =>
+        return this._children.reduce<SceneNode<S> | undefined>((found, child) =>
         {
             if (found) return found;
             if (child.name === name) return child;
@@ -278,7 +291,7 @@ export class Container
     }
 
     /** Return all descendants (DFS) matching the predicate. */
-    findAll(pred: (c: Container) => boolean): Container[]
+    findAll(pred: (c: SceneNode<S>) => boolean): SceneNode<S>[]
     {
         return this._children.flatMap(child =>
         {
@@ -334,7 +347,7 @@ export class Container
     /**
      * Push the effectiveStyle() down to every shape in this subtree, mutating
      * each shape's `.style` in place.  Call this before passing shapes to
-     * external code that does not understand Container hierarchies.
+     * external code that does not understand SceneNode hierarchies.
      */
     applyStyle(): this
     {
@@ -346,78 +359,39 @@ export class Container
     //// TO GRAPH ───────────────────────────────────────────────────────────────
 
     /** Return a plain-object tree representation of this container hierarchy. */
-    toGraph(): ContainerGraphNode
+    toGraph(): SceneNodeGraphNode
     {
         return {
             name: this.name,
             isLayer: this.isLayer(),
             shapeCount: this._shapes.length,
-            shapeTypes: this._shapes.map(s => (s instanceof Mesh ? 'mesh' : 'curve')),
+            shapeTypes: this._shapes.map(s => s.type()) as ShapeType[],
             children: this._children.map(c => c.toGraph()),
         };
     }
 
     //// GLTF EXPORT ////
 
-    /**
-     * Build a gltf-transform Node tree for this container within an existing Document.
-     * Invisible containers (effectiveStyle().visible === false) are skipped entirely.
-     * @internal
-     */
-    _buildGLTFNode(doc: Document, up: Axis = 'z'): GltfNode | null
-    {
-        if (!this.effectiveStyle().visible) return null;
-
-        const node = doc.createNode(this.name);
-
-        this._shapes.forEach((shape, i) =>
-        {
-            const shapeNode = shape._buildGLTFNode(doc, up, `${this.name}_shape_${i}`);
-            node.addChild(shapeNode);
-        });
-
-        this._children.forEach(child =>
-        {
-            const childNode = child._buildGLTFNode(doc, up);
-            if (childNode) node.addChild(childNode);
-        });
-
-        return node;
-    }
-
-    /** Export this container hierarchy as a GLTF JSON string. */
+    /** Export this node hierarchy as a GLTF JSON string. */
     async toGLTF(up: Axis = 'z'): Promise<string>
     {
-        const doc = new Document();
-        const rootNode = this._buildGLTFNode(doc, up);
-        const scene = doc.createScene(this.name);
-        if (rootNode) scene.addChild(rootNode);
-        doc.getRoot().setDefaultScene(scene);
-        const io = createNodeIO();
-        return io.writeJSON(doc).then(GLTFJsonDocumentToString);
+        return new GLTFBuilder(up, this.name).addSceneNode(this).applyExtensions().toGLTF();
     }
 
-    /** Export this container hierarchy as a GLB binary (Uint8Array). */
+    /** Export this node hierarchy as a GLB binary (Uint8Array). */
     async toGLB(up: Axis = 'z'): Promise<Uint8Array>
     {
-        const doc = new Document();
-        const rootNode = this._buildGLTFNode(doc, up);
-        const scene = doc.createScene(this.name);
-        if (rootNode) scene.addChild(rootNode);
-        doc.getRoot().setDefaultScene(scene);
-        const io = createNodeIO();
-        return io.writeBinary(doc);
+        return new GLTFBuilder(up, this.name).addSceneNode(this).applyExtensions().toGLB();
     }
 
     //// SVG EXPORT ────────────────────────────────────────────────────────────
 
     /**
-     * Build a `<g>` SVG group element (with nested children) for this container.
-     * Invisible containers emit `<g display="none">` to preserve structure while hiding content.
-     * Mesh shapes are skipped with a warning (SVG is curves-only, matching ShapeCollection.toSVG()).
-     * @internal
+     * Return a `<g>` SVG element for this node (with nested children).
+     * Only 2D shapes (is2D() === true) are included; non-2D shapes are silently skipped.
+     * Invisible nodes emit `<g display="none">` to preserve structure.
      */
-    _toSVGGroup(plane: BasePlane = 'xy'): string
+    toSVGElem(): string
     {
         const eff = this.effectiveStyle();
         const displayAttr = eff.visible ? '' : ' display="none"';
@@ -425,17 +399,15 @@ export class Container
 
         this._shapes.forEach(shape =>
         {
-            if (shape instanceof Mesh)
+            if (shape.is2D() && shape.toSVGElem)
             {
-                console.warn(`Container.toSVG(): Mesh shapes are not exported to SVG (container "${this.name}"). Use Curve shapes for SVG export.`);
-                return;
+                lines.push('  ' + shape.toSVGElem());
             }
-            lines.push('  ' + shape._toSVGElement(plane));
         });
 
         this._children.forEach(child =>
         {
-            const childGroup = child._toSVGGroup(plane);
+            const childGroup = child.toSVGElem();
             lines.push(...childGroup.split('\n').map(l => '  ' + l));
         });
 
@@ -444,32 +416,25 @@ export class Container
     }
 
     /**
-     * Export this container hierarchy as a self-contained SVG string.
-     * Curves are projected onto `plane`; the viewBox is the union of all descendant curve bounds.
-     * @param plane  Base plane to project onto (default: 'xy')
+     * Export this node hierarchy as a self-contained SVG string.
+     * Only 2D shapes are included; the viewBox is the union of their bounding boxes.
      */
-    toSVG(plane: BasePlane = 'xy'): string
+    toSVG(): string
     {
-        const allCurves = this.curves(true);
+        const shapes2D = this.shapes(true).filter(s => s.is2D());
 
-        // Compute union viewBox
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        allCurves.forEach(curve =>
+        shapes2D.forEach(shape =>
         {
-            const bb = curve.copy().projectOnto(plane).bbox();
+            const bb = shape.bbox();
             if (!bb) return;
-            // SVG Y-axis is flipped
             minX = Math.min(minX, bb.min().x);
-            minY = Math.min(minY, -bb.max().y);
+            minY = Math.min(minY, -bb.max().y); // SVG Y-axis is flipped
             maxX = Math.max(maxX, bb.max().x);
             maxY = Math.max(maxY, -bb.min().y);
         });
 
-        if (!isFinite(minX))
-        {
-            // No curves at all — still emit a valid SVG
-            minX = 0; minY = 0; maxX = 1; maxY = 1;
-        }
+        if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 1; maxY = 1; }
 
         const w = maxX - minX;
         const h = maxY - minY;
@@ -480,16 +445,15 @@ export class Container
         const vbW = +(w + 2 * pad).toFixed(6);
         const vbH = +(h + 2 * pad).toFixed(6);
 
-        const group = this._toSVGGroup(plane);
-        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}">\n${group}\n</svg>`;
+        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}">\n${this.toSVGElem()}\n</svg>`;
     }
 
     //// INTERNAL HELPERS ////
 
-    /** traversal (BFS) that includes `this` as the first element. */
-    private _traverse(): Container[]
+    /** BFS traversal that includes `this` as the first element. */
+    protected _traverse(): SceneNode<S>[]
     {
-        const bfs = (queue: Container[], acc: Container[]): Container[] =>
+        const bfs = (queue: SceneNode<S>[], acc: SceneNode<S>[]): SceneNode<S>[] =>
         {
             if (queue.length === 0) return acc;
             const [cur, ...rest] = queue;

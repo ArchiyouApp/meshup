@@ -10,11 +10,17 @@
  *    - Shape.isShape() — type guard
  */
 
+import { Style } from './Style';
+import { SceneNode } from './SceneNode';
+
 import { uuid } from './utils';
 
 export abstract class Shape
 {
     private _id: string;
+    _node: SceneNode | null = null; // The SceneNode this shape belongs to, or null if not in a container
+    style: Style = new Style(); // Style properties for export (color, lineWidth, etc)
+    metadata: Record<string, any> = {};
 
     constructor()
     {
@@ -27,19 +33,24 @@ export abstract class Shape
         return this._id;
     }
 
-    /** Primary geometry type: 'Mesh' or 'Curve'. */
-    abstract type(): 'Mesh' | 'Curve';
+    node(): SceneNode | null
+    {
+        return this._node;
+    }
 
-    /** Finer classification within the type
-     *   For Mesh: 'mesh' (generic), 'box', 'sphere', etc.
-     *   For Curve: 'line', 'arc', 'circle', 'ellipse', 'spline', etc.
-     *  Returns null if no subType or unrecognized type.
-     */
+    // Abstract methods to be implemented by concrete subclasses (Mesh, Curve)
+
+    abstract type(): 'Mesh' | 'Curve';
     abstract subType(): string|null;
+    abstract is2D(): boolean;
+    abstract bbox(): { min(): { x: number; y: number; z: number }; max(): { x: number; y: number; z: number } } | undefined;
 
     /** Type guard — returns true for any Mesh or Curve instance. */
     static isShape(o: unknown): o is Shape
     {
         return o instanceof Shape;
     }
+
+    //// GENERAL OUTPUT METHODS ////
+
 }

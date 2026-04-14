@@ -6,17 +6,49 @@
  */
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync, Point } from '../../src/index';
-import { Collection } from '../../src/Collection';
+import { ShapeCollection as Collection } from '../../src/ShapeCollection';
 import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
-import { Container } from '../../src/Container';
+import { SceneNode } from '../../src/SceneNode';
 import { save } from '../../src/utils';
-import { dashPatternToUint16 } from '../../src/GLTFExtensions';
+import { dashPatternToUint16 } from '../../src/GLTFBuilder';
 
 beforeAll(async () =>
 {
     await initAsync();
 });
+
+describe('Set up a basic scene hierarchy and export', () =>
+{
+    it('Create a scene hierarchy and export to GLTF', async () =>
+    {
+        const cyl = Mesh.Cylinder(5, 10).color('blue');
+        const cubes = Mesh.Cube(10).replicate(4, (c,i) => c.move(i*15, 0, 0).color(255-i*50, 0, 0))
+                        .moveTo(0,0,0)
+                        .moveZ(20);
+        const spheres = Mesh.Sphere(5).row(3, 10)
+                            .color('yellow')
+                            .moveTo(0,0,0)
+                            .moveZ(35);
+
+        const lines = Collection.generate(50, () => Curve.Line(Point.random(10), Point.random(10)))
+                        .color('green')
+                        .moveTo(0,0,0)
+                        .moveZ(50);
+
+        const scene = SceneNode.root();
+        scene.add(cyl); // on top level
+        scene.addLayer('cubes', cubes); // in a layer
+        scene.add('spheres').add(spheres); // same thing
+        scene.addLayer('lines', lines); 
+        
+        const gltf = await scene.toGLTF();
+        expect(gltf).toBeTruthy();
+        save('test.scene.gltf', gltf);
+    });
+});
+
+
 
 describe('glTF extension exports', () =>
 {
@@ -72,35 +104,5 @@ describe('glTF extension exports', () =>
         expect(ext.pattern).toBe(dashPatternToUint16([4, 4]));
 
         save('test.curve.extensions.gltf', gltfStr!);
-    });
-});
-
-describe('Set up a basic scene hierarchy and export', () =>
-{
-    it('Create a scene hierarchy and export to GLTF', async () =>
-    {
-        const cyl = Mesh.Cylinder(5, 10).color('blue');
-        const cubes = Mesh.Cube(10).replicate(4, (c,i) => c.move(i*15, 0, 0).color(255-i*50, 0, 0))
-                        .moveTo(0,0,0)
-                        .moveZ(20);
-        const spheres = Mesh.Sphere(5).row(3, 10)
-                            .color('yellow')
-                            .moveTo(0,0,0)
-                            .moveZ(35);
-
-        const lines = Collection.generate(50, () => Curve.Line(Point.random(10), Point.random(10)))
-                        .color('green')
-                        .moveTo(0,0,0)
-                        .moveZ(50);
-
-        const scene = Container.root();
-        scene.add(cyl); // on top level
-        scene.addLayer('cubes', cubes); // in a layer
-        scene.add('spheres').add(spheres); // same thing
-        scene.addLayer('lines', lines); 
-        
-        const gltf = await scene.toGLTF();
-        expect(gltf).toBeTruthy();
-        save('test.scene.gltf', gltf);
     });
 });

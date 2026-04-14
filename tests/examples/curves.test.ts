@@ -3,10 +3,9 @@
  *
  */
 import { beforeAll, describe, it, expect, should } from 'vitest';
-import { Collection, CurveCollection, initAsync } from '../../src/index';
+import { CurveCollection, initAsync } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { save } from '../../src/utils';
-import { TOLERANCE } from '../../src/constants';
 
 beforeAll(async () => 
 {
@@ -15,13 +14,13 @@ beforeAll(async () =>
 
 describe('Example: Curves', () => 
 {
-    it('Can create basic curves', () => 
+    it('Can create basic curves', async () =>
     {
         const line = Curve.Line([0,0], [100,100]).color('red');
         const pline = Curve.Polyline(
             [0,0,0], [-50,0,10], [-50,50,20],[0,50,30], [0,0,40]).color('blue');
         const arc = Curve.Arc([0,0],[100,100],[200,0], 'tangent').color('green');
-        const curve = Curve.Interpolated([0,0,0], [-50,-50,50], [-100,-100,10], [-150,-200,150]).color('yellow');
+        const curve = Curve.Interpolated([[0,0,0], [-50,-50,50], [-100,-100,10], [-150,-200,150]]).color('yellow');
         const circle = Curve.Circle(20, [0,0,0], [0,0,1]).color('cyan');
 
         expect(line).toBeTruthy();
@@ -32,11 +31,11 @@ describe('Example: Curves', () =>
         expect(circle).toBeTruthy();
 
         // Save as GLTF to view in 3D 
-        save('test.curves.basic.gltf', new CurveCollection(line, circle, pline, arc, curve).toGLTF());
+        await save('test.curves.basic.gltf', await new CurveCollection(line, circle, pline, arc, curve).toGLTF());
 
     });
 
-    it('Can do operations on curves', () =>
+    it('Can do operations on curves', async () =>
     {
         const c = Curve.Circle(10).color('red');
         expect(c).toBeTruthy();
@@ -56,7 +55,7 @@ describe('Example: Curves', () =>
     
         const col = new CurveCollection(c, rect, circles, union!, unionOffset!);
 
-        save('test.curves.ops.gltf', col.toGLTF());
+        await save('test.curves.ops.gltf', await col.toGLTF());
         //save('test.curves.ops.svg', col.toSVG());
     });
 

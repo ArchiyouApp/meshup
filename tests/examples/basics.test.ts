@@ -10,7 +10,7 @@ import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
 import { Sketch } from '../../src/Sketch';
 import { Vector } from '../../src/Vector';
-import { Collection } from '../../src/Collection';
+import { ShapeCollection } from '../../src/ShapeCollection';
 
 beforeAll(async () =>
 {
@@ -111,7 +111,7 @@ describe('Example: collection workflow', () =>
         const b = Mesh.Cube(5);
         b.translate([10, 0, 0]);
 
-        const col = new Collection(a, b);
+        const col = new ShapeCollection(a, b);
         expect(col.count()).toBe(2);
 
         let totalVertices = 0;

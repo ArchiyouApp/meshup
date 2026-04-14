@@ -6,7 +6,7 @@ import { beforeAll, describe, it, expect, should } from 'vitest';
 import { Curve, initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { save } from '../../src/utils';
-import { Collection, MeshCollection } from '../../src/Collection';
+import { ShapeCollection as Collection, MeshCollection } from '../../src/ShapeCollection';
 
 beforeAll(async () => 
 {
@@ -26,8 +26,8 @@ describe('Example: Aligning Shapes', async () =>
                         .color('red')
                         .opacity(0.5);
         
-        await save('test.alignments.bypoints.gltf', 
-            new Collection(box, line, aligned, alignedScaled).toGLTF()); // OK
+        await save('test.alignments.bypoints.gltf',
+            await new Collection(box, line, aligned, alignedScaled).toGLTF()); // OK
     });
 
 });       

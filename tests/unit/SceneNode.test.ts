@@ -1,8 +1,9 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Container } from '../../src/Container';
+import { SceneNode } from '../../src/SceneNode';
 import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
+import { MeshCollection, CurveCollection } from '../../src/ShapeCollection';
 
 beforeAll(async () =>
 {
@@ -11,39 +12,39 @@ beforeAll(async () =>
 
 // ─── Construction ─────────────────────────────────────────────────────────────
 
-describe('Container construction', () =>
+describe('SceneNode construction', () =>
 {
     it('creates a container with default name', () =>
     {
-        const c = new Container();
+        const c = new SceneNode();
         expect(c.name).toBe('container');
     });
 
     it('accepts a custom name', () =>
     {
-        const c = new Container('walls');
+        const c = new SceneNode('walls');
         expect(c.name).toBe('walls');
     });
 
-    it('Container.root() creates an unnamed root', () =>
+    it('SceneNode.root() creates an unnamed root', () =>
     {
-        const r = Container.root();
+        const r = SceneNode.root();
         expect(r.isRoot()).toBe(true);
         expect(r.name).toBe('root');
     });
 
-    it('Container.from() wraps a Mesh', () =>
+    it('SceneNode.from() wraps a Mesh', () =>
     {
         const m = Mesh.Cube(5);
-        const c = Container.from(m);
+        const c = SceneNode.from(m);
         expect(c.shapes()).toHaveLength(1);
         expect(c.shapes()[0]).toBe(m);
     });
 
-    it('Container.from() wraps a Curve', () =>
+    it('SceneNode.from() wraps a Curve', () =>
     {
         const cv = Curve.Line([0,0,0], [1,0,0]);
-        const c = Container.from(cv, 'myLine');
+        const c = SceneNode.from(cv, 'myLine');
         expect(c.name).toBe('myLine');
         expect(c.shapes()).toHaveLength(1);
     });
@@ -51,11 +52,11 @@ describe('Container construction', () =>
 
 // ─── Shape management ─────────────────────────────────────────────────────────
 
-describe('Container shape management', () =>
+describe('SceneNode shape management', () =>
 {
     it('addShape / shapes()', () =>
     {
-        const c = new Container('c');
+        const c = new SceneNode('c');
         const m = Mesh.Cube(5);
         c.addShape(m);
         expect(c.shapes()).toContain(m);
@@ -63,7 +64,7 @@ describe('Container shape management', () =>
 
     it('addShape is idempotent', () =>
     {
-        const c = new Container('c');
+        const c = new SceneNode('c');
         const m = Mesh.Cube(5);
         c.addShape(m).addShape(m);
         expect(c.shapes()).toHaveLength(1);
@@ -71,7 +72,7 @@ describe('Container shape management', () =>
 
     it('removeShape removes the shape', () =>
     {
-        const c = new Container('c');
+        const c = new SceneNode('c');
         const m = Mesh.Cube(5);
         c.addShape(m).removeShape(m);
         expect(c.shapes()).toHaveLength(0);
@@ -79,20 +80,20 @@ describe('Container shape management', () =>
 
     it('isLayer() is true when no shapes', () =>
     {
-        const c = new Container('layer');
+        const c = new SceneNode('layer');
         expect(c.isLayer()).toBe(true);
     });
 
     it('isLayer() is false when shapes are present', () =>
     {
-        const c = new Container('c');
+        const c = new SceneNode('c');
         c.addShape(Mesh.Cube(5));
         expect(c.isLayer()).toBe(false);
     });
 
     it('hasShape() mirrors isLayer()', () =>
     {
-        const c = new Container('c');
+        const c = new SceneNode('c');
         expect(c.hasShape()).toBe(false);
         c.addShape(Mesh.Cube(5));
         expect(c.hasShape()).toBe(true);
@@ -100,17 +101,17 @@ describe('Container shape management', () =>
 
     it('meshes() returns only Mesh shapes', () =>
     {
-        const c = new Container('c');
+        const c = new SceneNode('c');
         c.addShape(Mesh.Cube(5));
         c.addShape(Curve.Line([0,0,0], [1,0,0]));
-        expect(c.meshes()).toHaveLength(1);
-        expect(c.curves()).toHaveLength(1);
+        expect(c.shapes().filter(s => s instanceof Mesh)).toHaveLength(1);
+        expect(c.shapes().filter(s => s instanceof Curve)).toHaveLength(1);
     });
 
     it('shapes(true) collects from descendants', () =>
     {
-        const parent = new Container('parent');
-        const child = new Container('child');
+        const parent = new SceneNode('parent');
+        const child = new SceneNode('child');
         const m = Mesh.Cube(5);
         child.addShape(m);
         parent.addChild(child);
@@ -121,36 +122,36 @@ describe('Container shape management', () =>
 
 // ─── Hierarchy ────────────────────────────────────────────────────────────────
 
-describe('Container hierarchy', () =>
+describe('SceneNode hierarchy', () =>
 {
     it('addChild / children()', () =>
     {
-        const parent = new Container('parent');
-        const child = new Container('child');
+        const parent = new SceneNode('parent');
+        const child = new SceneNode('child');
         parent.addChild(child);
         expect(parent.children()).toContain(child);
     });
 
     it('addChild sets parent reference', () =>
     {
-        const parent = new Container('parent');
-        const child = new Container('child');
+        const parent = new SceneNode('parent');
+        const child = new SceneNode('child');
         parent.addChild(child);
         expect(child.parent()).toBe(parent);
     });
 
     it('addChild is idempotent', () =>
     {
-        const parent = new Container('parent');
-        const child = new Container('child');
+        const parent = new SceneNode('parent');
+        const child = new SceneNode('child');
         parent.addChild(child).addChild(child);
         expect(parent.children()).toHaveLength(1);
     });
 
     it('removeChild removes child and clears parent ref', () =>
     {
-        const parent = new Container('parent');
-        const child = new Container('child');
+        const parent = new SceneNode('parent');
+        const child = new SceneNode('child');
         parent.addChild(child).removeChild(child);
         expect(parent.children()).toHaveLength(0);
         expect(child.parent()).toBeNull();
@@ -158,18 +159,18 @@ describe('Container hierarchy', () =>
 
     it('detach() unlinks from parent', () =>
     {
-        const parent = new Container('parent');
-        const child = new Container('child');
+        const parent = new SceneNode('parent');
+        const child = new SceneNode('child');
         parent.addChild(child);
         child.detach();
         expect(parent.children()).toHaveLength(0);
         expect(child.parent()).toBeNull();
     });
 
-    it('add() dispatches correctly for Container vs Shape', () =>
+    it('add() dispatches correctly for SceneNode vs Shape', () =>
     {
-        const parent = new Container('parent');
-        const child = new Container('child');
+        const parent = new SceneNode('parent');
+        const child = new SceneNode('child');
         const m = Mesh.Cube(5);
         parent.add(child).add(m);
         expect(parent.children()).toContain(child);
@@ -178,15 +179,15 @@ describe('Container hierarchy', () =>
 
     it('isRoot() is true for detached container', () =>
     {
-        const c = new Container('c');
+        const c = new SceneNode('c');
         expect(c.isRoot()).toBe(true);
     });
 
     it('root() walks up to the topmost ancestor', () =>
     {
-        const a = new Container('a');
-        const b = new Container('b');
-        const c = new Container('c');
+        const a = new SceneNode('a');
+        const b = new SceneNode('b');
+        const c = new SceneNode('c');
         a.addChild(b);
         b.addChild(c);
         expect(c.root()).toBe(a);
@@ -195,14 +196,14 @@ describe('Container hierarchy', () =>
 
 // ─── Traversal ────────────────────────────────────────────────────────────────
 
-describe('Container traversal', () =>
+describe('SceneNode traversal', () =>
 {
     function buildTree()
     {
-        const root = new Container('root');
-        const a = new Container('a');
-        const b = new Container('b');
-        const c = new Container('c');
+        const root = new SceneNode('root');
+        const a = new SceneNode('a');
+        const b = new SceneNode('b');
+        const c = new SceneNode('c');
         root.addChild(a).addChild(b);
         a.addChild(c);
         return { root, a, b, c };
@@ -240,9 +241,9 @@ describe('Container traversal', () =>
 
     it('findAll() returns all matching descendants', () =>
     {
-        const root = new Container('root');
-        const a = new Container('layer');
-        const b = new Container('layer');
+        const root = new SceneNode('root');
+        const a = new SceneNode('layer');
+        const b = new SceneNode('layer');
         root.addChild(a).addChild(b);
         const found = root.findAll(c => c.name === 'layer');
         expect(found).toHaveLength(2);
@@ -251,57 +252,57 @@ describe('Container traversal', () =>
 
 // ─── Style cascading ──────────────────────────────────────────────────────────
 
-describe('Container style cascading', () =>
+describe('SceneNode style cascading', () =>
 {
     it('effectiveStyle() returns own style when no ancestors', () =>
     {
-        const c = new Container('c');
+        const c = new SceneNode('c');
         c.style.opacity = 0.5;
         expect(c.effectiveStyle().opacity).toBe(0.5);
     });
 
     it('effectiveStyle() merges ancestor styles root-first', () =>
     {
-        const parent = new Container('parent');
-        const child = new Container('child');
+        const parent = new SceneNode('parent');
+        const child = new SceneNode('child');
         parent.addChild(child);
         parent.style.color = 'blue';
         child.style.opacity = 0.3;
         const eff = child.effectiveStyle();
         expect(eff.opacity).toBe(0.3);
-        expect(eff.fillColor).toBe('blue');
+        expect(eff.fillColor).toBe('#0000ff');
     });
 
     it('child style overrides parent style', () =>
     {
-        const parent = new Container('parent');
-        const child = new Container('child');
+        const parent = new SceneNode('parent');
+        const child = new SceneNode('child');
         parent.addChild(child);
         parent.style.color = 'red';
         child.style.color = 'green';
-        expect(child.effectiveStyle().fillColor).toBe('green');
+        expect(child.effectiveStyle().fillColor).toBe('#008000');
     });
 
     it('applyStyle() mutates shape styles', () =>
     {
-        const c = new Container('c');
+        const c = new SceneNode('c');
         const m = Mesh.Cube(5);
         c.addShape(m);
         c.color('blue');
         c.applyStyle();
-        expect(m.style.fillColor).toBe('blue');
+        expect(m.style.fillColor).toBe('#0000ff');
     });
 
     it('visible() shortcut sets style.visible', () =>
     {
-        const c = new Container('c');
+        const c = new SceneNode('c');
         c.visible(false);
         expect(c.style.visible).toBe(false);
     });
 
     it('opacity() shortcut sets style.opacity', () =>
     {
-        const c = new Container('c');
+        const c = new SceneNode('c');
         c.opacity(0.4);
         expect(c.style.opacity).toBe(0.4);
     });
@@ -309,32 +310,32 @@ describe('Container style cascading', () =>
 
 // ─── toGraph ──────────────────────────────────────────────────────────────────
 
-describe('Container.toGraph()', () =>
+describe('SceneNode.toGraph()', () =>
 {
     it('returns correct structure for a single container with shapes', () =>
     {
-        const c = new Container('root');
+        const c = new SceneNode('root');
         c.addShape(Mesh.Cube(5));
         c.addShape(Curve.Line([0,0,0], [1,0,0]));
         const g = c.toGraph();
         expect(g.name).toBe('root');
         expect(g.isLayer).toBe(false);
         expect(g.shapeCount).toBe(2);
-        expect(g.shapeTypes).toEqual(['mesh', 'curve']);
+        expect(g.shapeTypes).toEqual(['Mesh', 'Curve']);
         expect(g.children).toHaveLength(0);
     });
 
     it('isLayer is true when no direct shapes', () =>
     {
-        const c = new Container('layer');
+        const c = new SceneNode('layer');
         const g = c.toGraph();
         expect(g.isLayer).toBe(true);
     });
 
     it('children are reflected recursively', () =>
     {
-        const parent = new Container('parent');
-        const child = new Container('child');
+        const parent = new SceneNode('parent');
+        const child = new SceneNode('child');
         child.addShape(Mesh.Cube(5));
         parent.addChild(child);
         const g = parent.toGraph();
@@ -346,11 +347,11 @@ describe('Container.toGraph()', () =>
 
 // ─── SVG export ───────────────────────────────────────────────────────────────
 
-describe('Container.toSVG()', () =>
+describe('SceneNode.toSVG()', () =>
 {
     it('returns a valid SVG string', () =>
     {
-        const c = new Container('scene');
+        const c = new SceneNode('scene');
         c.addShape(Curve.Line([0,0,0], [10,0,0]));
         const svg = c.toSVG();
         expect(svg).toContain('<svg');
@@ -359,7 +360,7 @@ describe('Container.toSVG()', () =>
 
     it('contains a <g> group with the container name', () =>
     {
-        const c = new Container('myGroup');
+        const c = new SceneNode('myGroup');
         c.addShape(Curve.Line([0,0,0], [10,0,0]));
         const svg = c.toSVG();
         expect(svg).toContain('id="myGroup"');
@@ -367,8 +368,8 @@ describe('Container.toSVG()', () =>
 
     it('nested containers produce nested <g> groups', () =>
     {
-        const parent = new Container('outer');
-        const child = new Container('inner');
+        const parent = new SceneNode('outer');
+        const child = new SceneNode('inner');
         parent.addChild(child);
         child.addShape(Curve.Circle(5));
         const svg = parent.toSVG();
@@ -378,7 +379,7 @@ describe('Container.toSVG()', () =>
 
     it('invisible container gets display="none"', () =>
     {
-        const c = new Container('hidden');
+        const c = new SceneNode('hidden');
         c.visible(false);
         c.addShape(Curve.Line([0,0,0], [10,0,0]));
         const svg = c.toSVG();
@@ -387,7 +388,7 @@ describe('Container.toSVG()', () =>
 
     it('produces a valid SVG with no curves (empty container)', () =>
     {
-        const c = new Container('empty');
+        const c = new SceneNode('empty');
         const svg = c.toSVG();
         expect(svg).toContain('<svg');
     });
@@ -395,11 +396,11 @@ describe('Container.toSVG()', () =>
 
 // ─── GLTF export ──────────────────────────────────────────────────────────────
 
-describe('Container.toGLTF()', () =>
+describe('SceneNode.toGLTF()', () =>
 {
     it('returns a valid JSON string', async () =>
     {
-        const c = new Container('scene');
+        const c = new SceneNode('scene');
         c.addShape(Mesh.Cube(5));
         const gltf = await c.toGLTF();
         const parsed = JSON.parse(gltf);
@@ -409,7 +410,7 @@ describe('Container.toGLTF()', () =>
 
     it('root node carries the container name', async () =>
     {
-        const c = new Container('myScene');
+        const c = new SceneNode('myScene');
         c.addShape(Mesh.Cube(5));
         const gltf = await c.toGLTF();
         const parsed = JSON.parse(gltf);
@@ -419,8 +420,8 @@ describe('Container.toGLTF()', () =>
 
     it('nested containers produce nested node hierarchy', async () =>
     {
-        const parent = new Container('parent');
-        const child = new Container('child');
+        const parent = new SceneNode('parent');
+        const child = new SceneNode('child');
         parent.addChild(child);
         child.addShape(Mesh.Cube(5));
         const gltf = await parent.toGLTF();
@@ -432,8 +433,8 @@ describe('Container.toGLTF()', () =>
 
     it('invisible container is excluded from GLTF', async () =>
     {
-        const root = new Container('root');
-        const hidden = new Container('hiddenChild');
+        const root = new SceneNode('root');
+        const hidden = new SceneNode('hiddenChild');
         hidden.visible(false);
         hidden.addShape(Mesh.Cube(5));
         root.addChild(hidden);
@@ -445,7 +446,7 @@ describe('Container.toGLTF()', () =>
 
     it('toGLB() returns a Uint8Array', async () =>
     {
-        const c = new Container('scene');
+        const c = new SceneNode('scene');
         c.addShape(Mesh.Cube(5));
         const glb = await c.toGLB();
         expect(glb).toBeInstanceOf(Uint8Array);

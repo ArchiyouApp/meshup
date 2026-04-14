@@ -5,7 +5,7 @@
  *      
  */
 
-import type { Axis, BasePlane, PointLike, ProjectEdgeOptions, RaycastHit } from "./types";
+import type { Axis, PointLike, ProjectEdgeOptions, RaycastHit } from "./types";
 
 import { Mesh } from "./Mesh";
 import { Curve } from "./Curve";
@@ -16,9 +16,7 @@ import { Bbox } from "./Bbox";
 
 import { MeshJs, PolygonJs } from "./wasm/csgrs";
 
-import { Document } from '@gltf-transform/core';
-import { createNodeIO } from './GLTFExtensions';
-import { GLTFJsonDocumentToString } from './utils';
+import { GLTFBuilder } from './GLTFBuilder';
 
 export class ShapeCollection
 {
@@ -496,57 +494,15 @@ export class ShapeCollection
 
     }
 
-    /** Export the entire collection to a single GLTF file (JSON) or GLB binary using gltf-transform.
-     *  Each Mesh becomes a TRIANGLES node; each Curve becomes a LINE_STRIP node.
-     *
-     *  @param binary  true → GLB (Uint8Array), false → GLTF JSON string
-     *  @param up      Source up-axis ('z' default, 'y', 'x'). Remapped to GLTF Y-up.
-     */
-    private async _toGLTF(binary: boolean, up: Axis = 'z'): Promise<string | Uint8Array>
-    {
-        const doc = new Document();
-        const scene = doc.createScene('scene');
-
-        this._shapes.forEach((shape, i) =>
-        {
-            if (shape instanceof Mesh)
-            {
-                if (!shape._mesh || shape.vertices().length === 0) return;
-                const node = shape._buildGLTFNode(doc, up, `mesh_${i}`);
-                scene.addChild(node);
-            }
-            else if (shape instanceof Curve)
-            {
-                const node = shape._buildGLTFNode(doc, up, `curve_${i}`);
-                scene.addChild(node);
-
-                if (shape.hasHoles())
-                {
-                    shape.holes().forEach((holeCurve, h) =>
-                    {
-                        const holeNode = holeCurve._buildGLTFNode(doc, up, `curve_${i}_hole_${h}`);
-                        scene.addChild(holeNode);
-                    });
-                }
-            }
-        });
-
-        if (scene.listChildren().length === 0)
-        {
-            console.warn('ShapeCollection::toGLTF(): No exportable shapes found.');
-        }
-
-        doc.getRoot().setDefaultScene(scene);
-        const io = createNodeIO();
-        return binary ? io.writeBinary(doc) : io.writeJSON(doc).then(GLTFJsonDocumentToString);
-    }
-
     /** Export the collection to a GLTF JSON string.
      *  @param up Source up-axis ('z' default, 'y', 'x'). Remapped to GLTF Y-up.
      */
     async toGLTF(up: Axis = 'z'): Promise<string>
     {
-        return this._toGLTF(false, up) as Promise<string>;
+        const builder = new GLTFBuilder(up, 'scene');
+        this._shapes.forEach((shape, i) => builder.add(shape as Mesh | Curve, `shape_${i}`));
+        if (builder.isEmpty()) console.warn('ShapeCollection::toGLTF(): No exportable shapes found.');
+        return builder.applyExtensions().toGLTF();
     }
 
     /** Export the collection to a GLB binary (Uint8Array).
@@ -554,7 +510,10 @@ export class ShapeCollection
      */
     async toGLB(up: Axis = 'z'): Promise<Uint8Array>
     {
-        return this._toGLTF(true, up) as Promise<Uint8Array>;
+        const builder = new GLTFBuilder(up, 'scene');
+        this._shapes.forEach((shape, i) => builder.add(shape as Mesh | Curve, `shape_${i}`));
+        if (builder.isEmpty()) console.warn('ShapeCollection::toGLTF(): No exportable shapes found.');
+        return builder.applyExtensions().toGLB();
     }
 
     /** Output Shapes as an array */
@@ -1202,7 +1161,7 @@ export class CurveCollection extends ShapeCollection
      * Each curve becomes a separate `<path>` element. The viewBox is the union
      * of all individual curve bounds.
      */
-    toSVG(plane: BasePlane = 'xy'): string
+    toSVG(): string
     {
         const curves = this.curves();
         if (curves.length === 0)
@@ -1217,9 +1176,9 @@ export class CurveCollection extends ShapeCollection
 
         curves.forEach(curve =>
         {
-            const svg = curve.toSVG(plane);
+            const svg = curve.toSVG();
             const innerMatch = svg.match(/<svg[^>]*>([\s\S]*?)<\/svg>/);
-            const vbMatch = svg.match(/viewBox="([^"]*)"/)
+            const vbMatch = svg.match(/viewBox="([^"]*)"/);
             if (!innerMatch?.[1]) return;
             paths.push(innerMatch[1]);
             if (vbMatch)

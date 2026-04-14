@@ -24,8 +24,8 @@ import { NurbsCurve3DJs, CompoundCurve3DJs, Vector3Js, BooleanRegionJs } from ".
 
 import { MeshCollection, CurveCollection, getCsgrs, Mesh } from './index';
 import { Shape } from './Shape';
-import type { Container } from './Container';
-import type { CsgrsModule, PointLike, Axis, GLTFBuffer, BasePlane } from './types';
+import type { SceneNode } from './SceneNode';
+import type { CsgrsModule, PointLike, Axis, BasePlane } from './types';
 import { isPointLike, isBasePlane } from './types'
 import { Point } from './Point';
 import { Vector } from './Vector';
@@ -34,29 +34,17 @@ import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { Polygon } from './Polygon';
 
-import { toBase64, fromBase64, rad, remapAxis, GLTFJsonDocumentToString } from "./utils";
-import { Document, Accessor, Primitive, Node as GltfNode } from '@gltf-transform/core';
-import
-{
-    BentleyLineStyleExtension,
-    dashPatternToUint16,
-    createNodeIO,
-} from './GLTFExtensions';
-import { Style } from "./Style";
+import { rad } from "./utils";
+import { GLTFBuilder } from './GLTFBuilder';
 
 
 export class Curve extends Shape
 {
+    // inherits: _id, _node, style, metadata from Shape
     _curve: NurbsCurve3DJs|CompoundCurve3DJs|undefined = undefined;
 
     /** Interior hole curves (e.g. from boolean difference where one curve contains the other) */
     private _holes: Array<Curve> = [];
-
-    style: Style = new Style();
-    metadata: Record<string, any> = {};
-
-    /** The Container this curve belongs to, or null if not in a container. */
-    _container: Container | null = null;
 
     constructor()
     {
@@ -585,8 +573,8 @@ export class Curve extends Shape
 
     //// PROPERTIES ////
 
-    /** Return the Container this curve belongs to, or null. */
-    container(): Container | null { return this._container; }
+    /** Return the SceneNode this curve belongs to, or null. */
+    node(): SceneNode | null { return this._node; }
     type(): 'Curve' { return 'Curve'; }
 
     /** Classify this curve as 'line', 'arc', 'circle', 'rect', 'polyline', 'spline', or 'compound'. */
@@ -656,7 +644,7 @@ export class Curve extends Shape
         if (n < 4 || n > 5) return false;
 
         const corners = (n === 5) ? pts.slice(0, 4) : pts;
-        if (corners.lPROPEength !== 4) return false;
+        if (corners.length !== 4) return false;
 
         return corners.every((a, i) =>
         {
@@ -2094,124 +2082,29 @@ export class Curve extends Shape
         return `<Curve(${this.isCompound() ? 'Compound' : 'Single'}): length="${this.length().toFixed(3)}", planar="${this.isPlanar()}", closed="${this.isClosed()}">`;
     }
 
-    /**
-     * Build the raw geometry buffer for this curve, ready to be embedded in a GLTF document.
-     * Returns all pieces needed to assemble one GLTF primitive so that multiple curves can be
-     * combined into a single GLTF later.
-     */
-    toGLTFBuffer(up: Axis = 'z'): GLTFBuffer
+    /** Return raw tessellated points as a flat Float32Array (xyz per point, no axis remapping).
+     *  Used by GLTFBuilder to assemble GLTF geometry. */
+    toBuffer(): Float32Array
     {
         const points = this.tessellate();
-        const pointsFlat = new Float32Array(
-            points
-                .map(p =>
-                {
-                    const arr = p.toArray();
-                    if (up === 'z')
-                    {
-                        return [arr[0], arr[2], -arr[1]];
-                    }
-                    else if (up === 'x')
-                    {
-                        return [arr[1], arr[0], arr[2]];
-                    }
-                    else
-                    {
-                        // GLTF is Y-up
-                        return [arr[0], arr[2], arr[1]];
-                    }
-                })
-                .flat() as Array<number>
-        );
-
-        if (pointsFlat.length < 3)
-        {
-            throw new Error(`Curve::toGLTFBuffer(): Not enough vertices to export!`);
-        }
-
-        // Compute min/max from the already-remapped positions in the buffer
-        const minArr = [Infinity, Infinity, Infinity];
-        const maxArr = [-Infinity, -Infinity, -Infinity];
-        for (let i = 0; i < pointsFlat.length; i += 3) // perf: keep as loop
-        {
-            for (let c = 0; c < 3; c++) // perf: keep as loop
-            {
-                if (pointsFlat[i + c] < minArr[c]) minArr[c] = pointsFlat[i + c];
-                if (pointsFlat[i + c] > maxArr[c]) maxArr[c] = pointsFlat[i + c];
-            }
-        }
-
-        return {
-            data: toBase64(pointsFlat),
-            byteLength: pointsFlat.byteLength,
-            count: points.length,
-            min: new Point(minArr[0], minArr[1], minArr[2]),
-            max: new Point(maxArr[0], maxArr[1], maxArr[2]),
-        };
-    }
-
-    /** Export this curve to GLTF JSON (binary=false) or GLB binary (binary=true) using gltf-transform (LINE_STRIP). */
-    /**
-     * Build a gltf-transform Node for this curve within an existing Document.
-     * Used by Container.toGLTF() for composing hierarchical scenes.
-     * @internal
-     */
-    _buildGLTFNode(doc: Document, up: Axis = 'z', name = 'curve'): GltfNode
-    {
-        const buf = this.toGLTFBuffer(up);
-        const posF32 = new Float32Array(fromBase64(buf.data).slice().buffer);
-
-        const gtBuf = doc.getRoot().listBuffers()[0] ?? doc.createBuffer();
-
-        const posAcc = doc.createAccessor()
-            .setType(Accessor.Type.VEC3)
-            .setArray(posF32)
-            .setBuffer(gtBuf);
-
-        const matDef = this.style.toGltfMaterial('curve_material', true) as any;
-        const [r, g, b, a] = matDef.pbrMetallicRoughness.baseColorFactor;
-        const material = doc.createMaterial('curve_material')
-            .setBaseColorFactor([r, g, b, a])
-            .setMetallicFactor(matDef.pbrMetallicRoughness.metallicFactor)
-            .setRoughnessFactor(matDef.pbrMetallicRoughness.roughnessFactor)
-            .setDoubleSided(matDef.doubleSided ?? true);
-        if (matDef.alphaMode) material.setAlphaMode(matDef.alphaMode as 'BLEND' | 'OPAQUE' | 'MASK');
-
-        const prim = doc.createPrimitive()
-            .setAttribute('POSITION', posAcc)
-            .setMode(Primitive.Mode.LINE_STRIP)
-            .setMaterial(material);
-
-        // --- BENTLEY_materials_line_style ---
-        const hasStrokeWidth = (this.style.strokeWidth ?? 0) > 0;
-        const hasStrokeDash  = (this.style.strokeDash?.length ?? 0) > 0;
-        if (hasStrokeWidth || hasStrokeDash)
-        {
-            const lineStyleProp = doc.createExtension(BentleyLineStyleExtension).createProperty();
-            lineStyleProp.width   = hasStrokeWidth ? Math.round(this.style.strokeWidth!) : 1;
-            lineStyleProp.pattern = hasStrokeDash  ? dashPatternToUint16(this.style.strokeDash!) : 0xFFFF;
-            material.setExtension('BENTLEY_materials_line_style', lineStyleProp);
-        }
-
-        const gltfMesh = doc.createMesh(name).addPrimitive(prim);
-        return doc.createNode(name).setMesh(gltfMesh);
+        const buf = new Float32Array(points.length * 3);
+        points.forEach((p, i) => { buf[i * 3] = p.x; buf[i * 3 + 1] = p.y; buf[i * 3 + 2] = p.z; });
+        return buf;
     }
 
     /**
-     * Return just the SVG element(s) for this curve (a `<path>` or `<circle>` element string),
-     * without the outer `<svg>` wrapper. Used by Container.toSVG().
-     * @internal
+     * Return just the SVG element for this curve (`<path>` or `<circle>`),
+     * without the outer `<svg>` wrapper. Used by SceneNode to compose hierarchies.
+     * Assumes the curve is already 2D (on the XY plane). Use `is2D()` to check first.
      */
-    _toSVGElement(plane: BasePlane = 'xy'): string
+    toSVGElem(): string
     {
-        const projected = this.copy().projectOnto(plane);
-
         const fmt = (n: number) => +n.toFixed(6);
         const to2D = (p: { x: number; y: number; z: number }): [number, number] => [p.x, -p.y];
 
         if (this.subType() === 'circle')
         {
-            const bb = projected.bbox();
+            const bb = this.bbox();
             if (bb)
             {
                 const cx = fmt((bb.min().x + bb.max().x) / 2);
@@ -2222,7 +2115,7 @@ export class Curve extends Shape
         }
 
         const pathParts: string[] = [];
-        const spans = projected._getSvgSpans();
+        const spans = this._getSvgSpans();
 
         spans.forEach((spanRaw, si) =>
         {
@@ -2298,192 +2191,36 @@ export class Curve extends Shape
         return `<path d="${d}" ${this.style.toSvgAttrs(this.isClosed())}/>`;
     }
 
-    private async _toGLTF(binary: boolean, up: Axis = 'z'): Promise<string | Uint8Array>
-    {
-        const buf = this.toGLTFBuffer(up);
-        // slice() copies into a plain ArrayBuffer, avoiding SharedArrayBuffer issues with Node Buffer
-        const posF32 = new Float32Array(fromBase64(buf.data).slice().buffer);
-
-        const doc = new Document();
-        const gtBuf = doc.createBuffer();
-
-        const posAcc = doc.createAccessor()
-            .setType(Accessor.Type.VEC3)
-            .setArray(posF32)
-            .setBuffer(gtBuf);
-
-        const matDef = this.style.toGltfMaterial('curve_material', true) as any;
-        const [r, g, b, a] = matDef.pbrMetallicRoughness.baseColorFactor;
-        const material = doc.createMaterial('curve_material')
-            .setBaseColorFactor([r, g, b, a])
-            .setMetallicFactor(matDef.pbrMetallicRoughness.metallicFactor)
-            .setRoughnessFactor(matDef.pbrMetallicRoughness.roughnessFactor)
-            .setDoubleSided(matDef.doubleSided ?? true);
-        if (matDef.alphaMode) material.setAlphaMode(matDef.alphaMode as 'BLEND' | 'OPAQUE' | 'MASK');
-
-        const prim = doc.createPrimitive()
-            .setAttribute('POSITION', posAcc)
-            .setMode(Primitive.Mode.LINE_STRIP)
-            .setMaterial(material);
-
-        // --- BENTLEY_materials_line_style ---
-        const hasStrokeWidth = (this.style.strokeWidth ?? 0) > 0;
-        const hasStrokeDash  = (this.style.strokeDash?.length ?? 0) > 0;
-        if (hasStrokeWidth || hasStrokeDash)
-        {
-            const lineStyleProp = doc.createExtension(BentleyLineStyleExtension).createProperty();
-            lineStyleProp.width   = hasStrokeWidth ? Math.round(this.style.strokeWidth!) : 1;
-            lineStyleProp.pattern = hasStrokeDash  ? dashPatternToUint16(this.style.strokeDash!) : 0xFFFF;
-            material.setExtension('BENTLEY_materials_line_style', lineStyleProp);
-        }
-
-        const mesh = doc.createMesh('curve').addPrimitive(prim);
-        const node = doc.createNode('node').setMesh(mesh);
-        const scene = doc.createScene('scene').addChild(node);
-        doc.getRoot().setDefaultScene(scene);
-
-        const io = createNodeIO();
-        return binary ? io.writeBinary(doc) : io.writeJSON(doc).then(GLTFJsonDocumentToString);
-    }
-
     /** Export this curve as a self-contained GLTF JSON string (LINE_STRIP). */
     async toGLTF(up: Axis = 'z'): Promise<string>
     {
-        return this._toGLTF(false, up) as Promise<string>;
+        return new GLTFBuilder(up).add(this).applyExtensions().toGLTF();
     }
 
     /** Export this curve as a GLB binary (Uint8Array, LINE_STRIP). */
     async toGLB(up: Axis = 'z'): Promise<Uint8Array>
     {
-        return this._toGLTF(true, up) as Promise<Uint8Array>;
+        return new GLTFBuilder(up).add(this).applyExtensions().toGLB();
     }
 
-    /** Export this curve as an SVG string, projecting onto the given named plane.
+    /** Export this curve as a self-contained SVG string.
+     *  Assumes the curve is already 2D (on the XY plane).
      *  Preserves arc geometry: degree-2 rational NURBS → SVG `A`, quadratic → `Q`, cubic → `C`, line → `L`.
-     *  @param plane - named base plane to project onto (default: 'xy')
      */
-    toSVG(plane: BasePlane = 'xy'): string
+    toSVG(): string
     {
-        // Project onto the target plane, then read XY as the 2D SVG coordinates
-        const projected = this.copy().projectOnto(plane);
-
+        const element = this.toSVGElem();
         const fmt = (n: number) => +n.toFixed(6);
-        // SVG Y-axis points down, so negate y
-        const to2D = (p: { x: number; y: number; z: number }): [number, number] => [p.x, -p.y];
 
-        // Full circle → emit a <circle> element directly instead of two arcs
-        if (this.subType() === 'circle')
-        {
-            const bb = projected.bbox();
-            if (bb)
-            {
-                const cx = fmt((bb.min().x + bb.max().x) / 2);
-                const cy = fmt(-((bb.min().y + bb.max().y) / 2)); // SVG Y flip
-                const r  = fmt((bb.max().x - bb.min().x) / 2);
-                const pad = +r * 0.05 || 1;
-                const vbX = fmt(cx - r - pad);
-                const vbY = fmt(cy - r - pad);
-                const vbW = fmt(2 * r + 2 * pad);
-                const vbH = fmt(2 * r + 2 * pad);
-                return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}"><circle cx="${cx}" cy="${cy}" r="${r}" ${this.style.toSvgAttrs(true)}/></svg>`;
-            }
-        }
-
-        const pathParts: string[] = [];
-        const spans = projected._getSvgSpans();
-
-        spans.forEach((spanRaw, si) =>
-        {
-            const spanCurve = Curve.fromCsgrs(spanRaw);
-            const cps = spanCurve.controlPoints();
-            const curveType = spanCurve.subType();
-
-            // Move-to for the first span's start
-            if (si === 0)
-            {
-                const [sx, sy] = to2D(cps[0]);
-                pathParts.push(`M${fmt(sx)} ${fmt(sy)}`);
-            }
-
-            switch (curveType)
-            {
-                case 'line':
-                case 'polyline':
-                case 'rect':
-                {
-                    cps.slice(1).forEach(cp =>
-                    {
-                        const [x, y] = to2D(cp);
-                        pathParts.push(`L${fmt(x)} ${fmt(y)}`);
-                    });
-                    break;
-                }
-                case 'arc':
-                case 'circle':
-                {
-                    _appendArcSvg(spanRaw, to2D, fmt, pathParts);
-                    break;
-                }
-                case 'spline':
-                {
-                    const deg = spanRaw.degree();
-                    const weights = Array.from(spanRaw.weights());
-                    const bezierSegs = _bsplineToBezierSegments(
-                        spanRaw.controlPoints(), Array.from(spanRaw.knots()), weights, deg);
-
-                    if (deg === 2)
-                    {
-                        bezierSegs.forEach(seg =>
-                        {
-                            const [, cp1, end] = seg.map(to2D);
-                            pathParts.push(`Q${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(end[0])} ${fmt(end[1])}`);
-                        });
-                    }
-                    else
-                    {
-                        // degree 3 (cubic) is the common case
-                        bezierSegs.forEach(seg =>
-                        {
-                            const [, cp1, cp2, end] = seg.map(to2D);
-                            pathParts.push(`C${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(cp2[0])} ${fmt(cp2[1])} ${fmt(end[0])} ${fmt(end[1])}`);
-                        });
-                    }
-                    break;
-                }
-                default:
-                {
-                    // compound or unsupported: tessellate fallback
-                    spanCurve.tessellate().slice(1).forEach(pt =>
-                    {
-                        const [x, y] = to2D(pt);
-                        pathParts.push(`L${fmt(x)} ${fmt(y)}`);
-                    });
-                    break;
-                }
-            }
-        });
-
-        // Close path if the curve is closed
-        if (this.isClosed())
-        {
-            pathParts.push('Z');
-        }
-
-        // Compute viewBox from bbox of the projected curve (in SVG-flipped Y)
-        const bb = projected.bbox();
+        const bb = this.bbox();
         let vbX: number, vbY: number, vbW: number, vbH: number;
         if (bb)
         {
-            const minPt = bb.min();
-            const maxPt = bb.max();
-            // SVG y is flipped: world minY → SVG maxY, world maxY → SVG minY
-            const svgMinX = minPt.x;
-            const svgMinY = -maxPt.y;
-            const svgW = maxPt.x - minPt.x;
-            const svgH = maxPt.y - minPt.y;
+            const svgW = bb.max().x - bb.min().x;
+            const svgH = bb.max().y - bb.min().y;
             const pad = Math.max(svgW, svgH) * 0.05 || 1;
-            vbX = fmt(svgMinX - pad);
-            vbY = fmt(svgMinY - pad);
+            vbX = fmt(bb.min().x - pad);
+            vbY = fmt(-bb.max().y - pad);
             vbW = fmt(svgW + 2 * pad);
             vbH = fmt(svgH + 2 * pad);
         }
@@ -2492,8 +2229,7 @@ export class Curve extends Shape
             vbX = 0; vbY = 0; vbW = 1; vbH = 1;
         }
 
-        const d = pathParts.join(' ');
-        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}"><path d="${d}" ${this.style.toSvgAttrs(this.isClosed())}/></svg>`;
+        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}">${element}</svg>`;
     }
 
     /** Collect all individual NurbsCurve3DJs spans from this curve (compound or single).
