@@ -5,6 +5,8 @@
  *  Mostly for more convenient usage in TypeScript and introspection
  *  and avoid things like Vector { __wbg_ptr: 1123141 } when you print instances
  *  We introduce private properties for introspection
+ * 
+ *  IMPORTANT: VertexJs has 6 coords: position and normal
 */
 
 import type { PointLike } from "./types";
@@ -49,6 +51,17 @@ export class Vertex extends VertexJs
     return this?.inner?.position()?.z;
   }
 
+  // @ts-expect-error: intentional covariant return-type narrowing (Point ⊂ Point3Js)
+  override position(): Point
+  {
+    return this._position;
+  }
+
+  normal(): Vector
+  {
+    return this._normal;
+  }
+
   toPoint(): Point
   {
     return new Point(this.x, this.y, this.z);
@@ -57,6 +70,13 @@ export class Vertex extends VertexJs
   toVector(): Vector
   {
     return new Vector(this.x, this.y, this.z);
+  }
+
+  // NOTE: VertexJs toArray() returns 6 coords: position and normal. We only return position here for convenience, but we could add a toArray6() if needed.
+  // @ts-expect-error:
+  toArray(): [number, number, number]
+  {
+    return [this.x, this.y, this.z];
   }
 
 }

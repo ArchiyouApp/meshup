@@ -1,9 +1,17 @@
 import { Point3Js, PlaneJs } from './wasm/csgrs.js';
 
 import { Point } from './Point';
+import { Vertex } from './Vertex';
+import { Polygon } from './Polygon.js';
+import { Curve } from './Curve';
 import { Mesh } from './Mesh';
+
+
 import type { PointLike, Axis } from './types';
 import { isPointLike } from './types';
+
+import { BASE_PLANE_NAME_TO_PLANE, TOLERANCE, BBOX_SIDES } from './constants';
+
 
 /** Axis-aligned Bounding Box */
 export class Bbox
@@ -242,39 +250,116 @@ export class Bbox
     }
 
     //// SHAPE REPRESENTATIONS ////
-    // NOTE: These return `any` to avoid a circular dependency (Curve imports Bbox).
-    //       Implement properly once a shape factory / dependency-inversion is in place.
 
-    /** Returns a rectangular Curve outline of this bbox on the XY plane
-     *  TODO: implement via shape factory to avoid Curve→Bbox circular dep
-     */
+    /** Returns a rectangular Curve outline of this bbox on the XY plane */
     rect(): any
     {
-        throw new Error('Bbox.rect(): not yet implemented — requires Curve factory');
+        throw new Error('Bbox.rect(): not yet implemented');
     }
 
-    /** Returns the back edge of this bbox as a Curve (max-Y side)
-     *  TODO: implement via shape factory
-     */
-    back(): any
+    /** Generate a box Mesh representation of this bbox */
+    box(): Mesh
     {
-        throw new Error('Bbox.back(): not yet implemented — requires Curve factory');
+        return Mesh.Box(this.width(), this.depth(), this.height())
+                .translate(this.center());
     }
 
-    /** Returns the left edge of this bbox as a Curve (min-X side)
-     *  TODO: implement via shape factory
-     */
-    left(): any
+    /** get all planes as polygons of this bbox */
+    planes(): Array<Polygon>
     {
-        throw new Error('Bbox.left(): not yet implemented — requires Curve factory');
+       return this.box().polygons();
     }
 
-    /** Returns the edge or vertex at the given named side of the bbox (e.g. 'bottomfront')
-     *  TODO: implement via shape factory
-     */
-    getSidesShape(_alignment: string): any
+    /** Get side face of bbox  
+     *  front/back, left/right, top/bottom
+     *  NOTE: polygons are converted to Mesh
+    */
+    getPlane(alignment: string): Mesh|undefined
     {
-        throw new Error('Bbox.getSidesShape(): not yet implemented — requires Curve factory');
+        const basePlane = BASE_PLANE_NAME_TO_PLANE[alignment.toLowerCase().trim()];        
+        if(!basePlane){ throw new Error(`Bbox.getPlane(): Unknown alignment "${alignment}". Use one of: top, bottom, front, back, left, right, xy, yz, xz.`); }
+        
+        return this.planes().find(pl => {
+            return pl.normal().angle(basePlane.normal) < TOLERANCE;
+        })?.toMesh();
+    }
+    
+    /** Returns the back edge of this bbox as a Curve (max-Y side) */
+    back(): Mesh|undefined 
+    {
+        return this.getPlane('back');    
+    }
+
+    /** Returns the left edge of this bbox as a Curve (min-X side) */
+    left(): Mesh|undefined
+    {
+        return this.getPlane('left');
+    }
+
+    /** Returns the right edge of this bbox as a Curve (max-X side) */
+    right(): Mesh|undefined
+    {
+        return this.getPlane('right');
+    }
+
+    /** Returns the front edge of this bbox as a Curve (min-Y side) */
+    top(): Mesh|undefined
+    {
+        return this.getPlane('top');
+    }
+
+    /** Returns bottom polygon of this bbox (min-Z side) */
+    bottom(): Mesh|undefined
+    {
+        return this.getPlane('bottom');
+    }
+
+    /** Returns the face, edge or vertex at the given named side of the bbox 
+     *  
+     *   alignments can be any combination of: 
+     *         top, bottom, front, back, left, right (case-insensitive, order doesn't matter)
+     *   
+     *   NOTE: Polygons are converted to Meshes
+     *   TODO: Can we return a ShapeCollection? What to do with Vertices?
+     *   TODO: Have it work for ShapeCollections 
+    */
+    getSidesShapes(alignments: string, type: 'face'|'edge'|'vertex'): Array<Mesh | Curve | Vertex>
+    {
+        const s = alignments.toLowerCase();
+        const sides = BBOX_SIDES.filter(k => s.includes(k));
+
+        if (type === 'face')
+        {
+            if (sides.length !== 1)
+                throw new Error(`Bbox.getSidesShapes(): 'face' requires exactly 1 side keyword, got: "${alignments}"`);
+            const plane = this.getPlane(sides[0]);
+            return plane ? [plane] : [];
+        }
+
+        if (type === 'vertex')
+        {
+            if (sides.length !== 3)
+                throw new Error(`Bbox.getSidesShapes(): 'vertex' requires 3 side keywords (one per axis), got: "${alignments}"`);
+            return [this.corner(sides.join('')).toVertex()];
+        }
+
+        // type === 'edge': 2 side keywords, one axis is free
+        if (sides.length !== 2)
+            throw new Error(`Bbox.getSidesShapes(): 'edge' requires exactly 2 side keywords, got: "${alignments}"`);
+
+        const inX = sides.some(k => k === 'left'  || k === 'right');
+        const inY = sides.some(k => k === 'front' || k === 'back');
+        const inZ = sides.some(k => k === 'top'   || k === 'bottom');
+
+        // The free axis contributes the two edge endpoints
+        const freeEnds: [string, string] = !inX ? ['left', 'right']
+                                         : !inY ? ['front', 'back']
+                                         :        ['top', 'bottom'];
+
+        const p1 = this.corner(s + freeEnds[0]);
+        const p2 = this.corner(s + freeEnds[1]);
+
+        return [Curve.Line(p1, p2)];
     }
 
 }

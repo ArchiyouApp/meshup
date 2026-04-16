@@ -1,6 +1,7 @@
 import { Vector } from './Vector'
 import { Vertex } from './Vertex';
 import { Point } from './Point';
+import { StyleData } from './Style';
 
 import { 
   Point3Js,
@@ -122,6 +123,7 @@ export interface SceneNodeGraphNode
   isLayer: boolean;
   shapeCount: number;
   shapeTypes: ShapeType[];
+  style: StyleData;
   children: SceneNodeGraphNode[];
 }
 

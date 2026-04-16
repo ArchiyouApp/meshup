@@ -323,6 +323,11 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         return this;
     }
 
+    hide(): this
+    {
+        return this.visible(false);
+    }
+
     /** Merge partial style data into this container's own style. */
     setStyle(data: Partial<StyleData>): this
     {
@@ -366,6 +371,7 @@ export class SceneNode<S extends SceneNodeShape = Shape>
             isLayer: this.isLayer(),
             shapeCount: this._shapes.length,
             shapeTypes: this._shapes.map(s => s.type()) as ShapeType[],
+            style: this.style.explicitData(),
             children: this._children.map(c => c.toGraph()),
         };
     }

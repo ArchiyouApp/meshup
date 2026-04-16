@@ -182,13 +182,13 @@ export class Curve extends Shape
     static Interpolated(...args: Array<PointLike|Array<PointLike>>): Curve
     {
         // arguments can be flat [p1, p2, p3] or all in first args [[p1, p2, p3]]
-        const controlPoints = (args[0] instanceof Array && args[0].every(isPointLike))
-                                ? args[0].filter(isPointLike).map(p => Point.from(p)) 
+        const controlPoints = (args.length === 1 && Array.isArray(args[0]) && args[0].some(isPointLike))
+                                ? args[0].filter(isPointLike).map(p => Point.from(p)) // BEWARE: one coord can be a PointLike move(10) → [10,0,0]
                                 : args.filter(isPointLike).map(p => Point.from(p));
-
+                                
         if(controlPoints.length < 3)
         {
-            throw new Error('Curve.Interpolated(): At least 3 control points are required. Please supply PointLikes (p1,p2,p3) or [p1,p2,p3].');
+            throw new Error(`Curve.Interpolated(): At least 3 control points are required. Got: ${controlPoints.length}: ${controlPoints.map(p => p.toString()).join(', ')}. Please supply PointLikes (p1,p2,p3) or [p1,p2,p3].`);
         }
 
         return Curve.fromCsgrs(

@@ -11,13 +11,14 @@
  * 
  */
 
-import { ShapeCollection } from "./ShapeCollection";
 import { 
     MAIN_AXIS,
     SELECTOR_SHAPES,
     BASE_PLANE_NAME_TO_PLANE
   } from "./constants"
-import { Curve } from "./Curve";
+
+import type { Vertex } from "./Vertex";
+import type { Curve } from "./Curve";
 import { Mesh } from "./Mesh";
 import { Point } from "./Point";
 import { Polygon } from "./Polygon";
@@ -25,24 +26,26 @@ import { Vector } from "./Vector";
 import { isPointLike } from "./types"
 import type { Axis, PointLike } from "./types"
 
+import { ShapeCollection } from "./ShapeCollection";
+
 //// CONFIG ////
 
 
 const SELECTORS = {
     // Order of patterns matters, more specific ones should be defined first
     side: {
-        // Get subshapes that are parallal to bbox sides (e.g. top, bottom, left, right, front, back) of target
-        // Example: "face||front" to get faces parallel to the front plane of the target
-        pattern: '{{shape}}||{{side}}',
-        target: ['collection', 'mesh', 'curve'], // only these types can be the target of a side selector
-        shape: ['face'], 
-        side: BASE_PLANE_NAME_TO_PLANE,
+        // Get subshapes that are on sides of bbox sides (e.g. top, bottom, left, right, front, back) of target
+        // Example: "face||front" to get faces facing the front side of the bounding box
+        pattern: '{{shape}}||{{alignments}}',
+        target: ['collection', 'mesh'], // only these types can be the target of a side selector
+        shape: ['face', 'edge', 'vertex'], 
+        alignments: (inp:string) => { return inp } // leave alignment tests for execution
     },
     parallel: {
         // Get subshapes that are parallel to target shape
         pattern: '{{shape}}|{{axis|plane}}',
         target: ['collection', 'mesh', 'curve'], // only these types can be the target of a side selector
-        shape: ['face', 'edge', 'wire'],
+        shape: ['face', 'edge'],
         axis: MAIN_AXIS,
         plane: BASE_PLANE_NAME_TO_PLANE,
     },
@@ -142,14 +145,14 @@ export class Selector
     static ANGLE_TOLERANCE = 1.0;
 
     /**
-     *  side: face||<side>
-     *  Return faces whose normal is parallel (within tolerance) to the side plane normal.
+     *  side: face/edge/vertex||<side>
+     *  Return subshapes that are on the specified side of the target's bounding box (e.g. top, bottom, left, right, front, back).
      */
-    private _side(target: ShapeCollection | Mesh | Curve): Array<Polygon>
+    private _side(target: Mesh | Curve | ShapeCollection): Array<Polygon | Curve | Vertex> | undefined
     {
-        const planeNormal = new Vector(this.params.side.normal);
-        return this._facesFromTarget(target)
-            .filter(f => this._normalIsParallel(f.normal(), planeNormal));
+        return target.bbox()?.getSidesShapes(
+                                this.params.alignments, 
+                                this.params.shape);
     }
 
     /**

@@ -26,12 +26,6 @@ describe('Selector parsing', () =>
             expect(s.params.shape).toBe('edge');
         });
 
-        it('parses W as wire', () =>
-        {
-            const s = new Selector('W|x');
-            expect(s.params.shape).toBe('wire');
-        });
-
         it('parses V as vertex', () =>
         {
             const s = new Selector('V-z');
@@ -59,16 +53,7 @@ describe('Selector parsing', () =>
             expect(s._parsed).toBe(true);
             expect(s.type).toBe('side');
             expect(s.params.shape).toBe('face');
-            // side resolves to the plane object from BASE_PLANE_NAME_TO_PLANE
-            expect(s.params.side).toHaveProperty('normal');
-        });
-
-        it('parses face||xy', () =>
-        {
-            const s = new Selector('face||xy');
-            expect(s.type).toBe('side');
-            expect(s.params.shape).toBe('face');
-            expect(s.params.side).toHaveProperty('normal');
+            expect(s.params.alignments).toEqual('front');
         });
     });
 
@@ -168,32 +153,19 @@ describe('Selector parsing', () =>
 
 describe('Selector.execute()', () =>
 {
-
     describe('side', () =>
     {
-        it('face||front returns faces with normal parallel to xz (front normal = [0,-1,0])', () =>
+        it('face||front returns faces that are facing the front side of the bounding box', () =>
         {
             const cube = Mesh.Cube(10);
-            const faces = new Selector('face||front').execute(cube) as Polygon[];
+            const faces = new Selector('face||front').execute(cube) as Mesh[];
             expect(faces.length).toBeGreaterThan(0);
             // All returned faces should have a normal parallel to [0,-1,0]
             faces.forEach(f =>
             {
-                const n = f.plane().normal();
+                const n = f.polygons()[0].normal();
                 // y-component should be ±1, x and z near 0
                 expect(Math.abs(n.y)).toBeCloseTo(1, 0);
-            });
-        });
-
-        it('face||xy returns faces with normal parallel to z', () =>
-        {
-            const cube = Mesh.Cube(10);
-            const faces = new Selector('face||xy').execute(cube) as Polygon[];
-            expect(faces.length).toBeGreaterThan(0);
-            faces.forEach(f =>
-            {
-                const n = f.plane().normal();
-                expect(Math.abs(n.z)).toBeCloseTo(1, 0);
             });
         });
     });

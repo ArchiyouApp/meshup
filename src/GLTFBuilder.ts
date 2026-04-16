@@ -482,21 +482,30 @@ export class GLTFBuilder
 
         const gltfNode = this._doc.createNode(node.name);
 
+        // Cascade the node's effective style down to each shape: node style is the base,
+        // shape's own explicit properties take precedence.
+        const nodeEffective = node.effectiveStyle();
+
         node.shapes().forEach((shape, i) =>
         {
             const name = `${node.name}_shape_${i}`;
-            if (shape instanceof Mesh)
+            const cascadedStyle = new Style(nodeEffective.toData());
+            cascadedStyle.merge(shape.style.explicitData() as any);
+
+            if (shape instanceof Mesh || shape.type?.() === 'Mesh')
             {
-                if (!shape._mesh || shape.vertices().length === 0) return;
-                const { node: meshNode, primitive, indices, normals } = this._meshToGLTFNode(shape, name);
+                const mesh = shape as unknown as Mesh;
+                if (!mesh._mesh || mesh.vertices().length === 0) return;
+                const { node: meshNode, primitive, indices, normals } = this._meshToGLTFNode(mesh, name, cascadedStyle);
                 gltfNode.addChild(meshNode);
-                this.queueMeshExtData(primitive, indices, normals, shape.style);
+                this.queueMeshExtData(primitive, indices, normals, cascadedStyle);
             }
-            else if (shape instanceof Curve)
+            else if (shape instanceof Curve || shape.type?.() === 'Curve')
             {
-                const { node: curveNode, material } = this._curveToGLTFNode(shape, name);
+                const curve = shape as unknown as Curve;
+                const { node: curveNode, material } = this._curveToGLTFNode(curve, name, cascadedStyle);
                 gltfNode.addChild(curveNode);
-                this.queueCurveExtData(material, shape.style);
+                this.queueCurveExtData(material, cascadedStyle);
             }
         });
 
@@ -512,7 +521,7 @@ export class GLTFBuilder
     //// PRIVATE: GEOMETRY BUILDERS ////
 
     /** Assemble a GltfNode for a Mesh from its raw toBuffer() data. */
-    private _meshToGLTFNode(mesh: Mesh, name = 'mesh'): { node: GltfNode; primitive: Primitive; indices: Uint32Array; normals: Float32Array }
+    private _meshToGLTFNode(mesh: Mesh, name = 'mesh', style?: Style): { node: GltfNode; primitive: Primitive; indices: Uint32Array; normals: Float32Array }
     {
         const { positions: posRaw, normals: normRaw, indices } = mesh.toBuffer();
         const count = posRaw.length / 3;
@@ -530,7 +539,7 @@ export class GLTFBuilder
         const normAcc = this._doc.createAccessor().setType(Accessor.Type.VEC3).setArray(normF32).setBuffer(gtBuf);
         const idxAcc = this._doc.createAccessor().setType(Accessor.Type.SCALAR).setArray(idxCopy).setBuffer(gtBuf);
 
-        const matDef = mesh.style.toGltfMaterial('mesh_material', false) as any;
+        const matDef = (style ?? mesh.style).toGltfMaterial('mesh_material', false) as any;
         const [r, g, b, a] = matDef.pbrMetallicRoughness.baseColorFactor;
         const material = this._doc.createMaterial('mesh_material')
             .setBaseColorFactor([r, g, b, a])
@@ -552,7 +561,7 @@ export class GLTFBuilder
     }
 
     /** Assemble a GltfNode for a Curve from its raw toBuffer() data. */
-    private _curveToGLTFNode(curve: Curve, name = 'curve'): { node: GltfNode; material: Material }
+    private _curveToGLTFNode(curve: Curve, name = 'curve', style?: Style): { node: GltfNode; material: Material }
     {
         const rawBuf = curve.toBuffer();
         const count = rawBuf.length / 3;
@@ -568,7 +577,7 @@ export class GLTFBuilder
             .setArray(posF32)
             .setBuffer(gtBuf);
 
-        const matDef = curve.style.toGltfMaterial('curve_material', true) as any;
+        const matDef = (style ?? curve.style).toGltfMaterial('curve_material', true) as any;
         const [r, g, b, a] = matDef.pbrMetallicRoughness.baseColorFactor;
         const material = this._doc.createMaterial('curve_material')
             .setBaseColorFactor([r, g, b, a])

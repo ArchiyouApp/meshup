@@ -27,6 +27,8 @@ import { MeshJs, PolygonJs, PlaneJs, Vector3Js, NurbsCurve3DJs, CompoundCurve3DJ
 import { Polygon } from './Polygon';
 import { ShapeCollection, CurveCollection, MeshCollection } from './ShapeCollection';
 
+import { Selector } from './Selector';
+
 // Settings
 import { TOLERANCE, SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT, 
     SHAPES_CYLINDER_SEGMENTS_RADIAL,EDGE_PROJECTION_DEFAULTS } from './constants';
@@ -920,31 +922,13 @@ export class Mesh extends Shape
         return meshes;
     }
 
-    //// STYLE ////
+    //// SELECT ////
 
-    /** Shortcut for `Mesh.style.color`. Accepts `'red'`, `'#ff0000'`, or `r, g, b` (0–255). */
-    color(color: number | string, g?: number, b?: number): this
+    select(what:string)
     {
-        if (typeof color === 'number' && typeof g === 'number' && typeof b === 'number')
-        {
-            this.style.color = [color, g, b];
-        }
-        else
-        {
-            this.style.color = color as string;
-        }
-        return this;
+        return new Selector(what).execute(this);
     }
 
-    /** Shortcut for `Mesh.style.opacity`. Value between 0 (transparent) and 1 (opaque). */
-    opacity(opacity: number): this
-    {
-        this.style.opacity = opacity;
-        return this;
-    }
-
-    /** Alias for `opacity()`. */
-    alpha(a: number): this { return this.opacity(a); }
 
     //// OUTPUT ////
 

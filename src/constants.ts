@@ -21,7 +21,11 @@ export const BASE_PLANE_NAME_TO_PLANE = {
     'back': { normal: [0,1,0], xDir: [1,0,0], yDir: [0,0,1] },
     'left': { normal: [-1,0,0], xDir: [0,1,0], yDir: [0,0,1] },
     'right': { normal: [1,0,0], xDir: [0,1,0], yDir: [0,0,1] },
-}
+    'top': { normal: [0,0,1], xDir: [1,0,0], yDir: [0,1,0] },
+    'bottom': { normal: [0,0,-1], xDir: [1,0,0], yDir: [0,1,0] },
+} as Record<string, { normal: [number, number, number], xDir: [number, number, number], yDir: [number, number, number] }>;
+
+export const BBOX_SIDES = ['top', 'bottom', 'front', 'back', 'left', 'right'];
 
 // Follow BREP terminology for subshapes. Face = Polygon, Wire = Curve
 export const SELECTOR_SHAPES = ['mesh', 'curve', 'face', 'edge', 'wire','vertex'];

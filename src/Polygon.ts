@@ -198,4 +198,12 @@ export class Polygon
 
         return Mesh.fromPolygons(faces);
     }
+
+    //// EXPORT ////
+
+    /** Polygon is basically Mesh with one polygon */
+    toMesh(): Mesh
+    {
+        return Mesh.fromPolygons([this.vertices()]);
+    }
 }

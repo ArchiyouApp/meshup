@@ -1,6 +1,8 @@
 import { beforeAll, describe, it, expect } from 'vitest';
-import { initAsync } from '../../src/index';
+import { Curve, initAsync, Mesh, Polygon } from '../../src/index';
 import { Bbox } from '../../src/Bbox';
+import { Vertex } from '../../../../src/modeler/brep';
+import { Vertex } from '../../../../src/modeler/brep';
 
 beforeAll(async () =>
 {
@@ -108,5 +110,39 @@ describe('Bbox classification', () =>
     {
         const bbox = new Bbox([0, 0, 0], [10, 0, 0]);
         expect(bbox.is1D()).toBe(true);
+    });
+});
+
+describe('Bbox shape generation', () =>
+{
+    it('face||top returns a face on the top side of the bbox', () =>
+    {
+        const bbox = new Bbox([0, 0, 0], [10, 20, 30]);
+        const plane = bbox.getSidesShapes('top', 'face')[0] as Mesh;
+        expect(plane.polygons()[0].normal().toArray().map(c => (c === 0) ? 0 : c)).toEqual([0, 0, 1]);
+    });
+
+    it('edge||leftfront', () =>
+    {
+        const bbox = new Bbox([0, 0, 0], [10, 20, 30]);
+        const edge = bbox.getSidesShapes('leftfront', 'edge') as Curve[];
+        // +0 -0 problems
+        expect(edge[0].direction().normalize().toArray().map(c => (c === 0) ? 0 : c)).toEqual([0, 0, -1]); // TODO: force edges to be positive
+        expect(edge[0].end().toArray()).toEqual([0, 0, 0]); // -0
+        expect(edge[0].start().toArray()).toEqual([0, 0, 30]);
+    });
+    
+    it('vertex||frontleftbottom returns the front-left-bottom corner vertex', () =>
+    {
+        const bbox = new Bbox([0, 0, 0], [10, 20, 30]);
+        const vertex = bbox.getSidesShapes('frontleftbottom', 'vertex') as any as Vertex[];
+        expect(vertex[0].position().toArray().map(c => (c === 0) ? 0 : c)).toEqual([0, 0, 0]);
+    });
+
+    it('throws if the number of sides does not match the type', () =>
+    {
+        const bbox = new Bbox([0, 0, 0], [10, 20, 30]);
+        expect(() => bbox.getSidesShapes('top', 'vertex')).toThrow();
+        expect(() => bbox.getSidesShapes('topleft', 'face')).toThrow();
     });
 });
