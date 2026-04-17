@@ -3,7 +3,7 @@
  *
  */
 import { beforeAll, describe, it, expect, should } from 'vitest';
-import { CurveCollection, initAsync } from '../../src/index';
+import { ShapeCollection, initAsync } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { save } from '../../src/utils';
 import { TOLERANCE } from '../../src/constants';
@@ -25,10 +25,7 @@ describe('Example: Curves exported to SVG', () =>
         rectb.subtract(Curve.Circle(50, rectb.bbox()?.max()));
 
         const curv = Curve.Interpolated(
-                rect.points()[3],
-                rect.points()[3].copy().move(20,50),
-                rect.points()[3].copy().move(20,80),
-                rectb.bbox()!.corner('leftback')
+                [[0,0], [20,50], [20,80], [60,80]]
             ).color('orange');
 
         const ln = Curve.Line(
@@ -37,10 +34,10 @@ describe('Example: Curves exported to SVG', () =>
                         .color('red');
         
         // Export both in 3D GLTF and 2D SVG
-        save('test.svg.gltf', await new CurveCollection(circ, circ2, rect, rectb, curv, ln).toGLTF());
+        save('test.svg.gltf', await new ShapeCollection(circ, circ2, rect, rectb, curv, ln).toGLTF());
 
         // NOTE: svg does fill the closed curves, but the Curves stay unfilled in 3D (not turned into polygons)
-        save('test.svg.svg', new CurveCollection(circ, circ2, rect, rectb, curv, ln).toSVG());
+        save('test.svg.svg', new ShapeCollection(circ, circ2, rect, rectb, curv, ln).toSVG());
         
     });
 });

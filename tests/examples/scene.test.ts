@@ -6,7 +6,7 @@
  */
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync, Point } from '../../src/index';
-import { ShapeCollection as Collection } from '../../src/ShapeCollection';
+import { ShapeCollection } from '../../src/ShapeCollection';
 import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
 import { SceneNode } from '../../src/SceneNode';
@@ -31,7 +31,7 @@ describe('Set up a basic scene hierarchy and export', () =>
                             .moveTo(0,0,0)
                             .moveZ(35);
 
-        const lines = Collection.generate(50, () => Curve.Line(Point.random(10), Point.random(10)))
+        const lines = ShapeCollection.generate(50, () => Curve.Line(Point.random(10), Point.random(10)))
                         .color('green')
                         .moveTo(0,0,0)
                         .moveZ(50);

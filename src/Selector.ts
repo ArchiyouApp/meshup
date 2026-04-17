@@ -18,7 +18,7 @@ import {
   } from "./constants"
 
 import type { Vertex } from "./Vertex";
-import type { Curve } from "./Curve";
+import { Curve } from "./Curve";
 import { Mesh } from "./Mesh";
 import { Point } from "./Point";
 import { Polygon } from "./Polygon";
@@ -148,7 +148,7 @@ export class Selector
      *  side: face/edge/vertex||<side>
      *  Return subshapes that are on the specified side of the target's bounding box (e.g. top, bottom, left, right, front, back).
      */
-    private _side(target: Mesh | Curve | ShapeCollection): Array<Polygon | Curve | Vertex> | undefined
+    private _side(target: Mesh | Curve | ShapeCollection): undefined | ShapeCollection
     {
         return target.bbox()?.getSidesShapes(
                                 this.params.alignments, 
@@ -305,9 +305,9 @@ export class Selector
     /** Get the reference normal from params (axis or plane) */
     private _refNormal(): Vector
     {
-        if (this.params.axis) return new Vector(this.params.axis as Axis);
-        if (this.params.plane) return new Vector(this.params.plane.normal);
-        return new Vector(0, 0, 1);
+        if (this.params.axis) return Vector.from(this.params.axis as Axis);
+        if (this.params.plane) return Vector.from(this.params.plane.normal);
+        return Vector.from(0, 0, 1);
     }
 
     /** Get the coordinate of a point along an axis */
@@ -342,7 +342,7 @@ export class Selector
         if (this.params.plane)
         {
             // Signed distance to a plane through the origin
-            const n = new Vector(this.params.plane.normal).normalize();
+            const n = Vector.from(this.params.plane.normal).normalize();
             return Math.abs(p.x * n.x + p.y * n.y + p.z * n.z);
         }
         return 0;

@@ -25,7 +25,7 @@ import { GLTFBuilder } from './GLTFBuilder';
 
 import { MeshJs, PolygonJs, PlaneJs, Vector3Js, NurbsCurve3DJs, CompoundCurve3DJs } from './wasm/csgrs';
 import { Polygon } from './Polygon';
-import { ShapeCollection, CurveCollection, MeshCollection } from './ShapeCollection';
+import { ShapeCollection } from './ShapeCollection';
 
 import { Selector } from './Selector';
 
@@ -165,7 +165,7 @@ export class Mesh extends Shape
         const buffer = this.inner()?.normals() || [];
         for (let i = 0; i < buffer.length; i += 3) // perf: keep as loop
         {
-            yield new Vector(buffer[i], buffer[i + 1], buffer[i + 2]);
+            yield Vector.from(buffer[i], buffer[i + 1], buffer[i + 2]);
         }
     }
 
@@ -259,7 +259,7 @@ export class Mesh extends Shape
             }
             else
             {
-                const polyVerts = poly.map(v => Point.from(v).toVertex());
+                const polyVerts = poly.map(v => Point.from(v).toVertexJs());
                 polygons.push(new PolygonJs(polyVerts, {}));
             }
         });
@@ -344,10 +344,25 @@ export class Mesh extends Shape
         return new Point(this.inner()?.massProperties(1)?.centerOfMass);
     }
 
+    
+
+    /** Surface area — sum of all polygon face areas */
+    area(): number
+    {
+        return this.polygons().reduce((sum, poly) => sum + poly.area(), 0);
+    }
+
     /** Volume */
     volume(): number|undefined
     {
         return this.inner()?.massProperties(1)?.mass;
+    }
+
+    /** Meshes have no single length — returns undefined */
+    length(): undefined
+    {
+        console.warn('Mesh.length(): a solid mesh has no single length; use bbox().diagonal(), perimeter of an edge, or a curve length instead.');
+        return undefined;
     }
 
     /** Calculate outer bounding box of current Mesh.
@@ -369,7 +384,7 @@ export class Mesh extends Shape
     /** Returns the outline edges of this mesh as Curves
      *  TODO: implement proper edge extraction via CSGRS
      */
-    edges(): CurveCollection
+    edges(): ShapeCollection<Curve>
     {
         throw new Error('Mesh.edges(): not yet implemented — requires CSGRS edge extraction');
     }
@@ -391,19 +406,27 @@ export class Mesh extends Shape
      *  NOTE: We use copy here instead of clone
      *  conventionally cloning is used for operations involving references to previous data
     */
-    copy():undefined|Mesh
+    override copy(): this
     {
         const c = this?.inner()?.clone();
-        if (!c) return undefined;
+        if (!c) return new Mesh() as this;
         const m = Mesh.from(c);
         m.style.merge(this.style.toData());
-        return m;
+
+        // also add to scene as sibling of original
+        if (this._node)
+        {
+            const parent = this._node.parent();
+            if (parent) parent.addChild(m._node!);
+        }
+
+        return m as this;
     }
 
-    /** Replicate this Mesh a given number of times and return in a MeshCollection */
-    replicate(num: number, transform: (mesh: Mesh, index: number, prev: Mesh | undefined) => Mesh): MeshCollection
+    /** Replicate this Mesh a given number of times and return in a ShapeCollection<Mesh> */
+    replicate(num: number, transform: (mesh: Mesh, index: number, prev: Mesh | undefined) => Mesh): ShapeCollection<Mesh>
     {
-        const newMeshes = new MeshCollection();
+        const newMeshes = new ShapeCollection<Mesh>();
         new Array(num).fill(0).map((_, i) =>
         {
             const newMesh = transform(
@@ -425,28 +448,14 @@ export class Mesh extends Shape
 
     //// TRANSLATE/ROTATE/SCALE OPERATIONS ////
 
-    translate(px: PointLike | number, dy?: number, dz?: number): this
+    override translate(px: PointLike | number, dy?: number, dz?: number): this
     {
-        const vec = (typeof dy === 'number' && typeof dz === 'number') 
+        const vec = (typeof dy === 'number' && (typeof dz === 'number' || dz === undefined)) 
                         ? Point.from(px, dy || 0, dz || 0) 
                         : Point.from(px); // throws is px is invalid Point
 
         return this.update(this.inner()?.translate(vec.toVector3Js()));
     }
-
-    /** Alias for translate */
-    move(px: PointLike | number, dy?: number, dz?: number): this
-    {
-        const mv =  (dy !== undefined || dz !== undefined)
-                    ? Point.from(px, dy || 0, dz || 0)
-                    : Point.from(px);
-        
-        return this.translate(mv);
-    }
-
-    moveX(dx: number): this { return this.translate(dx, 0, 0); }
-    moveY(dy: number): this { return this.translate(0, dy, 0); }
-    moveZ(dz: number): this { return this.translate(0, 0, dz); }
 
     /** Move the mesh so its bbox center lands at the given point */
     moveTo(target: PointLike): this
@@ -461,7 +470,7 @@ export class Mesh extends Shape
     moveToZ(z: number): this { return this.translate(0, 0, z - this.bbox().center().z); }
 
     /** Rotate Mesh by angle (degrees) around an axis through the world origin */
-    rotate(angle: number, axis: Axis | PointLike = 'z'): this
+    override rotate(angle: number, axis: Axis | PointLike = 'z'): this
     {
         if (typeof axis === 'string')
         {
@@ -490,30 +499,16 @@ export class Mesh extends Shape
         return this;
     }
 
-    /** Rotate Mesh by angle (degrees) around X axis */
-    rotateX(angle: number): this
-    {
-        return this.rotate(angle, 'x');
-    }
-
-    /** Rotate Mesh by angle (degrees) around Y axis */
-    rotateY(angle: number): this
-    {
-        return this.rotate(angle, 'y');
-    }
-
-    /** Rotate Mesh by angle (degrees) around Z axis */
-    rotateZ(angle: number): this
-    {
-        return this.rotate(angle, 'z');
-    }
-
     /** Rotate Mesh by a quaternion given as components `(w, x, y, z)`.
      *  The quaternion is normalized internally, so non-unit input is safe.
      */
-    rotateQuaternion(w: number, x: number, y: number, z: number): this
+    override rotateQuaternion(wOrObj: number | { w: number; x: number; y: number; z: number }, x?: number, y?: number, z?: number): this
     {
-        this._mesh = this.inner()?.rotateQuaternion(w, x, y, z);
+        const w = typeof wOrObj === 'object' ? wOrObj.w : wOrObj;
+        const xv = typeof wOrObj === 'object' ? wOrObj.x : (x ?? 0);
+        const yv = typeof wOrObj === 'object' ? wOrObj.y : (y ?? 0);
+        const zv = typeof wOrObj === 'object' ? wOrObj.z : (z ?? 0);
+        this._mesh = this.inner()?.rotateQuaternion(w, xv, yv, zv);
         return this;
     }
 
@@ -522,7 +517,7 @@ export class Mesh extends Shape
      *  @param axis     - 'x' | 'y' | 'z' or an arbitrary direction vector (PointLike)
      *  @param pivot    - point the axis passes through (default: world origin)
      */
-    rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
+    override rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
     {
         const p = Point.from(pivot);
         this.translate(-p.x, -p.y, -p.z);
@@ -542,7 +537,7 @@ export class Mesh extends Shape
 
         // Step 1: shortest-arc rotation from→to
         const q    = from.rotationBetween(to);
-        const qVec = new Vector(q.x, q.y, q.z);
+        const qVec = Vector.from(q.x, q.y, q.z);
 
         // Step 2: find where `up` ends up after the shortest-arc rotation
         const mappedUp = upV.rotateQuaternion(q);
@@ -559,7 +554,7 @@ export class Mesh extends Shape
 
         // Step 4: twist around `to` to align mappedUpPerp → upPerp
         const twist = mappedUpPerp.normalize().rotationBetween(upPerp.normalize());
-        const tVec  = new Vector(twist.x, twist.y, twist.z);
+        const tVec  = Vector.from(twist.x, twist.y, twist.z);
 
         // Step 5: compose twist * q  (Hamilton product, q applied first)
         const swingVec = qVec.scale(twist.w).add(tVec.scale(q.w)).add(tVec.cross(qVec));
@@ -647,7 +642,7 @@ export class Mesh extends Shape
                 if (srcLen > 1e-10)
                 {
                     scaleFactor = tgtLen / srcLen;
-                    this.translate(q1.reverse()); // move to origin for scaling
+                    this.translate(q1.copy().reverse()); // move to origin for scaling
                     this.scale(scaleFactor);
                     this.translate(q1);
                 }
@@ -655,7 +650,7 @@ export class Mesh extends Shape
 
             // Step 3: rotate around q1 to align srcEdge → tgtEdge
             const R1 = srcEdge.rotationBetween(tgtEdge);
-            this.translate(q1.reverse()); // move to origin for rotation
+            this.translate(q1.copy().reverse()); // move to origin for rotation
             this.rotateQuaternion(R1.w, R1.x, R1.y, R1.z);
             this.translate(q1);
 
@@ -664,22 +659,25 @@ export class Mesh extends Shape
             const q3 = Vector.from(targetPoints[2]!); // we know this exists because of the earlier length check
 
             // Where p3 ended up after translate + scale + R1 (relative to q1):
-            const rel = new Vector(p3.subtract(p1))
+            const rel = Vector.from(p3.subtract(p1))
                             .scale(scaleFactor)
                             .rotateQuaternion(R1.w, R1.x, R1.y, R1.z);
 
             // Where q3 sits relative to q1:
-            const goal = new Vector(q3.subtract(q1));
+            const goal = Vector.from(q3.subtract(q1));
 
             // Twist axis = the aligned first edge (unit)
             const axLen = tgtEdge.length();
             if (axLen > 1e-10)
             {
-                const axis = tgtEdge.scale(1 / axLen);
+                const axis = tgtEdge.copy().scale(1 / axLen);
 
                 // Project both vectors onto the plane perpendicular to axis
-                const u1 = rel.subtract(axis.scale(rel.dot(axis)));
-                const u2 = goal.subtract(axis.scale(goal.dot(axis)));
+                // Use axis.copy() so axis is not mutated before crossVec.dot(axis)
+                const d1 = rel.dot(axis);
+                const d2 = goal.dot(axis);
+                const u1 = rel.subtract(axis.copy().scale(d1));
+                const u2 = goal.subtract(axis.copy().scale(d2));
 
                 const len1 = u1.length(), len2 = u2.length();
                 if (len1 > 1e-10 && len2 > 1e-10)
@@ -705,7 +703,7 @@ export class Mesh extends Shape
     }
 
     /** Scale Mesh with a uniform factor or per-axis [sx, sy, sz]. Optionally around an origin point. */
-    scale(factor: number | PointLike, origin?: PointLike): this
+    override scale(factor: number | PointLike, origin?: PointLike): this
     {
         const [sx, sy, sz] = (typeof factor === 'number') ? [factor, factor, factor] : [Point.from(factor).x, Point.from(factor).y, Point.from(factor).z];
         if (origin)
@@ -720,13 +718,32 @@ export class Mesh extends Shape
         return this;
     }
 
-    mirror(dir:Axis|PointLike, pos?:PointLike): this
+    /** Mirror Mesh along a plane defined by a normal and a position
+     *  @param dir - normal vector of the mirror plane, or an axis ('x', 'y', 'z') to mirror across the corresponding world plane
+     *  @param pos - a point the mirror plane passes through (default: center of mass)
+     */
+    override mirror(dir: Axis | PointLike, pos?: PointLike): this
     {
         const planeNormal = isPointLike(dir) 
                                 ? Point.from(dir).toVector()
                                 : Vector.from(dir); // converts axis to Vector
-        // If position is not given use center of mass of Mesh
-        const planePosition = pos ? Point.from(pos) : this.center();
+        
+        let planePosition:Point;
+
+        // If the normal is not a unit vector there is actually a position implied
+        // which is the center of mass moved along the normal by the normal's length.
+        if((planeNormal.length() - 1) > TOLERANCE && pos === undefined) 
+        {
+            planePosition = Point.from(planeNormal.copy()); // this is the position implied by the non-unit normal, we move one unit along the normal from the center of mass
+            planeNormal.normalize(); // really normalize
+            console.warn(`Mesh::mirror(): Warning: non-unit normal vector supplied without position; Mirroring with normal ${planeNormal.toArray()} and mirror plane position implied at ${planePosition.toArray()}`);
+        }
+        else {
+            // If position is not given use center of mass of Mesh
+            planeNormal.normalize();
+            planePosition = pos ? Point.from(pos) : this.center();
+        }
+        
         // TODO CSGRS: Plane could use some work for ease of use
         const plane = PlaneJs.fromNormal(
                 planeNormal.toVector3Js(), 10.0);
@@ -741,6 +758,20 @@ export class Mesh extends Shape
 
         this.update(this.inner()?.mirror(offsettedPlane));
         return this;
+    }
+
+    /** Mirror at x coordinate (YZ plane) */
+    mirrorX(x:number)
+    {
+        return this.mirror('x', [x, 0, 0]);
+    }
+
+    mirrorY(y?: number): this {
+        return this.mirror('y', [0, y || 0, 0]);
+    }
+
+    mirrorZ(z?: number): this {
+        return this.mirror('z', [0, 0, z || 0]);
     }
 
     /** Centers Mesh with center of mass at origin ([0,0,0]) */
@@ -881,7 +912,7 @@ export class Mesh extends Shape
      *  We don't use csgrs distribute_linear() because it merges meshes into one
      *  We want to output a collection of individual meshes
     */
-    row(count:number, spacing:number, direction:PointLike|Axis='x'):ShapeCollection
+    row(count:number, spacing:number=10, direction:PointLike|Axis='x'):ShapeCollection
     {
         const meshes = new ShapeCollection();
         const dirVec = Vector.from(direction).normalize(); // auto converts Axis
@@ -1183,7 +1214,7 @@ export class Mesh extends Shape
      * @return CurveColection with groups 'visible' and 'hidden' for the respective edges
      *   use isometryResult.group('visible') and isometryResult.group('hidden') to access each separately
      */
-    isometry(cam:PointLike = [-1,-1,1], all:boolean=true, samples: number = 16, featureAngle: number=10):CurveCollection
+    isometry(cam:PointLike = [-1,-1,1], all:boolean=true, samples: number = 16, featureAngle: number=10):ShapeCollection<Shape>
     {
         // from cam position to origin
         const camDirVec = (isPointLike(cam))
@@ -1207,7 +1238,7 @@ export class Mesh extends Shape
 
         // Flatten the 3D projection onto the 2D XY plane (Z = [0,0,1])
         const flattenedIso = iso.rotateQuaternion(
-                planeNormal.rotationBetween(new Vector(0, 0, 1)));
+                planeNormal.rotationBetween(Vector.from(0, 0, 1)));
         
         // Find where the original 3D UP [0,0,1] landed after flattening.
         // A shortest arc rotation to [0,0,1] geometrically forces the original Z-axis 
@@ -1223,7 +1254,7 @@ export class Mesh extends Shape
         }
 
         // Twist the flattened curves so the 3D Up aligns perfectly with 2D Screen Up [0,1,0]
-        const twistRot = mappedUpVec.rotationBetween(new Vector(0, 1, 0));
+        const twistRot = mappedUpVec.rotationBetween(Vector.from(0, 1, 0));
         
         return flattenedIso.rotateQuaternion(twistRot)
                 .moveTo(0,0,0); // ensure centered at origin
@@ -1235,9 +1266,9 @@ export class Mesh extends Shape
      *
      * @param options  View direction, projection plane, optional feature angle and sample count.
      * @param occluders Other meshes that may occlude this mesh's edges.
-     * @returns CurveCollection with two groups: 'visible' and 'hidden', containing the respective projected edges as Curves.
+     * @returns ShapeCollection<Curve> with two groups: 'visible' and 'hidden', containing the respective projected edges as Curves.
      */
-    _projectEdges(options: ProjectEdgeOptions, occluders: MeshCollection = new MeshCollection()): CurveCollection
+    _projectEdges(options: ProjectEdgeOptions, occluders: ShapeCollection<Mesh> = new ShapeCollection<Mesh>()): ShapeCollection<Shape>
     {
         const optionsWithDefaults = { 
             ...EDGE_PROJECTION_DEFAULTS, 
@@ -1254,22 +1285,22 @@ export class Mesh extends Shape
         if (!r)
         {
             console.error(`Mesh::_projectEdges(): Projection failed. Check if the mesh is valid and the options are correct.`);
-            return new CurveCollection(); // empty result on failure
+            return new ShapeCollection<Shape>(); // empty result on failure
         }
-        
-        const result = new CurveCollection();
+
+        const result = new ShapeCollection<Shape>();
         // First add hidden edges, so they are rendered below visible ones by default
-        result.addGroup('hidden',  this._projectedPolylinesToCurveCollection(r.hiddenPolylines()));
-        result.addGroup('visible', this._projectedPolylinesToCurveCollection(r.visiblePolylines()));
+        result.addGroup('hidden',  this._projectedPolylinesToShapeCollection(r.hiddenPolylines()));
+        result.addGroup('visible', this._projectedPolylinesToShapeCollection(r.visiblePolylines()));
         
 
         r.free?.();
         return result;
     }
 
-    _projectedPolylinesToCurveCollection(polylines: Array<[number, number, number][]>): CurveCollection
+    _projectedPolylinesToShapeCollection(polylines: Array<[number, number, number][]>): ShapeCollection<Shape>
     {
-        const curves = new CurveCollection();
+        const curves = new ShapeCollection<Shape>();
         polylines.forEach(points =>
         {
             curves.add(

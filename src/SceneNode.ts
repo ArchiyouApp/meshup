@@ -17,7 +17,8 @@
  *  SmartSceneNode uses S = SmartShape.
  */
 
-import type { Shape } from './Shape';
+
+import { Shape } from './Shape';
 
 import { Style } from './Style';
 import type { StyleData } from './Style';
@@ -88,7 +89,7 @@ export class SceneNode<S extends SceneNodeShape = Shape>
      * Convenience method: adds a child SceneNode or a Shape to this node
      *   - String → addChild(new SceneNode(string)) - new child container with given name
      *   - SceneNode<S> → addChild()
-     *   - S → addShape()
+     *   - S = Shape (or subclass) → addShape()
      *   - ShapeCollection → addShape() for each (only meaningful when S = Shape)
      */
     add(...items: Array<string | SceneNode<S> | S | ShapeCollection>): this
@@ -102,7 +103,13 @@ export class SceneNode<S extends SceneNodeShape = Shape>
             }
             else if (item instanceof SceneNode) this.addChild(item as SceneNode<S>);
             else if (item instanceof ShapeCollection) item.forEach(shape => this.addShape(shape as unknown as S));
-            else this.addShape(item as S);
+            else if (Shape.isShape(item))
+            {
+                this.addShape(item as S);
+            }
+            else {
+                throw new Error(`SceneNode.add(): Invalid item: ${item}. Must be a string (new child name), SceneNode, ShapeCollection, or Shape.`);
+            }
         }
         return this;
     }
@@ -177,7 +184,7 @@ export class SceneNode<S extends SceneNodeShape = Shape>
      * Return shapes held by this container.
      * @param recursive  If true, collect shapes from all descendant containers too.
      */
-    shapes(recursive = false): S[]
+    shapes(recursive = true): S[]
     {
         if (!recursive) return [...this._shapes];
         return this._traverse().flatMap(c => c._shapes);
@@ -241,6 +248,12 @@ export class SceneNode<S extends SceneNodeShape = Shape>
     children(): SceneNode<S>[]
     {
         return [...this._children];
+    }
+
+    /** Return all descendant containers recursively (depth-first). */
+    allChildren(): SceneNode<S>[]
+    {
+        return this._traverse().slice(1); // exclude self
     }
 
     /** Return the parent container, or null if this is the root. */

@@ -158,13 +158,14 @@ describe('Selector.execute()', () =>
         it('face||front returns faces that are facing the front side of the bounding box', () =>
         {
             const cube = Mesh.Cube(10);
-            const faces = new Selector('face||front').execute(cube) as Mesh[];
+            const result = new Selector('face||front').execute(cube);
+            // execute() returns a ShapeCollection for side selectors
+            const faces = (result as any).toArray ? (result as any).toArray() : (result as any[]);
             expect(faces.length).toBeGreaterThan(0);
             // All returned faces should have a normal parallel to [0,-1,0]
-            faces.forEach(f =>
+            faces.forEach((f: any) =>
             {
-                const n = f.polygons()[0].normal();
-                // y-component should be ±1, x and z near 0
+                const n = f.normal ? f.normal() : f.polygons()[0].normal();
                 expect(Math.abs(n.y)).toBeCloseTo(1, 0);
             });
         });

@@ -484,9 +484,11 @@ export class GLTFBuilder
 
         // Cascade the node's effective style down to each shape: node style is the base,
         // shape's own explicit properties take precedence.
+        // Use non-recursive shapes() so each shape is processed exactly once,
+        // by its own owning node (children are handled via the children().forEach below).
         const nodeEffective = node.effectiveStyle();
 
-        node.shapes().forEach((shape, i) =>
+        node.shapes(false).forEach((shape, i) =>
         {
             const name = `${node.name}_shape_${i}`;
             const cascadedStyle = new Style(nodeEffective.toData());

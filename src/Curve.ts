@@ -22,7 +22,7 @@ import { ANGLE_COMPARE_TOLERANCE, TESSELATION_TOLERANCE, BASE_PLANE_NAME_TO_PLAN
 
 import { NurbsCurve3DJs, CompoundCurve3DJs, Vector3Js, BooleanRegionJs } from "./wasm/csgrs";
 
-import { MeshCollection, CurveCollection, getCsgrs, Mesh } from './index';
+import { ShapeCollection, getCsgrs, Mesh } from './index';
 import { Shape } from './Shape';
 import type { SceneNode } from './SceneNode';
 import type { CsgrsModule, PointLike, Axis, BasePlane } from './types';
@@ -109,19 +109,19 @@ export class Curve extends Shape
         return this;
     }
 
-    copy(): Curve
+    override copy(): this
     {
         const newCurve = new Curve();
         newCurve._curve = this._curve?.clone();
         newCurve._holes = this._holes.map(h => h.copy());
         newCurve.style.merge(this.style.toData());
-        return newCurve;
+        return newCurve as this;
     }
 
-    /** Replicate this Curve a given number of times and return in a CurveCollection */
-    replicate(num: number, transform: (curve: Curve, index: number, prev:Curve|undefined) => Curve): CurveCollection
+    /** Replicate this Curve a given number of times and return in a ShapeCollection<Curve> */
+    replicate(num: number, transform: (curve: Curve, index: number, prev:Curve|undefined) => Curve): ShapeCollection<Curve>
     {
-        const newCurves = new CurveCollection();
+        const newCurves = new ShapeCollection<Curve>();
         new Array(num).fill(0).map((_, i) => 
         {
             const newCurve = transform(
@@ -248,11 +248,11 @@ export class Curve extends Shape
     private static _arcFromThreePoints(A: Point, B: Point, C: Point): Curve
     {
         // Vectors from A to B and A to C
-        const ab = new Vector(B.x - A.x, B.y - A.y, B.z - A.z);
-        const ac = new Vector(C.x - A.x, C.y - A.y, C.z - A.z);
+        const ab = Vector.from(B.x - A.x, B.y - A.y, B.z - A.z);
+        const ac = Vector.from(C.x - A.x, C.y - A.y, C.z - A.z);
 
         // Plane normal (cross product of two edges)
-        const rawNormal = ab.cross(ac);
+        const rawNormal = ab.copy().cross(ac);
         if (rawNormal.length() < 1e-10)
         {
             throw new Error('Curve.Arc(): start, mid, and end are collinear — no arc can be defined.');
@@ -268,7 +268,7 @@ export class Curve extends Shape
     private static _arcFromTangent(A: Point, tangent: Vector, C: Point): Curve
     {
         const tanUnit = tangent.normalize();
-        const chord = new Vector(C.x - A.x, C.y - A.y, C.z - A.z);
+        const chord = Vector.from(C.x - A.x, C.y - A.y, C.z - A.z);
 
         if (chord.length() < 1e-10)
         {
@@ -276,7 +276,7 @@ export class Curve extends Shape
         }
 
         // The plane normal is the cross product of the tangent and the chord
-        const rawNormal = tanUnit.cross(chord);
+        const rawNormal = tanUnit.copy().cross(chord);
         if (rawNormal.length() < 1e-10)
         {
             throw new Error('Curve.Arc(): tangent is parallel to start→end — no arc can be defined.');
@@ -285,12 +285,12 @@ export class Curve extends Shape
 
         // The center lies on the line through A perpendicular to the tangent in the plane.
         // perpAtA = normal × tangent — points from A towards center
-        const perpAtA = normalUnit.cross(tanUnit).normalize();
+        const perpAtA = normalUnit.copy().cross(tanUnit).normalize();
 
         // Also the center must be equidistant from A and C → lies on perpendicular bisector of AC.
-        const midAC = new Vector((A.x + C.x) / 2, (A.y + C.y) / 2, (A.z + C.z) / 2);
+        const midAC = Vector.from((A.x + C.x) / 2, (A.y + C.y) / 2, (A.z + C.z) / 2);
         const chordDir = chord.normalize();
-        const perpBisector = normalUnit.cross(chordDir).normalize();
+        const perpBisector = normalUnit.copy().cross(chordDir).normalize();
 
         // Solve: A + t·perpAtA = midAC + s·perpBisector
         // → t·perpAtA − s·perpBisector = midAC − A
@@ -324,7 +324,7 @@ export class Curve extends Shape
 
         // Synthesise a mid-point on the correct side of the chord for direction resolution
         const midChord = new Point((A.x + C.x) / 2, (A.y + C.y) / 2, (A.z + C.z) / 2);
-        const centerToMid = new Vector(midChord.x - center.x, midChord.y - center.y, midChord.z - center.z);
+        const centerToMid = Vector.from(midChord.x - center.x, midChord.y - center.y, midChord.z - center.z);
         const midOnArc = new Point(
             center.x + centerToMid.normalize().scale(radius).x,
             center.y + centerToMid.normalize().scale(radius).y,
@@ -334,7 +334,7 @@ export class Curve extends Shape
         // Use the tangent cross chord to pick the arc side consistent with the tangent direction.
         // If perpAtA (which points from A towards center) has a positive dot with center−A,
         // the arc should go the "short way" through midOnArc. Otherwise flip.
-        const centerFromA = new Vector(center.x - A.x, center.y - A.y, center.z - A.z);
+        const centerFromA = Vector.from(center.x - A.x, center.y - A.y, center.z - A.z);
         const sameSide = centerFromA.dot(perpAtA) > 0;
 
         // B is the guide point that tells the trimmer which side of the circle to take
@@ -360,14 +360,14 @@ export class Curve extends Shape
     /** Compute circumcenter and radius for three non-collinear points on a plane with given normal. */
     private static _circumcenter(A: Point, B: Point, C: Point, normalUnit: Vector): { center: Point, radius: number }
     {
-        const ab = new Vector(B.x - A.x, B.y - A.y, B.z - A.z);
-        const ac = new Vector(C.x - A.x, C.y - A.y, C.z - A.z);
+        const ab = Vector.from(B.x - A.x, B.y - A.y, B.z - A.z);
+        const ac = Vector.from(C.x - A.x, C.y - A.y, C.z - A.z);
 
-        const mAB = new Vector((A.x + B.x) / 2, (A.y + B.y) / 2, (A.z + B.z) / 2);
-        const mAC = new Vector((A.x + C.x) / 2, (A.y + C.y) / 2, (A.z + C.z) / 2);
+        const mAB = Vector.from((A.x + B.x) / 2, (A.y + B.y) / 2, (A.z + B.z) / 2);
+        const mAC = Vector.from((A.x + C.x) / 2, (A.y + C.y) / 2, (A.z + C.z) / 2);
 
-        const dAB = normalUnit.cross(ab).normalize();
-        const dAC = normalUnit.cross(ac).normalize();
+        const dAB = normalUnit.copy().cross(ab).normalize();
+        const dAC = normalUnit.copy().cross(ac).normalize();
 
         const dx = mAC.x - mAB.x;
         const dy = mAC.y - mAB.y;
@@ -650,8 +650,8 @@ export class Curve extends Shape
         {
             const b = corners[(i + 1) % 4];
             const c = corners[(i + 2) % 4];
-            const ab = new Vector(b.x - a.x, b.y - a.y, b.z - a.z);
-            const bc = new Vector(c.x - b.x, c.y - b.y, c.z - b.z);
+            const ab = Vector.from(b.x - a.x, b.y - a.y, b.z - a.z);
+            const bc = Vector.from(c.x - b.x, c.y - b.y, c.z - b.z);
             return Math.abs(ab.dot(bc)) <= ANGLE_COMPARE_TOLERANCE;
         });
     }
@@ -758,9 +758,9 @@ export class Curve extends Shape
             const result = this._curve.getOnPlane(tolerance);
             if (!result || result.length === 0) return null;
             return {
-                normal: new Vector(result[0].x, result[0].y, result[0].z),
-                x: new Vector(result[1].x, result[1].y, result[1].z),
-                y: new Vector(result[2].x, result[2].y, result[2].z),
+                normal: Vector.from(result[0].x, result[0].y, result[0].z),
+                x: Vector.from(result[1].x, result[1].y, result[1].z),
+                y: Vector.from(result[2].x, result[2].y, result[2].z),
             };
         }
 
@@ -779,9 +779,9 @@ export class Curve extends Shape
             });
             if (!allSpansOnPlane) return null;
             return {
-                normal: new Vector(firstResult[0].x, firstResult[0].y, firstResult[0].z),
-                x: new Vector(firstResult[1].x, firstResult[1].y, firstResult[1].z),
-                y: new Vector(firstResult[2].x, firstResult[2].y, firstResult[2].z),
+                normal: Vector.from(firstResult[0].x, firstResult[0].y, firstResult[0].z),
+                x: Vector.from(firstResult[1].x, firstResult[1].y, firstResult[1].z),
+                y: Vector.from(firstResult[2].x, firstResult[2].y, firstResult[2].z),
             };
         }
 
@@ -813,7 +813,44 @@ export class Curve extends Shape
 
     length(): number
     {
-        return this.inner().length(); 
+        return this.inner().length();
+    }
+
+    /** Area enclosed by this curve. Only valid for closed planar curves; warns and returns undefined otherwise */
+    area(): number | undefined
+    {
+        if (!this.isClosed())
+        {
+            console.warn('Curve.area(): curve is not closed — area is undefined.');
+            return undefined;
+        }
+        if (!this.isPlanar())
+        {
+            console.warn('Curve.area(): curve is not planar — area is undefined.');
+            return undefined;
+        }
+        const pts = this.tessellate();
+        const n = pts.length;
+        if (n < 3) return 0;
+        const v0 = pts[0];
+        let ax = 0, ay = 0, az = 0;
+        for (let i = 1; i < n - 1; i++)
+        {
+            const a = pts[i], b = pts[i + 1];
+            const ux = a.x - v0.x, uy = a.y - v0.y, uz = a.z - v0.z;
+            const vx = b.x - v0.x, vy = b.y - v0.y, vz = b.z - v0.z;
+            ax += uy * vz - uz * vy;
+            ay += uz * vx - ux * vz;
+            az += ux * vy - uy * vx;
+        }
+        return 0.5 * Math.sqrt(ax * ax + ay * ay + az * az);
+    }
+
+    /** Curves have no volume — returns undefined */
+    volume(): undefined
+    {
+        console.warn('Curve.volume(): curves are 1D and have no volume.');
+        return undefined;
     }
 
     /** Start point of the curve (at the start of the knot domain) */
@@ -1089,10 +1126,10 @@ export class Curve extends Shape
     /** Returns constituent sub-curves (or self for simple curves)
      *  For compound curves returns the segments; for a simple curve returns [this].
      */
-    edges(): CurveCollection
+    edges(): ShapeCollection<Curve>
     {
         const curves = this.isCompound() ? this.spans() : [this];
-        return new CurveCollection(...curves);
+        return new ShapeCollection<Curve>(...curves);
     }
 
     /** Extrude and return a Mesh — alias for extrude with argument order matching old API */
@@ -1150,7 +1187,7 @@ export class Curve extends Shape
 
     //// OPERATIONS ////
 
-    translate(px: PointLike | number, dy?: number, dz?: number): this
+    override translate(px: PointLike | number, dy?: number, dz?: number): this
     {
         // NOTE: because PointLike matches [number], we need to check y and z first
         const vec = (typeof dy === 'number' && typeof dz === 'number') 
@@ -1161,16 +1198,6 @@ export class Curve extends Shape
         this.update(this.inner().translate(vec.toVector3Js()));
         return this;
     }
-
-    /** Alias for translate */
-    move(px: PointLike | number, dy?: number, dz?: number): this
-    {
-        return this.translate(px, dy, dz);
-    }
-
-    moveX(dx: number): this { return this.translate(dx, 0, 0); }
-    moveY(dy: number): this { return this.translate(0, dy, 0); }
-    moveZ(dz: number): this { return this.translate(0, 0, dz); }
 
     /** Move the curve so its bbox center lands at the given point */
     moveTo(target: PointLike): this
@@ -1201,7 +1228,7 @@ export class Curve extends Shape
     }
 
     /** Rotate the given curve a specified angle (in degrees) around an axis through the world origin */
-    rotate(angle: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
+    override rotate(angle: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
     {
         return this.update(this.rotateAround(angle, axis, pivot));
     }
@@ -1212,7 +1239,7 @@ export class Curve extends Shape
      *  @param axis     - 'x' | 'y' | 'z' or an arbitrary direction vector (PointLike)
      *  @param pivot    - point the axis passes through (default: world origin)
      */
-    rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
+    override rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
     {
         const p = Point.from(pivot);
         this.translate([-p.x, -p.y, -p.z]);
@@ -1239,25 +1266,10 @@ export class Curve extends Shape
         return this;
     }
 
-    rotateX(angle: number, pivot: PointLike = [0, 0, 0]): this 
-    { 
-        return this.rotateAround(angle, 'x', pivot); 
-    }
-
-    rotateY(angle: number, pivot: PointLike = [0, 0, 0]): this 
-    { 
-        return this.rotateAround(angle, 'y', pivot); 
-    }
-    
-    rotateZ(angle: number, pivot: PointLike = [0, 0, 0]): this 
-    { 
-        return this.rotateAround(angle, 'z', pivot); 
-    }
-
     /** Rotate Curve by a quaternion given as components `(w, x, y, z)`.
      *  The quaternion is normalized internally, so non-unit input is safe.
      */
-    rotateQuaternion(wOrObj: number | {w: number, x: number, y: number, z: number}, x?: number, y?: number, z?: number): this
+    override rotateQuaternion(wOrObj: number | {w: number, x: number, y: number, z: number}, x?: number, y?: number, z?: number): this
     {
         if (typeof wOrObj === 'object' && wOrObj !== null && 'w' in wOrObj && 'x' in wOrObj && 'y' in wOrObj && 'z' in wOrObj)
         {
@@ -1303,8 +1315,8 @@ export class Curve extends Shape
         this.translate([q1.x - p1.x, q1.y - p1.y, q1.z - p1.z]);
 
         // Edge vectors (source and target)
-        const srcEdge = new Vector(p2.x - p1.x, p2.y - p1.y, p2.z - p1.z);
-        const tgtEdge = new Vector(q2.x - q1.x, q2.y - q1.y, q2.z - q1.z);
+        const srcEdge = Vector.from(p2.x - p1.x, p2.y - p1.y, p2.z - p1.z);
+        const tgtEdge = Vector.from(q2.x - q1.x, q2.y - q1.y, q2.z - q1.z);
 
         // Step 2: optional uniform scale (before rotation, centered at q1) ---
         let scaleFactor = 1;
@@ -1334,12 +1346,12 @@ export class Curve extends Shape
             const q3 = Point.from((targetPoints as [PointLike, PointLike, PointLike])[2]);
 
             // Where p3 ended up after translate + scale + R1 (relative to q1):
-            const rel = new Vector(p3.x - p1.x, p3.y - p1.y, p3.z - p1.z)
+            const rel = Vector.from(p3.x - p1.x, p3.y - p1.y, p3.z - p1.z)
                             .scale(scaleFactor)
                             .rotateQuaternion(R1.w, R1.x, R1.y, R1.z);
 
             // Where q3 sits relative to q1:
-            const goal = new Vector(q3.x - q1.x, q3.y - q1.y, q3.z - q1.z);
+            const goal = Vector.from(q3.x - q1.x, q3.y - q1.y, q3.z - q1.z);
 
             // Twist axis = the aligned first edge (unit)
             const axLen = tgtEdge.length();
@@ -1375,7 +1387,7 @@ export class Curve extends Shape
         return this;
     }
 
-    scale(factor: number | PointLike, origin?: PointLike): this
+    override scale(factor: number | PointLike, origin?: PointLike): this
     {
         const [sx, sy, sz] = (typeof factor === 'number') ? [factor, factor, factor] : [Point.from(factor).x, Point.from(factor).y, Point.from(factor).z];
         if (origin)
@@ -1401,7 +1413,7 @@ export class Curve extends Shape
      *  If no position is given, the bbox center of the curve is used.
      *  Works by reflecting each NURBS control point across the plane: P' = P - 2·(dot(P−Q, n))·n
      */
-    mirror(dir: Axis | PointLike, pos?: PointLike): this
+    override mirror(dir: Axis | PointLike, pos?: PointLike): this
     {
         const planeNormal = isPointLike(dir)
                                 ? Point.from(dir).toVector()
@@ -1752,9 +1764,7 @@ export class Curve extends Shape
         });
 
         // Combine original spans with added lines and create a new CompoundCurve
-        const combinedCurves = CurveCollection.from(
-                                    this.spans().concat(addedLines)
-                                ).combine();
+        const combinedCurves = new ShapeCollection<Curve>(...this.spans().concat(addedLines)).combine();
         // The combined collection should always be a Curve or CompoundCurve
         // But just to make sure:
         if(combinedCurves.count() > 1)
@@ -1772,16 +1782,16 @@ export class Curve extends Shape
         NOTES:
             - If boolean operation succeeds:
                     - Result is single Curve: current Curve is replaced by the result
-                    - Result are multiple Curves: a new CurveCollection is returned, current Curve is unchanged (also give warning)
+                    - Result are multiple Curves: a new ShapeCollection<Curve> is returned, current Curve is unchanged (also give warning)
             - If it fails: return original curve with warning
             - the operant (other) is not modified/removed in either case
     */
 
     /** Perform a boolean operation against another Curve
      *  Dispatches to the correct WASM method based on curve types.
-     *  @returns CurveCollection of result Curves (each with holes attached), or null on error.
+     *  @returns ShapeCollection<Curve> of result Curves (each with holes attached), or null on error.
      */
-    private _booleanOp(other: Curve, operation: 'union'|'difference'|'intersection'): CurveCollection | null
+    private _booleanOp(other: Curve, operation: 'union'|'difference'|'intersection'): ShapeCollection<Curve> | null
     {
         try
         {
@@ -1800,7 +1810,7 @@ export class Curve extends Shape
                 (region.holes || []).forEach(hole => exterior.addHole(Curve.fromCsgrs(hole)));
                 return exterior;
             });
-            return new CurveCollection(...curves);
+            return new ShapeCollection<Curve>(...curves);
         }
         catch (e)
         {
@@ -1817,13 +1827,13 @@ export class Curve extends Shape
      *  Returns the exterior outlines of the resulting regions,
      *  or null on error.
      */
-    union(other: Curve): Curve|CurveCollection|null
+    union(other: Curve): Curve|ShapeCollection<Curve>|null
     {
         const bool = this._booleanOp(other, 'union')?.checkSingle() || null;
         if(bool instanceof Curve){ return this.update(bool);}
-        else if (bool instanceof CurveCollection)
+        else if (bool instanceof ShapeCollection)
         {
-            console.warn('Curve::union(): Result are multiple curves. Returning a CurveCollection');
+            console.warn('Curve::union(): Result are multiple curves. Returning a ShapeCollection<Curve>');
             return bool;
         }
         else { console.warn('Curve::union(): Boolean operation failed. Returning null.'); return null; }
@@ -1834,26 +1844,26 @@ export class Curve extends Shape
      *  Returns the exterior outlines of the resulting regions,
      *  or null on error.
      */
-    difference(other: Curve): Curve|CurveCollection|null
+    difference(other: Curve): Curve|ShapeCollection<Curve>|null
     {
         const bool = this._booleanOp(other, 'difference')?.checkSingle() || null;
         if(bool instanceof Curve){ return this.update(bool);}
-        else if (bool instanceof CurveCollection)
+        else if (bool instanceof ShapeCollection)
         {
-            console.warn('Curve::difference(): Result are multiple curves. Returning a CurveCollection');
+            console.warn('Curve::difference(): Result are multiple curves. Returning a ShapeCollection<Curve>');
             return bool;
         }
         else { console.warn('Curve::difference(): Boolean operation failed. Returning null.'); return null; }
     }
 
     // Alias for difference
-    subtract(other: Curve): Curve|CurveCollection|null
+    subtract(other: Curve): Curve|ShapeCollection<Curve>|null
     {
         return this.difference(other);
     }
 
     /** Get intersecting Curves with either closed Curves or Mesh */
-    intersections(other: Curve|Mesh): CurveCollection|null
+    intersections(other: Curve|Mesh): ShapeCollection<Curve>|null
     {
         return (other instanceof Mesh) 
                     ? this._intersectionMesh(other) 
@@ -1861,7 +1871,7 @@ export class Curve extends Shape
     }
 
     /** Get single intersection of Curve with another Curve or Mesh */
-    intersection(other: Curve|Mesh): Curve|CurveCollection|null
+    intersection(other: Curve|Mesh): Curve|ShapeCollection<Curve>|null
     {
         return this.intersections(other)?.checkSingle() || null;
     }
@@ -1874,14 +1884,14 @@ export class Curve extends Shape
      *  NOTE: This is curve-vs-curve boolean intersection.
      *        For intersection with a Mesh, use `intersection(mesh)` instead.
      */
-    private _intersectionCurve(other: Curve): CurveCollection | null
+    private _intersectionCurve(other: Curve): ShapeCollection<Curve> | null
     {
         if(!this.isClosed){ throw new Error('Curve::intersection(): Intersection requires closed curves for now!'); }
         
         return this._booleanOp(other, 'intersection');
     }
 
-    /** Intersect this Curve with a Mesh and return the trimmed sub-curve(s) as CurveCollection.
+    /** Intersect this Curve with a Mesh and return the trimmed sub-curve(s) as ShapeCollection<Curve>.
      *  If the curve doesn't intersect the mesh, returns null
      *
      *  With an even number of intersections the curve alternates
@@ -1892,7 +1902,7 @@ export class Curve extends Shape
      *  @param tolerance - Tessellation tolerance for finding intersections (default: 1e-4)
      *  @returns Array of Curve segments that lie inside the mesh
      */
-    private _intersectionMesh(mesh: Mesh, tolerance?: number): CurveCollection|null
+    private _intersectionMesh(mesh: Mesh, tolerance?: number): ShapeCollection<Curve>|null
     {
         if(!mesh || !(mesh instanceof Mesh))
         {
@@ -1939,7 +1949,7 @@ export class Curve extends Shape
             }
         }
 
-        return (results.length > 0) ? new CurveCollection(results) : null;
+        return (results.length > 0) ? new ShapeCollection<Curve>(results) : null;
     }
 
     /** Find intersection points between this Curve and a Mesh.
@@ -2036,7 +2046,7 @@ export class Curve extends Shape
         // When converting to Mesh, the orientation is important for the resulting normal of new polygons/faces.
         // Once case is ackward: If Curve normal (based on orientation) is pointing away from default camera position ([0,1,0])
         // It is not immediately visible. Correct this.
-        return ((this.isPlanar() && this.normalOrientation()!.dot(new Vector(0, 1, 0)) < 0))
+        return ((this.isPlanar() && this.normalOrientation()!.dot(Vector.from(0, 1, 0)) < 0))
                 ? m.inverse()
                 : m;
     }

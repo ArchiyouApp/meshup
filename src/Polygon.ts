@@ -5,7 +5,8 @@
  *  and a TypeScript-level extrude method.
  */
 
-import type { PointLike } from './types';
+import type { PointLike, Axis } from './types';
+import { Shape } from './Shape';
 import { Point } from './Point';
 import { Vector } from './Vector';
 import { Vertex } from './Vertex';
@@ -14,7 +15,7 @@ import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { PolygonJs, VertexJs } from './wasm/csgrs';
 
-export class Polygon
+export class Polygon extends Shape
 {
     _polygon: PolygonJs;
 
@@ -25,13 +26,13 @@ export class Polygon
      */
     constructor(vertices: Array<PointLike | Vertex>, metadata: any = {})
     {
+        super();
         if (!Array.isArray(vertices) || vertices.length < 3)
         {
             throw new Error('Polygon::constructor(): Need at least 3 vertices.');
         }
-        const verts: VertexJs[] = vertices.map(v =>
-            v instanceof Vertex ? (v.inner as VertexJs) : new Vertex(v as PointLike)
-        );
+        const verts: VertexJs[] = vertices.map(v => Point.from(v).toVertexJs());
+
         this._polygon = new PolygonJs(verts, metadata);
     }
 
@@ -55,9 +56,26 @@ export class Polygon
         }
         else
         {
-            poly._polygon = new PolygonJs(p.map(v => new Vertex(v as PointLike)), {});
+            poly._polygon = new PolygonJs(p.map(v => Point.from(v).toVertexJs()), {});
         }
         return poly;
+    }
+
+    //// SHAPE PROTOCOL ////
+
+    override type(): 'Polygon'
+    {
+        return 'Polygon';
+    }
+
+    override subType(): string | null
+    {
+        return null;
+    }
+
+    override is2D(): boolean
+    {
+        return true;
     }
 
 
@@ -92,10 +110,51 @@ export class Polygon
         return Vector.from(this._polygon.plane()?.normal());
     }
 
-    /** Get metadata as a JSON string, or undefined if none */
-    metadata(): string | undefined
+    /** Get the WASM polygon metadata as a JSON string, or undefined if none */
+    polygonMetadata(): string | undefined
     {
         return this._polygon.metadata();
+    }
+
+    //// TRANSFORMS ////
+
+    override translate(_px: PointLike | number, _dy?: number, _dz?: number): this
+    {
+        throw new Error('Polygon.translate(): not yet implemented');
+    }
+
+    override rotate(_angleDeg: number, _axis?: Axis | PointLike, _pivot?: PointLike): this
+    {
+        throw new Error('Polygon.rotate(): not yet implemented');
+    }
+
+    override rotateAround(_angleDeg: number, _axis: Axis | PointLike, _pivot?: PointLike): this
+    {
+        throw new Error('Polygon.rotateAround(): not yet implemented');
+    }
+
+    override rotateQuaternion(_w: number | { w: number; x: number; y: number; z: number }, _x?: number, _y?: number, _z?: number): this
+    {
+        throw new Error('Polygon.rotateQuaternion(): not yet implemented');
+    }
+
+    override scale(_factor: number | PointLike, _origin?: PointLike): this
+    {
+        throw new Error('Polygon.scale(): not yet implemented');
+    }
+
+    override mirror(_dir: Axis | PointLike, _pos?: PointLike): this
+    {
+        throw new Error('Polygon.mirror(): not yet implemented');
+    }
+
+    override copy(): this
+    {
+        const verts = this.vertices().map(p => p.toVertexJs());
+        const p = Object.create(Polygon.prototype) as Polygon;
+        p._polygon = new PolygonJs(verts, {});
+        p.style.merge(this.style.toData());
+        return p as this;
     }
 
     //// GEOMETRY ////
@@ -127,6 +186,61 @@ export class Polygon
         return OBbox.fromPoints(this.vertices());
     }
 
+    //// MEASUREMENTS ////
+
+    /** Total perimeter — sum of all edge lengths */
+    perimeter(): number
+    {
+        const verts = this.vertices();
+        const n = verts.length;
+        let total = 0;
+        for (let i = 0; i < n; i++)
+        {
+            const a = verts[i], b = verts[(i + 1) % n];
+            const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+            total += Math.sqrt(dx * dx + dy * dy + dz * dz);
+        }
+        return total;
+    }
+
+    /** Alias for perimeter */
+    length(): number 
+    { 
+        console.warn(`Polygon.length() is an alias for perimeter(); use perimeter() for clarity.`);
+        return this.perimeter(); 
+    }
+
+    override volume(): undefined 
+    { 
+        console.warn('Polygon.volume() is undefined since a polygon is 2D; use area() instead.');
+        return undefined; 
+    }
+
+    /** Area using triangle-fan cross-product method (works for planar polygons in 3D) */
+    area(): number
+    {
+        const verts = this.vertices();
+        const n = verts.length;
+        if (n < 3) return 0;
+        const v0 = verts[0];
+        let ax = 0, ay = 0, az = 0;
+        for (let i = 1; i < n - 1; i++)
+        {
+            const a = verts[i], b = verts[i + 1];
+            const ux = a.x - v0.x, uy = a.y - v0.y, uz = a.z - v0.z;
+            const vx = b.x - v0.x, vy = b.y - v0.y, vz = b.z - v0.z;
+            ax += uy * vz - uz * vy;
+            ay += uz * vx - ux * vz;
+            az += ux * vy - uy * vx;
+        }
+        // TODO: move this to csgrs 
+        // TODO: subtract holes?
+
+        return 0.5 * Math.sqrt(ax * ax + ay * ay + az * az);
+    }
+
+
+
     //// MUTATIONS (return this for chaining) ////
 
     /** Flip winding order and vertex normals in place */
@@ -146,8 +260,7 @@ export class Polygon
     /** Add a hole defined by an array of PointLike vertices */
     addHole(holeVertices: Array<PointLike | Vertex>): this
     {
-        const verts: VertexJs[] = holeVertices.map(v =>
-            v instanceof Vertex ? (v.inner as VertexJs) : new Vertex(v as PointLike)
+        const verts: VertexJs[] = holeVertices.map(v => Point.from(v).toVertexJs()
         );
         this._polygon.addHole(verts);
         return this;
@@ -176,7 +289,7 @@ export class Polygon
      */
     extrude(length: number, direction: PointLike = [0, 0, 1]): Mesh
     {
-        const dir = new Vector(direction).normalize().scale(length);
+        const dir = Vector.from(direction).normalize().scale(length);
         const bottom: Point[] = this.vertices();
         const top: Point[] = bottom.map(p =>
             new Point(p.x + dir.x, p.y + dir.y, p.z + dir.z)

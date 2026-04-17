@@ -1,248 +1,208 @@
 /**
  *  ShapeCollection.ts
- *      a collection of multiple Mesh or Curve instances
- *      Provides methods to manage, order and query the collection
- *      
+ *
+ *  A generic, typed collection of Shape instances.
+ *
+ *  ShapeCollection<S extends Shape = Shape> is the single collection class.
+ *  Use ShapeCollection<Mesh> or ShapeCollection<Curve> for typed access.
+ *  Curve-specific and Mesh-specific methods are included here; they throw
+ *  or no-op when called on the wrong shape type.
  */
 
-import type { Axis, PointLike, ProjectEdgeOptions, RaycastHit } from "./types";
+import type { Axis, PointLike, ProjectEdgeOptions, RaycastHit } from './types';
 
-import { Mesh } from "./Mesh";
-import { Curve } from "./Curve";
-import { Point } from "./Point";
-import { Vector } from "./Vector";
-import { Vertex } from "./Vertex";
-import { Bbox } from "./Bbox";
+import { Vector } from './Vector';
+import { Vertex } from './Vertex';
+import { Mesh } from './Mesh';
+import { Curve } from './Curve';
+import { Shape } from './Shape';
+import { Point } from './Point';
+import { Bbox } from './Bbox';
 
-import { MeshJs, PolygonJs } from "./wasm/csgrs";
-
+import { MeshJs } from './wasm/csgrs';
 import { GLTFBuilder } from './GLTFBuilder';
 
-export class ShapeCollection
+export class ShapeCollection<S extends Shape = Shape>
 {
-    _shapes = new Array<Mesh|Curve>();
-    // We can have multiple groups in a collection, each group is a named subset of shapes. Shapes can belong to multiple groups.
-    _groups = new Map<string, ShapeCollection>(); 
+    _shapes: Array<S> = [];
+    _groups = new Map<string, ShapeCollection<S>>();
 
-    constructor(...args: Array<Mesh|Curve|Array<any>|ShapeCollection>)
+    constructor(...args: Array<S | Array<any> | ShapeCollection<any>>)
     {
-        args.forEach(arg => 
-        {
-            this.add(arg)
-        });
+        args.forEach(arg => this.add(arg as any));
     }
+
+    //// STATIC FACTORIES ////
 
     static isShapeCollection(obj: any): obj is ShapeCollection
     {
         return obj instanceof ShapeCollection;
     }
 
-    /** Replace the current shapes with new ones */
-    update(shapes: Array<Mesh|Curve>|ShapeCollection|MeshCollection|CurveCollection): void
+    static generate<S extends Shape>(count: number, generator: (index: number) => S): ShapeCollection<S>
     {
-        this._shapes = ShapeCollection.isShapeCollection(shapes) ? shapes.toArray() : shapes as Array<Mesh|Curve>;
+        return new ShapeCollection<S>(...new Array(count).fill(null).map((_, i) => generator(i)));
     }
 
-    /** Add shapes to the collection */
-    add(shapes: Mesh|Curve|ShapeCollection|CurveCollection|MeshCollection|Array<Mesh|Curve>): ShapeCollection
+    //// COLLECTION MANAGEMENT ////
+
+    update(shapes: Array<S> | ShapeCollection<S>): void
     {
-        if (shapes instanceof Mesh || shapes instanceof Curve)
+        this._shapes = ShapeCollection.isShapeCollection(shapes) ? shapes.toArray() : shapes;
+    }
+
+    add(shapes: S | ShapeCollection<any> | Array<any>): this
+    {
+        if (Shape.isShape(shapes))
         {
-            this._shapes.push(shapes);
+            this._shapes.push(shapes as S);
         }
         else if (Array.isArray(shapes) || ShapeCollection.isShapeCollection(shapes))
         {
-            const addShapes = (ShapeCollection.isShapeCollection(shapes) 
-                                    ? shapes.toArray() : 
-                                    shapes.filter(s => s instanceof Mesh || s instanceof Curve) as Array<Mesh|Curve>);
+            const addShapes: S[] = ShapeCollection.isShapeCollection(shapes)
+                ? shapes.toArray() as S[]
+                : (shapes as any[]).filter(s => Shape.isShape(s)) as S[];
             this._shapes.push(...addShapes);
         }
         else
         {
-            console.error(`ShapeCollection::add(): Invalid shape(s). Supply something [<Mesh>|<Curve>|<ShapeCollection>|<CurveCollection>|<MeshCollection>|Array<Mesh|Curve>]. Skipping it!:`, shapes);
+            console.error(`ShapeCollection::add(): Invalid shape(s). Supply something [<Shape>|<ShapeCollection>|Array<Shape>]. Skipping:`, shapes);
         }
         return this;
     }
 
-    //// STATIC FACTORY METHODS ////
-
-    static generate(count: number, generator: (index: number) => Mesh|Curve): ShapeCollection
+    push(shapes: S | ShapeCollection<any>): void
     {
-        const shapes = new Array(count).fill(null).map((_, i) => generator(i));
-        return new ShapeCollection(...shapes);
+        this.add(shapes);
     }
 
     //// GROUPS ////
-    /** One can have subgroups within the ShapeCollection */
 
-    /** Add Shape (Mesh or Curve) to ShapeCollection under a group 
-     *  @returns the added shape(s) as a new ShapeCollection for chaining
-    */
-    addGroup(groupName: string, shapes: Mesh|Curve|ShapeCollection|CurveCollection|MeshCollection ): ShapeCollection
+    addGroup(groupName: string, shapes: S | ShapeCollection<S>): this
     {
         this.add(shapes);
-        
-        if(!this._groups.has(groupName))
-        {
-            this._groups.set(groupName, new ShapeCollection());
-        }
-        const group = this._groups.get(groupName);
-        
-        if(group)
-        {
-            group.add(shapes);
-        }
+        if (!this._groups.has(groupName)) this._groups.set(groupName, new ShapeCollection<S>());
+        this._groups.get(groupName)?.add(shapes);
         return this;
     }
 
     removeGroup(groupName: string): void
     {
         const groupedShapes = this._groups.get(groupName);
-        if(!groupedShapes){ console.error(`ShapeCollection::removeGroup(): No group with name '${groupName}' found. Available groups:`, Array.from(this._groups.keys())); return; }
+        if (!groupedShapes)
+        {
+            console.error(`ShapeCollection::removeGroup(): No group '${groupName}'. Available:`, Array.from(this._groups.keys()));
+            return;
+        }
         this.remove(groupedShapes);
-        this._groups.delete(groupName); // remove group in map
+        this._groups.delete(groupName);
     }
 
-    group(groupName: string): ShapeCollection | undefined
+    group(groupName: string): ShapeCollection<S> | undefined
     {
-        const groupColl = this._groups.get(groupName);
-        if(!groupColl)
+        const g = this._groups.get(groupName);
+        if (!g) { console.error(`ShapeCollection::group(): No group '${groupName}'. Available:`, Array.from(this._groups.keys())); return undefined; }
+        return g;
+    }
+
+    //// TYPE FILTERS ////
+
+    meshes(): ShapeCollection<Mesh>
+    {
+        return new ShapeCollection<Mesh>(...this._shapes.filter(s => s instanceof Mesh) as Mesh[]);
+    }
+
+    curves(): ShapeCollection<Curve>
+    {
+        return new ShapeCollection<Curve>(...this._shapes.filter(s => s instanceof Curve) as Curve[]);
+    }
+
+    //// COPY / CLONE ////
+
+    copy(): ShapeCollection<S>
+    {
+        return new ShapeCollection<S>(...this._shapes.map(s => s.copy() as S));
+    }
+
+    clone(): ShapeCollection<S>
+    {
+        return new ShapeCollection<S>(...this._shapes);
+    }
+
+    //// REMOVE ////
+
+    remove(shape: S | ShapeCollection<S>): void
+    {
+        if (ShapeCollection.isShapeCollection(shape))
         {
-            console.error(`ShapeCollection::group(): No group with name '${groupName}' found. Available groups:`, Array.from(this._groups.keys())); 
-            return undefined; 
+            shape.shapes().forEach(s => this.remove(s as S));
         }
-        return groupColl;
-    }
-
-    /** Return a deep copy of this ShapeCollection (all members are independently copied) */
-    copy(): ShapeCollection|MeshCollection|CurveCollection
-    {
-        return new ShapeCollection(...this._shapes.map(s => s.copy() as Mesh|Curve));
-    }
-
-    /** Return a shallow copy of this ShapeCollection (new container, same member references) */
-    clone(): ShapeCollection|MeshCollection|CurveCollection
-    {
-        return new ShapeCollection(...this._shapes);
-    }
-
-    remove(shape: Mesh|Curve|ShapeCollection|MeshCollection|CurveCollection): void
-    {
-        if(ShapeCollection.isShapeCollection(shape))
-        {
-            shape.shapes().forEach(s => this.remove(s));   
-        }
-        else if(shape instanceof Mesh || shape instanceof Curve)
+        else if (Shape.isShape(shape))
         {
             this._shapes = this._shapes.filter(s => s !== shape);
         }
     }
 
-    /** Get a shape by its index */
-    get(index: number): Mesh | Curve | undefined
+    //// ACCESSORS ////
+
+    get(index: number): S | undefined { return this._shapes[index]; }
+    at(index: number): S | undefined { return this.get(index); }
+
+    first(): S
     {
-        return this._shapes[index] as Mesh | Curve | undefined;
+        if (!this._shapes.length) throw new Error('ShapeCollection::first(): empty.');
+        return this._shapes[0];
     }
 
-    /** Alias for get */
-    at(index: number): Mesh | Curve | undefined
+    last(): S
     {
-        return this.get(index);
+        if (!this._shapes.length) throw new Error('ShapeCollection::last(): empty.');
+        return this._shapes[this._shapes.length - 1];
     }
 
-    first(): Mesh | Curve
+    checkSingle(): S | this
     {
-        if(this._shapes.length === 0){ throw new Error(`ShapeCollection::first(): ShapeCollection is empty.`); }
-        return this._shapes[0] as Mesh | Curve;
-    }
-
-    last(): Mesh | Curve
-    {
-        if(this._shapes.length === 0){ throw new Error(`ShapeCollection::last(): ShapeCollection is empty.`); }
-        return this._shapes[this._shapes.length - 1] as Mesh | Curve;
-    }
-
-    /** If single shape in the collection, return it. Otherwise, return collection. */
-    checkSingle(): Mesh | Curve | this
-    {
-        if(this._shapes.length === 1){ return this._shapes[0]; }
+        if (this._shapes.length === 1) return this._shapes[0];
         return this;
     }
 
-    shapes():Array<Mesh|Curve>
-    {
-        return this._shapes;
-    }
+    shapes(): Array<S> { return this._shapes; }
+    count(): number { return this._shapes.length; }
+    get length(): number { return this._shapes.length ?? 0; }
 
-    /** Get all meshes in the collection as a MeshCollection 
-     *  NOTE: Use toArray() if you want a plain array instead of a MeshCollection wrapper
-    */
-    meshes(): MeshCollection
-    {
-        return new MeshCollection(
-                    ...this._shapes.filter(shape => shape instanceof Mesh) as Array<Mesh>);
-    }
+    //// ITERATORS ////
 
-    /** Get all curves in the collection as a CurveCollection */
-    curves(): CurveCollection
-    {
-        return new CurveCollection(...this._shapes.filter(shape => shape instanceof Curve) as Array<Curve>);
-    }
-
-    count()
-    {
-        return  this._shapes.length;
-    }
-
-    /** ShapeCollection.length for Array compatibility */
-    get length(): number
-    {
-        return this._shapes.length ?? 0;
-    }
-
-
-    //// ITERATOR METHODS ////
-
-    forEach(callback: (shape: Mesh|Curve, index: number, array: (Mesh|Curve)[]) => void): this
+    forEach(callback: (shape: S, index: number, array: S[]) => void): this
     {
         this._shapes.forEach(callback);
         return this;
     }
 
-    filter(callback: (shape: Mesh|Curve, index: number, array: (Mesh|Curve)[]) => boolean): ShapeCollection
+    filter(callback: (shape: S, index: number, array: S[]) => boolean): ShapeCollection<S>
     {
-        const filtered = this._shapes.filter(callback);
-        return new ShapeCollection(...filtered);
+        return new ShapeCollection<S>(...this._shapes.filter(callback));
     }
 
-    map<T>(callback: (shape: Mesh|Curve, index: number, array: (Mesh|Curve)[]) => T): T[]
+    map<T>(callback: (shape: S, index: number, array: S[]) => T): T[]
     {
         return this._shapes.map(callback);
     }
 
-    /** Returns true if the given shape is in the collection (by reference) */
-    has(shape: Mesh|Curve): boolean
-    {
-        return this._shapes.includes(shape);
-    }
+    has(shape: S): boolean { return this._shapes.includes(shape); }
 
-    /** Add shapes only if not already present (by reference) */
-    addUnique(shapes: Mesh|Curve|ShapeCollection|Array<Mesh|Curve>): this
+    addUnique(shapes: S | ShapeCollection<S> | Array<S>): this
     {
-        const incoming = shapes instanceof ShapeCollection
+        const incoming = ShapeCollection.isShapeCollection(shapes)
             ? shapes.toArray()
-            : Array.isArray(shapes) ? shapes : [shapes];
-        incoming.forEach(s => { if (!this.has(s)) this._shapes.push(s); });
+            : Array.isArray(shapes) ? shapes : [shapes as S];
+        incoming.forEach(s => { if (!this.has(s as S)) this._shapes.push(s as S); });
         return this;
     }
 
-    /** Remove and return the last shape */
-    pop(): Mesh|Curve|undefined
-    {
-        return this._shapes.pop();
-    }
+    pop(): S | undefined { return this._shapes.pop(); }
 
-    /** Center point of the collection's bounding box */
+    //// BBOX / SPATIAL ////
+
     center(): Point
     {
         const bb = this.bbox();
@@ -250,45 +210,13 @@ export class ShapeCollection
         return bb.center();
     }
 
-    /** Returns intersections of all shapes in the collection with the given shape
-     *  TODO: implement proper intersection logic per shape type
-     */
-    _intersections(_shape: Mesh|Curve): Array<Mesh|Curve>
-    {
-        throw new Error('ShapeCollection::_intersections(): not yet implemented');
-    }
-
-    //// BASIC TRANSFORMATIONS ////
-
-    /** Translate all shapes in ShapeCollection */
-    translate(vecOrX: PointLike | number, dy?: number, dz?: number): this
-    {    
-        this._shapes.forEach(
-            shape => shape.translate(vecOrX, dy, dz));   
-        return this;
-    }
-
-    /** Alias for translate */
-    move(vecOrX: PointLike | number, dy?: number, dz?: number): this
-    {
-        return this.translate(vecOrX as any, dy, dz);
-    }
-
-    moveX(dx: number): this { return this.translate(dx, 0, 0); }
-    moveY(dy: number): this { return this.translate(0, dy, 0); }
-    moveZ(dz: number): this { return this.translate(0, 0, dz); }
-
-    /** Compute the union bounding box over all shapes in this collection, or undefined if empty.
-     *  The optional arg is ignored — kept for old-API compatibility.
-     */
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     bbox(_includeAnnotations?: boolean): Bbox | undefined
     {
         let minX = Infinity, minY = Infinity, minZ = Infinity;
         let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
         this._shapes.forEach(shape =>
         {
-            const bb = shape instanceof Mesh ? shape.bbox() : (shape as Curve).bbox();
+            const bb = shape.bbox();
             if (!bb) return;
             const mn = bb.min(), mx = bb.max();
             if (mn.x < minX) minX = mn.x;  if (mx.x > maxX) maxX = mx.x;
@@ -299,757 +227,360 @@ export class ShapeCollection
         return new Bbox([minX, minY, minZ], [maxX, maxY, maxZ]);
     }
 
-    /** Move the collection so its bbox center lands at the given point */
+    //// TRANSFORMS ////
+
+    translate(vecOrX: PointLike | number, dy?: number, dz?: number): this
+    {
+        this._shapes.forEach(shape => shape.translate(vecOrX, dy, dz));
+        return this;
+    }
+
+    move(vecOrX: PointLike | number, dy?: number, dz?: number): this { return this.translate(vecOrX as any, dy, dz); }
+    moveX(dx: number): this { return this.translate(dx, 0, 0); }
+    moveY(dy: number): this { return this.translate(0, dy, 0); }
+    moveZ(dz: number): this { return this.translate(0, 0, dz); }
+
     moveTo(...args: any[]): this
     {
         const target = Point.from(args);
-
         const bb = this.bbox();
         if (!bb) return this;
         const c = bb.center();
-        const t = Point.from(target);
-        return this.translate(t.x - c.x, t.y - c.y, t.z - c.z);
+        return this.translate(target.x - c.x, target.y - c.y, target.z - c.z);
     }
 
-    moveToX(x: number): this
-    {
-        const bb = this.bbox();
-        return bb ? this.translate(x - bb.center().x, 0, 0) : this;
-    }
-
-    moveToY(y: number): this
-    {
-        const bb = this.bbox();
-        return bb ? this.translate(0, y - bb.center().y, 0) : this;
-    }
-
-    moveToZ(z: number): this
-    {
-        const bb = this.bbox();
-        return bb ? this.translate(0, 0, z - bb.center().z) : this;
-    }
+    moveToX(x: number): this { const bb = this.bbox(); return bb ? this.translate(x - bb.center().x, 0, 0) : this; }
+    moveToY(y: number): this { const bb = this.bbox(); return bb ? this.translate(0, y - bb.center().y, 0) : this; }
+    moveToZ(z: number): this { const bb = this.bbox(); return bb ? this.translate(0, 0, z - bb.center().z) : this; }
 
     rotateX(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'x', origin); }
     rotateY(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'y', origin); }
     rotateZ(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'z', origin); }
 
-    rotate(angleDeg: number, axis: Axis = 'z', origin: PointLike = {x:0,y:0,z:0}): this
+    rotate(angleDeg: number, axis: Axis = 'z', origin: PointLike = { x: 0, y: 0, z: 0 }): this
     {
-        this._shapes.forEach(
-            shape => shape.rotate(angleDeg, axis, origin));
+        this._shapes.forEach(shape => shape.rotate(angleDeg, axis, origin));
         return this;
     }
 
-    rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot: PointLike = {x:0,y:0,z:0}): this
+    rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot: PointLike = { x: 0, y: 0, z: 0 }): this
     {
-        this._shapes.forEach(
-            shape => shape.rotateAround(angleDeg, axis, pivot));
+        this._shapes.forEach(shape => shape.rotateAround(angleDeg, axis, pivot));
         return this;
     }
 
-    rotateQuaternion(wOrObj: number | {w: number, x: number, y: number, z: number}, x?: number, y?: number, z?: number): this
+    rotateQuaternion(wOrObj: number | { w: number, x: number, y: number, z: number }, x?: number, y?: number, z?: number): this
     {
         this.forEach(shape => shape.rotateQuaternion(wOrObj as any, x as any, y as any, z as any));
         return this;
     }
 
-    scale(factor: number|PointLike, origin: PointLike = {x:0,y:0,z:0}): this
+    scale(factor: number | PointLike, origin: PointLike = { x: 0, y: 0, z: 0 }): this
     {
-        this._shapes.forEach(
-            shape => shape.scale(factor, origin));
+        this._shapes.forEach(shape => shape.scale(factor, origin));
         return this;
     }
 
-    mirror(dir:Axis|PointLike, pos?:PointLike): this
+    mirror(dir: Axis | PointLike, pos?: PointLike): this
     {
-        this._shapes.forEach(
-            shape => shape.mirror(dir, pos));
+        this._shapes.forEach(shape => shape.mirror(dir, pos));
         return this;
     }
 
-    /** Shortcut for `style.color` on every shape. Sets both fill and stroke color. */
+    offset(distance: number, cornerType: 'sharp' | 'round' | 'smooth' = 'sharp'): ShapeCollection<Curve>
+    {
+        console.warn('ShapeCollection::offset(): Only Curve shapes are offset! Non-curve shapes will be ignored. TODO');
+
+        return new ShapeCollection<Curve>(
+            ...(this._shapes as any[])
+                .map(curve => (curve as any).offset?.(distance, cornerType))
+                .filter((r: any): r is Curve => r !== null && r !== undefined)
+        );
+    }
+
+    //// STYLING ////
+
     color(c: string | [number, number, number]): this
     {
         this._shapes.forEach(shape => shape.color(c as any));
         return this;
     }
 
-    /** Shortcut for `style.opacity` on every shape. Value between 0 (transparent) and 1 (opaque). */
     opacity(opacity: number): this
     {
         this._shapes.forEach(shape => shape.opacity(opacity));
         return this;
     }
 
-    /** Alias for `opacity()`. */
     alpha(a: number): this { return this.opacity(a); }
 
-    /** Merge all Meshes in this collection into a single Mesh by concatenating
-    *  their polygon arrays */
+    /** Set dashed line */
+    dashed(dash: number[] = [2, 2]): this
+    {
+        this._shapes.forEach(shape => (shape as any).dashed?.(dash));
+        return this;
+    }
+
+    //// BOOLEAN OPERATIONS ////
+
     merge(): Mesh
     {
-        const allPolygons: PolygonJs[] = this._shapes
+        const allPolygons = this._shapes
             .filter(shape => shape instanceof Mesh)
             .flatMap(shape =>
             {
                 const inner = (shape as Mesh).inner();
                 return inner ? inner.polygons() : [];
             });
-        if (allPolygons.length === 0)
-        {
-            console.error(`ShapeCollection::merge(): No meshes to merge. Returning empty mesh.`);
-            return new Mesh();
-        }
+        if (!allPolygons.length) { console.error('ShapeCollection::merge(): No meshes. Returning empty mesh.'); return new Mesh(); }
         return Mesh.from(MeshJs.fromPolygons(allPolygons, {}));
     }
 
-    //// BOOLEAN OPERATIONS ////
-
-    /** Union all shapes into one shape or collection 
-     *  NOTE: For now only Meshes can be unioned
-    */
-    union(other?: Mesh|ShapeCollection): Mesh
+    union(other?: Mesh | ShapeCollection<Mesh>): Mesh
     {
-        // We can only union meshes for now, so we filter out curves and other non-mesh shapes
         const meshesToUnion = this.meshes().toArray();
-
-        if(other instanceof Mesh)
-        {
-            meshesToUnion.push(other);
-        }
-        else if(other instanceof ShapeCollection)
-        {
-            meshesToUnion.push(...other.meshes().toArray());
-        }
-        else if(other !== undefined)
-        {
-            console.warn(`ShapeCollection::union(): Invalid argument. Only Mesh or ShapeCollection instances are allowed. Ignoring:`, other);
-        }
-
-        if(meshesToUnion.length === 0)
-        {
-            console.warn(`ShapeCollection::union(): No meshes to union. Returning empty mesh.`);
-            return new Mesh();
-        }
-
-        // Perform union operation on all meshes
+        if (other instanceof Mesh) meshesToUnion.push(other);
+        else if (ShapeCollection.isShapeCollection(other)) meshesToUnion.push(...other.meshes().toArray());
+        else if (other !== undefined) console.warn(`ShapeCollection::union(): Invalid argument. Only Mesh or ShapeCollection allowed.`, other);
+        if (!meshesToUnion.length) { console.warn('ShapeCollection::union(): No meshes. Returning empty mesh.'); return new Mesh(); }
         return meshesToUnion.slice(1).reduce((acc, mesh) => acc.union(mesh), meshesToUnion[0]);
     }
 
-    /** Subtract all meshes in the other collection from this collection */
-    subtract(other: Mesh|ShapeCollection): this
+    subtract(other: Mesh | ShapeCollection<Mesh>): this
     {
-        const otherMeshes = (other instanceof ShapeCollection) 
-            ? other.meshes() 
-            : (other instanceof Mesh)
-                ? [other]
-                : [];
-
-        if(otherMeshes.length === 0)
-        {
-            console.warn(`MeshCollection::subtract(): No valid meshes to subtract. Returning original collection.`);
-            return this;
-        }
-
-        this.forEach( shape =>
+        const otherMeshes = ShapeCollection.isShapeCollection(other)
+            ? other.meshes()
+            : (other instanceof Mesh ? [other] : []);
+        if (!otherMeshes.length) { console.warn('ShapeCollection::subtract(): No valid meshes. Returning original.'); return this; }
+        this.forEach(shape =>
         {
             if (!(shape instanceof Mesh)) return;
-            otherMeshes.forEach(otherMesh =>
-            {
-                (shape as Mesh).subtract(otherMesh);
-            });
+            (otherMeshes as any[]).forEach(otherMesh => (shape as Mesh).subtract(otherMesh));
         });
-
         return this;
     }
 
-    //// EDGE PROJECTION AND SECTIONING ////
-
-    /** Isometric projection with hidden lines
-     *  
-     * @param cam normalizaed 3D position of the camera (default: [-1,-1,1], a common isometric view direction) 
-     * @param includeHidden Whether to include hidden edges (default: true)
-     * @return CurveColection with groups 'visible' and 'hidden' for the respective edges
-     *   use isometryResult.group('visible') and isometryResult.group('hidden') to access each separately
-     */
-    isometry(cam:PointLike = [-1,-1,1], includeHidden:boolean=true):CurveCollection
+    /** Union all Mesh shapes into a single Mesh */
+    mergeAll(): Mesh
     {
-        // Just simple merge all meshes and project the resulting mesh.
-        const mergedMesh = this.merge();
-        return mergedMesh.isometry(cam, includeHidden);
+        const meshes = this.meshes().toArray();
+        if (!meshes.length) { console.warn('ShapeCollection::mergeAll(): No meshes. Returning empty mesh.'); return new Mesh(); }
+        return meshes.slice(1).reduce((acc, mesh) => acc.union(mesh), meshes[0]);
     }
 
-
-    //// EXPORT ////
-
-    toSVG(): string|null
-    {
-        if(this.meshes().length === 0)
-        {
-            console.warn(`ShapeCollection::toSVG(): Exporting a (mixed) collection with ${this.meshes().length} meshes and ${this.curves().length} curves. Only curves will be exported to SVG.`);
-        }
-
-        return this.curves().toSVG();
-
-    }
-
-    /** Export the collection to a GLTF JSON string.
-     *  @param up Source up-axis ('z' default, 'y', 'x'). Remapped to GLTF Y-up.
-     */
-    async toGLTF(up: Axis = 'z'): Promise<string>
-    {
-        const builder = new GLTFBuilder(up, 'scene');
-        this._shapes.forEach((shape, i) => builder.add(shape as Mesh | Curve, `shape_${i}`));
-        if (builder.isEmpty()) console.warn('ShapeCollection::toGLTF(): No exportable shapes found.');
-        return builder.applyExtensions().toGLTF();
-    }
-
-    /** Export the collection to a GLB binary (Uint8Array).
-     *  @param up Source up-axis ('z' default, 'y', 'x'). Remapped to GLTF Y-up.
-     */
-    async toGLB(up: Axis = 'z'): Promise<Uint8Array>
-    {
-        const builder = new GLTFBuilder(up, 'scene');
-        this._shapes.forEach((shape, i) => builder.add(shape as Mesh | Curve, `shape_${i}`));
-        if (builder.isEmpty()) console.warn('ShapeCollection::toGLTF(): No exportable shapes found.');
-        return builder.applyExtensions().toGLB();
-    }
-
-    /** Output Shapes as an array */
-    toArray(): Array<Mesh|Curve>
-    {
-        return this.shapes();
-    }
-}
-
-
-//// TYPED COLLECTIONS ////
-
-/** A ShapeCollection that only holds Mesh instances. */
-export class MeshCollection extends ShapeCollection
-{
-    constructor(...args: Array<Mesh|Array<any>|ShapeCollection|MeshCollection>)
-    {
-        super(...(args as Array<Mesh|Array<any>|ShapeCollection>));
-    }
-
-    add(shapes: Mesh|MeshCollection|Array<Mesh>): ShapeCollection
-    {
-        if (!(shapes instanceof Mesh) && !(shapes instanceof MeshCollection) && !(Array.isArray(shapes) && shapes.every(s => s instanceof Mesh)))
-        {
-            console.error(`MeshCollection::add(): Only Mesh instances are allowed.`);
-            return this;
-        }
-        return super.add(shapes as any);
-    }
-
-    /** Return a deep copy of this MeshCollection (all members are independently copied) */
-    copy(): MeshCollection
-    {
-        return new MeshCollection(...(this._shapes as Array<Mesh>).map(m => m.copy() as Mesh));
-    }
-
-    /** Return a shallow copy of this MeshCollection (new container, same member references) */
-    clone(): MeshCollection
-    {
-        return new MeshCollection(...this._shapes as Array<Mesh>);
-    }
-
-    /** Override to return a typed MeshCollection for the named group. */
-    group(groupName: string): MeshCollection | undefined
-    {
-        const g = super.group(groupName);
-        return g ? new MeshCollection(...g.meshes().toArray()) : undefined;
-    }
-
-    shapes(): Array<Mesh>  { return this._shapes as Array<Mesh>; }
-    get(index: number): Mesh | undefined { return this._shapes[index] as Mesh | undefined; }
-    at(index: number): Mesh | undefined { return this.get(index); }
-    first(): Mesh
-    {
-        const m = this._shapes[0] as Mesh;
-        if (!m) throw new Error('MeshCollection::first(): ShapeCollection is empty.');
-        return m;
-    }
-
-    last(): Mesh 
-    {
-        const m = this._shapes[this._shapes.length - 1] as Mesh;
-        if (!m) throw new Error('MeshCollection::last(): ShapeCollection is empty.');
-        return m;
-    }
-
-
-    /** If single Mesh in the collection, return it. Otherwise, return collection. */
-    checkSingle(): Mesh | this
-    {
-        if(this._shapes.length === 1){ return this.first();}
-        return this;
-    }
-
-    forEach(callback: (shape: Mesh, index: number, array: Mesh[]) => void): this
-    {
-        (this._shapes as Array<Mesh>).forEach(callback);
-        return this;
-    }
-
-    filter(callback: (shape: Mesh, index: number, array: Mesh[]) => boolean): MeshCollection
-    {
-        return new MeshCollection(...(this._shapes as Array<Mesh>).filter(callback));
-    }
-
-    /** Union all meshes into one */
-    unionAll(): Mesh { return super.union(); }
-
-    /** Create a MeshCollection from the Mesh members of a general ShapeCollection */
-    static from(collection: ShapeCollection): MeshCollection
-    {
-        return new MeshCollection(collection.meshes());
-    }
-
-    // ── BVH Spatial Queries ────────────────────────────────────────────────
-
-    /**
-     * Find all pairs of meshes (one from `this`, one from `other`) that overlap.
-     *
-     * Performs a coarse axis-aligned-box check, then a precise BVH hit test.
-     *
-     * @returns Array of `[meshFromThis, meshFromOther]` overlap pairs.
-     */
-    hits(other: Mesh | MeshCollection): Array<[Mesh, Mesh]>
-    {
-        const aList = this.shapes();
-        const bList = other instanceof Mesh ? [other] : other.shapes();
-        return aList.flatMap(a =>
-            bList.filter(b => a.hits(b)).map(b => [a, b] as [Mesh, Mesh])
-        );
-    }
-
-    /**
-     * Fire a ray against every mesh in this collection.
-     *
-     * When `all` is `true` (default) returns every mesh that is hit, each
-     * with its closest-hit result, sorted by distance (nearest first).
-     * When `all` is `false` returns only the single nearest-hit mesh entry,
-     * or `null` if nothing is hit.
-     *
-     * @param origin    Ray origin `[x, y, z]`.
-     * @param direction Ray direction (need not be normalised).
-     * @param maxDist   Maximum ray length (default `Infinity`).
-     * @param all       Return all hits (`true`, default) or only the first (`false`).
-     */
-    raycast(
-        origin: [number, number, number],
-        direction: [number, number, number],
-        maxDist = Infinity,
-        all = true,
-    ): Array<{ mesh: Mesh; hit: RaycastHit }> | { mesh: Mesh; hit: RaycastHit } | null
-    {
-        const results = this.shapes()
-            .map(mesh => ({ mesh, hit: mesh.raycast(origin, direction, maxDist, false) }))
-            .filter((r): r is { mesh: Mesh; hit: RaycastHit } => r.hit !== null)
-            .sort((a, b) => a.hit.distance - b.hit.distance);
-        if (all) return results;
-        return results[0] ?? null;
-    }
-
-    /**
-     * Minimum separating distance between any mesh in this collection and
-     * any mesh in `other` (or a single Mesh).
-     *
-     * Returns `0` if any meshes intersect, `Infinity` if either side is empty.
-     */
-    distanceTo(other: Mesh | MeshCollection): number
-    {
-        const aList = this.shapes();
-        const bList = other instanceof Mesh ? [other] : other.shapes();
-        return aList.reduce((minSoFar, a) =>
-        {
-            if (minSoFar === 0) return 0;
-            return bList.reduce((m, b) =>
-            {
-                if (m === 0) return 0;
-                return Math.min(m, a.distanceTo(b));
-            }, minSoFar);
-        }, Infinity);
-    }
-
-    /**
-     * Find the closest pair of meshes between this collection and `other`.
-     *
-     * @returns `{ mesh1, mesh2, distance }` for the closest pair, or `null`
-     *          if either collection is empty.
-     */
-    closestPair(other: MeshCollection): { mesh1: Mesh; mesh2: Mesh; distance: number } | null
-    {
-        const aList = this.shapes();
-        const bList = other.shapes();
-        if (aList.length === 0 || bList.length === 0) return null;
-        return aList.flatMap(a => bList.map(b => ({ mesh1: a, mesh2: b, distance: a.distanceTo(b) })))
-            .reduce((best, pair) => best === null || pair.distance < best.distance ? pair : best, null as { mesh1: Mesh; mesh2: Mesh; distance: number } | null);
-    }
-
-    // ── Edge Projection (HLR) ────────────────────────────────────────────────
-
-    /**
-     * Project the visible and hidden edges of every mesh in this collection
-     * onto a plane, using all meshes in the collection as mutual occluders.
-     *
-     * The results from individual meshes are merged into a single
-     * `EdgeProjectionResult`.
-     *
-     * @param options  View direction, projection plane, feature angle, samples.
-     * @returns Merged `{ visible, hidden }` polyline arrays.
-     */
-    _projectEdges(options: ProjectEdgeOptions) // CurveCollection
-    {
-        // TODO
-    }
-
-    //// OUTPUTS ////
-
-    /** Output Shapes as an array */
-    toArray(): Array<Mesh>
-    {
-        return this._shapes as Array<Mesh>;
-    }
-
-}
-
-
-/** A ShapeCollection that only holds Curve instances. */
-export class CurveCollection extends ShapeCollection
-{
-    constructor(...args: Array<Curve|Array<any>|ShapeCollection|CurveCollection>)
-    {
-        super(...args);
-    }
-
-    /** Create a CurveCollection from from array of Curves or the curves of a ShapeCollection */
-    static from(...args: Array<Curve|Array<any>|ShapeCollection|CurveCollection>): CurveCollection
-    {
-        if(args.length === 1 && args[0] instanceof ShapeCollection)
-        {
-            return new CurveCollection(args[0].curves());
-        }
-        else if(Array.isArray(args[0]) && args[0].every(c => c instanceof Curve))
-        {
-            return new CurveCollection(...args[0]);
-        }
-        else if(args.every(c => c instanceof Curve || c instanceof ShapeCollection)) // also allow multiple Curve or ShapeCollection arguments, which are flattened
-        {
-            return new CurveCollection(...args.flatMap(arg => arg instanceof ShapeCollection ? arg.curves().toArray() as Curve[] : (arg instanceof Curve ? [arg] : [])));
-        }
-        else
-        {
-            throw new Error(`CurveCollection.from(): Invalid input: "${args.map(a => a.toString()).join(', ')}". Please provide a ShapeCollection or an array of Curves.`);
-        }
-    }
-
-    update(shapes: Array<Curve|Mesh>|ShapeCollection|MeshCollection|CurveCollection): void
-    {
-        if(!Array.isArray(shapes) && !ShapeCollection.isShapeCollection(shapes) 
-                && !(shapes as any instanceof MeshCollection) && !(shapes as any instanceof CurveCollection))
-        {
-            console.error(`CurveCollection::update(): Invalid input. Please provide an array of Curves or a ShapeCollection.`);
-            return;
-        }
-        // Filter out any non-Curve shapes from the input
-        const curves = ShapeCollection.isShapeCollection(shapes) 
-            ? shapes.curves() 
-            : (Array.isArray(shapes) ? shapes.filter(s => s instanceof Curve) : []);   
-
-        if(shapes.length !== curves.length)
-        {
-            console.warn(`CurveCollection::update(): ${shapes.length - curves.length} provided shapes were not Curves and have been ignored.`);
-        }
-
-        super.update(curves);
-    }
-
-    /** Return a deep copy of this CurveCollection (all members are independently copied) */
-    copy(): CurveCollection
-    {
-        return new CurveCollection(...(this._shapes as Array<Curve>).map(c => c.copy()));
-    }
-
-    /** Return a shallow copy of this CurveCollection (new container, same member references) */
-    clone(): CurveCollection
-    {
-        return new CurveCollection(...this._shapes as Array<Curve>);
-    }
-
-    /** Add Curves or CurveCollections to this collection. Mutates this collection in place.
-     *  @returns this CurveCollection (for chaining)
-     */
-    add(shapes: Curve|CurveCollection): CurveCollection
-    {
-        if (!(shapes instanceof Curve) && !(shapes instanceof CurveCollection))
-        {
-            console.error(`CurveCollection::add(): Only Curve(ShapeCollection) instances are allowed.`);
-            return this;
-        }
-        return super.add(shapes) as CurveCollection;
-    }
-
-    /** Alias for add (like an Array) */
-    push(shapes:Curve|CurveCollection): void
-    {
-        this.add(shapes);
-    }
-
-    /** Override to return a typed CurveCollection for the named group. */
-    group(groupName: string): CurveCollection | undefined
-    {
-        const g = super.group(groupName);
-        return g ? new CurveCollection(...g.curves().toArray()) : undefined;
-    }
-
-    shapes(): Array<Curve>  { return this._shapes as Array<Curve>; }
-    get(index: number): Curve | undefined { return this._shapes[index] as Curve | undefined; }
-    at(index: number): Curve | undefined { return this.get(index); }
-    first(): Curve
-    {
-        const c = this._shapes[0] as Curve;
-        if (!c) throw new Error('CurveCollection::first(): ShapeCollection is empty.');
-        return c;
-    }
-    last(): Curve
-    {
-        const c = this._shapes[this._shapes.length - 1] as Curve;
-        if (!c) throw new Error('CurveCollection::last(): ShapeCollection is empty.');
-        return c;
-    }
-
-    /** If single Curve in the collection, return it. Otherwise, return collection. */
-    checkSingle(): Curve | this
-    {
-        if(this._shapes.length === 1){ return this.first();}
-        return this;
-    }
-
-    forEach(callback: (shape: Curve, index: number, array: Curve[]) => void): this
-    {
-        this.shapes().forEach(callback);
-        return this;
-    }
-
-    filter(callback: (shape: Curve, index: number, array: Curve[]) => boolean): CurveCollection
-    {
-        return new CurveCollection(...this.shapes().filter(callback));
-    }
-
-    /** Replicate this CurveCollection a given number of times, applying a transform to each copy */
-    replicate(num: number, transform: (collection: CurveCollection, index: number, prev: CurveCollection | undefined) => CurveCollection): CurveCollection
-    {
-        const { curves } = Array.from({ length: num }, (_, i) => i).reduce<{ curves: Curve[]; prev: CurveCollection | undefined }>(
-            ({ curves, prev }, i) =>
-            {
-                const transformed = transform(this.copy(), i, prev);
-                return { curves: [...curves, ...transformed.curves().toArray()], prev: transformed };
-            },
-            { curves: [], prev: undefined }
-        );
-        return new CurveCollection(...curves);
-    }
-
-    /** Boolean-union all curves sequentially, returning the result curves */
+    /** Union all Curve shapes sequentially (curve boolean union) */
     unionAll(): Array<Curve> | null
     {
-        const curves = super.curves();
-        if (curves.length === 0) return null;
+        const curves = this.curves();
+        if (!curves.length) return null;
         return curves.toArray().slice(1).reduce<Array<Curve>>(
             (acc, curve) =>
             {
-                const next = acc[0]?.union(curve) as Array<Curve> | null;
+                const next = (acc[0] as any)?.union(curve) as Array<Curve> | null;
                 return next ?? acc;
             },
             [curves.get(0)!]
         );
     }
 
-    /** Offset every curve in this collection by `distance`.
-     *  Curves for which offset returns null are silently dropped.
-     *  @returns a new CurveCollection with the offset results.
-     */
-    offset(distance: number, cornerType: 'sharp'|'round'|'smooth' = 'sharp'): CurveCollection
+    intersecting(other: S): ShapeCollection
     {
-        return new CurveCollection(
-            ...(this._shapes as Curve[])
-                .map(curve => curve.offset(distance, cornerType))
-                .filter((r): r is Curve => r !== null && r !== undefined)
-        );
+        throw new Error('ShapeCollection::intersecting(): not yet implemented');
     }
 
-    /** Set stroke dash pattern on every curve in this collection. Defaults to [2, 2]. */
-    dashed(dash: number[] = [2, 2]): this
+    intersections(other: S): ShapeCollection
     {
-        (this._shapes as Curve[]).forEach(curve => curve.dashed(dash));
-        return this;
+        throw new Error('ShapeCollection::_intersections(): not yet implemented');
     }
 
-    //// COMBINED CURVE OPERATIONS ////
+    //// ISOMETRY ////
 
-    /** 
-     *  Combine all Curves into the minimal set of curves:
-     *   - Consecutive collinear degree-1 segments are merged into single polylines
-     *   - All remaining connected segments become CompoundCurves
-     *   - Disconnected groups stay as separate curves
-     * 
-     *  // TODO: avoid combining curves that are the same
-     */
-    combine(): CurveCollection
+    isometry(cam: PointLike = [-1, -1, 1], includeHidden: boolean = true): ShapeCollection<Shape>
     {
+        return this.merge().isometry(cam, includeHidden);
+    }
+
+    //// OUTPUTS ////
+
+    toSVG(): string
+    {
+        console.warn('ShapeCollection::toSVG(): Only 2D Curves are outputted!');
+
         const curves = this.curves();
-        if(curves.length <= 1) return this;
-
-        const chains = this._buildChains(curves.map(c => [c]) as Curve[][]); // start with each curve as its own chain
-        const combined = chains.map(chain => this._chainToCurve(chain));
-        this.update(new CurveCollection(...combined));
-        // Try to combine Compound curves with line segments
-        // this.curves().forEach(curve => curve.mergeColinearLines()); 
-
-        return this;
-    }
-
-    /** Connect Curves in this collection by endpoints */
-    connect(): CurveCollection
-    {
-        // First make sure already connected are merged
-        this.combine();
-
-        // Create a convenient list of endpoints with references to their curves
-        const endpoints = this.curves().toArray().flatMap(curve =>
+        if (curves.length === 0)
         {
-            // NOTE: references need to be consistent (don't call start()/end() 
-            const start = curve.start();
-            const end = curve.end();
-            return [ 
-                { point: start, otherPoint: end, curve: curve }, 
-                { point: end, otherPoint: start, curve: curve }
-            ] as Array<{ point: Vertex, otherPoint: Vertex, curve: Curve }|null>;
+            console.warn(`ShapeCollection::toSVG(): Exporting with ${curves.length} curves. Only curves will be exported to SVG.`);
+            return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 20">
+                            <text x="4" y="15" font-size="12" fill="red">ShapeCollection::toSVG() — no curves</text></svg>`;
+        }
+
+        const paths: string[] = [];
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+        curves.forEach(curve =>
+        {
+            const svg = (curve as any).toSVG();
+            const innerMatch = svg.match(/<svg[^>]*>([\s\S]*?)<\/svg>/);
+            const vbMatch = svg.match(/viewBox="([^"]*)"/);
+            if (!innerMatch?.[1]) return;
+            paths.push(innerMatch[1]);
+            if (vbMatch)
+            {
+                const [vx, vy, vw, vh] = vbMatch[1].split(' ').map(Number);
+                if (vx < minX) minX = vx;   if (vy < minY) minY = vy;
+                if (vx + vw > maxX) maxX = vx + vw;  if (vy + vh > maxY) maxY = vy + vh;
+            }
         });
 
-        const connectingLines: Array<Curve> = [];
+        if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 1; maxY = 1; }
+        const vb = `${minX} ${minY} ${maxX - minX} ${maxY - minY}`;
+        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}">${paths.join('')}</svg>`;
+    }
 
-        endpoints.forEach((curEndPoint, p) => 
-        {   
-            if(curEndPoint === null) return; // already connected
 
-            const closest = { 
-                endpoint: null, 
-                dist: Infinity,
-                index: undefined as number | undefined,
-            } as { endpoint: { point: Vertex, curve: Curve } | null, dist: number, index: number | undefined };
+    /** Returns all start/end vertices of curves in this collection */
+    vertices(): Array<Vertex>
+    {
+        const pts: Vertex[] = [];
+        this._shapes.forEach(c => { pts.push((c as any).start?.(), (c as any).end?.()); });
+        return pts.filter(Boolean);
+    }
 
-            endpoints.forEach((ep, idx) => 
+    toMesh(): ShapeCollection<Mesh>
+    {
+        const meshes = this._shapes
+            .map(curve => (curve as any).toMesh?.())
+            .filter((mesh: any) => mesh?.validate?.()) as Mesh[];
+        return new ShapeCollection<Mesh>(...meshes);
+    }
+
+
+    //// CURVE-SPECIFIC ////
+
+    /** Merge connected curves in this collection into as few Curve/CompoundCurve objects as possible. */
+    combine(): ShapeCollection<Curve>
+    {
+        const curves = this.curves().toArray();
+        if (curves.length === 0) return new ShapeCollection<Curve>();
+        if (curves.length === 1) return new ShapeCollection<Curve>(curves[0]);
+
+        const chains = this._buildChains(curves.map(c => [c]) as Curve[][]);
+        const combined = chains.map(chain => this._chainToCurve(chain));
+        return new ShapeCollection<Curve>(...combined);
+    }
+
+    /** Connect curves in this collection into one, bridging small gaps where needed. */
+    connect(): ShapeCollection<Curve>
+    {
+        const combined = this.combine();
+
+        const endpoints = combined.curves().toArray().flatMap(curve =>
+        {
+            const start = curve.start();
+            const end   = curve.end();
+            return [
+                { point: start, otherPoint: end,   curve },
+                { point: end,   otherPoint: start,  curve },
+            ] as Array<{ point: Vertex; otherPoint: Vertex; curve: Curve } | null>;
+        });
+
+        const connectingLines: Curve[] = [];
+
+        endpoints.forEach((curEndPoint, p) =>
+        {
+            if (curEndPoint === null) return;
+
+            const closest = { endpoint: null as { point: Vertex; curve: Curve } | null, dist: Infinity, index: undefined as number | undefined };
+
+            endpoints.forEach((ep, idx) =>
             {
-                if(ep === null) return; // already connected
-
-                if(curEndPoint.point !== ep.point && curEndPoint.otherPoint !== ep.point) // don't connect curve to itself
+                if (ep === null) return;
+                if (curEndPoint.point !== ep.point && curEndPoint.otherPoint !== ep.point)
                 {
                     const d1 = new Point(curEndPoint.point).distance(new Point(ep.point));
                     const d2 = new Point(curEndPoint.otherPoint).distance(new Point(ep.point));
-                    
-                    if(d1 < closest.dist && d1 !== 0 && d1 < d2) 
-                    // never connect to another point, if that's closer 
-                    // to the other endpoint of the same curve (prevents loops)
+                    if (d1 < closest.dist && d1 !== 0 && d1 < d2)
                     {
-                        // TODO: add tolerance threshold?
                         closest.dist = d1;
                         closest.endpoint = ep;
                         closest.index = idx;
-                    }   
+                    }
                 }
             });
-            // now we found closest endpoint, we connect them with a line
-            if(closest.endpoint)
+
+            if (closest.endpoint)
             {
                 connectingLines.push(Curve.Line(curEndPoint.point, closest.endpoint.point));
-                // make endpoints null that we just connected
-                if(closest.index !== undefined)
+                if (closest.index !== undefined)
                 {
-                    endpoints[p] = null; // curPoint
-                    endpoints[closest.index] = null; // connect to closest endpoint   
+                    endpoints[p] = null;
+                    endpoints[closest.index] = null;
                 }
             }
-
         });
 
         console.info(`Connecting ${connectingLines.length} pairs of endpoints with lines.`);
-        
-        // add connecting lines to new collection
-        const connCol = new CurveCollection(
-                            ...this.curves().toArray(), 
-                            ...connectingLines
-                        ).combine(); // combine again to merge connected lines into curves
-        this.update(connCol);
-        return this;
+
+        return new ShapeCollection<Curve>(
+            ...combined.curves().toArray(),
+            ...connectingLines,
+        ).combine();
     }
 
     /**
      *  Group curves into ordered end-to-start connected chains.
      *  Tries both orientations of each candidate.
-     *  @param tolerance - distance threshold for considering endpoints as connected (default 1e-3)
-     *  
-     *  TODO: automatically fill gaps with line segments
      */
     private _buildChains(chains: Array<Array<Curve>>, tolerance: number = 1e-3): Array<Array<Curve>>
     {
         const startNumChains = chains.length;
-        let newChains = [] as Array<Array<Curve>>;  
+        let newChains: Array<Array<Curve>> = [];
 
-        chains.forEach((curChain, i) => 
+        chains.forEach((curChain, i) =>
         {
-            if(curChain.length) // only go into it if still unattached
+            if (curChain.length)
             {
-                if(i === 0) newChains.push(curChain);
-                chains[i] = []; // clear original chain to mark as processed
+                if (i === 0) newChains.push(curChain);
+                chains[i] = [];
 
-                const curChainStartPoint = curChain[0].start();
-                const curChainEndPoint = curChain.at(-1)!.end();
+                const curStart = curChain[0].start();
+                const curEnd   = curChain.at(-1)!.end();
 
-                chains.forEach((otherChain, j) => 
+                chains.forEach((otherChain, j) =>
                 {
-                    if(otherChain.length === 0 || otherChain === curChain) return; // skip empty or same chain
+                    if (otherChain.length === 0 || otherChain === curChain) return;
 
-                    const otherChainStartPoint = otherChain[0].start();
-                    const otherChainEndPoint = otherChain.at(-1)!.end();
+                    const otherStart = otherChain[0].start();
+                    const otherEnd   = otherChain.at(-1)!.end();
 
-                    chains[j] = []; // mark other chain as processed
+                    chains[j] = [];
 
-                    // chains connect start to start - prepend to current chain in reverse
-                    if(new Point(curChainStartPoint).distance(new Point(otherChainStartPoint)) <= tolerance)
+                    if (new Point(curStart).distance(new Point(otherStart)) <= tolerance)
                     {
-                        newChains[i]?.unshift(...(otherChain.map(curve => curve.reverse()).reverse()));
+                        newChains[i]?.unshift(...otherChain.map(c => c.copy().reverse()).reverse());
                     }
-                    // start to end - prepend to current chain as-is
-                    else if(new Point(curChainStartPoint).distance(new Point(otherChainEndPoint)) <= tolerance)
+                    else if (new Point(curStart).distance(new Point(otherEnd)) <= tolerance)
                     {
                         newChains[i]?.unshift(...otherChain);
                     }
-                    // end to start - append to current chain as-is
-                    else if(new Point(curChainEndPoint).distance(new Point(otherChainStartPoint)) <= tolerance)
+                    else if (new Point(curEnd).distance(new Point(otherStart)) <= tolerance)
                     {
                         newChains[i]?.push(...otherChain);
                     }
-                    // end to end - append to current chain in reverse
-                    else if(new Point(curChainEndPoint).distance(new Point(otherChainEndPoint)) <= tolerance)
+                    else if (new Point(curEnd).distance(new Point(otherEnd)) <= tolerance)
                     {
-                        newChains[i]?.push(...(otherChain.map(curve => curve.reverse()).reverse()));
+                        newChains[i]?.push(...otherChain.map(c => c.copy().reverse()).reverse());
                     }
                     else
                     {
-                        // no connection: start new chain
                         newChains.push(otherChain);
                     }
                 });
             }
         });
-        // recursively process 
-        if(newChains.length < startNumChains)
-        {   
-            // ...existing code...
+
+        if (newChains.length < startNumChains)
+        {
             newChains = this._buildChains(newChains, tolerance);
         }
         return newChains;
@@ -1059,83 +590,69 @@ export class CurveCollection extends ShapeCollection
      *  Convert a connected chain into the simplest representation:
      *   - Single curve          → as-is
      *   - All collinear degree-1 → single Polyline
-     *   - Mixed types           → CompoundCurve
+     *   - Mixed / non-linear    → CompoundCurve
      */
     private _chainToCurve(chain: Array<Curve>): Curve
     {
-        if(chain.length === 1) return chain[0];
-
+        if (chain.length === 1) return chain[0];
         const merged = this._mergeCollinearSegments(chain);
-        if(merged.length === 1) return merged[0];
-
+        if (merged.length === 1) return merged[0];
         return Curve.Compound(merged);
     }
 
     /**
-     *  Walk a chain and merge consecutive collinear degree-1 segments
-     *  into single polylines.  Non-linear curves pass through as-is.
-     *
-     *  Collinearity test:  |cross(dirA, dirB)| < tolerance
+     *  Walk a chain and merge consecutive collinear degree-1 segments into single polylines.
      */
     private _mergeCollinearSegments(chain: Array<Curve>): Array<Curve>
     {
         const TOLERANCE = 1e-6;
-        const result: Array<Curve> = [];
-        let run: Array<Point> = [];  // accumulated polyline points
+        const result: Curve[] = [];
+        let run: Point[] = [];
 
         const flushRun = () =>
         {
-            if(run.length >= 2)
-            {
-                result.push(Curve.Polyline(run));
-            }
+            if (run.length >= 2) result.push(Curve.Polyline(run));
             run = [];
         };
 
         chain.forEach(curve =>
         {
-            if(!curve.isCompound() && curve.degree() === 1)
+            if (!curve.isCompound() && curve.degree() === 1)
             {
-                // Get all control points — handles polylines with 3+ vertices
                 const cps = curve.controlPoints();
-                // Process each consecutive pair of control points as a sub-segment
                 cps.slice(0, -1).forEach((segStart, k) =>
                 {
-                    const segEnd   = cps[k + 1];
+                    const segEnd = cps[k + 1];
                     const dx = segEnd.x - segStart.x;
                     const dy = segEnd.y - segStart.y;
                     const dz = segEnd.z - segStart.z;
-                    const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
-                    if(len < TOLERANCE) return;  // skip zero-length
-                    const segDir = new Vector(dx/len, dy/len, dz/len);
+                    const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                    if (len < TOLERANCE) return;
+                    const segDir = new Vector(dx / len, dy / len, dz / len);
 
-                    if(run.length === 0)
+                    if (run.length === 0)
                     {
-                        // Start a new run
                         run.push(segStart, segEnd);
                     }
                     else
                     {
-                        // Check collinearity against last segment direction
                         const prev = run.at(-2)!;
                         const last = run.at(-1)!;
                         const px = last.x - prev.x;
                         const py = last.y - prev.y;
                         const pz = last.z - prev.z;
-                        const plen = Math.sqrt(px*px + py*py + pz*pz);
+                        const plen = Math.sqrt(px * px + py * py + pz * pz);
                         const prevDir = plen > TOLERANCE
-                            ? new Vector(px/plen, py/plen, pz/plen)
+                            ? new Vector(px / plen, py / plen, pz / plen)
                             : segDir;
 
-                        const cross = prevDir.cross(segDir);
-                        if(cross.length() < TOLERANCE)
+                        const cross = prevDir.copy().cross(segDir);
+                        if (cross.length() < TOLERANCE)
                         {
-                            // Collinear — extend the run (shared endpoint already present)
                             run.push(segEnd);
                         }
                         else
                         {
-                            // Direction change — flush and start new
                             flushRun();
                             run.push(segStart, segEnd);
                         }
@@ -1144,7 +661,6 @@ export class CurveCollection extends ShapeCollection
             }
             else
             {
-                // Non-linear or compound curve — flush any pending polyline run
                 flushRun();
                 result.push(curve);
             }
@@ -1153,74 +669,124 @@ export class CurveCollection extends ShapeCollection
         return result;
     }
 
-    //// OUTPUTS ////
+    //// MESH-SPECIFIC (BVH) ////
 
-    /**
-     * Export all curves in this collection as a single SVG string.
-     * Each curve becomes a separate `<path>` element. The viewBox is the union
-     * of all individual curve bounds.
-     */
-    toSVG(): string
+    hits(other: Mesh | ShapeCollection<Mesh>): Array<[Mesh, Mesh]>
     {
-        const curves = this.curves();
-        if (curves.length === 0)
+        const aList = this.meshes().toArray();
+        const bList = other instanceof Mesh ? [other] : other.meshes().toArray();
+        return aList.flatMap(a => bList.filter(b => a.hits(b)).map(b => [a, b] as [Mesh, Mesh]));
+    }
+
+    raycast(
+        origin: [number, number, number],
+        direction: [number, number, number],
+        maxDist = Infinity,
+        all = true,
+    ): Array<{ mesh: Mesh; hit: RaycastHit }> | { mesh: Mesh; hit: RaycastHit } | null
+    {
+        const results = this.meshes().toArray()
+            .map(mesh => ({ mesh, hit: mesh.raycast(origin, direction, maxDist, false) }))
+            .filter((r): r is { mesh: Mesh; hit: RaycastHit } => r.hit !== null)
+            .sort((a, b) => a.hit.distance - b.hit.distance);
+        if (all) return results;
+        return results[0] ?? null;
+    }
+
+    distanceTo(other: Mesh | ShapeCollection<Mesh>): number
+    {
+        const aList = this.meshes().toArray();
+        const bList = other instanceof Mesh ? [other] : other.meshes().toArray();
+        return aList.reduce((minSoFar, a) =>
         {
-            console.warn('CurveCollection::toSVG(): No curves to export. Returned null');
-            return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 20">
-                            <text x="4" y="15" font-size="12" fill="red">CurveCollection::toSVG() — no curves</text></svg>`;
+            if (minSoFar === 0) return 0;
+            return bList.reduce((m, b) => { if (m === 0) return 0; return Math.min(m, a.distanceTo(b)); }, minSoFar);
+        }, Infinity);
+    }
+
+    closestPair(other: ShapeCollection<Mesh>): { mesh1: Mesh; mesh2: Mesh; distance: number } | null
+    {
+        const aList = this.meshes().toArray();
+        const bList = other.meshes().toArray();
+        if (!aList.length || !bList.length) return null;
+        return aList.flatMap(a => bList.map(b => ({ mesh1: a, mesh2: b, distance: a.distanceTo(b) })))
+            .reduce((best, pair) => best === null || pair.distance < best.distance ? pair : best, null as { mesh1: Mesh; mesh2: Mesh; distance: number } | null);
+    }
+
+    _projectEdges(_options: ProjectEdgeOptions): void
+    {
+        throw new Error('ShapeCollection::_projectEdges(): not yet implemented');
+    }
+
+    //// PATTERNS ////
+
+    /** Copy this collection count times in a line along direction, spaced by spacing */
+    row(count: number, spacing: number = 10, direction: PointLike | Axis = 'x'): ShapeCollection<S>
+    {
+        const dir: PointLike = direction === 'x' ? [1, 0, 0]
+                             : direction === 'y' ? [0, 1, 0]
+                             : direction === 'z' ? [0, 0, 1]
+                             : direction as PointLike;
+        const result = new ShapeCollection<S>();
+        for (let i = 0; i < count; i++)
+        {
+            const delta: PointLike = [(dir as number[])[0] * spacing * i, (dir as number[])[1] * spacing * i, (dir as number[])[2] * spacing * i];
+            result.add(this.copy().translate(delta));
         }
+        return result;
+    }
 
-        const paths: string[] = [];
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-
-        curves.forEach(curve =>
+    /** Copy this collection in a 3D grid, spaced uniformly */
+    grid(cx: number = 2, cy: number = 2, cz: number = 1, spacing: number = 10): ShapeCollection<S>
+    {
+        const result = new ShapeCollection<S>();
+        for (let iz = 0; iz < cz; iz++)
+        for (let iy = 0; iy < cy; iy++)
+        for (let ix = 0; ix < cx; ix++)
         {
-            const svg = curve.toSVG();
-            const innerMatch = svg.match(/<svg[^>]*>([\s\S]*?)<\/svg>/);
-            const vbMatch = svg.match(/viewBox="([^"]*)"/);
-            if (!innerMatch?.[1]) return;
-            paths.push(innerMatch[1]);
-            if (vbMatch)
+            result.add(this.copy().translate(ix * spacing, iy * spacing, iz * spacing));
+        }
+        return result;
+    }
+
+    replicate(num: number, transform: (collection: ShapeCollection<S>, index: number, prev: ShapeCollection<S> | undefined) => ShapeCollection<S>): ShapeCollection<S>
+    {
+        const { shapes } = Array.from({ length: num }, (_, i) => i).reduce<{ shapes: S[]; prev: ShapeCollection<S> | undefined }>(
+            ({ shapes, prev }, i) =>
             {
-                const [vx, vy, vw, vh] = vbMatch[1].split(' ').map(Number);
-                if (vx < minX) minX = vx;
-                if (vy < minY) minY = vy;
-                if (vx + vw > maxX) maxX = vx + vw;
-                if (vy + vh > maxY) maxY = vy + vh;
-            }
-        });
-
-        if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 1; maxY = 1; }
-        const vb = `${minX} ${minY} ${maxX - minX} ${maxY - minY}`;
-        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}">${paths.join('')}</svg>`;
+                const transformed = transform(this.copy(), i, prev);
+                return { shapes: [...shapes, ...transformed.toArray()], prev: transformed };
+            },
+            { shapes: [], prev: undefined }
+        );
+        return new ShapeCollection<S>(...shapes);
     }
 
-    toArray(): Array<Curve>
+    //// EXPORT ////
+
+    toString(): string
     {
-        return this._shapes as Array<Curve>;
+        return `<ShapeCollection shapes="${this._shapes.length}"${(Array.from(this._groups.keys()).length > 0) ? 'groups="' + Array.from(this._groups.keys()).join(',') + '"' : ''} types="${[...new Set(this._shapes.map(s => s.type()))].join(',')}">`;
     }
 
-    /** Filter curves that intersect (or touch) the given curve — stub for old-API compat
-     *  TODO: implement proper geometric intersection test
-     */
-    intersecting(_other: Curve): CurveCollection
+    async toGLTF(up: Axis = 'z'): Promise<string>
     {
-        throw new Error('CurveCollection::intersecting(): not yet implemented');
+        const builder = new GLTFBuilder(up, 'scene');
+        this._shapes.forEach((shape, i) => builder.add(shape as any, `shape_${i}`));
+        if (builder.isEmpty()) console.warn('ShapeCollection::toGLTF(): No exportable shapes found.');
+        return builder.applyExtensions().toGLTF();
     }
 
-    /** Returns all start/end vertices of curves in this collection as a flat array */
-    vertices(): Array<Vertex>
+    async toGLB(up: Axis = 'z'): Promise<Uint8Array>
     {
-        const pts: Vertex[] = [];
-        (this._shapes as Curve[]).forEach(c => { pts.push(c.start(), c.end()); });
-        return pts;
+        const builder = new GLTFBuilder(up, 'scene');
+        this._shapes.forEach((shape, i) => builder.add(shape as any, `shape_${i}`));
+        if (builder.isEmpty()) console.warn('ShapeCollection::toGLB(): No exportable shapes found.');
+        return builder.applyExtensions().toGLB();
     }
 
-    toMesh(): MeshCollection
-    {
-        const meshes = this.curves().toArray()
-                .map(curve => curve.toMesh())
-                .filter(mesh => mesh?.validate()) as Mesh[]; // filter out empty meshes
-        return new MeshCollection(...meshes);
+    toArray(): Array<S> 
+    { 
+        return this.shapes(); 
     }
 }

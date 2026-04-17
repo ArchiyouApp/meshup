@@ -2,7 +2,7 @@ import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
-import { ShapeCollection as Collection, MeshCollection, CurveCollection } from '../../src/ShapeCollection';
+import { ShapeCollection as Collection } from '../../src/ShapeCollection';
 
 let cube1: Mesh;
 let cube2: Mesh;
@@ -119,20 +119,20 @@ describe('Collection accessors', () =>
     });
 });
 
-describe('MeshCollection', () =>
+describe('ShapeCollection<Mesh>', () =>
 {
     it('creates a typed mesh collection', () =>
     {
-        const mc = new MeshCollection(cube1, cube2);
+        const mc = new Collection<Mesh>(cube1, cube2);
         expect(mc.count()).toBe(2);
     });
 });
 
-describe('CurveCollection', () =>
+describe('ShapeCollection<Curve>', () =>
 {
     it('creates a typed curve collection', () =>
     {
-        const cc = new CurveCollection(line);
+        const cc = new Collection<Curve>(line);
         expect(cc.count()).toBe(1);
     });
 });

@@ -3,7 +3,7 @@
  *
  */
 import { beforeAll, describe, it, expect, should } from 'vitest';
-import { CurveCollection, initAsync } from '../../src/index';
+import { ShapeCollection, initAsync } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { save } from '../../src/utils';
 
@@ -22,7 +22,7 @@ describe('Example: Offsets', async () =>
         expect(offsets.length).toBe(5);
 
         // Save as GLTF to view in 3D 
-        await save('test.offsets.basic.gltf', await new CurveCollection(rect, offsets).toGLTF());
+        await save('test.offsets.basic.gltf', await new ShapeCollection(rect, offsets).toGLTF());
     });
 
     it('Can do advanced offsets', async () =>
@@ -36,9 +36,9 @@ describe('Example: Offsets', async () =>
         const circlesOffset = circles.copy().offset(-20); // inward OK, outward produces self-intersections
         const circleOffsetFallback = circles.copy().offsetFallback(20);
     
-        await save('test.offsets.circles.gltf', await new CurveCollection(circles!, deg1.moveZ(10), circlesOffset!.moveZ(20), circleOffsetFallback!.moveZ(30)
+        await save('test.offsets.circles.gltf', await new ShapeCollection(circles!, deg1.moveZ(10), circlesOffset!.moveZ(20), circleOffsetFallback!.moveZ(30)
             /* circles!.copy().offset(20)!.color('yellow')*/).toGLTF());
-        //await save('test.curves.ops.svg', new CurveCollection(circles, rect, cc, /*un!, unOffsets*/).toSVG());
+        //await save('test.curves.ops.svg', new ShapeCollection<circles, rect, cc, /*un!, unOffsets*/).toSVG());
     });
 
 

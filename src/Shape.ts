@@ -1,26 +1,31 @@
 /**
  *  Shape.ts
  *
- *  Abstract base class for all geometry types in Meshup (Mesh, Curve).
+ *  Abstract base class for all geometry types in Meshup (Mesh, Curve, Polygon, Vertex).
  *
  *  Provides:
  *    - id()           — UUID for this instance
- *    - type()         — 'Mesh' | 'Curve', implemented by each subclass
+ *    - type()         — 'Mesh' | 'Curve' | 'Polygon' | 'Vertex', implemented by each subclass
  *    - subType()      — finer classification, implemented by each subclass
  *    - Shape.isShape() — type guard
+ *    - Common transforms: translate, move, rotate, scale, mirror, copy (abstract)
+ *    - Delegate shorthands: move, moveX/Y/Z, rotateX/Y/Z (concrete, call abstract translate/rotateAround)
  */
 
 import { Style } from './Style';
 import { SceneNode } from './SceneNode';
+import { Bbox } from './Bbox';
+
+import type { PointLike, Axis } from './types';
+import type { ShapeCollection } from './ShapeCollection';
 
 import { uuid } from './utils';
-// import { Selector } from './Selector';
 
 export abstract class Shape
 {
     private _id: string;
-    _node: SceneNode | null = null; // The SceneNode this shape belongs to, or null if not in a container
-    style: Style = new Style(); // Style properties for export (color, lineWidth, etc)
+    _node: SceneNode | null = null;
+    style: Style = new Style();
     metadata: Record<string, any> = {};
 
     constructor()
@@ -28,7 +33,14 @@ export abstract class Shape
         this._id = uuid();
     }
 
-    /** UUID for this shape instance. */
+    inner():any
+    {
+        throw new Error('Shape::inner(): method not implemented for base Shape class.');
+    }
+
+
+    //// IDENTITY ////
+
     id(): string
     {
         return this._id;
@@ -39,22 +51,59 @@ export abstract class Shape
         return this._node;
     }
 
-    // Abstract methods to be implemented by concrete subclasses (Mesh, Curve)
+    //// TYPE GUARD ////
 
-    abstract type(): 'Mesh' | 'Curve';
-    abstract subType(): string|null;
-    abstract is2D(): boolean;
-    abstract bbox(): { min(): { x: number; y: number; z: number }; max(): { x: number; y: number; z: number } } | undefined;
-
-    /** Type guard — returns true for any Mesh or Curve instance. */
     static isShape(o: unknown): o is Shape
     {
         return o instanceof Shape;
     }
 
+    static isShapeCollection(o: unknown): o is ShapeCollection
+    {
+        return false;
+    }
+
+
+    //// ABSTRACT: implemented by subclasses ////
+
+    abstract type(): 'Curve' | 'Mesh' | 'Polygon' | 'Vertex';
+    abstract subType(): string | null;
+    abstract is2D(): boolean;
+    abstract bbox(): Bbox | undefined;
+
+    abstract translate(px: PointLike | number, dy?: number, dz?: number): this;
+    abstract rotate(angleDeg: number, axis?: Axis | PointLike, pivot?: PointLike): this;
+    abstract rotateAround(angleDeg: number, axis: Axis | PointLike, pivot?: PointLike): this;
+    abstract rotateQuaternion(wOrObj: number | { w: number; x: number; y: number; z: number }, x?: number, y?: number, z?: number): this;
+    abstract scale(factor: number | PointLike, origin?: PointLike): this;
+    abstract mirror(dir: Axis | PointLike, pos?: PointLike): this;
+    abstract mirrorX(x?: number): this;
+    abstract mirrorY(y?: number): this;
+    abstract mirrorZ(z?: number): this;
+    abstract copy(): this;
+
+    abstract length(): number | undefined;
+    abstract area(): number | undefined;
+    abstract volume(): number | undefined;
+    
+
+    //// TRANSFORM SHORTHANDS ////
+
+    move(px: PointLike | number, dy?: number, dz?: number): this
+    {
+        return this.translate(px, dy, dz);
+    }
+
+    moveX(dx: number): this { return this.translate(dx, 0, 0); }
+    moveY(dy: number): this { return this.translate(0, dy, 0); }
+    moveZ(dz: number): this { return this.translate(0, 0, dz); }
+
+    rotateX(angleDeg: number, pivot: PointLike = [0, 0, 0]): this { return this.rotateAround(angleDeg, 'x', pivot); }
+    rotateY(angleDeg: number, pivot: PointLike = [0, 0, 0]): this { return this.rotateAround(angleDeg, 'y', pivot); }
+    rotateZ(angleDeg: number, pivot: PointLike = [0, 0, 0]): this { return this.rotateAround(angleDeg, 'z', pivot); }
+
     //// STYLING ////
 
-    /** Shortcut for `Shape.style.color`. Accepts `'red'`, `'#ff0000'`, or `r, g, b` (0–255). */
     color(color: number | string, g?: number, b?: number): this
     {
         if (typeof color === 'number' && typeof g === 'number' && typeof b === 'number')
@@ -68,14 +117,12 @@ export abstract class Shape
         return this;
     }
 
-    /** Shortcut for `Shape.style.opacity`. Value between 0 (transparent) and 1 (opaque). */
     opacity(opacity: number): this
     {
         this.style.opacity = opacity;
         return this;
     }
 
-    /** Alias for `opacity()`. */
     alpha(a: number): this { return this.opacity(a); }
 
     hide(): this
@@ -92,12 +139,25 @@ export abstract class Shape
 
     //// SELECTING ////
 
-    select(what:string)
+    select(_what: string)
     {
-        // Implemented in subclasses to avoid circular dependency on Selector class, which needs to import Shape for type definitions. Selector is a higher-level utility that can operate on any Shape, so it shouldn't be imported into the base Shape class.
-         throw new Error('select() method not implemented for base Shape class.');
+        throw new Error('select() method not implemented for base Shape class.');
     }
 
-    //// GENERAL OUTPUT METHODS ////
+    //// OUTPUT ////
 
+    toGLB(): Promise<Uint8Array>
+    {
+        throw new Error('toGLB() method not implemented for base Shape class.');
+    }
+
+    toGLTF(): Promise<string>
+    {
+        throw new Error('toGLTF() method not implemented for base Shape class.');
+    }
+
+    toSVG(): string
+    {
+        throw new Error('toSVG() method not implemented for base Shape class.');
+    }
 }

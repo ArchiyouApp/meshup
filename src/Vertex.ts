@@ -1,65 +1,68 @@
-/** 
+/**
  *  Vertex.ts
- * 
- *  A very thin subclass layer on top of CSGRS VertexJs 
+ *
+ *  A TypeScript wrapper around CSGRS VertexJs
  *  Mostly for more convenient usage in TypeScript and introspection
  *  and avoid things like Vector { __wbg_ptr: 1123141 } when you print instances
- *  We introduce private properties for introspection
- * 
+ *
  *  IMPORTANT: VertexJs has 6 coords: position and normal
 */
 
-import type { PointLike } from "./types";
+import type { PointLike, Axis } from "./types";
 import { Point } from "./Point";
 import { Vector } from "./Vector";
+import { Bbox } from "./Bbox";
+import { Shape } from "./Shape";
 import { VertexJs  } from "./wasm/csgrs";
 
-export class Vertex extends VertexJs 
+export class Vertex extends Shape
 {
-  declare private _position: Point;
-  declare private _normal: Vector;
+  private _vertex: VertexJs;
 
   constructor(p: PointLike, n: PointLike = [0, 0, 0])
   {
+    super();
     const position = new Point(p).toPoint3Js();
     const normal = new Point(n).toVector3Js();
-    super(position, normal);
-    this._privateFromGetters();
+    this._vertex = new VertexJs(position, normal);
   }
 
-  _privateFromGetters()
+  /** Wrap an existing VertexJs instance */
+  static from(v: VertexJs): Vertex
   {
-    this._position = Point.from(super.position()); 
-    this._normal = Vector.from(super.normal());
+    const vertex = Object.create(Vertex.prototype) as Vertex;
+    vertex._vertex = v;
+    return vertex;
   }
 
-  get inner():VertexJs
-  { 
-    return this as VertexJs;
-  }
-
-  get x(): number 
+  inner(): VertexJs
   {
-    return this?.inner?.position()?.x;
+    return this._vertex;
   }
 
-  get y(): number {
-    return this?.inner?.position()?.y;
-  }
-
-  get z(): number {
-    return this?.inner?.position()?.z;
-  }
-
-  // @ts-expect-error: intentional covariant return-type narrowing (Point ⊂ Point3Js)
-  override position(): Point
+  get x(): number
   {
-    return this._position;
+    return this._vertex.position().x;
+  }
+
+  get y(): number
+  {
+    return this._vertex.position().y;
+  }
+
+  get z(): number
+  {
+    return this._vertex.position().z;
+  }
+
+  position(): Point
+  {
+    return Point.from(this._vertex.position());
   }
 
   normal(): Vector
   {
-    return this._normal;
+    return Vector.from(this._vertex.normal());
   }
 
   toPoint(): Point
@@ -69,14 +72,93 @@ export class Vertex extends VertexJs
 
   toVector(): Vector
   {
-    return new Vector(this.x, this.y, this.z);
+    return Vector.from(this.x, this.y, this.z);
   }
 
-  // NOTE: VertexJs toArray() returns 6 coords: position and normal. We only return position here for convenience, but we could add a toArray6() if needed.
-  // @ts-expect-error:
+  // NOTE: VertexJs toArray() returns 6 coords: position and normal. We only return position here for convenience.
   toArray(): [number, number, number]
   {
     return [this.x, this.y, this.z];
   }
 
+  //// TRANSFORMS ////
+
+  override translate(px: PointLike | number, dy?: number, dz?: number): this
+  {
+    const delta = new Point(px as PointLike, dy, dz);
+    this._vertex = new VertexJs(
+      new Point(this.x + delta.x, this.y + delta.y, this.z + delta.z).toPoint3Js(),
+      this._vertex.normal(),
+    );
+    return this;
+  }
+
+  override rotate(_angleDeg: number, _axis?: Axis | PointLike, _pivot?: PointLike): this
+  {
+    throw new Error('Vertex.rotate(): not yet implemented');
+  }
+
+  override rotateAround(_angleDeg: number, _axis: Axis | PointLike, _pivot?: PointLike): this
+  {
+    throw new Error('Vertex.rotateAround(): not yet implemented');
+  }
+
+  override rotateQuaternion(_w: number | { w: number; x: number; y: number; z: number }, _x?: number, _y?: number, _z?: number): this
+  {
+    throw new Error('Vertex.rotateQuaternion(): not yet implemented');
+  }
+  
+  override scale(_factor: number | PointLike, _origin?: PointLike): this
+  {
+    throw new Error('Vertex.scale(): not yet implemented');
+  }
+
+  override mirror(_dir: Axis | PointLike, _pos?: PointLike): this
+  {
+    throw new Error('Vertex.mirror(): not yet implemented');
+  }
+
+  override copy(): this
+  {
+    console.log('==== VERTEX COPY =====');
+    const v = new Vertex([this.x, this.y, this.z], this.normal().toArray());
+    v.style.merge(this.style.toData());
+    return v as this;
+  }
+
+  //// MEASUREMENTS ////
+
+  /** Vertices are dimensionless points — returns undefined */
+  length(): undefined { console.warn('Vertex.length(): a vertex is a point and has no length.'); return undefined; }
+  area(): undefined   { console.warn('Vertex.area(): a vertex is a point and has no area.');   return undefined; }
+  volume(): undefined { console.warn('Vertex.volume(): a vertex is a point and has no volume.'); return undefined; }
+
+  //// SHAPE PROTOCOL ////
+
+  override type(): 'Vertex'
+  {
+    return 'Vertex';
+  }
+
+  override subType(): string | null
+  {
+    return null;
+  }
+
+  override is2D(): boolean
+  {
+    return false;
+  }
+
+  override bbox(): Bbox
+  {
+    return new Bbox([this.x, this.y, this.z], [this.x, this.y, this.z]);
+  }
+
+  //// REPRESENTATION ////
+
+  toString(): string
+  {
+    return `Vertex(${this.x}, ${this.y}, ${this.z})`;
+  }
 }

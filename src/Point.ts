@@ -265,7 +265,7 @@ export class Point
 
     toVector(): Vector
     {
-        return new Vector(this._x, this._y, this._z);
+        return Vector.from(this._x, this._y, this._z);
     }
 
     /** Returns this Point as a new Point — for old-API compatibility */
@@ -296,6 +296,12 @@ export class Point
     toVector3Js(): Vector3Js
     {
         return new Vector3Js(this._x, this._y, this._z || 0.0);
+    }
+
+    toVertexJs(n?:PointLike): VertexJs
+    {
+        const normal = isPointLike(n) ? new Point(n) : new Point([0,0,0]);
+        return new VertexJs(this.toPoint3Js(), normal.toVector3Js());
     }
 
     //// REPRESENTATION ////

@@ -5,6 +5,7 @@ import { Vertex } from './Vertex';
 import { Polygon } from './Polygon.js';
 import { Curve } from './Curve';
 import { Mesh } from './Mesh';
+import { ShapeCollection } from './ShapeCollection';
 
 
 import type { PointLike, Axis } from './types';
@@ -274,42 +275,42 @@ export class Bbox
      *  front/back, left/right, top/bottom
      *  NOTE: polygons are converted to Mesh
     */
-    getPlane(alignment: string): Mesh|undefined
+    getPlane(alignment: string): Polygon|undefined
     {
         const basePlane = BASE_PLANE_NAME_TO_PLANE[alignment.toLowerCase().trim()];        
         if(!basePlane){ throw new Error(`Bbox.getPlane(): Unknown alignment "${alignment}". Use one of: top, bottom, front, back, left, right, xy, yz, xz.`); }
         
         return this.planes().find(pl => {
             return pl.normal().angle(basePlane.normal) < TOLERANCE;
-        })?.toMesh();
+        });
     }
     
     /** Returns the back edge of this bbox as a Curve (max-Y side) */
-    back(): Mesh|undefined 
+    back(): Polygon|undefined
     {
         return this.getPlane('back');    
     }
 
     /** Returns the left edge of this bbox as a Curve (min-X side) */
-    left(): Mesh|undefined
+    left(): Polygon|undefined
     {
         return this.getPlane('left');
     }
 
     /** Returns the right edge of this bbox as a Curve (max-X side) */
-    right(): Mesh|undefined
+    right(): Polygon|undefined
     {
         return this.getPlane('right');
     }
 
     /** Returns the front edge of this bbox as a Curve (min-Y side) */
-    top(): Mesh|undefined
+    top(): Polygon|undefined
     {
         return this.getPlane('top');
     }
 
     /** Returns bottom polygon of this bbox (min-Z side) */
-    bottom(): Mesh|undefined
+    bottom(): Polygon|undefined
     {
         return this.getPlane('bottom');
     }
@@ -319,11 +320,8 @@ export class Bbox
      *   alignments can be any combination of: 
      *         top, bottom, front, back, left, right (case-insensitive, order doesn't matter)
      *   
-     *   NOTE: Polygons are converted to Meshes
-     *   TODO: Can we return a ShapeCollection? What to do with Vertices?
-     *   TODO: Have it work for ShapeCollections 
     */
-    getSidesShapes(alignments: string, type: 'face'|'edge'|'vertex'): Array<Mesh | Curve | Vertex>
+    getSidesShapes(alignments: string, type: 'face'|'edge'|'vertex'): ShapeCollection
     {
         const s = alignments.toLowerCase();
         const sides = BBOX_SIDES.filter(k => s.includes(k));
@@ -333,14 +331,14 @@ export class Bbox
             if (sides.length !== 1)
                 throw new Error(`Bbox.getSidesShapes(): 'face' requires exactly 1 side keyword, got: "${alignments}"`);
             const plane = this.getPlane(sides[0]);
-            return plane ? [plane] : [];
+            return new ShapeCollection<Polygon>(plane ? [plane] : []);
         }
 
         if (type === 'vertex')
         {
             if (sides.length !== 3)
                 throw new Error(`Bbox.getSidesShapes(): 'vertex' requires 3 side keywords (one per axis), got: "${alignments}"`);
-            return [this.corner(sides.join('')).toVertex()];
+            return new ShapeCollection<Vertex>([this.corner(sides.join('')).toVertex()]);
         }
 
         // type === 'edge': 2 side keywords, one axis is free
@@ -349,7 +347,6 @@ export class Bbox
 
         const inX = sides.some(k => k === 'left'  || k === 'right');
         const inY = sides.some(k => k === 'front' || k === 'back');
-        const inZ = sides.some(k => k === 'top'   || k === 'bottom');
 
         // The free axis contributes the two edge endpoints
         const freeEnds: [string, string] = !inX ? ['left', 'right']
@@ -359,7 +356,7 @@ export class Bbox
         const p1 = this.corner(s + freeEnds[0]);
         const p2 = this.corner(s + freeEnds[1]);
 
-        return [Curve.Line(p1, p2)];
+        return new ShapeCollection<Curve>([Curve.Line(p1, p2)]);
     }
 
 }

@@ -32,8 +32,8 @@ describe('Example: House', () =>
                         .polyline(roofLinePoints)
                         .lineTo(WIDTH,0)
                         .close()
-                        .extrude(THICKNESS);
-        
+                        .extrude(-THICKNESS); // again reverse for +y extrusion
+
         // TODO: add more tests
 
         const backFacade = frontFacade?.copy()?.move(0, DEPTH-THICKNESS, 0);
@@ -47,17 +47,19 @@ describe('Example: House', () =>
                         .extend(50, 'both')
                         .offsetted(THICKNESS)
                         .close()
-                        .extrude(DEPTH+ROOF_OVERHANG_FRONT*2)
-                        ?.move(0,-ROOF_OVERHANG_FRONT);
+                        .extrude(-(DEPTH+ROOF_OVERHANG_FRONT*2)) // extude in direction -y is normal for XZ plane
+                        .move(0,-ROOF_OVERHANG_FRONT);
                         
-
+        
         const door = Mesh.Box(100, 50, 200).move(WIDTH/2, 0, 200/2);
         frontFacade?.subtract(door);
+        
         
         const house = new ShapeCollection(frontFacade!, backFacade!, wallLeft, wallRight, roof!);
 
         const gltf = await house!.toGLTF();
         expect(house).toBeTruthy();
+        
         save('test.house.gltf', gltf );
         
     });

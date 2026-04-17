@@ -74,14 +74,14 @@ import { PolygonJs, SketchJs, VertexJs, Vector3Js } from "./wasm/csgrs";
 
 import { Vector } from "./Vector";
 import { Point } from "./Point";
-import { ShapeCollection, CurveCollection } from "./ShapeCollection";
+import { ShapeCollection } from "./ShapeCollection";
+import { Curve } from "./Curve";
 import { Mesh, getCsgrs } from "./index";
 
 import type { Axis, BasePlane, PointLike } from "./types";
 import { isBasePlane, isPointLike } from "./types";
 
 import { BASE_PLANE_NAME_TO_PLANE } from "./constants";
-import { Curve } from "./Curve";
 
 
 export class Sketch  
@@ -91,7 +91,7 @@ export class Sketch
     declare _xDir: Vector; // direction of the X axis of the Sketch plane in world coordinates
     declare _yDir: Vector; // direction of the Y axis of the Sketch plane in world coordinates
 
-    _curves: CurveCollection = new CurveCollection(); // collection of curves in the sketch
+    _curves: ShapeCollection<Curve> = new ShapeCollection<Curve>(); // collection of curves in the sketch
     _cursors: Array<SketchCursor> = []; // active cursor stack
 
     constructor(plane: BasePlane|PolygonJs = 'xy')
@@ -107,9 +107,9 @@ export class Sketch
         {
             // Initialize sketch with base plane
             const { normal, xDir, yDir } = BASE_PLANE_NAME_TO_PLANE[plane];
-            this._normal = new Vector(normal);
-            this._xDir = new Vector(xDir);
-            this._yDir = new Vector(yDir);
+            this._normal = Vector.from(normal);
+            this._xDir = Vector.from(xDir);
+            this._yDir = Vector.from(yDir);
             this._origin = new Point(0,0,0); // default origin at world coordinates
         }
         else if(plane instanceof PolygonJs)
@@ -126,7 +126,7 @@ export class Sketch
 
     //// CURSOR MANAGEMENT ////
 
-    private _pushCursor(at: Point, direction:Vector = new Vector(1,0)): void
+    private _pushCursor(at: Point, direction:Vector = Vector.from(1,0)): void
     {
         this._cursors = [{ at, direction }];
     }
@@ -232,7 +232,7 @@ export class Sketch
                     }
                     this._curves.add(l);
                     // make end of line (and its tangent) the new cursor
-                    this._pushCursor(p, l.tangentAt(l.end()) || new Vector(1,0,0));
+                    this._pushCursor(p, l.tangentAt(l.end()) || Vector.from(1,0,0));
                 }
                 else 
                 {
@@ -255,7 +255,7 @@ export class Sketch
             const endPt = Point.from(end);
             const arc = Curve.Arc(cur.at, midPt, endPt);
             this._curves.add(arc);
-            this._pushCursor(endPt, arc.tangentAt(endPt) ?? new Vector(1, 0, 0));
+            this._pushCursor(endPt, arc.tangentAt(endPt) ?? Vector.from(1, 0, 0));
         });
         return this;
     }
@@ -277,7 +277,7 @@ export class Sketch
             const poly = Curve.Polyline(allPoints);
             this._curves.add(poly);
             const endPt = Point.from(pnts[pnts.length - 1]);
-            this._pushCursor(endPt, poly.tangentAt(endPt) ?? new Vector(1, 0, 0));
+            this._pushCursor(endPt, poly.tangentAt(endPt) ?? Vector.from(1, 0, 0));
         });
         return this;
     }
@@ -296,7 +296,7 @@ export class Sketch
             const allPoints = [cur.at, ...pnts.map(p => Point.from(p))];
             const curve = Curve.Interpolated(allPoints);
             this._curves.add(curve);
-            this._pushCursor(endPt, curve.tangentAt(endPt) ?? new Vector(1, 0, 0));
+            this._pushCursor(endPt, curve.tangentAt(endPt) ?? Vector.from(1, 0, 0));
         });
         return this;
     }
@@ -320,7 +320,7 @@ export class Sketch
         else
         {
             // Multiple shapes, try to connect them into one closed curve
-            this._curves.connect();
+            this._curves = this._curves.connect() as ShapeCollection<Curve>;
         }
     
         return this;
@@ -391,13 +391,14 @@ export class Sketch
     }
 
     /** Extrude all closed curves in this sketch into a solid Mesh.
-     *  Extrudes `length` units along the specified `direction` and places the
-     *  result correctly in world space for any sketch plane orientation.
+     *  Extrudes `length` units along the sketch normal by default.
+     *  Pass an explicit `dir` (world-space vector) to override the direction.
      *
-     *  @param length - Extrusion distance (positive = along sketch normal)
+     *  @param length - Extrusion distance
+     *  @param dir    - Optional world-space direction vector. Defaults to the sketch normal.
      *  @returns Mesh in world space, or null if no closed curves are present.
      */
-    extrude(length: number): Mesh | null
+    extrude(length: number, dir?: PointLike): Mesh | null
     {
         const sketch = this._toSketchJs();
         
@@ -406,11 +407,21 @@ export class Sketch
             console.error('Sketch.extrude(): No closed curves to extrude.');
             return null;
         }
-        // SketchJs extrudes along +Z, rotate to align with sketch normal
-        const dirVecLocal = this._normal.rotateQuaternion(new Vector(0,0,1).rotationBetween(this._normal));
-        
-        const mesh = Mesh.from(
-                sketch.extrudeVector(dirVecLocal.scale(length)));
+
+        // The local→world transform maps: localX→xDir, localY→yDir, localZ→normal.
+        // To extrude along a custom world direction, project it into local space
+        // via the transpose (since the basis is orthonormal), then pass to extrudeVector.
+        const worldDir = dir
+            ? Vector.from(dir).normalize()
+            : this._normal.copy().normalize();
+
+        const localX = worldDir.dot(this._xDir.copy().normalize());
+        const localY = worldDir.dot(this._yDir.copy().normalize());
+        const localZ = worldDir.dot(this._normal.copy().normalize());
+
+        const mesh = Mesh.from(sketch.extrudeVector(
+            Vector.from(localX * length, localY * length, localZ * length).inner()
+        ));
         return this._alignMeshToWorld(mesh);
     }
 
@@ -460,7 +471,7 @@ export class Sketch
     //// FINISHING ////
 
     /** Convert all curves in Sketch to world coordinates and return copies */
-    _localToWorld():CurveCollection
+    _localToWorld():ShapeCollection<Curve>
     {
         return this._curves.copy()
             .forEach((curve) =>
@@ -474,19 +485,19 @@ export class Sketch
         });
     }
 
-    end(): CurveCollection
+    end(): ShapeCollection<Curve>
     {
         return this._localToWorld();
     }
 
     /** Alias for end */
-    importSketch(): CurveCollection
+    importSketch(): ShapeCollection<Curve>
     {
         return this.end();
     }
 
     /** Alias for end */
-    toCurves(): CurveCollection
+    toCurves(): ShapeCollection<Curve>
     {
         return this.end();
     }

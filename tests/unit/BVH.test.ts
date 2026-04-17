@@ -1,7 +1,7 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
-import { MeshCollection } from '../../src/ShapeCollection';
+import { ShapeCollection } from '../../src/ShapeCollection';
 
 beforeAll(async () =>
 {
@@ -214,7 +214,7 @@ describe('Mesh.fromSDF()', () =>
 
 // ── MeshCollection.hits ───────────────────────────────────────────────────────
 
-describe('MeshCollection.hits()', () =>
+describe('ShapeCollection.hits()', () =>
 {
     it('finds the overlapping pair', () =>
     {
@@ -222,7 +222,7 @@ describe('MeshCollection.hits()', () =>
         const b = Mesh.Cube(10).move(100, 0, 0);
         const c = Mesh.Cube(10); // overlaps a
 
-        const col = new MeshCollection(a, b);
+        const col = new ShapeCollection<Mesh>(a, b);
         const pairs = col.hits(c);
         // a and c overlap; b and c do not
         expect(pairs.length).toBe(1);
@@ -233,28 +233,28 @@ describe('MeshCollection.hits()', () =>
 
 // ── MeshCollection.distanceTo ─────────────────────────────────────────────────
 
-describe('MeshCollection.distanceTo()', () =>
+describe('ShapeCollection.distanceTo()', () =>
 {
     it('returns 0 when a mesh overlaps at least one member', () =>
     {
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10).move(100, 0, 0);
-        const col = new MeshCollection(a, b);
+        const col = new ShapeCollection<Mesh>(a, b);
         expect(col.distanceTo(Mesh.Cube(10))).toBeCloseTo(0, 3);
     });
 });
 
 // ── MeshCollection.closestPair ────────────────────────────────────────────────
 
-describe('MeshCollection.closestPair()', () =>
+describe('ShapeCollection.closestPair()', () =>
 {
     it('finds the pair with minimum distance', () =>
     {
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10).move(50, 0, 0);
         const target = Mesh.Cube(10).move(55, 0, 0); // closer to b
-        const col = new MeshCollection(a, b);
-        const result = col.closestPair(new MeshCollection(target));
+        const col = new ShapeCollection<Mesh>(a, b);
+        const result = col.closestPair(new ShapeCollection<Mesh>(target));
         expect(result).not.toBeNull();
         expect(result!.mesh1).toBe(b);
     });
@@ -262,13 +262,13 @@ describe('MeshCollection.closestPair()', () =>
 
 // ── MeshCollection.raycast ────────────────────────────────────────────────────
 
-describe('MeshCollection.raycast() — all hits (all=true, default)', () =>
+describe('ShapeCollection.raycast() — all hits (all=true, default)', () =>
 {
     it('returns entries for every mesh the ray pierces', () =>
     {
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10).move(0, 0, 50);
-        const col = new MeshCollection(a, b);
+        const col = new ShapeCollection<Mesh>(a, b);
         const results = col.raycast([0, 0, 100], [0, 0, -1]) as Array<{ mesh: Mesh; hit: import('../../src/types').RaycastHit }>;
         expect(Array.isArray(results)).toBe(true);
         expect(results.length).toBe(2);
@@ -278,7 +278,7 @@ describe('MeshCollection.raycast() — all hits (all=true, default)', () =>
     {
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10).move(0, 0, 50);
-        const col = new MeshCollection(a, b);
+        const col = new ShapeCollection<Mesh>(a, b);
         const results = col.raycast([0, 0, 100], [0, 0, -1]) as Array<{ mesh: Mesh; hit: import('../../src/types').RaycastHit }>;
         expect(results.length).toBe(2);
         expect(results[0].hit.distance).toBeLessThanOrEqual(results[1].hit.distance);
@@ -287,20 +287,20 @@ describe('MeshCollection.raycast() — all hits (all=true, default)', () =>
     it('returns empty array when ray misses all meshes', () =>
     {
         const a = Mesh.Cube(10);
-        const col = new MeshCollection(a);
+        const col = new ShapeCollection<Mesh>(a);
         const results = col.raycast([100, 100, 100], [1, 0, 0]);
         expect(Array.isArray(results)).toBe(true);
         expect((results as any[]).length).toBe(0);
     });
 });
 
-describe('MeshCollection.raycast() — first hit (all=false)', () =>
+describe('ShapeCollection.raycast() — first hit (all=false)', () =>
 {
     it('returns the nearest-hit mesh entry', () =>
     {
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10).move(0, 0, 50);
-        const col = new MeshCollection(a, b);
+        const col = new ShapeCollection<Mesh>(a, b);
         const result = col.raycast([0, 0, 100], [0, 0, -1], Infinity, false) as { mesh: Mesh; hit: import('../../src/types').RaycastHit };
         expect(result).not.toBeNull();
         expect(result.mesh).toBe(b); // b is closer to the ray origin at z=100
@@ -309,7 +309,7 @@ describe('MeshCollection.raycast() — first hit (all=false)', () =>
     it('returns null when the ray misses all meshes', () =>
     {
         const a = Mesh.Cube(10);
-        const col = new MeshCollection(a);
+        const col = new ShapeCollection<Mesh>(a);
         const result = col.raycast([100, 100, 100], [1, 0, 0], Infinity, false);
         expect(result).toBeNull();
     });

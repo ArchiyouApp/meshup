@@ -66,7 +66,7 @@ export { Shape } from './Shape';
 export { Mesh } from './Mesh';
 export { Polygon } from './Polygon';
 export { Curve } from './Curve';
-export { ShapeCollection, MeshCollection, CurveCollection } from './ShapeCollection';
+export { ShapeCollection } from './ShapeCollection';
 export { Sketch } from './Sketch';
 export { Bbox } from './Bbox';
 export { OBbox } from './OBbox';
