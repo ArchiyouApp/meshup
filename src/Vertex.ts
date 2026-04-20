@@ -113,10 +113,33 @@ export class Vertex extends Shape
     throw new Error('Vertex.scale(): not yet implemented');
   }
 
-  override mirror(_dir: Axis | PointLike, _pos?: PointLike): this
+  override mirror(dir: Axis | PointLike, pos?: PointLike): this
   {
-    throw new Error('Vertex.mirror(): not yet implemented');
+    const origin = pos ? new Point(pos) : new Point(0, 0, 0);
+
+    // Resolve dir to a unit normal
+    const n = (typeof dir === 'string'
+      ? new Vector(dir as Axis)
+      : new Vector(dir as PointLike)
+    ).copy().normalize();
+
+    // Reflect position: p' = p - 2 * ((p - origin) · n) * n
+    const rel = new Vector(this.x - origin.x, this.y - origin.y, this.z - origin.z);
+    const d = rel.dot(n.inner());
+    const newPos = new Point(this.x - 2 * d * n.x, this.y - 2 * d * n.y, this.z - 2 * d * n.z);
+
+    // Reflect normal direction (translation-free)
+    const nm = Vector.from(this._vertex.normal());
+    const dn = nm.dot(n.inner());
+    const newNormal = new Vector(nm.x - 2 * dn * n.x, nm.y - 2 * dn * n.y, nm.z - 2 * dn * n.z);
+
+    this._vertex = new VertexJs(newPos.toPoint3Js(), newNormal.toVector3Js());
+    return this;
   }
+
+  override mirrorX(x?: number): this { return this.mirror('x', [x ?? 0, 0, 0]); }
+  override mirrorY(y?: number): this { return this.mirror('y', [0, y ?? 0, 0]); }
+  override mirrorZ(z?: number): this { return this.mirror('z', [0, 0, z ?? 0]); }
 
   override copy(): this
   {

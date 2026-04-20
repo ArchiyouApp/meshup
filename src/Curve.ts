@@ -1271,13 +1271,13 @@ export class Curve extends Shape
      */
     override rotateQuaternion(wOrObj: number | {w: number, x: number, y: number, z: number}, x?: number, y?: number, z?: number): this
     {
-        if (typeof wOrObj === 'object' && wOrObj !== null && 'w' in wOrObj && 'x' in wOrObj && 'y' in wOrObj && 'z' in wOrObj)
+        if (typeof wOrObj === 'number')
         {
-            return this.update(this.inner().rotateQuaternion(wOrObj.w, wOrObj.x, wOrObj.y, wOrObj.z));
+            return this.update(this.inner().rotateQuaternion(wOrObj, x!, y!, z!));
         }
         else
         {
-            return this.update(this.inner().rotateQuaternion(wOrObj, x!, y!, z!));
+            return this.update(this.inner().rotateQuaternion(wOrObj.w, wOrObj.x, wOrObj.y, wOrObj.z));
         }
     }
     
@@ -1615,7 +1615,7 @@ export class Curve extends Shape
 
         // Fast path for circles: offsetting a circle just changes its radius 
         // Curvo offsetting is quite slow 
-        if(this.subtype() === 'circle')
+        if(this.subtype() === 'Circle')
         {
             const bb = this.bbox();
             if(bb)
@@ -2130,7 +2130,7 @@ export class Curve extends Shape
         const fmt = (n: number) => +n.toFixed(6);
         const to2D = (p: { x: number; y: number; z: number }): [number, number] => [p.x, -p.y];
 
-        if (this.subtype() === 'circle')
+        if (this.subtype() === 'Circle')
         {
             const bb = this.bbox();
             if (bb)
@@ -2159,9 +2159,9 @@ export class Curve extends Shape
 
             switch (curveType)
             {
-                case 'line':
-                case 'polyline':
-                case 'rect':
+                case 'Line':
+                case 'Polyline':
+                case 'Rect':
                 {
                     cps.slice(1).forEach(cp =>
                     {
@@ -2170,13 +2170,13 @@ export class Curve extends Shape
                     });
                     break;
                 }
-                case 'arc':
-                case 'circle':
+                case 'Arc':
+                case 'Circle':
                 {
                     _appendArcSvg(spanRaw, to2D, fmt, pathParts);
                     break;
                 }
-                case 'spline':
+                case 'Spline':
                 {
                     const deg = spanRaw.degree();
                     const weights = Array.from(spanRaw.weights());

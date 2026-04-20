@@ -217,10 +217,8 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         return this._shape;
     }
 
-    /** Return shapes held by this SceneNode and its children 
-     *  NOTE: would rather return a ShapeCollection, but needs work to have correct typing
-    */
-    shapes(): ShapeCollection<S>
+    /** Return shapes held by this SceneNode and its children */
+    shapes(): ShapeCollection
     {
         return new ShapeCollection(
             this._traverse().flatMap(c => c._shape ? [c._shape] : []));
@@ -412,7 +410,7 @@ export class SceneNode<S extends SceneNodeShape = Shape>
     applyStyle(): this
     {
         const eff = this.effectiveStyle();
-        this.shapes(true).forEach(shape => shape.style.merge(eff.toData()));
+        this.shapes().forEach(shape => shape.style.merge(eff.toData()));
         return this;
     }
 
@@ -424,8 +422,8 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         return {
             name: this.name,
             isLayer: this.isLayer(),
-            shapeCount: this._shape ? 1 : 0,
-            shapeTypes: this._shape ? [this._shape.type() as ShapeType] : [],
+            hasShape: !!this._shape,
+            shapeType: this._shape ? this._shape.type() : undefined,
             style: this.style.explicitData(),
             children: this._children.map(c => c.toGraph()),
         };

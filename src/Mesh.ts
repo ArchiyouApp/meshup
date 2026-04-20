@@ -826,10 +826,13 @@ export class Mesh extends Shape
         return ch ? Mesh.from(ch) : undefined;
     }
 
+    /*
+    // TODO
     smooth(lambda: number, mu:number, iterations:number, preserveBoundaries:boolean): this
     {
         return this.update(this.inner()?.taubinSmooth(lambda, mu, iterations, preserveBoundaries));
     }
+    */
 
     //// BOOLEAN OPERATIONS ////
     /*

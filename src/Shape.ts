@@ -159,12 +159,12 @@ export abstract class Shape
         return `<Shape id=${this.id()} type=${this.type()} subtype=${this.subtype()}>`;
     }
 
-    toGLB(): Promise<Uint8Array>
+    async toGLB(up: Axis = 'z'): Promise<Uint8Array|undefined>
     {
         throw new Error('toGLB() method not implemented for base Shape class.');
     }
 
-    toGLTF(): Promise<string>
+    async toGLTF(up: Axis = 'z'): Promise<string|undefined>
     {
         throw new Error('toGLTF() method not implemented for base Shape class.');
     }

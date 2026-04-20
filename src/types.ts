@@ -119,11 +119,11 @@ export type ShapeType = 'Mesh' | 'Curve' | 'unknown';
 /** Plain-object representation of a SceneNode for inspection/serialisation. */
 export interface SceneNodeGraphNode
 {
-  name: string;
-  isLayer: boolean;
-  hasShape: number;
-  shapeType: ShapeType | undefined;
-  style: StyleData;
-  children: SceneNodeGraphNode[];
+  name: string
+  isLayer: boolean
+  hasShape: boolean
+  shapeType: ShapeType | string | undefined
+  style: StyleData
+  children: SceneNodeGraphNode[]
 }
 

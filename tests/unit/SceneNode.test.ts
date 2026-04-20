@@ -3,7 +3,6 @@ import { initAsync } from '../../src/index';
 import { SceneNode } from '../../src/SceneNode';
 import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
-import { MeshCollection, CurveCollection } from '../../src/ShapeCollection';
 
 beforeAll(async () =>
 {
@@ -107,11 +106,11 @@ describe('SceneNode shape management', () =>
         meshNode.setShape(Mesh.Cube(5));
         curveNode.setShape(Curve.Line([0,0,0], [1,0,0]));
         parent.addChild(meshNode).addChild(curveNode);
-        expect(parent.shapes(true).filter(s => s instanceof Mesh)).toHaveLength(1);
-        expect(parent.shapes(true).filter(s => s instanceof Curve)).toHaveLength(1);
+        expect(parent.shapes().filter(s => s instanceof Mesh)).toHaveLength(1);
+        expect(parent.shapes().filter(s => s instanceof Curve)).toHaveLength(1);
     });
 
-    it('shapes(true) collects from descendants', () =>
+    it('shapes collects from descendants', () =>
     {
         const parent = new SceneNode('parent');
         const child = new SceneNode('child');
@@ -323,8 +322,8 @@ describe('SceneNode.toGraph()', () =>
         const g = c.toGraph();
         expect(g.name).toBe('root');
         expect(g.isLayer).toBe(false);
-        expect(g.shapeCount).toBe(1);
-        expect(g.shapeTypes).toEqual(['Mesh']);
+        expect(g.hasShape).toBe(true);
+        expect(g.shapeType).toEqual('Mesh');
         expect(g.children).toHaveLength(0);
     });
 
@@ -344,7 +343,7 @@ describe('SceneNode.toGraph()', () =>
         const g = parent.toGraph();
         expect(g.children).toHaveLength(1);
         expect(g.children[0].name).toBe('child');
-        expect(g.children[0].shapeCount).toBe(1);
+        expect(g.children[0].hasShape).toBe(true);
     });
 });
 

@@ -148,6 +148,10 @@ export class Polygon extends Shape
         throw new Error('Polygon.mirror(): not yet implemented');
     }
 
+    override mirrorX(_x?: number): this { throw new Error('Polygon.mirrorX(): not yet implemented'); }
+    override mirrorY(_y?: number): this { throw new Error('Polygon.mirrorY(): not yet implemented'); }
+    override mirrorZ(_z?: number): this { throw new Error('Polygon.mirrorZ(): not yet implemented'); }
+
     override copy(): this
     {
         const verts = this.vertices().map(p => p.toVertexJs());
