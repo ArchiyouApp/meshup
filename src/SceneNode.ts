@@ -2,18 +2,18 @@
  *  SceneNode.ts
  *
  *  Manages a nested scene hierarchy of Shapes (Meshes / Curves), similar to
- *  a Blender ShapeCollection or a GLTF Node.  Every shape on the scene can be
+ *  a Blender ShapeCollection or a GLTF Node.  Every shape on the scene needs to be
  *  wrapped in a SceneNode.  The scene root is also a SceneNode.
  *
  *  Key concepts:
- *   - A SceneNode can hold 0..N shapes directly AND 0..N child SceneNodes.
+ *   - A SceneNode can hold 0 or one shape directly AND 0..N child SceneNodes.
  *   - If a SceneNode holds no shapes (directly) it is considered a "layer".
  *   - Style cascades from ancestors to descendants at export time.
  *   - SceneNodes export to SVG as nested <g> elements and to GLTF as nested
  *     Nodes via gltf-transform.
  *
  *  The class is generic over S (the shape type it holds).
- *  The default S = Shape (Mesh | Curve) preserves existing behaviour.
+ *  The default S = Shape (Vertex| Curve| Polygon | Mesh ) preserves existing behaviour.
  *  SmartSceneNode uses S = SmartShape.
  */
 
@@ -30,7 +30,7 @@ import { GLTFBuilder } from './GLTFBuilder';
 /** Minimal interface that any shape stored in a SceneNode must satisfy. */
 export interface SceneNodeShape {
     type(): ShapeType | string
-    subType(): string | null
+    subtype(): string | null
     _node: SceneNode<any> | null
     style: Style
     is2D(): boolean
@@ -48,7 +48,7 @@ export class SceneNode<S extends SceneNodeShape = Shape>
     name: string;
     style: Style;
 
-    private _shapes: S[] = []; // Shapes held directly in this container (not in child containers)
+    private _shape: S | null = null; // Shape held directly in this container (not in child containers)
     private _children: SceneNode<S>[] = []; // Child containers (sub-groups / layers)
     private _parent: SceneNode<S> | null = null; // Back-reference to the parent container; null if this is the root
 
@@ -69,9 +69,9 @@ export class SceneNode<S extends SceneNodeShape = Shape>
     /** Wrap a single shape in a new container. */
     static from<S extends SceneNodeShape = Shape>(shape: S, name?: string): SceneNode<S>
     {
-        const label = name || `${shape.type()}: ${shape.subType() || 'shape'}`;
+        const label = name || this.getName(shape);
         const c = new SceneNode<S>(name ?? label);
-        c.addShape(shape);
+        c.setShape(shape);
         return c;
     }
 
@@ -83,6 +83,13 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         return new SceneNode<S>(name);
     }
 
+    /** Find a label based on shape */
+    static getName<S extends SceneNodeShape>(s: S): string
+    {
+        const sub = s.subtype();
+        return sub ? `${s.type()}:${sub}` : s.type();
+    }
+
     //// SHAPE MANAGEMENT ////
 
      /**
@@ -91,6 +98,8 @@ export class SceneNode<S extends SceneNodeShape = Shape>
      *   - SceneNode<S> → addChild()
      *   - S = Shape (or subclass) → addShape()
      *   - ShapeCollection → addShape() for each (only meaningful when S = Shape)
+     * 
+     *   NOTE: _setShape only for internal use
      */
     add(...items: Array<string | SceneNode<S> | S | ShapeCollection>): this
     {
@@ -98,15 +107,19 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         {
             if (typeof item === 'string')
             {
-                // Name of new SceneNode: create it and add as child
+                // Name of new SceneNode: create it and add as child to current node
                 this.addChild(this._createChild(item));
             }
             else if (item instanceof SceneNode) this.addChild(item as SceneNode<S>);
-            else if (item instanceof ShapeCollection) item.forEach(shape => this.addShape(shape as unknown as S));
-            else if (Shape.isShape(item))
+            else if (item instanceof ShapeCollection || Shape.isShape(item))  // any shape
             {
-                this.addShape(item as S);
+                const items = item instanceof ShapeCollection ? item.shapes() : [item as S];    
+                items.forEach(shape =>
+                {
+                    this.addShape(shape as S);
+                });
             }
+            
             else {
                 throw new Error(`SceneNode.add(): Invalid item: ${item}. Must be a string (new child name), SceneNode, ShapeCollection, or Shape.`);
             }
@@ -114,9 +127,8 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         return this;
     }
 
-    /** Add new SceneNode (layer) and populate it with the given shape(s).
+    /** Add new empty SceneNode (=layer) and populate it with the given shape(s).
      *  Dot-notation creates nested layers: 'walls.inner' finds or creates 'walls',
-     *  then finds or creates 'inner' inside it, and adds the item to the bottom layer.
      */
     addLayer(name: string, item: S | ShapeCollection): SceneNode<S>
     {
@@ -145,61 +157,85 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         const layer = existing ?? this._createChild(bottomName);
         if (!existing) parent.addChild(layer);
 
-        if (item instanceof ShapeCollection)
+        const items = item instanceof ShapeCollection ? item.shapes() : [item as S];
+        items.forEach(shape =>
         {
-            item.forEach(shape => layer.addShape(shape as unknown as S));
-        }
-        else
-        {
-            layer.addShape(item);
-        }
-
+            layer.addShape(shape as S);
+        });
+        
         return layer;
     }
 
-    /** Add a shape to this container. Returns `this` for chaining. */
-    addShape(shape: S): this
+    /** Wrap Shape in a new SceneNode and add it as a child. */
+    addShape(s:S):this
     {
-        if (!this._shapes.includes(shape))
+        // If already has a node. Move node to current container
+        if (s._node && s._node !== this)
         {
-            this._shapes.push(shape);
-            shape._node = this;
+            const existingNode = s._node as SceneNode<S>;
+            existingNode.detach();
+            this.addChild(existingNode);
+            return this;
         }
-        return this;
-    }
-
-    /** Remove a shape from this container. */
-    removeShape(shape: S): this
-    {
-        const idx = this._shapes.indexOf(shape);
-        if (idx !== -1)
-        {
-            this._shapes.splice(idx, 1);
-            shape._node = null;
-        }
+        const childNode = this._createChild(SceneNode.getName(s));
+        childNode.setShape(s as unknown as S);
+        this.addChild(childNode);
         return this;
     }
 
     /**
-     * Return shapes held by this container.
-     * @param recursive  If true, collect shapes from all descendant containers too.
+     * Attach a shape to this node. Automatically detaches the shape from its previous node if it has one.
      */
-    shapes(recursive = true): S[]
+    setShape(shape: S): this
     {
-        if (!recursive) return [...this._shapes];
-        return this._traverse().flatMap(c => c._shapes);
+        if (this._shape === shape) return this;
+        // Detach from previous node
+        if (shape._node && shape._node !== this)
+        {
+            (shape._node as SceneNode<S>).resetShape(shape);
+        }
+        if (this._shape) this._shape._node = null;
+        this._shape = shape;
+        shape._node = this;
+        return this;
+    }
+
+    /** Remove a shape from this SceneNode. */
+    resetShape(shape: S): this
+    {
+        if (this._shape === shape)
+        {
+            this._shape._node = null;
+            this._shape = null;
+        }
+        return this;
+    }
+
+    /** Return Shape held by this SceneNode */
+    shape()
+    {
+        return this._shape;
+    }
+
+    /** Return shapes held by this SceneNode and its children 
+     *  NOTE: would rather return a ShapeCollection, but needs work to have correct typing
+    */
+    shapes(): ShapeCollection<S>
+    {
+        return new ShapeCollection(
+            this._traverse().flatMap(c => c._shape ? [c._shape] : []));
     }
 
     /** True when this container holds no shapes directly (acts as a layer). */
     isLayer(): boolean
     {
-        return this._shapes.length === 0;
+        return this._shape === null;
     }
 
     /** True when this container holds at least one shape directly. */
     hasShape(): boolean
     {
-        return this._shapes.length > 0;
+        return this._shape !== null;
     }
 
     //// CHILD MANAGEMENT ////
@@ -228,11 +264,17 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         return this;
     }
 
+    /** Remove a shape from this node (public alias for resetShape). */
+    removeShape(shape: S): this
+    {
+        return this.resetShape(shape);
+    }
+
     /** Remove a child SceneNode or a Shape from this node. */
     remove(item: SceneNode<S> | S): this
     {
         if (item instanceof SceneNode) return this.removeChild(item as SceneNode<S>);
-        return this.removeShape(item as S);
+        return this.resetShape(item as S);
     }
 
     /** Detach this container from its parent. Returns `this`. */
@@ -382,8 +424,8 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         return {
             name: this.name,
             isLayer: this.isLayer(),
-            shapeCount: this._shapes.length,
-            shapeTypes: this._shapes.map(s => s.type()) as ShapeType[],
+            shapeCount: this._shape ? 1 : 0,
+            shapeTypes: this._shape ? [this._shape.type() as ShapeType] : [],
             style: this.style.explicitData(),
             children: this._children.map(c => c.toGraph()),
         };
@@ -416,13 +458,10 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         const displayAttr = eff.visible ? '' : ' display="none"';
         const lines: string[] = [`<g id="${this.name}"${displayAttr}>`];
 
-        this._shapes.forEach(shape =>
+        if (this._shape && this._shape.is2D() && this._shape.toSVGElem)
         {
-            if (shape.is2D() && shape.toSVGElem)
-            {
-                lines.push('  ' + shape.toSVGElem());
-            }
-        });
+            lines.push('  ' + this._shape.toSVGElem());
+        }
 
         this._children.forEach(child =>
         {
@@ -440,7 +479,7 @@ export class SceneNode<S extends SceneNodeShape = Shape>
      */
     toSVG(): string
     {
-        const shapes2D = this.shapes(true).filter(s => s.is2D());
+        const shapes2D = this.shapes().filter(s => s.is2D());
 
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         shapes2D.forEach(shape =>

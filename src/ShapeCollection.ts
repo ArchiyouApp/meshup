@@ -27,7 +27,7 @@ export class ShapeCollection<S extends Shape = Shape>
     _shapes: Array<S> = [];
     _groups = new Map<string, ShapeCollection<S>>();
 
-    constructor(...args: Array<S | Array<any> | ShapeCollection<any>>)
+    constructor(...args: Array<Shape | Array<any> | ShapeCollection<any>>)
     {
         args.forEach(arg => this.add(arg as any));
     }
@@ -52,7 +52,7 @@ export class ShapeCollection<S extends Shape = Shape>
     }
 
     add(shapes: S | ShapeCollection<any> | Array<any>): this
-    {
+    {        
         if (Shape.isShape(shapes))
         {
             this._shapes.push(shapes as S);
@@ -61,7 +61,13 @@ export class ShapeCollection<S extends Shape = Shape>
         {
             const addShapes: S[] = ShapeCollection.isShapeCollection(shapes)
                 ? shapes.toArray() as S[]
-                : (shapes as any[]).filter(s => Shape.isShape(s)) as S[];
+                : (shapes as any[])
+                    .filter(s => {
+                        // HACKY: If you want to force any instance to be accepted as a shape, 
+                        // implement isShapeClass() on it to return true, and ShapeCollection will accept it. 
+                        return Shape.isShape(s) || s.isShapeClass?.();
+                    }) as S[];
+
             this._shapes.push(...addShapes);
         }
         else

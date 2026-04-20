@@ -120,7 +120,6 @@ export class Vertex extends Shape
 
   override copy(): this
   {
-    console.log('==== VERTEX COPY =====');
     const v = new Vertex([this.x, this.y, this.z], this.normal().toArray());
     v.style.merge(this.style.toData());
     return v as this;
@@ -140,7 +139,7 @@ export class Vertex extends Shape
     return 'Vertex';
   }
 
-  override subType(): string | null
+  override subtype(): string | null
   {
     return null;
   }

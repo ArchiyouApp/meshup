@@ -374,6 +374,7 @@ export class GLTFBuilder
      */
     add(item: Mesh | Curve, name?: string): this
     {
+        if (item.style.visible === false) return this;
         if (item instanceof Mesh)
         {
             const n = name ?? 'mesh';
@@ -488,11 +489,14 @@ export class GLTFBuilder
         // by its own owning node (children are handled via the children().forEach below).
         const nodeEffective = node.effectiveStyle();
 
-        node.shapes(false).forEach((shape, i) =>
+        const _directShape = node.shape();
+        (_directShape ? [_directShape] : []).forEach((shape, i) =>
         {
             const name = `${node.name}_shape_${i}`;
             const cascadedStyle = new Style(nodeEffective.toData());
             cascadedStyle.merge(shape.style.explicitData() as any);
+
+            if (cascadedStyle.visible === false) return;
 
             if (shape instanceof Mesh || shape.type?.() === 'Mesh')
             {

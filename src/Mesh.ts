@@ -11,7 +11,7 @@
 
 import type { CsgrsModule, Axis, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions } from './types';
 import type { SceneNode } from './SceneNode';
-import { isPointLike } from './types';
+import { isAxis, isPointLike } from './types';
 
 import { Curve, getCsgrs } from './index';
 import { Shape } from './Shape';
@@ -42,13 +42,6 @@ export class Mesh extends Shape
     _mesh: MeshJs | undefined; // Underlying MeshJs geometry
 
     type(): 'Mesh' { return 'Mesh'; }
-    subType(): string|null 
-    { 
-        // TODO: Box, Sphere, etc subtypes
-        console.warn('Mesh::subType(): no subtypes implemented yet — returning null');
-        return null;
-    } 
-
 
     constructor()
     {
@@ -277,6 +270,7 @@ export class Mesh extends Shape
             getCsgrs().MeshJs.cube(size, {}));
         // NOTE: CSGRS created boxes from [0,0,0] to [size,size,size]
         // But create at center here, following defaults of many other software
+        mesh.metadata.subtype = 'Box';
         return mesh.moveToCenter();
     }
 
@@ -291,6 +285,7 @@ export class Mesh extends Shape
         if (d === undefined) d = w;
         if (h === undefined) h = w;
         const mesh = this.from(getCsgrs().MeshJs.cuboid(w, d, h, {}));
+        mesh.metadata.subtype = 'Box';
         return mesh.moveToCenter();
     }
 
@@ -322,17 +317,21 @@ export class Mesh extends Shape
 
     static Sphere(radius: number): Mesh
     {
-        const mesh = getCsgrs()?.MeshJs.sphere(radius, 
+        const meshJs = getCsgrs()?.MeshJs.sphere(radius, 
             SHAPES_SPHERE_SEGMENTS_WIDTH, 
             SHAPES_SPHERE_SEGMENTS_HEIGHT, {});
-        return this.from(mesh);
+        const mesh = this.from(meshJs);
+        mesh.metadata.subtype = 'Sphere';
+        return mesh;
     }
 
     static Cylinder(radius: number, height: number): Mesh
     {
-        const mesh = getCsgrs()?.MeshJs.cylinder(radius, height, 
+        const meshJs = getCsgrs()?.MeshJs.cylinder(radius, height, 
             SHAPES_CYLINDER_SEGMENTS_RADIAL, {});
-        return this.from(mesh);
+        const mesh = this.from(meshJs);
+        mesh.metadata.subtype = 'Cylinder';
+        return mesh;
     }
 
     //// CALCULATED PROPERTIES ////
@@ -410,14 +409,20 @@ export class Mesh extends Shape
     {
         const c = this?.inner()?.clone();
         if (!c) return new Mesh() as this;
+        
         const m = Mesh.from(c);
-        m.style.merge(this.style.toData());
 
-        // also add to scene as sibling of original
-        if (this._node)
+        m.style.merge(this.style.explicitData() as any); // copy only explicit style properties so layer colors can cascade
+        m.metadata = { ...this.metadata }; // copy metadata
+
+        // if original shape is tied to scene: add copy too, as sibling
+        if (this.node())
         {
-            const parent = this._node.parent();
-            if (parent) parent.addChild(m._node!);
+            const parent = this.node()?.parent() || this.node(); 
+            if (parent)
+            {
+                parent.addShape(m); // TODO: name with 'copy'
+            };
         }
 
         return m as this;
@@ -458,10 +463,10 @@ export class Mesh extends Shape
     }
 
     /** Move the mesh so its bbox center lands at the given point */
-    moveTo(target: PointLike): this
+    moveTo(target: PointLike, py?: number, pz?: number): this
     {
         const c = this.bbox().center();
-        const t = Point.from(target);
+        const t = Point.from(target, py, pz);
         return this.translate(t.x - c.x, t.y - c.y, t.z - c.z);
     }
 
@@ -720,36 +725,38 @@ export class Mesh extends Shape
 
     /** Mirror Mesh along a plane defined by a normal and a position
      *  @param dir - normal vector of the mirror plane, or an axis ('x', 'y', 'z') to mirror across the corresponding world plane
-     *  @param pos - a point the mirror plane passes through (default: center of mass)
+     *  @param pos - a coord (in case of axis) or point the mirror plane passes through (default: center of mass)
      */
-    override mirror(dir: Axis | PointLike, pos?: PointLike): this
+    override mirror(dir: Axis | PointLike, pos?: number|PointLike): this
     {
         const planeNormal = isPointLike(dir) 
-                                ? Point.from(dir).toVector()
-                                : Vector.from(dir); // converts axis to Vector
-        
+                                ? Point.from(dir as PointLike).toVector()
+                                : Vector.from(dir as Axis) ; // converts axis to Vector
+
         let planePosition:Point;
 
-        // If the normal is not a unit vector there is actually a position implied
-        // which is the center of mass moved along the normal by the normal's length.
+        // If the normal is not a unit vector the vector itself encodes both plane position and normal
         if((planeNormal.length() - 1) > TOLERANCE && pos === undefined) 
         {
-            planePosition = Point.from(planeNormal.copy()); // this is the position implied by the non-unit normal, we move one unit along the normal from the center of mass
-            planeNormal.normalize(); // really normalize
-            console.warn(`Mesh::mirror(): Warning: non-unit normal vector supplied without position; Mirroring with normal ${planeNormal.toArray()} and mirror plane position implied at ${planePosition.toArray()}`);
+            planePosition = Point.from(planeNormal.toArray() as PointLike); // position is the end-point of the vector
+            planeNormal.normalize();
         }
         else {
-            // If position is not given use center of mass of Mesh
+            // Either we have an axis, then coord is given, or we have a normal with a position, otherwise use center of shape
             planeNormal.normalize();
-            planePosition = pos ? Point.from(pos) : this.center();
+            planePosition = pos ? (isAxis(dir) && typeof pos === 'number') 
+                                        ? new Point(0,0,0).setComponent(dir, pos)
+                                        : Point.from(pos) 
+                                : this.center();
         }
         
         // TODO CSGRS: Plane could use some work for ease of use
-        const plane = PlaneJs.fromNormal(
-                planeNormal.toVector3Js(), 10.0);
+        const plane = PlaneJs.fromNormal(planeNormal.toVector3Js(), 0);
+
         const offsettedPlanePoints = plane
                                     .points()
                                     .map( p => Vector.from(p).add(planePosition).toPoint().toPoint3Js());
+        
         const offsettedPlane = PlaneJs.fromPoints(
                                 offsettedPlanePoints[0],
                                 offsettedPlanePoints[1],
@@ -916,15 +923,21 @@ export class Mesh extends Shape
     {
         const meshes = new ShapeCollection();
         const dirVec = Vector.from(direction).normalize(); // auto converts Axis
-        for(let i=0; i<count; i++)
+        const bbox = this.bbox();
+        const offsetSize = new Vector(bbox.width(), bbox.depth(), bbox.height())
+                            .scale(dirVec)
+                            .length();
+
+        new Array(count).fill(0).forEach((_, i) =>
         {
             const mesh = this.copy();
             if(mesh)
             {
-                mesh.move(dirVec.scale(i * spacing));
+                mesh.move(dirVec.copy().scale(i * offsetSize + spacing));
                 meshes.add(mesh);
             }
-        }
+        });
+        
         return meshes;
     }
 
@@ -963,12 +976,15 @@ export class Mesh extends Shape
 
     //// OUTPUT ////
 
+    toString(): string
+    {
+        return `<Mesh id=${this.id} vertices=${this.vertices().length} polygons=${this.polygons().length}>`;
+    }
+
     toPolygons(): undefined|Array<PolygonJs>
     {
         return this.inner()?.polygons();
     }
-
-    //// EXPORT ////
 
     toSTLBinary(): Uint8Array | undefined
     {
@@ -1116,11 +1132,24 @@ export class Mesh extends Shape
     }
 
     /**
-     * Minimum separating distance to another mesh.  Returns `0` if they intersect.
+     * Minimum separating distance to another Mesh or Curve.
+     * For Curves the curve is tessellated and the minimum closestPoint distance
+     * across all samples is returned.  Returns `0` if they intersect.
      */
-    distanceTo(other: Mesh): number {
+    distanceTo(other: Mesh | Curve): number
+    {
+        if (other instanceof Curve)
+        {
+            const pts = other.tessellate();
+            if (!pts || pts.length === 0) return Infinity;
+            return pts.reduce<number>((minD, p) =>
+            {
+                const r = this.closestPoint(p.x, p.y, p.z);
+                return r ? Math.min(minD, r.distance) : minD;
+            }, Infinity);
+        }
         const a = this.inner();
-        const b = other.inner();
+        const b = (other as Mesh).inner();
         if (!a || !b) return Infinity;
         return a.distanceTo(b);
     }

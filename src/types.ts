@@ -121,8 +121,8 @@ export interface SceneNodeGraphNode
 {
   name: string;
   isLayer: boolean;
-  shapeCount: number;
-  shapeTypes: ShapeType[];
+  hasShape: number;
+  shapeType: ShapeType | undefined;
   style: StyleData;
   children: SceneNodeGraphNode[];
 }

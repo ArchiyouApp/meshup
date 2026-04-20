@@ -198,9 +198,22 @@ export class Vector
     return this.normalize();
   }
 
-  scale(scalar: number): this
+  scale(scalar: number | PointLike): this
   {
-    this._inner = this._inner.scale(scalar);
+    if (typeof scalar === 'number')
+    {
+      this._inner = this._inner.scale(scalar);
+    }
+    else if (isPointLike(scalar))
+    {
+      const p = Point.from(scalar);
+      // Little shortcut
+      this._inner = new Vector3Js(this.x * p.x, this.y * p.y, this.z * p.z);
+    }
+    else
+    {
+      throw new Error('Vector::scale(): Invalid argument. Supply a number or PointLike.');
+    }
     return this;
   }
 

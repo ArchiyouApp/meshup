@@ -23,10 +23,14 @@ describe('Set up a basic scene hierarchy and export', () =>
     it('Create a scene hierarchy and export to GLTF', async () =>
     {
         const cyl = Mesh.Cylinder(5, 10).color('blue');
-        const cubes = Mesh.Cube(10).replicate(4, (c,i) => c.move(i*15, 0, 0).color(255-i*50, 0, 0))
+
+        const cubes = Mesh.Cube(10)
+                        .replicate(4, (c,i) => c.move(i*15, 0, 0).color(255-i*50, 0, 0))
                         .moveTo(0,0,0)
                         .moveZ(20);
-        const spheres = Mesh.Sphere(5).row(3, 10)
+                        
+        const spheres = Mesh.Sphere(5)
+                            .row(3, 10)
                             .color('yellow')
                             .moveTo(0,0,0)
                             .moveZ(35);
@@ -38,10 +42,25 @@ describe('Set up a basic scene hierarchy and export', () =>
 
         const scene = SceneNode.root();
         scene.add(cyl); // on top level
-        scene.addLayer('cubes', cubes); // in a layer
-        scene.add('spheres').add(spheres); // same thing
-        scene.addLayer('lines', lines); 
-        
+        const cubeLayer = scene.addLayer('cubes', cubes); // in a layer
+
+        expect(cubeLayer.shapes().length).toBe(cubes.length); // should have all cubes
+
+        const sphereLayer = scene.addLayer('spheres', spheres);
+        expect(sphereLayer.shapes().length).toBe(spheres.length); // should have all spheres
+
+        const lineLayer = scene.addLayer('lines', lines); 
+        expect(lineLayer.shapes().length).toBe(lines.length); // should have all lines
+
+        // Copy a shape that is in the scene - should automatically add to scene as sibling
+        cyl.copy().move(20).opacity(0.5);
+        expect(scene.findAll(c => c.name === 'Mesh:Cylinder')?.length).toBe(2);
+
+    
+        // Explore graph
+        // console.log(JSON.stringify(scene.toGraph()));
+
+    
         const gltf = await scene.toGLTF();
         expect(gltf).toBeTruthy();
         save('test.scene.gltf', gltf);

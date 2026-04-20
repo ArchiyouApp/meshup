@@ -17,6 +17,8 @@
     "dist"
   ],
   "scripts": {
+    "test:unit:mesh": "vitest run tests/unit/Mesh.test.ts",
+    "test:example:scene": "vitest run tests/examples/scene.test.ts",
     "test:example:house": "vitest run tests/examples/house.test.ts",
     "test:example:curves": "vitest run tests/examples/curves.test.ts",
     "test:example:offsets": "vitest run tests/examples/offsets.test.ts",

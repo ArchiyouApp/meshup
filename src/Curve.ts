@@ -578,7 +578,7 @@ export class Curve extends Shape
     type(): 'Curve' { return 'Curve'; }
 
     /** Classify this curve as 'line', 'arc', 'circle', 'rect', 'polyline', 'spline', or 'compound'. */
-    subType(): 'line'|'arc'|'circle'|'rect'|'polyline'|'spline'|'compound'
+    subtype(): 'Line'|'Arc'|'Circle'|'Rect'|'Polyline'|'Spline'|'Compound'
     {
         const inner = this.inner();
 
@@ -591,14 +591,14 @@ export class Curve extends Shape
         const compound = inner as CompoundCurve3DJs;
         const spans = compound.spans();
 
-        if (spans.length === 0) return 'compound';
+        if (spans.length === 0) return 'Compound';
 
         const allDeg1 = spans.every(s => s.degree() === 1);
         if (allDeg1)
         {
             // Rebuild control points from spans to check rect/polyline
-            if (this.isClosed() && this._isRect()) return 'rect';
-            return 'polyline';
+            if (this.isClosed() && this._isRect()) return 'Rect';
+            return 'Polyline';
         }
 
         const allRationalDeg2 = spans.every(s =>
@@ -606,14 +606,14 @@ export class Curve extends Shape
         );
         if (allRationalDeg2)
         {
-            return this.isClosed() ? 'circle' : 'arc';
+            return this.isClosed() ? 'Circle' : 'Arc';
         }
 
-        return 'compound';
+        return 'Compound';
     }
 
     /** Classify a single NurbsCurve3DJs span. */
-    private _classifyNurbs(c: NurbsCurve3DJs): 'line'|'arc'|'circle'|'rect'|'polyline'|'spline'
+    private _classifyNurbs(c: NurbsCurve3DJs): 'Line'|'Arc'|'Circle'|'Rect'|'Polyline'|'Spline'
     {
         const deg = c.degree();
         const weights = Array.from(c.weights());
@@ -622,17 +622,17 @@ export class Curve extends Shape
         if (deg === 1)
         {
             const nCps = c.controlPoints().length;
-            if (nCps <= 2) return 'line';
-            if (this.isClosed() && this._isRect()) return 'rect';
-            return 'polyline';
+            if (nCps <= 2) return 'Line';
+            if (this.isClosed() && this._isRect()) return 'Rect';
+            return 'Polyline';
         }
 
         if (deg === 2 && isRational)
         {
-            return this.isClosed() ? 'circle' : 'arc';
+            return this.isClosed() ? 'Circle' : 'Arc';
         }
 
-        return 'spline';
+        return 'Spline';
     }
 
     /** Check if a closed degree-1 curve forms a rectangle (4 right-angle corners). */
@@ -1450,6 +1450,24 @@ export class Curve extends Shape
         return this;
     }
 
+    mirrorX(pos?: number): this
+    {
+        const planePos = (typeof pos === 'number') ? new Point(pos, 0, 0) : this.bbox()?.center() ?? new Point([0, 0, 0]);
+        return this.mirror('x', planePos);
+    }
+
+    mirrorY(pos?: number): this
+    {
+        const planePos = (typeof pos === 'number') ? new Point(0, pos, 0) : this.bbox()?.center() ?? new Point([0, 0, 0]);
+        return this.mirror('y', planePos);
+    }
+    
+    mirrorZ(pos?: number): this
+    {       
+        const planePos = (typeof pos === 'number') ? new Point(0, 0, pos) : this.bbox()?.center() ?? new Point([0, 0, 0]);
+        return this.mirror('z', planePos);
+    }
+
     /** Project this Curve onto a plane, flattening all control points onto it.
      *  @param plane - a named base plane ('xy', 'yz', 'xz', 'front', 'back', 'left', 'right')
      *               or an object { normal: PointLike, origin?: PointLike } for an arbitrary plane.
@@ -1597,7 +1615,7 @@ export class Curve extends Shape
 
         // Fast path for circles: offsetting a circle just changes its radius 
         // Curvo offsetting is quite slow 
-        if(this.subType() === 'circle')
+        if(this.subtype() === 'circle')
         {
             const bb = this.bbox();
             if(bb)
@@ -1630,7 +1648,6 @@ export class Curve extends Shape
             }
             const t = performance.now();
             offsettedCurve = Curve.fromCsgrs(this.inner().offset(distance, cornerType));
-            console.log(`Curve::offset(): Curvo offset completed in ${(performance.now() - t).toFixed(2)} ms.`);
         }
         catch (e)
         {
@@ -2113,7 +2130,7 @@ export class Curve extends Shape
         const fmt = (n: number) => +n.toFixed(6);
         const to2D = (p: { x: number; y: number; z: number }): [number, number] => [p.x, -p.y];
 
-        if (this.subType() === 'circle')
+        if (this.subtype() === 'circle')
         {
             const bb = this.bbox();
             if (bb)
@@ -2132,7 +2149,7 @@ export class Curve extends Shape
         {
             const spanCurve = Curve.fromCsgrs(spanRaw);
             const cps = spanCurve.controlPoints();
-            const curveType = spanCurve.subType();
+            const curveType = spanCurve.subtype();
 
             if (si === 0)
             {

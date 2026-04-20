@@ -140,12 +140,19 @@ export class Point
     move(pntOrDx: PointLike | number, dy?: number, dz?: number): Point
     {
         if(!isPointLike(pntOrDx) && typeof pntOrDx !== 'number'){ throw new Error(`Point::move(): Invalid parameter: ${pntOrDx}`); }
-        const d = isPointLike(pntOrDx) ? new Point(pntOrDx) : new Point(pntOrDx, dy || 0, dz || 0);
+        // IMPORTANT: isPointLike accept numbers (for x coord only), so don't start with that check!
+        const d = (typeof dy === 'number' || typeof dz === 'number') 
+                        ? new Point(pntOrDx, dy || 0, dz || 0)
+                        : Point.from(pntOrDx);
         this._x += d.x;
         this._y += d.y;
         this._z += d.z;
         return this;
     }
+
+    moveX(dx: number): Point { return this.move(dx, 0, 0); }
+    moveY(dy: number): Point { return this.move(0, dy, 0); }
+    moveZ(dz: number): Point { return this.move(0, 0, dz); }
 
     //// RELATIONSHIPS WITH OTHER POINTS ////
 

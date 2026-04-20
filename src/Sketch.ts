@@ -391,14 +391,13 @@ export class Sketch
     }
 
     /** Extrude all closed curves in this sketch into a solid Mesh.
-     *  Extrudes `length` units along the sketch normal by default.
-     *  Pass an explicit `dir` (world-space vector) to override the direction.
+     *  Extrudes `length` units along the specified `direction` and places the
+     *  result correctly in world space for any sketch plane orientation.
      *
-     *  @param length - Extrusion distance
-     *  @param dir    - Optional world-space direction vector. Defaults to the sketch normal.
+     *  @param length - Extrusion distance (positive = along sketch normal)
      *  @returns Mesh in world space, or null if no closed curves are present.
      */
-    extrude(length: number, dir?: PointLike): Mesh | null
+    extrude(length: number): Mesh | null
     {
         const sketch = this._toSketchJs();
         
@@ -407,21 +406,8 @@ export class Sketch
             console.error('Sketch.extrude(): No closed curves to extrude.');
             return null;
         }
-
-        // The local→world transform maps: localX→xDir, localY→yDir, localZ→normal.
-        // To extrude along a custom world direction, project it into local space
-        // via the transpose (since the basis is orthonormal), then pass to extrudeVector.
-        const worldDir = dir
-            ? Vector.from(dir).normalize()
-            : this._normal.copy().normalize();
-
-        const localX = worldDir.dot(this._xDir.copy().normalize());
-        const localY = worldDir.dot(this._yDir.copy().normalize());
-        const localZ = worldDir.dot(this._normal.copy().normalize());
-
-        const mesh = Mesh.from(sketch.extrudeVector(
-            Vector.from(localX * length, localY * length, localZ * length).inner()
-        ));
+        // Always extrude along local +Z; _alignMeshToWorld rotates that into the correct world normal.
+        const mesh = Mesh.from(sketch.extrudeVector(Vector.from(0, 0, length).inner()));
         return this._alignMeshToWorld(mesh);
     }
 

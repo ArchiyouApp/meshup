@@ -68,7 +68,7 @@ export class Polygon extends Shape
         return 'Polygon';
     }
 
-    override subType(): string | null
+    override subtype(): string | null
     {
         return null;
     }

@@ -6,7 +6,7 @@
  *  Provides:
  *    - id()           — UUID for this instance
  *    - type()         — 'Mesh' | 'Curve' | 'Polygon' | 'Vertex', implemented by each subclass
- *    - subType()      — finer classification, implemented by each subclass
+ *    - subtype()      — finer classification, implemented by each subclass
  *    - Shape.isShape() — type guard
  *    - Common transforms: translate, move, rotate, scale, mirror, copy (abstract)
  *    - Delegate shorthands: move, moveX/Y/Z, rotateX/Y/Z (concrete, call abstract translate/rotateAround)
@@ -38,36 +38,9 @@ export abstract class Shape
         throw new Error('Shape::inner(): method not implemented for base Shape class.');
     }
 
-
-    //// IDENTITY ////
-
-    id(): string
-    {
-        return this._id;
-    }
-
-    node(): SceneNode | null
-    {
-        return this._node;
-    }
-
-    //// TYPE GUARD ////
-
-    static isShape(o: unknown): o is Shape
-    {
-        return o instanceof Shape;
-    }
-
-    static isShapeCollection(o: unknown): o is ShapeCollection
-    {
-        return false;
-    }
-
-
-    //// ABSTRACT: implemented by subclasses ////
+     //// ABSTRACT: implemented by subclasses ////
 
     abstract type(): 'Curve' | 'Mesh' | 'Polygon' | 'Vertex';
-    abstract subType(): string | null;
     abstract is2D(): boolean;
     abstract bbox(): Bbox | undefined;
 
@@ -85,7 +58,42 @@ export abstract class Shape
     abstract length(): number | undefined;
     abstract area(): number | undefined;
     abstract volume(): number | undefined;
-    
+
+
+    //// IDENTITY ////
+
+    id(): string
+    {
+        return this._id;
+    }
+
+    node(): SceneNode | null
+    {
+        return this._node;
+    }
+
+    subtype(): string|null 
+    { 
+        return (this.metadata?.subtype as string) ?? null;
+    } 
+
+    /** Implement this and ShapeCollection allows it */
+    isShapeClass(): boolean
+    {
+        return true;
+    }
+
+    //// TYPE GUARD ////
+
+    static isShape(o: unknown): o is Shape
+    {
+        return o instanceof Shape;
+    }
+
+    static isShapeCollection(o: unknown): o is ShapeCollection
+    {
+        return false;
+    }
 
     //// TRANSFORM SHORTHANDS ////
 
@@ -145,6 +153,11 @@ export abstract class Shape
     }
 
     //// OUTPUT ////
+
+    toString(): string
+    {
+        return `<Shape id=${this.id()} type=${this.type()} subtype=${this.subtype()}>`;
+    }
 
     toGLB(): Promise<Uint8Array>
     {
