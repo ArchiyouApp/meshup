@@ -24,6 +24,7 @@ import { uuid } from './utils';
 export abstract class Shape
 {
     private _id: string;
+    abstract readonly type: 'Curve' | 'Mesh' | 'Polygon' | 'Vertex';
     _node: SceneNode | null = null;
     style: Style = new Style();
     metadata: Record<string, any> = {};
@@ -40,7 +41,6 @@ export abstract class Shape
 
      //// ABSTRACT: implemented by subclasses ////
 
-    abstract type(): 'Curve' | 'Mesh' | 'Polygon' | 'Vertex';
     abstract is2D(): boolean;
     abstract bbox(): Bbox | undefined;
 
@@ -156,7 +156,7 @@ export abstract class Shape
 
     toString(): string
     {
-        return `<Shape id=${this.id()} type=${this.type()} subtype=${this.subtype()}>`;
+        return `<Shape id=${this.id()} type=${this.type} subtype=${this.subtype()}>`;
     }
 
     async toGLB(up: Axis = 'z'): Promise<Uint8Array|undefined>

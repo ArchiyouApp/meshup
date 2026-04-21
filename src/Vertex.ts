@@ -157,10 +157,7 @@ export class Vertex extends Shape
 
   //// SHAPE PROTOCOL ////
 
-  override type(): 'Vertex'
-  {
-    return 'Vertex';
-  }
+  override readonly type = 'Vertex' as const;
 
   override subtype(): string | null
   {

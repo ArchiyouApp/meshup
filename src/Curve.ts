@@ -575,7 +575,7 @@ export class Curve extends Shape
 
     /** Return the SceneNode this curve belongs to, or null. */
     node(): SceneNode | null { return this._node; }
-    type(): 'Curve' { return 'Curve'; }
+    override readonly type = 'Curve' as const;
 
     /** Classify this curve as 'line', 'arc', 'circle', 'rect', 'polyline', 'spline', or 'compound'. */
     subtype(): 'Line'|'Arc'|'Circle'|'Rect'|'Polyline'|'Spline'|'Compound'

@@ -63,10 +63,7 @@ export class Polygon extends Shape
 
     //// SHAPE PROTOCOL ////
 
-    override type(): 'Polygon'
-    {
-        return 'Polygon';
-    }
+    override readonly type = 'Polygon' as const;
 
     override subtype(): string | null
     {

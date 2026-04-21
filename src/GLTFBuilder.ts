@@ -498,7 +498,7 @@ export class GLTFBuilder
 
             if (cascadedStyle.visible === false) return;
 
-            if (shape instanceof Mesh || shape.type?.() === 'Mesh')
+            if (shape instanceof Mesh || shape.type === 'Mesh')
             {
                 const mesh = shape as unknown as Mesh;
                 if (!mesh._mesh || mesh.vertices().length === 0) return;

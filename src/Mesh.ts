@@ -10,7 +10,6 @@
  */
 
 import type { CsgrsModule, Axis, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions } from './types';
-import type { SceneNode } from './SceneNode';
 import { isAxis, isPointLike } from './types';
 
 import { Curve, getCsgrs } from './index';
@@ -37,11 +36,11 @@ import { TOLERANCE, SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT,
 
 export class Mesh extends Shape
 {
-    // inherits: _id, _node, style, metadata from Shape
+    // inherits: _id, type, _node, style, metadata from Shape
 
     _mesh: MeshJs | undefined; // Underlying MeshJs geometry
 
-    type(): 'Mesh' { return 'Mesh'; }
+    override readonly type = 'Mesh' as const;
 
     constructor()
     {

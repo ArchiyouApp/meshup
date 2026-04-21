@@ -7,6 +7,7 @@
  *  Use ShapeCollection<Mesh> or ShapeCollection<Curve> for typed access.
  *  Curve-specific and Mesh-specific methods are included here; they throw
  *  or no-op when called on the wrong shape type.
+ * 
  */
 
 import type { Axis, PointLike, ProjectEdgeOptions, RaycastHit } from './types';
@@ -772,7 +773,7 @@ export class ShapeCollection<S extends Shape = Shape>
 
     toString(): string
     {
-        return `<ShapeCollection shapes="${this._shapes.length}"${(Array.from(this._groups.keys()).length > 0) ? 'groups="' + Array.from(this._groups.keys()).join(',') + '"' : ''} types="${[...new Set(this._shapes.map(s => s.type()))].join(',')}">`;
+        return `<ShapeCollection shapes="${this._shapes.length}"${(Array.from(this._groups.keys()).length > 0) ? 'groups="' + Array.from(this._groups.keys()).join(',') + '"' : ''} types="${[...new Set(this._shapes.map(s => s.type))].join(',')}">`;
     }
 
     async toGLTF(up: Axis = 'z'): Promise<string>

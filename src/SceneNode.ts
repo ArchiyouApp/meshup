@@ -29,7 +29,7 @@ import { GLTFBuilder } from './GLTFBuilder';
 
 /** Minimal interface that any shape stored in a SceneNode must satisfy. */
 export interface SceneNodeShape {
-    type(): ShapeType | string
+    type: ShapeType | string
     subtype(): string | null
     _node: SceneNode<any> | null
     style: Style
@@ -87,7 +87,7 @@ export class SceneNode<S extends SceneNodeShape = Shape>
     static getName<S extends SceneNodeShape>(s: S): string
     {
         const sub = s.subtype();
-        return sub ? `${s.type()}:${sub}` : s.type();
+        return sub ? `${s.type}:${sub}` : s.type;
     }
 
     //// SHAPE MANAGEMENT ////
@@ -423,7 +423,7 @@ export class SceneNode<S extends SceneNodeShape = Shape>
             name: this.name,
             isLayer: this.isLayer(),
             hasShape: !!this._shape,
-            shapeType: this._shape ? this._shape.type() : undefined,
+            shapeType: this._shape ? this._shape.type : undefined,
             style: this.style.explicitData(),
             children: this._children.map(c => c.toGraph()),
         };
