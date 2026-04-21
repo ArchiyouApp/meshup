@@ -114,7 +114,19 @@ export class Curve extends Shape
         const newCurve = new Curve();
         newCurve._curve = this._curve?.clone();
         newCurve._holes = this._holes.map(h => h.copy());
-        newCurve.style.merge(this.style.toData());
+        newCurve.style.merge(this.style.explicitData() as any);
+
+        // if original shape is tied to scene: add copy too, as sibling
+        // TODO: keep this structural and put in Shape
+        if (this.node())
+        {
+            const parent = this.node()?.parent() || this.node(); 
+            if (parent)
+            {
+                parent.addShape(newCurve); // TODO: name with 'copy'
+            };
+        }
+
         return newCurve as this;
     }
 
@@ -753,9 +765,12 @@ export class Curve extends Shape
      */
     getOnPlane(tolerance: number = 1e-6): { normal: Vector, x: Vector, y: Vector } | null
     {
+        console.log('==== GET ON PLANE ====');
+
         if (this._curve instanceof NurbsCurve3DJs)
         {
             const result = this._curve.getOnPlane(tolerance);
+
             if (!result || result.length === 0) return null;
             return {
                 normal: Vector.from(result[0].x, result[0].y, result[0].z),
@@ -764,25 +779,61 @@ export class Curve extends Shape
             };
         }
 
-        // For compound curves: check each span's plane
-        if (this._curve instanceof CompoundCurve3DJs) 
+        // For compound curves: derive plane from tessellated points via cross product
+        if (this._curve instanceof CompoundCurve3DJs)
         {
-            const spans = this._curve.spans();
-            if (!spans || spans.length === 0) return null;
-            const firstResult = spans[0].getOnPlane(tolerance);
-            if (!firstResult || firstResult.length === 0) return null;
-            // Verify all spans share the same plane
-            const allSpansOnPlane = spans.slice(1).every(span =>
+            const pts = this.points();
+
+            // Find three non-collinear points to form a stable cross product
+            if (pts.length >= 3)
             {
-                const r = span.getOnPlane(tolerance);
-                return r && r.length > 0;
-            });
-            if (!allSpansOnPlane) return null;
-            return {
-                normal: Vector.from(firstResult[0].x, firstResult[0].y, firstResult[0].z),
-                x: Vector.from(firstResult[1].x, firstResult[1].y, firstResult[1].z),
-                y: Vector.from(firstResult[2].x, firstResult[2].y, firstResult[2].z),
-            };
+                const ab = Vector.from(pts[1].x - pts[0].x, pts[1].y - pts[0].y, pts[1].z - pts[0].z);
+
+                let normal: Vector | null = null;
+                for (let i = 2; i < pts.length; i++)
+                {
+                    const ac = Vector.from(pts[i].x - pts[0].x, pts[i].y - pts[0].y, pts[i].z - pts[0].z);
+                    const candidate = ab.copy().cross(ac);
+                    if (candidate.length() > tolerance)
+                    {
+                        normal = candidate.normalize();
+                        break;
+                    }
+                }
+
+                if (normal)
+                {
+                    // Align x to the closest global axis not parallel to normal
+                    const candidates: Vector[] = [
+                        Vector.from(1,0,0), Vector.from(0,1,0), Vector.from(0,0,1)
+                    ];
+                    const xDir = candidates
+                        .filter(c => Math.abs(c.dot(normal!)) < 1 - tolerance)
+                        .sort((a, b) => Math.abs(a.dot(normal!)) - Math.abs(b.dot(normal!)))[0];
+
+                    const x = xDir.copy().subtract(normal.copy().scale(xDir.dot(normal))).normalize();
+                    const y = normal.copy().cross(x).normalize();
+                    return { normal, x, y };
+                }
+            }
+
+            // Fall back: try the first span's plane
+            const spans = this._curve.spans();
+            if (spans && spans.length > 0)
+            {
+                const firstResult = spans[0].getOnPlane(tolerance);
+                if (firstResult && firstResult.length >= 3)
+                {
+                    return {
+                        normal: Vector.from(firstResult[0].x, firstResult[0].y, firstResult[0].z),
+                        x: Vector.from(firstResult[1].x, firstResult[1].y, firstResult[1].z),
+                        y: Vector.from(firstResult[2].x, firstResult[2].y, firstResult[2].z),
+                    };
+                }
+            }
+
+            console.warn('Curve.getOnPlane(): CompoundCurve has fewer than 3 non-collinear points — cannot determine plane.');
+            return null;
         }
 
         return null;
@@ -1116,20 +1167,29 @@ export class Curve extends Shape
         return [this.start(), this.end()];
     }
 
-    /** Alias for bbox() — the boolean arg is ignored (kept for old-API compat) */
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    bboxCompat(_includeAnnotations?: boolean): Bbox | undefined
+    /** Return all atomic segments of this Curve.
+     *  - degree-1 spans (polylines) are split into individual line segments (N CPs → N-1 edges)
+     *  - higher-degree spans (arcs, splines) are returned as-is, one per span
+     */
+    segments(): ShapeCollection<Curve>
     {
-        return this.bbox();
+        const segs: Curve[] = this.spans().flatMap(span =>
+        {
+            const inner = span.inner() as NurbsCurve3DJs;
+            if (inner.degree() === 1)
+            {
+                const cps = span.controlPoints();
+                return cps.slice(0, -1).map((cp, i) => Curve.Line(cp, cps[i + 1]));
+            }
+            return [span];
+        });
+        return new ShapeCollection<Curve>(...segs);
     }
 
-    /** Returns constituent sub-curves (or self for simple curves)
-     *  For compound curves returns the segments; for a simple curve returns [this].
-     */
+    /** For BREP compatibility: alias for segments() */
     edges(): ShapeCollection<Curve>
     {
-        const curves = this.isCompound() ? this.spans() : [this];
-        return new ShapeCollection<Curve>(...curves);
+        return this.segments();
     }
 
     /** Extrude and return a Mesh — alias for extrude with argument order matching old API */
@@ -1357,11 +1417,14 @@ export class Curve extends Shape
             const axLen = tgtEdge.length();
             if (axLen > 1e-10)
             {
-                const axis = tgtEdge.scale(1 / axLen);
+                const axis = tgtEdge.copy().scale(1 / axLen);
 
                 // Project both vectors onto the plane perpendicular to axis
-                const u1 = rel.subtract(axis.scale(rel.dot(axis)));
-                const u2 = goal.subtract(axis.scale(goal.dot(axis)));
+                // Use copies so axis is not mutated (dot products can be 0, zeroing axis in-place)
+                const d1 = rel.dot(axis);
+                const d2 = goal.dot(axis);
+                const u1 = rel.subtract(axis.copy().scale(d1));
+                const u2 = goal.subtract(axis.copy().scale(d2));
 
                 const len1 = u1.length(), len2 = u2.length();
                 if (len1 > 1e-10 && len2 > 1e-10)
@@ -1606,6 +1669,88 @@ export class Curve extends Shape
         // Both NurbsCurve3DJs and CompoundCurve3DJs now return CompoundCurve3DJs
         this.update(this.inner().extend(length, side));
         return this;
+    }
+
+    /** Extend this curve to another curve or shape collection.
+     *  Fires a probe ray from each end along its tangent direction and finds
+     *  the closest approach to `other` (= intersection for converging curves)
+     *  using ACI-refined closestPoints.  Extends the nearer end by that amount.
+     */
+    extendTo(other: Curve | ShapeCollection<Curve>): this
+    {
+        const targets: Curve[] = ShapeCollection.isShapeCollection(other)
+            ? (other as ShapeCollection<Curve>).curves().toArray()
+            : [other as Curve];
+
+        if (targets.length === 0) return this;
+
+        let bestDist = Infinity;
+        let bestSide: 'start' | 'end' = 'end';
+
+        const startPt = new Point(this.start());
+        const endPt   = new Point(this.end());
+        const tangentEnd   = this.tangentAt(endPt)?.normalize();
+        const tangentStart = this.tangentAt(startPt)?.normalize();
+
+        targets.forEach(target =>
+        {
+            // --- 'end' side ---
+            if (tangentEnd)
+            {
+                const d = this._rayIntersectDist(endPt, tangentEnd, target);
+                if (d !== null && d > 1e-6 && d < bestDist)
+                {
+                    bestDist = d;
+                    bestSide = 'end';
+                }
+            }
+            // --- 'start' side: ray goes in -tangent direction ---
+            if (tangentStart)
+            {
+                const revDir = tangentStart.copy().scale(-1);
+                const d = this._rayIntersectDist(startPt, revDir, target);
+                if (d !== null && d > 1e-6 && d < bestDist)
+                {
+                    bestDist = d;
+                    bestSide = 'start';
+                }
+            }
+        });
+
+        if (bestDist === Infinity)
+        {
+            console.error('Curve::extendTo(): No valid extension found to target curves. Returning original curve.');
+            return this;
+        }
+        return this.extend(bestDist, bestSide);
+    }
+
+    /** Project a ray (origin + unit dir) onto a target curve using a probe line +
+     *  ACI-refined closestPoints, returning the distance along the ray to the
+     *  closest approach point.  Returns null if no forward intersection is found.
+     * 
+     *  TODO: clean this up after AI
+     */
+    private _rayIntersectDist(origin: Point, dir: Vector, target: Curve): number | null
+    {
+        // Probe long enough to reach well past the target
+        const probeLen = this.length() * 10 + target.length() * 2 + 1000;
+        const probe = Curve.Line(
+            origin,
+            new Point(
+                origin.x + dir.x * probeLen,
+                origin.y + dir.y * probeLen,
+                origin.z + dir.z * probeLen,
+            ),
+        );
+        const pair = probe.closestPoints(target);
+        if (!pair) return null;
+        const [ptOnProbe] = pair;
+        // Project onto the ray: t = (ptOnProbe - origin) · dir
+        const t = (ptOnProbe.x - origin.x) * dir.x
+                + (ptOnProbe.y - origin.y) * dir.y
+                + (ptOnProbe.z - origin.z) * dir.z;
+        return t > 0 ? t : null;
     }
 
     /** Offset a Curve a given amount (+ or -) and optionally provide corner type (default:sharp) */
@@ -2107,7 +2252,7 @@ export class Curve extends Shape
 
     toString()
     {
-        return `<Curve(${this.isCompound() ? 'Compound' : 'Single'}): length="${this.length().toFixed(3)}", planar="${this.isPlanar()}", closed="${this.isClosed()}">`;
+        return `<Curve (${this.isCompound() ? 'Compound' : 'Single'}): length="${this.length().toFixed(3)}", planar="${this.isPlanar()}", closed="${this.isClosed()}">`;
     }
 
     /** Return raw tessellated points as a flat Float32Array (xyz per point, no axis remapping).

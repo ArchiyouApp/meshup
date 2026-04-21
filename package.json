@@ -18,6 +18,7 @@
   ],
   "scripts": {
     "test:unit:mesh": "vitest run tests/unit/Mesh.test.ts",
+    "test:example:sketch": "vitest run tests/examples/sketch.test.ts",
     "test:example:scene": "vitest run tests/examples/scene.test.ts",
     "test:example:house": "vitest run tests/examples/house.test.ts",
     "test:example:curves": "vitest run tests/examples/curves.test.ts",
@@ -26,7 +27,8 @@
     "test:example:isometry": "vitest run tests/examples/isometry.test.ts",
     "test:example:alignments": "vitest run tests/examples/alignments.test.ts",
     "test:unit:compare": "vitest run tests/unit/compare.test.ts",
-    "test:selector": "vitest run tests/unit/Selector.test.ts",
+    "test:unit:selector": "vitest run tests/unit/Selector.test.ts",
+    "test:unit:curve": "vitest run tests/unit/Curve.test.ts",
     "build:wasm": "tsx buildscripts/build-wasm.ts",
     "rust:check": "cd ./devlibs/csgrs && cargo check --features wasm --no-deps --target wasm32-unknown-unknown",
     "build": "tsup",

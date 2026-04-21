@@ -93,6 +93,7 @@ export class Sketch
 
     _curves: ShapeCollection<Curve> = new ShapeCollection<Curve>(); // collection of curves in the sketch
     _cursors: Array<SketchCursor> = []; // active cursor stack
+    _callbacks: Record<'end', [(curves: ShapeCollection<Curve>) => void, boolean]> = {} as any;
 
     constructor(plane: BasePlane|PolygonJs = 'xy')
     {
@@ -122,6 +123,16 @@ export class Sketch
         {
             throw new Error(`Sketch::setWorkingPlane(): Invalid plane. Supply a base plane name ('xy', 'yz', 'zx', 'front', 'back', 'left', 'right') or a PolygonJs.`);
         }
+    }
+
+    //// EVENT MANAGEMENT ////
+
+    /** Register a callback to be called when the sketch ends */
+    onEnd(callback: (curves: ShapeCollection<Curve>) => void, useResult:boolean=true): this
+    {
+        if(typeof callback !== 'function'){ throw new Error('Sketch::onEnd(): Callback must be a function');}
+        this._callbacks.end = [callback, useResult];
+        return this;
     }
 
     //// CURSOR MANAGEMENT ////
@@ -459,6 +470,8 @@ export class Sketch
     /** Convert all curves in Sketch to world coordinates and return copies */
     _localToWorld():ShapeCollection<Curve>
     {
+        this.combine(); // connect curves if possible
+
         return this._curves.copy()
             .forEach((curve) =>
             {
@@ -473,7 +486,32 @@ export class Sketch
 
     end(): ShapeCollection<Curve>
     {
-        return this._localToWorld();
+        const result = this._localToWorld();
+        const r = this.executeCallbacks(result);
+        // intercepts callback result if useResult is set, 
+        // otherwise returns curves as default
+        return r !== undefined ? r : result; 
+    }
+
+    /** Execute callbacks */
+    executeCallbacks(result: ShapeCollection<Curve>): any
+    {
+        for(const event in this._callbacks)
+        {
+            const [callback, useResult] = this._callbacks[event as keyof typeof this._callbacks];
+            if(typeof callback === 'function')
+            {
+                try { 
+                    const r = callback(result);
+                    if(useResult)
+                    { 
+                        // if useResult is set stop after first callback
+                        return r;
+                    }
+                }
+                catch(e){ console.error(`Sketch::executeCallbacks(): Error executing callback for event '${event}':`, e); }
+            }
+        }
     }
 
     /** Alias for end */

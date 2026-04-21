@@ -504,6 +504,62 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}">\n${this.toSVGElem()}\n</svg>`;
     }
 
+    //// PRETTY PRINT ////
+
+    /**
+     * Print a human-readable tree of this node and all its descendants to the console.
+     *
+     * Example output:
+     *   root
+     *   ├─ walls [layer]
+     *   │  ├─ mesh:Solid  color:#ff0000
+     *   │  └─ mesh:Solid  color:#0000ff
+     *   └─ floor
+     *      └─ mesh:Solid  color:#cccccc
+     */
+    print(): void
+    {
+        console.log(this._printLines().join('\n'));
+    }
+
+    /**
+     * Recursive helper.
+     * `prefix`    — indentation string inherited from the parent level.
+     * `connector` — the branch glyph for THIS node ('├─ ', '└─ ', or '' for root).
+     * The extension passed down to children is derived from the connector:
+     *   '├─ ' → '│  '  (branch continues)
+     *   '└─ ' → '   '  (branch ends)
+     *   ''    → ''     (root — children start at column 0)
+     */
+    private _printLines(prefix = '', connector = ''): string[]
+    {
+        const shape = this._shape;
+        let label = this.name;
+
+        if (!shape)
+        {
+            label += ' [layer]';
+        }
+        else
+        {
+            // Node name is already "type:subtype" — only append color
+            const color = this.effectiveStyle().color;
+            if (color) label += `  color:${color}`;
+        }
+
+        const lines: string[] = [prefix + connector + label];
+
+        const extension = connector === '└─ ' ? '   ' : connector === '├─ ' ? '│  ' : '';
+
+        this._children.forEach((child, i) =>
+        {
+            const isLast = i === this._children.length - 1;
+            lines.push(...child._printLines(prefix + extension, isLast ? '└─ ' : '├─ '));
+        });
+
+        return lines;
+    }
+
     //// INTERNAL HELPERS ////
 
     /** BFS traversal that includes `this` as the first element. */

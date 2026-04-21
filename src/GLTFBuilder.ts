@@ -506,7 +506,7 @@ export class GLTFBuilder
                 gltfNode.addChild(meshNode);
                 this.queueMeshExtData(primitive, indices, normals, cascadedStyle);
             }
-            else if (shape instanceof Curve || shape.type?.() === 'Curve')
+            else if (shape instanceof Curve || shape.type === 'Curve')
             {
                 const curve = shape as unknown as Curve;
                 const { node: curveNode, material } = this._curveToGLTFNode(curve, name, cascadedStyle);

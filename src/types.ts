@@ -56,9 +56,9 @@ export function isPointLike(obj: any): obj is PointLike {
 }
 
 
-export type BasePlane = 'xy' | 'yz' | 'xz' | 'front' | 'back' | 'left' | 'right';
+export type BasePlane = 'xy' | 'yz' | 'xz' | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
 export function isBasePlane(obj: any): obj is BasePlane {
-  return ['xy', 'yz', 'xz', 'front', 'back', 'left', 'right'].includes(obj);
+  return ['xy', 'yz', 'xz', 'front', 'back', 'left', 'right', 'top', 'bottom'].includes(obj);
 }
 
 //// OUTPUT TYPES ////

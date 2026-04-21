@@ -55,7 +55,6 @@ describe('Set up a basic scene hierarchy and export', () =>
         // Copy a shape that is in the scene - should automatically add to scene as sibling
         cyl.copy().move(20).opacity(0.5);
         expect(scene.findAll(c => c.name === 'Mesh:Cylinder')?.length).toBe(2);
-
     
         // Explore graph
         // console.log(JSON.stringify(scene.toGraph()));

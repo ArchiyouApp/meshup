@@ -415,6 +415,7 @@ export class Mesh extends Shape
         m.metadata = { ...this.metadata }; // copy metadata
 
         // if original shape is tied to scene: add copy too, as sibling
+        // TODO: keep this structural and put in Shape
         if (this.node())
         {
             const parent = this.node()?.parent() || this.node(); 

@@ -201,6 +201,7 @@ export class Point
 
         if(typeof coords[0] === 'string' && coords[0].includes('<')) // polar coordinates
         {
+            console.log('==== POLAR COORDS ====');
             // {r}<{angle} or {r}<<{angle}  e.g. 100<45, 100<<-45
             const polarRegex = /^(-?\d*\.?\d+)(<<?)(-?\d*\.?\d+)$/;
             const match = coords[0].match(polarRegex);
@@ -210,8 +211,14 @@ export class Point
                 return null;
             }
 
+            console.log(match);
+
             const [, rValue, separator, angleValue] = match;
             const r = parseFloat(rValue) || 0;
+
+            console.log(r);
+            console.log(angleValue);
+
             const angleDeg = parseFloat(angleValue) || 0;
             const angleRad = rad(angleDeg);
 
@@ -233,6 +240,9 @@ export class Point
             const finalAngle = baseAngle + angleRad;
             const dx = r * Math.cos(finalAngle);
             const dy = r * Math.sin(finalAngle);
+            
+            console.log(dx);
+            console.log(dy);
 
             return new Point(prevPoint.x + dx, prevPoint.y + dy);
         }

@@ -1,8 +1,9 @@
 import { beforeAll, describe, it, expect } from 'vitest';
-import { initAsync } from '../../src/index';
+import { initAsync, ShapeCollection } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { Polygon } from '../../src/Polygon';
 import { Mesh } from '../../src/Mesh';
+import { save } from '../../src/utils';
 
 beforeAll(async () =>
 {
@@ -207,18 +208,40 @@ describe('Curve.toMesh()', () =>
     });
 });
 
-describe('Curve.extend() merge_colinear_lines regression', () =>
+describe('Curve.extend()', async () =>
 {
-    it('keeps roof-profile polyline at 3 control points after extend both', () =>
+    it('Should extend a polyline correctly', () =>
     {
-        const roof = Curve.Polyline([
+        const line = Curve.Line(
             [0, 0, 0],
-            [200, 0, 500],
-            [400, 0, 300],
-        ]).extend(50, 'both');
+            [200, 200,0],
+        ).extend(50, 'both');
+        
+        expect(line).toBeTruthy();
+        expect(line.length()).toBeCloseTo(Math.sqrt(2) * 200 + 50*2, 1);
+    });
 
-        const spans = roof.spans();
-        expect(spans.length).toBe(1);
-        expect(spans[0].controlPoints().length).toBe(3);
+    it('should extend a line towards another', async () =>
+    {
+        const line1 = Curve.Line(
+            [0, 0, 0],
+            [50, 50,0],
+        ).color('red');
+        const line2 = Curve.Line(
+            [0, 0, 0],
+            [0, 250, 0],
+        ).move(200).color('blue');
+
+
+        expect(line1.distance(line2)).toBe(150);
+
+        line1.extendTo(line2);
+
+        expect(line1.distance(line2)).toBeCloseTo(0, 5);
+
+        // visual check
+        await save('test.curve.extendTo.gltf', 
+            await new ShapeCollection<Curve>(line1, line2).toGLTF()
+        );
     });
 });

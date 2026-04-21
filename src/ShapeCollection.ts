@@ -27,10 +27,20 @@ export class ShapeCollection<S extends Shape = Shape>
 {
     _shapes: Array<S> = [];
     _groups = new Map<string, ShapeCollection<S>>();
+    private _fakeArrayLength = 0;
 
     constructor(...args: Array<Shape | Array<any> | ShapeCollection<any>>)
     {
         args.forEach(arg => this.add(arg as any));
+        this._setFakeArrayKeys();
+    }
+
+    /** Expose shapes as numeric index properties (col[0], col[1], ...) for array-like access. */
+    _setFakeArrayKeys(): void
+    {
+        for (let i = this._shapes.length; i < this._fakeArrayLength; i++) { delete (this as any)[i]; }
+        this._shapes.forEach((shape, i) => { (this as any)[i] = shape; });
+        this._fakeArrayLength = this._shapes.length;
     }
 
     //// STATIC FACTORIES ////
@@ -50,6 +60,7 @@ export class ShapeCollection<S extends Shape = Shape>
     update(shapes: Array<S> | ShapeCollection<S>): void
     {
         this._shapes = ShapeCollection.isShapeCollection(shapes) ? shapes.toArray() : shapes;
+        this._setFakeArrayKeys();
     }
 
     add(shapes: S | ShapeCollection<any> | Array<any>): this
@@ -75,6 +86,7 @@ export class ShapeCollection<S extends Shape = Shape>
         {
             console.error(`ShapeCollection::add(): Invalid shape(s). Supply something [<Shape>|<ShapeCollection>|Array<Shape>]. Skipping:`, shapes);
         }
+        this._setFakeArrayKeys();
         return this;
     }
 
@@ -147,6 +159,7 @@ export class ShapeCollection<S extends Shape = Shape>
         else if (Shape.isShape(shape))
         {
             this._shapes = this._shapes.filter(s => s !== shape);
+            this._setFakeArrayKeys();
         }
     }
 
@@ -203,10 +216,16 @@ export class ShapeCollection<S extends Shape = Shape>
             ? shapes.toArray()
             : Array.isArray(shapes) ? shapes : [shapes as S];
         incoming.forEach(s => { if (!this.has(s as S)) this._shapes.push(s as S); });
+        this._setFakeArrayKeys();
         return this;
     }
 
-    pop(): S | undefined { return this._shapes.pop(); }
+    pop(): S | undefined
+    {
+        const s = this._shapes.pop();
+        this._setFakeArrayKeys();
+        return s;
+    }
 
     //// BBOX / SPATIAL ////
 
