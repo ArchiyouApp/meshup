@@ -23,13 +23,30 @@ import { Bbox } from './Bbox';
 import { MeshJs } from './wasm/csgrs';
 import { GLTFBuilder } from './GLTFBuilder';
 
-export class ShapeCollection<S extends Shape = Shape>
+/** Minimal interface a shape must satisfy to be held in a ShapeCollection. */
+export interface CollectableShape {
+    copy(): this
+    bbox(): Bbox
+    type?: string
+    // Transform methods — present on all meshup shapes
+    translate?(px: PointLike, dy?: PointLike, dz?: PointLike): this
+    rotate?(deg: number, axis?: Axis|PointLike, origin?: PointLike): this
+    rotateAround?(deg: number, axis?: Axis|PointLike, pivot?: PointLike): this
+    rotateQuaternion?(qw: number|{ w: number, x: number, y: number, z: number }, x?: number, y?: number, z?: number): this
+    scale?(factor: any, origin?: PointLike): this
+    mirror?(dir: PointLike, pos?: PointLike): this
+    // Styling
+    color(c: any, g?: number, b?: number): this
+    opacity?(o: number): this
+}
+
+export class ShapeCollection<S extends CollectableShape = Shape>
 {
     _shapes: Array<S> = [];
     _groups = new Map<string, ShapeCollection<S>>();
     private _fakeArrayLength = 0;
 
-    constructor(...args: Array<Shape | Array<any> | ShapeCollection<any>>)
+    constructor(...args: Array<CollectableShape | Array<any> | ShapeCollection<any>>)
     {
         args.forEach(arg => this.add(arg as any));
         this._setFakeArrayKeys();
@@ -50,7 +67,7 @@ export class ShapeCollection<S extends Shape = Shape>
         return obj instanceof ShapeCollection;
     }
 
-    static generate<S extends Shape>(count: number, generator: (index: number) => S): ShapeCollection<S>
+    static generate<S extends CollectableShape>(count: number, generator: (index: number) => S): ShapeCollection<S>
     {
         return new ShapeCollection<S>(...new Array(count).fill(null).map((_, i) => generator(i)));
     }
@@ -59,7 +76,7 @@ export class ShapeCollection<S extends Shape = Shape>
 
     update(shapes: Array<S> | ShapeCollection<S>): void
     {
-        this._shapes = ShapeCollection.isShapeCollection(shapes) ? shapes.toArray() : shapes;
+        this._shapes = (ShapeCollection.isShapeCollection(shapes) ? shapes.toArray() : shapes) as S[];
         this._setFakeArrayKeys();
     }
 
@@ -72,7 +89,7 @@ export class ShapeCollection<S extends Shape = Shape>
         else if (Array.isArray(shapes) || ShapeCollection.isShapeCollection(shapes))
         {
             const addShapes: S[] = ShapeCollection.isShapeCollection(shapes)
-                ? shapes.toArray() as S[]
+                ? shapes.toArray() as unknown as S[]
                 : (shapes as any[])
                     .filter(s => {
                         // HACKY: If you want to force any instance to be accepted as a shape, 
@@ -156,7 +173,7 @@ export class ShapeCollection<S extends Shape = Shape>
         {
             shape.shapes().forEach(s => this.remove(s as S));
         }
-        else if (Shape.isShape(shape))
+        else
         {
             this._shapes = this._shapes.filter(s => s !== shape);
             this._setFakeArrayKeys();
@@ -257,7 +274,7 @@ export class ShapeCollection<S extends Shape = Shape>
 
     translate(vecOrX: PointLike | number, dy?: number, dz?: number): this
     {
-        this._shapes.forEach(shape => shape.translate(vecOrX, dy, dz));
+        this._shapes.forEach(shape => shape.translate?.(vecOrX, dy, dz));
         return this;
     }
 
@@ -285,31 +302,31 @@ export class ShapeCollection<S extends Shape = Shape>
 
     rotate(angleDeg: number, axis: Axis = 'z', origin: PointLike = { x: 0, y: 0, z: 0 }): this
     {
-        this._shapes.forEach(shape => shape.rotate(angleDeg, axis, origin));
+        this._shapes.forEach(shape => shape.rotate?.(angleDeg, axis, origin));
         return this;
     }
 
     rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot: PointLike = { x: 0, y: 0, z: 0 }): this
     {
-        this._shapes.forEach(shape => shape.rotateAround(angleDeg, axis, pivot));
+        this._shapes.forEach(shape => shape.rotateAround?.(angleDeg, axis, pivot));
         return this;
     }
 
     rotateQuaternion(wOrObj: number | { w: number, x: number, y: number, z: number }, x?: number, y?: number, z?: number): this
     {
-        this.forEach(shape => shape.rotateQuaternion(wOrObj as any, x as any, y as any, z as any));
+        this.forEach(shape => shape.rotateQuaternion?.(wOrObj as any, x as any, y as any, z as any));
         return this;
     }
 
     scale(factor: number | PointLike, origin: PointLike = { x: 0, y: 0, z: 0 }): this
     {
-        this._shapes.forEach(shape => shape.scale(factor, origin));
+        this._shapes.forEach(shape => shape.scale?.(factor, origin));
         return this;
     }
 
     mirror(dir: Axis | PointLike, pos?: PointLike): this
     {
-        this._shapes.forEach(shape => shape.mirror(dir, pos));
+        this._shapes.forEach(shape => shape.mirror?.(dir, pos));
         return this;
     }
 
@@ -334,7 +351,7 @@ export class ShapeCollection<S extends Shape = Shape>
 
     opacity(opacity: number): this
     {
-        this._shapes.forEach(shape => shape.opacity(opacity));
+        this._shapes.forEach(shape => shape.opacity?.(opacity));
         return this;
     }
 
@@ -349,7 +366,7 @@ export class ShapeCollection<S extends Shape = Shape>
 
     //// BOOLEAN OPERATIONS ////
 
-    merge(): Mesh
+    merge(): any
     {
         const allPolygons = this._shapes
             .filter(shape => shape instanceof Mesh)
@@ -409,19 +426,19 @@ export class ShapeCollection<S extends Shape = Shape>
         );
     }
 
-    intersecting(other: S): ShapeCollection
+    intersecting(other: S): ShapeCollection<any>
     {
         throw new Error('ShapeCollection::intersecting(): not yet implemented');
     }
 
-    intersections(other: S): ShapeCollection
+    intersections(other: S): ShapeCollection<any>
     {
         throw new Error('ShapeCollection::_intersections(): not yet implemented');
     }
 
     //// ISOMETRY ////
 
-    isometry(cam: PointLike = [-1, -1, 1], includeHidden: boolean = true): ShapeCollection<Shape>
+    isometry(cam: PointLike = [-1, -1, 1], includeHidden: boolean = true): ShapeCollection<any>
     {
         return this.merge().isometry(cam, includeHidden);
     }
@@ -465,7 +482,7 @@ export class ShapeCollection<S extends Shape = Shape>
 
 
     /** Returns all start/end vertices of curves in this collection */
-    vertices(): Array<Vertex>
+    curveVertices(): Array<Vertex>
     {
         const pts: Vertex[] = [];
         this._shapes.forEach(c => { pts.push((c as any).start?.(), (c as any).end?.()); });

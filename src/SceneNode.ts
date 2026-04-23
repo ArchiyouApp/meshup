@@ -218,7 +218,7 @@ export class SceneNode<S extends SceneNodeShape = Shape>
     }
 
     /** Return shapes held by this SceneNode and its children */
-    shapes(): ShapeCollection
+    shapes(): ShapeCollection<any>
     {
         return new ShapeCollection(
             this._traverse().flatMap(c => c._shape ? [c._shape] : []));
