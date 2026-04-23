@@ -26,7 +26,7 @@ import { GLTFBuilder } from './GLTFBuilder';
 /** Minimal interface a shape must satisfy to be held in a ShapeCollection. */
 export interface CollectableShape {
     copy(): this
-    bbox(): Bbox
+    bbox(): undefined|Bbox
     type?: string
     // Transform methods — present on all meshup shapes
     translate?(px: PointLike, dy?: PointLike, dz?: PointLike): this
@@ -34,7 +34,7 @@ export interface CollectableShape {
     rotateAround?(deg: number, axis?: Axis|PointLike, pivot?: PointLike): this
     rotateQuaternion?(qw: number|{ w: number, x: number, y: number, z: number }, x?: number, y?: number, z?: number): this
     scale?(factor: any, origin?: PointLike): this
-    mirror?(dir: PointLike, pos?: PointLike): this
+    mirror?(dir: Axis|PointLike, pos?: PointLike): this
     // Styling
     color(c: any, g?: number, b?: number): this
     opacity?(o: number): this
