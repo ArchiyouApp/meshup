@@ -31,7 +31,8 @@ describe('Example: Curves exported to SVG', () =>
         const ln = Curve.Line(
                         rect.bbox()!.corner('rightfront'),
                         rectb.bbox()!.corner('rightfront'))
-                        .color('red');
+                        .color('red')
+                        .strokeWidth(5);
         
         // Export both in 3D GLTF and 2D SVG
         save('test.svg.gltf', await new ShapeCollection(circ, circ2, rect, rectb, curv, ln).toGLTF());

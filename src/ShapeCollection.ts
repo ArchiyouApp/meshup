@@ -38,6 +38,7 @@ export interface CollectableShape {
     // Styling
     color(c: any, g?: number, b?: number): this
     opacity?(o: number): this
+    hide(): this
 }
 
 export class ShapeCollection<S extends CollectableShape = Shape>
@@ -361,6 +362,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     dashed(dash: number[] = [2, 2]): this
     {
         this._shapes.forEach(shape => (shape as any).dashed?.(dash));
+        return this;
+    }
+
+    /** Hide Shapes in Collection */
+    hide(): this
+    {
+        this._shapes.forEach(shape => shape.hide());
         return this;
     }
 

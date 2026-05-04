@@ -285,6 +285,18 @@ export class Vector
     return this;
   }
 
+  /** Rotate around X-axis by given degrees */
+  rotateX(angleDeg: number): this
+  {
+    return this.rotate([1, 0, 0], angleDeg * Math.PI / 180);
+  }
+
+  /** Rotate around Y-axis by given degrees */
+  rotateY(angleDeg: number): this
+  {
+    return this.rotate([0, 1, 0], angleDeg * Math.PI / 180);
+  }
+
   /** Rotate around Z-axis by given degrees */
   rotateZ(angleDeg: number): this
   {

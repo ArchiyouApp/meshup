@@ -884,6 +884,13 @@ export class Mesh extends Shape
         return this.update(this.inner()?.intersection(other.inner() as MeshJs));
     }
 
+    /** Cut current Mesh by other and keep the biggest part (inside other).
+     *  Set keepSmallest=true to keep the part outside other instead. */
+    cutoffBy(other: Mesh, keepSmallest?: boolean): this
+    {
+        return keepSmallest ? this.difference(other) : this.intersection(other);
+    }
+
     //// CURVE–MESH INTERSECTION ////
 
     /** Find intersection points between a Curve and this Mesh.

@@ -20,7 +20,7 @@
 
 import { ANGLE_COMPARE_TOLERANCE, TESSELATION_TOLERANCE, BASE_PLANE_NAME_TO_PLANE } from './constants';
 
-import { NurbsCurve3DJs, CompoundCurve3DJs, Vector3Js, BooleanRegionJs } from "./wasm/csgrs";
+import { NurbsCurve3DJs, CompoundCurve3DJs, NurbsSurfaceJs, Vector3Js, BooleanRegionJs, VertexJs, Point3Js, PolygonJs } from "./wasm/csgrs";
 
 import { ShapeCollection, getCsgrs, Mesh } from './index';
 import { Shape } from './Shape';
@@ -2024,6 +2024,13 @@ export class Curve extends Shape
         return this.difference(other);
     }
 
+    /** Cut current Curve by other and keep the biggest part (inside other).
+     *  Set keepSmallest=true to keep the part outside other instead. */
+    cutoffBy(other: Curve, keepSmallest?: boolean): Curve|ShapeCollection<Curve>|null
+    {
+        return keepSmallest ? this.difference(other) : this._booleanOp(other, 'intersection')?.checkSingle() || null;
+    }
+
     /** Get intersecting Curves with either closed Curves or Mesh */
     intersections(other: Curve|Mesh): ShapeCollection<Curve>|null
     {
@@ -2156,10 +2163,37 @@ export class Curve extends Shape
      *  @param length - The extrusion length (default: 1)
      *  @returns A new Mesh representing the extruded geometry
      */
-    extrude(length: number, direction: PointLike): Mesh|null
+    extrude(length: number, direction: PointLike = [0, 0, 1]): Mesh | null
     {
-        console.error(`Curve::extrude(): Not implemented yet!`);
-        return null;
+        if (!this._curve) { return null; }
+
+        const d = Vector.from(direction as any).normalize().scale(length);
+        const dirVec = new Vector3Js(d.x, d.y, d.z);
+
+        const surfaces: NurbsSurfaceJs[] = this.isCompound()
+            ? (this._curve as CompoundCurve3DJs).extrude(dirVec)
+            : [(this._curve as NurbsCurve3DJs).extrude(dirVec)];
+
+        const polygons: PolygonJs[] = [];
+        for (const surf of surfaces)
+        {
+            const { positions, normals, indices } = surf.toArrays() as
+                { positions: Float32Array; normals: Float32Array; indices: Uint32Array };
+
+            for (let i = 0; i < indices.length; i += 3)
+            {
+                const verts = [0, 1, 2].map(k => {
+                    const vi = indices[i + k] * 3;
+                    const pos = new Point3Js(positions[vi], positions[vi + 1], positions[vi + 2]);
+                    const nor = new Vector3Js(normals[vi], normals[vi + 1], normals[vi + 2]);
+                    return new VertexJs(pos, nor);
+                });
+                polygons.push(new PolygonJs(verts, {}));
+            }
+        }
+
+        if (polygons.length === 0) { return null; }
+        return Mesh.from(this._csgrs.MeshJs.fromPolygons(polygons, {}));
     }
 
     
