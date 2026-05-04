@@ -945,6 +945,8 @@ export class VertexJs {
   toArray(): Float64Array;
 }
 
+export function init_panic_hook(): void;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -1216,10 +1218,12 @@ export interface InitOutput {
   readonly sketchjs_heart: (a: number, b: number, c: number, d: any) => number;
   readonly sketchjs_hilbertCurve: (a: number, b: number, c: number) => number;
   readonly sketchjs_intersection: (a: number, b: number) => number;
+  readonly sketchjs_invalidateBoundingBox: (a: number) => void;
   readonly sketchjs_inverse: (a: number) => number;
   readonly sketchjs_involuteGear: (a: number, b: number, c: number, d: number, e: number, f: number, g: any) => number;
   readonly sketchjs_isEmpty: (a: number) => number;
   readonly sketchjs_keyhole: (a: number, b: number, c: number, d: number, e: any) => number;
+  readonly sketchjs_new: () => number;
   readonly sketchjs_offset: (a: number, b: number) => number;
   readonly sketchjs_offsetRounded: (a: number, b: number) => number;
   readonly sketchjs_pieSlice: (a: number, b: number, c: number, d: number, e: any) => number;
@@ -1274,10 +1278,9 @@ export interface InitOutput {
   readonly vertexjs_position: (a: number) => number;
   readonly vertexjs_toArray: (a: number) => [number, number];
   readonly vertexjs_toString: (a: number) => [number, number];
+  readonly init_panic_hook: () => void;
   readonly vector3js_new: (a: number, b: number, c: number) => number;
   readonly polygonjs_new: (a: number, b: number, c: any) => number;
-  readonly sketchjs_invalidateBoundingBox: (a: number) => void;
-  readonly sketchjs_new: () => number;
   readonly point3js_x: (a: number) => number;
   readonly point3js_y: (a: number) => number;
   readonly point3js_z: (a: number) => number;
@@ -1307,8 +1310,8 @@ export interface InitOutput {
   readonly __wbindgen_exn_store: (a: number) => void;
   readonly __externref_table_alloc: () => number;
   readonly __wbindgen_externrefs: WebAssembly.Table;
-  readonly __externref_drop_slice: (a: number, b: number) => void;
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;
+  readonly __externref_drop_slice: (a: number, b: number) => void;
   readonly __externref_table_dealloc: (a: number) => void;
   readonly __wbindgen_start: () => void;
 }

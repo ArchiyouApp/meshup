@@ -21,6 +21,7 @@
     "test:example:sketch": "vitest run tests/examples/sketch.test.ts",
     "test:example:scene": "vitest run tests/examples/scene.test.ts",
     "test:example:house": "vitest run tests/examples/house.test.ts",
+    "test:example:booleans": "vitest run tests/examples/booleans.test.ts",
     "test:example:curves": "vitest run tests/examples/curves.test.ts",
     "test:example:offsets": "vitest run tests/examples/offsets.test.ts",
     "test:example:svg": "vitest run tests/examples/svg.test.ts",
