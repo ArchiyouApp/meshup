@@ -86,12 +86,12 @@ export function dashPatternToUint16(dash: number[]): number
  *   2 = hard edge (crease or boundary)
  *
  * @param indices         Flat triangle index buffer (length = 3 × triCount)
- * @param normals         Flat vertex normal buffer (length = 3 × vertexCount), F32 after axis remap
+ * @param positions       Flat vertex position buffer (length = 3 × vertexCount), F32 after axis remap
  * @param featureAngleDeg Crease angle threshold in degrees (e.g. 10)
  */
 export function computeEdgeVisibilityBitfield(
+    positions: Float32Array,
     indices: Uint32Array,
-    normals: Float32Array,
     featureAngleDeg: number,
 ): Uint8Array
 {
@@ -100,6 +100,25 @@ export function computeEdgeVisibilityBitfield(
 
     type EdgeRef = { tri: number; slot: number };
     const edgeMap = new Map<string, EdgeRef[]>();
+
+    // Position-based edge key: unindexed meshes (OpenCASCADE style) assign each
+    // triangle its own vertex copies, so two adjacent triangles share the same
+    // edge *positions* but different *vertex indices*.  We must key on positions
+    // to detect shared edges correctly.
+    //
+    // Use a fixed-grid quantization (1/QUANT per cell) to absorb the tiny
+    // floating-point differences that arise when the WASM tessellator computes
+    // shared-edge vertices independently for each triangle.  At 1e4 cells/unit,
+    // float32 noise (~1e-7) maps to < 0.01 grid cells (safe margin), while
+    // the minimum expected vertex spacing on a typical CAD mesh (>0.001 units)
+    // maps to >10 grid cells (sufficient resolution).
+    const QUANT = 1e4;
+    const posKey = (v: number) => {
+        const qx = Math.round(positions[v * 3]     * QUANT);
+        const qy = Math.round(positions[v * 3 + 1] * QUANT);
+        const qz = Math.round(positions[v * 3 + 2] * QUANT);
+        return `${qx},${qy},${qz}`;
+    };
 
     for (let tri = 0; tri < triCount; tri++)
     {
@@ -112,7 +131,8 @@ export function computeEdgeVisibilityBitfield(
         {
             const a = verts[slot];
             const b = verts[(slot + 1) % 3];
-            const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+            const pA = posKey(a), pB = posKey(b);
+            const key = pA < pB ? `${pA}|${pB}` : `${pB}|${pA}`;
             let refs = edgeMap.get(key);
             if (!refs) { refs = []; edgeMap.set(key, refs); }
             refs.push({ tri, slot });
@@ -131,17 +151,23 @@ export function computeEdgeVisibilityBitfield(
         bitfield[byteIndex] |= (value << bitOffset);
     };
 
+    // Compute exact geometric face normal via cross product.
+    // Averaging vertex normals is unreliable because vertices at sharp edges
+    // carry blended normals from multiple faces, making two coplanar triangles
+    // appear to have different normals and falsely classifying their shared
+    // interior edge as a crease (showing tessellation triangles in the viewer).
     const triNormal = (tri: number): [number, number, number] =>
     {
-        let nx = 0, ny = 0, nz = 0;
-        for (let k = 0; k < 3; k++)
-        {
-            const v = indices[tri * 3 + k];
-            nx += normals[v * 3];
-            ny += normals[v * 3 + 1];
-            nz += normals[v * 3 + 2];
-        }
-        return [nx / 3, ny / 3, nz / 3];
+        const i0 = indices[tri * 3];
+        const i1 = indices[tri * 3 + 1];
+        const i2 = indices[tri * 3 + 2];
+        const ax = positions[i1 * 3]     - positions[i0 * 3];
+        const ay = positions[i1 * 3 + 1] - positions[i0 * 3 + 1];
+        const az = positions[i1 * 3 + 2] - positions[i0 * 3 + 2];
+        const bx = positions[i2 * 3]     - positions[i0 * 3];
+        const by = positions[i2 * 3 + 1] - positions[i0 * 3 + 1];
+        const bz = positions[i2 * 3 + 2] - positions[i0 * 3 + 2];
+        return [ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx];
     };
 
     for (const adjacents of edgeMap.values())
@@ -328,6 +354,7 @@ type PendingMeshExt = {
     type: 'mesh';
     primitive: Primitive;
     indices: Uint32Array;
+    positions: Float32Array;
     normals: Float32Array;
     style: Style;
 };
@@ -379,9 +406,9 @@ export class GLTFBuilder
         {
             const n = name ?? 'mesh';
             if (!item._mesh || item.vertices().length === 0) return this;
-            const { node, primitive, indices, normals } = this._meshToGLTFNode(item, n);
+            const { node, primitive, indices, positions, normals } = this._meshToGLTFNode(item, n);
             this.addSceneChild(node);
-            this.queueMeshExtData(primitive, indices, normals, item.style);
+            this.queueMeshExtData(primitive, indices, positions, normals, item.style);
         }
         else
         {
@@ -422,11 +449,12 @@ export class GLTFBuilder
     queueMeshExtData(
         primitive: Primitive,
         indices: Uint32Array,
+        positions: Float32Array,
         normals: Float32Array,
         style: Style,
     ): this
     {
-        this._pending.push({ type: 'mesh', primitive, indices, normals, style });
+        this._pending.push({ type: 'mesh', primitive, indices, positions, normals, style });
         return this;
     }
 
@@ -502,9 +530,9 @@ export class GLTFBuilder
             {
                 const mesh = shape as unknown as Mesh;
                 if (!mesh._mesh || mesh.vertices().length === 0) return;
-                const { node: meshNode, primitive, indices, normals } = this._meshToGLTFNode(mesh, name, cascadedStyle);
+                const { node: meshNode, primitive, indices, positions, normals } = this._meshToGLTFNode(mesh, name, cascadedStyle);
                 gltfNode.addChild(meshNode);
-                this.queueMeshExtData(primitive, indices, normals, cascadedStyle);
+                this.queueMeshExtData(primitive, indices, positions, normals, cascadedStyle);
             }
             else if (shape instanceof Curve || shape.type === 'Curve')
             {
@@ -527,7 +555,7 @@ export class GLTFBuilder
     //// PRIVATE: GEOMETRY BUILDERS ////
 
     /** Assemble a GltfNode for a Mesh from its raw toBuffer() data. */
-    private _meshToGLTFNode(mesh: Mesh, name = 'mesh', style?: Style): { node: GltfNode; primitive: Primitive; indices: Uint32Array; normals: Float32Array }
+    private _meshToGLTFNode(mesh: Mesh, name = 'mesh', style?: Style): { node: GltfNode; primitive: Primitive; indices: Uint32Array; positions: Float32Array; normals: Float32Array }
     {
         const { positions: posRaw, normals: normRaw, indices } = mesh.toBuffer();
         const count = posRaw.length / 3;
@@ -563,7 +591,7 @@ export class GLTFBuilder
 
         const gltfMesh = this._doc.createMesh(name).addPrimitive(primitive);
         const node = this._doc.createNode(name).setMesh(gltfMesh);
-        return { node, primitive, indices: idxCopy, normals: normF32 };
+        return { node, primitive, indices: idxCopy, positions: posF32, normals: normF32 };
     }
 
     /** Assemble a GltfNode for a Curve from its raw toBuffer() data. */
@@ -611,7 +639,7 @@ export class GLTFBuilder
         const gtBuf = this._doc.getRoot().listBuffers()[0] ?? this._doc.createBuffer();
 
         const bitfieldRaw = computeEdgeVisibilityBitfield(
-            ext.indices, ext.normals, EDGE_PROJECTION_DEFAULTS.featureAngle,
+            ext.positions, ext.indices, EDGE_PROJECTION_DEFAULTS.featureAngle,
         );
         const bitfield = new Uint8Array(bitfieldRaw.buffer.slice(0) as ArrayBuffer);
         const visAcc = this._doc.createAccessor()
