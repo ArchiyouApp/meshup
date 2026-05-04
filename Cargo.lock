@@ -790,9 +790,9 @@ dependencies = [
 
 [[package]]
 name = "boolmesh"
-version = "0.1.5"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c24cf27b7b6478b2e2f082878c1ef77c4e06f902014a5ffb2cc5ab302084924"
+checksum = "0ede2e53d77b54cd1aae2a8641693c4c65b0ecd0d423194ca4ef78278b53313a"
 dependencies = [
  "glam 0.30.9",
 ]
@@ -1070,6 +1070,7 @@ dependencies = [
  "bevy_mesh",
  "boolmesh",
  "chull",
+ "console_error_panic_hook",
  "contour_tracing",
  "core2",
  "curvo",
@@ -2104,9 +2105,9 @@ checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 
 [[package]]
 name = "libc"
-version = "0.2.178"
+version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37c93d8daa9d8a012fd8ab92f088405fb202ea0b6ab73ee2482ae66af4f42091"
+checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "libfuzzer-sys"

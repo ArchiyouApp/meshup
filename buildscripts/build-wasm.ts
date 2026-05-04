@@ -23,11 +23,38 @@ console.log(`**** 🦀 Building Rust to WASM ****
     WASM dir: "${WASM_DIR}"
 `);
 
-// 1. Build Rust using wasm-pack
-execSync(`wasm-pack build --release --target web --out-dir ${WASM_DIR} --features wasm`, { 
-  cwd: RUST_DIR, 
-  stdio: 'inherit' 
+// 1. Build Rust using wasm-pack (skip built-in wasm-opt; we run it manually below)
+// RUSTFLAGS: enable wasm exception-handling so panic="unwind" works on wasm32.
+// This allows std::panic::catch_unwind to catch boolmesh panics gracefully.
+execSync(`wasm-pack build --release --no-opt --target web --out-dir ${WASM_DIR} --features wasm`, {
+    cwd: RUST_DIR, 
+    env: { ...process.env, RUSTFLAGS: "-C target-feature=+exception-handling" },
+    stdio: 'inherit' 
 });
+
+// 1b. Run wasm-opt manually so we can pass --enable-exception-handling,
+//     which preserves the wasm Exception Handling proposal instructions that
+//     std::panic::catch_unwind relies on. Without this flag wasm-opt v117
+//     would lower them to unreachable traps.
+const wasmOptBin = (() => {
+    // Locate the wasm-opt binary installed by wasm-pack.
+    const cache = path.join(process.env.HOME || '~', '.cache', '.wasm-pack');
+    const dirs = fs.existsSync(cache)
+        ? fs.readdirSync(cache).filter(d => d.startsWith('wasm-opt'))
+        : [];
+    const bin = dirs.map(d => path.join(cache, d, 'bin', 'wasm-opt')).find(p => fs.existsSync(p));
+    return bin;
+})();
+
+const wasmFilePath = path.join(WASM_DIR, WASM_FILE_NAME);
+if (wasmOptBin) {
+    execSync(`${wasmOptBin} -O3 --enable-exception-handling ${wasmFilePath} -o ${wasmFilePath}`, {
+        stdio: 'inherit',
+    });
+    console.log('[INFO]: Optimized wasm binary with exception-handling enabled');
+} else {
+    console.warn('[WARN]: wasm-opt not found; skipping wasm optimization');
+}
 
 // 2. Read the generated .wasm file
 const wasmPath = path.join(WASM_DIR, WASM_FILE_NAME); // check your actual filename in temp-wasm
