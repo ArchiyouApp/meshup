@@ -34,12 +34,14 @@ import
     type WriterContext,
 } from '@gltf-transform/core';
 import { Style } from './Style';
-import type { Axis } from './types';
+
 import { GLTFJsonDocumentToString, remapAxis } from './utils';
 import { EDGE_PROJECTION_DEFAULTS } from './constants';
 import { Mesh } from './Mesh';
 import { Curve } from './Curve';
+
 import type { SceneNode } from './SceneNode';
+import type { Axis, SceneNodeExport } from './types';
 
 // ─── Utility: dash array → 16-bit repeating bitmask ──────────────────────────
 
@@ -507,9 +509,14 @@ export class GLTFBuilder
     /** Recursively builds a GltfNode tree from a SceneNode hierarchy. */
     _sceneNodeToGLTFNode(node: SceneNode<any>): GltfNode | null
     {
-        if (!node.effectiveStyle().visible) return null;
-
         const gltfNode = this._doc.createNode(node.name);
+
+        // Tag nodes that were explicitly hidden so the viewer can initialise them
+        // as hidden while still allowing the user to toggle visibility on demand.
+        if (node.style.visible === false)
+        {
+            gltfNode.setExtras({ defaultVisible: false } as SceneNodeExport as any); // NOTE: setExtras has no TS type
+        }
 
         // Cascade the node's effective style down to each shape: node style is the base,
         // shape's own explicit properties take precedence.
@@ -524,7 +531,13 @@ export class GLTFBuilder
             const cascadedStyle = new Style(nodeEffective.toData());
             cascadedStyle.merge(shape.style.explicitData() as any);
 
-            if (cascadedStyle.visible === false) return;
+            // When the cascaded visibility is false (either the node or the shape
+            // itself was hidden), tag the containing GLTF node as defaultVisible:false
+            // so the viewer and scene navigator initialise it as hidden.
+            // Do NOT return early — include the geometry so the user can toggle
+            // visibility from the scene navigator, consistent with node.hide() behaviour.
+            if (cascadedStyle.visible === false)
+                gltfNode.setExtras({ defaultVisible: false });
 
             if (shape instanceof Mesh || shape.type === 'Mesh')
             {

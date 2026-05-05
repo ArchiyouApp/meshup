@@ -127,3 +127,11 @@ export interface SceneNodeGraphNode
   children: SceneNodeGraphNode[]
 }
 
+/** Some style or visibility data that can not be converted into format directly
+ *  For example: in GLTF export we want tag nodes as hidden
+ */
+export interface SceneNodeExport
+{
+    defaultVisible?: boolean;
+}
+

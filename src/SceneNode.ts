@@ -434,13 +434,13 @@ export class SceneNode<S extends SceneNodeShape = Shape>
     /** Export this node hierarchy as a GLTF JSON string. */
     async toGLTF(up: Axis = 'z'): Promise<string>
     {
-        return new GLTFBuilder(up, this.name).addSceneNode(this).applyExtensions().toGLTF();
+        return new GLTFBuilder(up, 'scene').addSceneNode(this).applyExtensions().toGLTF();
     }
 
     /** Export this node hierarchy as a GLB binary (Uint8Array). */
     async toGLB(up: Axis = 'z'): Promise<Uint8Array>
     {
-        return new GLTFBuilder(up, this.name).addSceneNode(this).applyExtensions().toGLB();
+        return new GLTFBuilder(up, 'scene').addSceneNode(this).applyExtensions().toGLB();
     }
 
     //// SVG EXPORT ────────────────────────────────────────────────────────────
