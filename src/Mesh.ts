@@ -884,11 +884,171 @@ export class Mesh extends Shape
         return this.update(this.inner()?.intersection(other.inner() as MeshJs));
     }
 
-    /** Cut current Mesh by other and keep the biggest part (inside other).
-     *  Set keepSmallest=true to keep the part outside other instead. */
-    cutoffBy(other: Mesh, keepSmallest?: boolean): this
+    /**
+     * Cut this mesh by `other` and keep one of the resulting pieces.
+     * By default keeps the largest piece; set `keepSmallest=true` to keep the smallest.
+     *
+     * For Mesh and Polygon cutters, warns and returns `this` unchanged when `other`
+     * does not intersect this mesh. PlaneJs cutters always proceed (planes are infinite).
+     */
+    cutoffBy(other: Mesh | Polygon | PlaneJs, keepSmallest = false): this
     {
-        return keepSmallest ? this.difference(other) : this.intersection(other);
+        // Touch detection only makes sense for finite cutters
+        if (!(other instanceof PlaneJs))
+        {
+            const otherMesh = other instanceof Polygon ? other.toMesh() : other;
+            if (!this.hits(otherMesh))
+            {
+                console.warn('Mesh.cutoffBy(): the cutter does not intersect this mesh — no cut performed.');
+                return this;
+            }
+        }
+
+        const parts = this.split(other);
+
+        if (parts.count() < 2)
+        {
+            console.warn('Mesh.cutoffBy(): split produced fewer than 2 pieces — no cut performed.');
+            return this;
+        }
+
+        const sized = parts.toArray().map(m => ({
+            mesh: m,
+            size: m.volume() ?? m.inner().triangleCount(),
+        }));
+        sized.sort((a, b) => a.size - b.size);
+
+        const picked = keepSmallest ? sized[0].mesh : sized[sized.length - 1].mesh;
+        return this.update(picked);
+    }
+
+    /** Cut off Mesh by a plane defined by axisNormal and coordinate.
+     *  `box(10).cutoff('x', 5)` keeps the half where x > 5 (positive-normal side).
+     *  `box(10).cutoff('x', 5, true)` keeps the half where x < 5 (negative-normal side).
+     */
+    cutoff(at: Axis, coord: number = 0, smallest: boolean = false): this
+    {
+        if(!isAxis(at)){ throw new Error(`Mesh.cutoff(): Invalid axis '${at}'. Use 'x', 'y', or 'z'.`); }
+
+        const normals: Record<Axis, [number, number, number]> = {
+            x: [1, 0, 0],
+            y: [0, 1, 0],
+            z: [0, 0, 1],
+        };
+        const [nx, ny, nz] = normals[at];
+        const plane = PlaneJs.fromNormalComponents(nx, ny, nz, coord);
+        const parts = this.split(plane);
+
+        if (parts.count() === 0)
+        {
+            console.warn('Mesh.cutoff(): plane does not intersect this mesh — nothing kept.');
+            return this;
+        }
+
+        if (parts.count() === 1)
+        {
+            console.warn('Mesh.cutoff(): plane does not split this mesh — nothing cut off.');
+            return this;
+        }
+
+        const partsArr = parts.toArray().sort((a, b) => (b.volume() ?? b.area()) - (a.volume() ?? a.area()));
+        const picked = smallest ? partsArr[partsArr.length - 1] : partsArr[0];
+
+        return this.update(picked!);
+    }
+
+    /**
+     * Detect geometrically isolated "islands" in this Mesh and return each as its own Mesh.
+     * Useful after a subtract boolean that splits the mesh into disconnected parts.
+     * Returns a ShapeCollection<Mesh> with one entry per isolated component.
+     * If the mesh is fully connected, returns a collection containing only this mesh.
+     */
+    separateIsolated(): ShapeCollection<Mesh>
+    {
+        const rawPolys = this.inner().polygons();
+        const n = rawPolys.length;
+        if (n === 0) return new ShapeCollection<Mesh>([this]);
+
+        // Union-Find
+        const parent = Array.from({ length: n }, (_, i) => i);
+        const find = (i: number): number =>
+        {
+            while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; }
+            return i;
+        };
+        const union = (a: number, b: number) => { parent[find(a)] = find(b); };
+
+        // Map vertex position key → first polygon index that owns it
+        const vertexOwner = new Map<string, number>();
+        const PREC = 6;
+        for (let pi = 0; pi < n; pi++)
+        {
+            const arr = rawPolys[pi].toArray(); // [x,y,z,nx,ny,nz, ...]
+            for (let vi = 0; vi < arr.length; vi += 6)
+            {
+                const key = `${arr[vi].toFixed(PREC)},${arr[vi + 1].toFixed(PREC)},${arr[vi + 2].toFixed(PREC)}`;
+                if (vertexOwner.has(key)) union(pi, vertexOwner.get(key)!);
+                else vertexOwner.set(key, pi);
+            }
+        }
+
+        // Group raw PolygonJs instances by component root
+        const groups = new Map<number, PolygonJs[]>();
+        for (let pi = 0; pi < n; pi++)
+        {
+            const root = find(pi);
+            if (!groups.has(root)) groups.set(root, []);
+            groups.get(root)!.push(rawPolys[pi]);
+        }
+
+        if (groups.size === 1) return new ShapeCollection<Mesh>([this]);
+
+        const meshes = [...groups.values()].map(polys =>
+            Mesh.from(getCsgrs().MeshJs.fromPolygons(polys, {}))
+        );
+        return new ShapeCollection<Mesh>(meshes);
+    }
+
+    /**
+     * Split this mesh into two pieces using a cutting `other`.
+     *
+     * - `Mesh`    — the pieces are computed via intersection and difference.
+     * - `Polygon` — the polygon's plane is used as the cutting plane.
+     * - `PlaneJs` — the plane is used directly (front side = direction the normal points).
+     *
+     * Returns a `ShapeCollection<Mesh>` with up to two entries (front/positive side first,
+     * back/negative side second). Empty halves are omitted from the result.
+     */
+    split(other: Mesh | Polygon | PlaneJs): ShapeCollection<Mesh>
+    {
+        if (other instanceof Mesh)
+        {
+            const front = this.copy().intersection(other);
+            const back  = this.copy().difference(other);
+            const parts: Mesh[] = [];
+            if (front.inner().triangleCount() > 0) parts.push(front);
+            if (back.inner().triangleCount() > 0)  parts.push(back);
+            return new ShapeCollection<Mesh>(parts);
+        }
+
+        // Resolve cutting plane
+        let plane: PlaneJs;
+        if (other instanceof Polygon)
+        {
+            plane = other.inner().plane();
+        }
+        else
+        {
+            plane = other; // PlaneJs passed directly
+        }
+
+        const halves = this.inner().splitByPlane(plane);
+        const parts: Mesh[] = [];
+        for (const half of halves)
+        {
+            if (half.triangleCount() > 0) parts.push(Mesh.from(half));
+        }
+        return new ShapeCollection<Mesh>(parts);
     }
 
     //// CURVE–MESH INTERSECTION ////

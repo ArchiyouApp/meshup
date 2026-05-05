@@ -1070,7 +1070,6 @@ dependencies = [
  "bevy_mesh",
  "boolmesh",
  "chull",
- "console_error_panic_hook",
  "contour_tracing",
  "core2",
  "curvo",

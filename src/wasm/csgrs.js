@@ -1231,6 +1231,27 @@ export class MeshJs {
         return v1;
     }
     /**
+     * Split this mesh by a plane into two halves.
+     *
+     * Returns `[front_mesh, back_mesh]` where:
+     * - `front_mesh` contains polygons on the side the plane normal points toward.
+     * - `back_mesh` contains polygons on the opposite side.
+     *
+     * Polygons spanning the plane are split at the intersection using
+     * Sutherland-Hodgman clipping.  Coplanar polygons go to `front_mesh`.
+     * Either half may be empty (zero polygons) if the mesh lies entirely on
+     * one side of the plane.
+     * @param {PlaneJs} plane
+     * @returns {MeshJs[]}
+     */
+    splitByPlane(plane) {
+        _assertClass(plane, PlaneJs);
+        const ret = wasm.meshjs_splitByPlane(this.__wbg_ptr, plane.__wbg_ptr);
+        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
      * Number of triangles (handy to sanity-check).
      * @returns {number}
      */
@@ -3747,7 +3768,7 @@ export class SketchJs {
         return SketchJs.__wrap(ret);
     }
     invalidateBoundingBox() {
-        wasm.sketchjs_invalidateBoundingBox(this.__wbg_ptr);
+        wasm.meshjs_invalidateBoundingBox(this.__wbg_ptr);
     }
     /**
      * @param {number} dx
@@ -3771,7 +3792,7 @@ export class SketchJs {
         return SketchJs.__wrap(ret);
     }
     constructor() {
-        const ret = wasm.sketchjs_new();
+        const ret = wasm.meshjs_new();
         this.__wbg_ptr = ret >>> 0;
         SketchJsFinalization.register(this, this.__wbg_ptr, this);
         return this;
@@ -4445,10 +4466,6 @@ export class VertexJs {
 }
 if (Symbol.dispose) VertexJs.prototype[Symbol.dispose] = VertexJs.prototype.free;
 
-export function init_panic_hook() {
-    wasm.init_panic_hook();
-}
-
 const EXPECTED_RESPONSE_TYPES = new Set(['basic', 'cors', 'default']);
 
 async function __wbg_load(module, imports) {
@@ -4580,17 +4597,6 @@ function __wbg_get_imports() {
         const ret = Object.entries(arg0);
         return ret;
     };
-    imports.wbg.__wbg_error_7534b8e9a36f1ab4 = function(arg0, arg1) {
-        let deferred0_0;
-        let deferred0_1;
-        try {
-            deferred0_0 = arg0;
-            deferred0_1 = arg1;
-            console.error(getStringFromWasm0(arg0, arg1));
-        } finally {
-            wasm.__wbindgen_free(deferred0_0, deferred0_1, 1);
-        }
-    };
     imports.wbg.__wbg_getRandomValues_1c61fac11405ffdc = function() { return handleError(function (arg0, arg1) {
         globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
     }, arguments) };
@@ -4680,6 +4686,10 @@ function __wbg_get_imports() {
         const ret = Matrix4Js.__wrap(arg0);
         return ret;
     };
+    imports.wbg.__wbg_meshjs_new = function(arg0) {
+        const ret = MeshJs.__wrap(arg0);
+        return ret;
+    };
     imports.wbg.__wbg_meshjs_unwrap = function(arg0) {
         const ret = MeshJs.__unwrap(arg0);
         return ret;
@@ -4694,10 +4704,6 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbg_new_6421f6084cc5bc5a = function(arg0) {
         const ret = new Uint8Array(arg0);
-        return ret;
-    };
-    imports.wbg.__wbg_new_8a6f238a6ece86ea = function() {
-        const ret = new Error();
         return ret;
     };
     imports.wbg.__wbg_new_from_slice_9a48ef80d2a51f94 = function(arg0, arg1) {
@@ -4774,13 +4780,6 @@ function __wbg_get_imports() {
         const ret = Reflect.set(arg0, arg1, arg2);
         return ret;
     }, arguments) };
-    imports.wbg.__wbg_stack_0ed75d68575b0f3c = function(arg0, arg1) {
-        const ret = arg1.stack;
-        const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
-        getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
-    };
     imports.wbg.__wbg_static_accessor_GLOBAL_769e6b65d6557335 = function() {
         const ret = typeof global === 'undefined' ? null : global;
         return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
