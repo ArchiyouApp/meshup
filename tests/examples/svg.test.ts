@@ -8,6 +8,8 @@ import { Curve } from '../../src/Curve';
 import { save } from '../../src/utils';
 import { TOLERANCE } from '../../src/constants';
 
+const OUTPUT_DIR = './tests/outputs/svg/';
+
 beforeAll(async () => 
 {
     await initAsync();
@@ -34,10 +36,10 @@ describe('Example: Curves exported to SVG', () =>
                         .color('red');
         
         // Export both in 3D GLTF and 2D SVG
-        save('test.svg.gltf', await new ShapeCollection(circ, circ2, rect, rectb, curv, ln).toGLTF());
+        save(OUTPUT_DIR + 'test.svg.gltf', await new ShapeCollection(circ, circ2, rect, rectb, curv, ln).toGLTF());
 
         // NOTE: svg does fill the closed curves, but the Curves stay unfilled in 3D (not turned into polygons)
-        save('test.svg.svg', new ShapeCollection(circ, circ2, rect, rectb, curv, ln).toSVG());
+        save(OUTPUT_DIR + 'test.svg.svg', new ShapeCollection(circ, circ2, rect, rectb, curv, ln).toSVG());
         
     });
 });

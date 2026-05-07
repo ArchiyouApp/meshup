@@ -5,6 +5,8 @@ import { Polygon } from '../../src/Polygon';
 import { Mesh } from '../../src/Mesh';
 import { save } from '../../src/utils';
 
+const OUTPUT_DIR = './tests/outputs/curve/';
+
 beforeAll(async () =>
 {
     await initAsync();
@@ -240,7 +242,7 @@ describe('Curve.extend()', async () =>
         expect(line1.distance(line2)).toBeCloseTo(0, 5);
 
         // visual check
-        await save('test.curve.extendTo.gltf', 
+        await save(OUTPUT_DIR + 'test.curve.extendTo.gltf', 
             await new ShapeCollection<Curve>(line1, line2).toGLTF()
         );
     });

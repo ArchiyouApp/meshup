@@ -13,6 +13,8 @@ import { SceneNode } from '../../src/SceneNode';
 import { save } from '../../src/utils';
 import { dashPatternToUint16 } from '../../src/GLTFBuilder';
 
+const OUTPUT_DIR = './tests/outputs/scene/';
+
 beforeAll(async () =>
 {
     await initAsync();
@@ -62,7 +64,7 @@ describe('Set up a basic scene hierarchy and export', () =>
     
         const gltf = await scene.toGLTF();
         expect(gltf).toBeTruthy();
-        save('test.scene.gltf', gltf);
+        save(OUTPUT_DIR + 'test.scene.gltf', gltf);
     });
 });
 
@@ -100,7 +102,7 @@ describe('glTF extension exports', () =>
         expect(lineStyleExt.width).toBe(3);
         expect(lineStyleExt.pattern).toBe(dashPatternToUint16([5, 2]));
 
-        save('test.mesh.extensions.gltf', gltfStr!);
+        save(OUTPUT_DIR + 'test.mesh.extensions.gltf', gltfStr!);
     });
 
     it('Curve with dash style emits BENTLEY_materials_line_style', async () =>
@@ -121,6 +123,6 @@ describe('glTF extension exports', () =>
         expect(ext.width).toBe(2);
         expect(ext.pattern).toBe(dashPatternToUint16([4, 4]));
 
-        save('test.curve.extensions.gltf', gltfStr!);
+        save(OUTPUT_DIR + 'test.curve.extensions.gltf', gltfStr!);
     });
 });

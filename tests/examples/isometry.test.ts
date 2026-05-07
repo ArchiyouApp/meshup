@@ -8,6 +8,8 @@ import { Mesh } from '../../src/Mesh';
 import { save } from '../../src/utils';
 import { ShapeCollection as Collection, MeshCollection } from '../../src/ShapeCollection';
 
+const OUTPUT_DIR = './tests/outputs/isometry/';
+
 beforeAll(async () => 
 {
     await initAsync();
@@ -30,8 +32,8 @@ describe('Example: Isometric projection with hidden lines', async () =>
 
         const col = new Collection(box.move(-200), boxIso!)
         
-        await save('test.isometry.box.gltf', await col.toGLTF());
-        await save('test.isometry.box.svg', boxIso.toSVG());
+        await save(OUTPUT_DIR + 'test.isometry.box.gltf', await col.toGLTF());
+        await save(OUTPUT_DIR + 'test.isometry.box.svg', boxIso.toSVG());
 
     });
 
@@ -46,7 +48,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         //expect(diffIso.group('hidden')?.length).toBe(9);
         //expect(diffIso.group('visible')?.length).toBe(15);
 
-        await save('test.isometry.diff.gltf', await new Collection(
+        await save(OUTPUT_DIR + 'test.isometry.diff.gltf', await new Collection(
             diff.move(-bigbox.bbox().width()*2), diffIso.group('visible')!).toGLTF()); // OK
 
     });
@@ -57,7 +59,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         const sphere = Mesh.Sphere(20);
         const sphereIso = sphere.isometry();
         expect(sphereIso).toBeTruthy();
-        await save('test.isometry.sphere.gltf', await new Collection(sphere.move(-20*2), sphereIso.group('visible')!).toGLTF());
+        await save(OUTPUT_DIR + 'test.isometry.sphere.gltf', await new Collection(sphere.move(-20*2), sphereIso.group('visible')!).toGLTF());
     });
 
     it('can do isometric projection of box with a hole', async () =>
@@ -68,7 +70,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         box.subtract(hole)
                 .subtract(subBox);
 
-        await save('test.isometry.hole.gltf',
+        await save(OUTPUT_DIR + 'test.isometry.hole.gltf',
                 await new Collection(
                     box.isometry()?.group('visible')!,
                     box.move(-100)
@@ -88,13 +90,13 @@ describe('Example: Isometric projection with hidden lines', async () =>
         const iso = boxes.isometry()?.group('visible')!;
         console.log('Created boxes grid isometry in', performance.now() - t, 'ms');
 
-        await save('test.isometry.boxes.gltf',
+        await save(OUTPUT_DIR + 'test.isometry.boxes.gltf',
                 await new Collection(
                     boxes,
                     iso.move(1000),
                     ).toGLTF());
 
-        await save('test.isometry.boxes.svg', 
+        await save(OUTPUT_DIR + 'test.isometry.boxes.svg', 
                 iso.toSVG());
     });
 });       

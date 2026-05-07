@@ -3,6 +3,9 @@ import { Curve, initAsync, Polygon } from '../../src/index';
 import { Bbox } from '../../src/Bbox';
 import { Vertex } from '../../src/Vertex';
 
+// from project dir
+const OUTPUT_DIR = './tests/outputs/bbox';
+
 beforeAll(async () =>
 {
     await initAsync();

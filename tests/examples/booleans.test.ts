@@ -4,6 +4,8 @@ import { Mesh } from '../../src/Mesh';
 import { Sketch } from '../../src/Sketch';
 import { rad, save } from '../../src/utils';
 
+const OUTPUT_DIR = './tests/outputs/booleans/';
+
 beforeAll(async () =>
 {
     await initAsync();
@@ -20,7 +22,7 @@ describe('Example: Booleans', () =>
         expect(a.positions().length).toBeGreaterThan(0);
         expect(a.inner().triangleCount()).toBeGreaterThan(0);
 
-        await save('test.booleans.union.gltf', await a.toGLTF());
+        await save(OUTPUT_DIR + 'test.booleans.union.gltf', await a.toGLTF());
     });
 
     it('can intersect a cube and sphere', async () =>
@@ -32,7 +34,7 @@ describe('Example: Booleans', () =>
         expect(c.positions().length).toBeGreaterThan(0);
         expect(c.inner().triangleCount()).toBeGreaterThan(0);
 
-        await save('test.booleans.intersection.gltf', 
+        await save(OUTPUT_DIR + 'test.booleans.intersection.gltf', 
             await (new ShapeCollection<Mesh>([a.opacity(0.5),b.opacity(0.5), c.color('red').moveZ(50)])).toGLTF());
     });
 
@@ -46,7 +48,7 @@ describe('Example: Booleans', () =>
         expect(box.positions().length).toBeGreaterThan(0);
         expect(box.inner().triangleCount()).toBeGreaterThan(0);
 
-        await save('test.booleans.holes.gltf', await box.toGLTF());
+        await save(OUTPUT_DIR + 'test.booleans.holes.gltf', await box.toGLTF());
     });
 
     it('subtracts a sphere from a box corner', async () =>
@@ -58,7 +60,7 @@ describe('Example: Booleans', () =>
         expect(box.positions().length).toBeGreaterThan(0);
         expect(box.inner().triangleCount()).toBeGreaterThan(0);
 
-        await save('test.booleans.corner-sphere-subtract.gltf', await box.toGLTF());
+        await save(OUTPUT_DIR + 'test.booleans.corner-sphere-subtract.gltf', await box.toGLTF());
     });
 
     it('creates a house facade polyline extrusion', async () =>
@@ -86,6 +88,6 @@ describe('Example: Booleans', () =>
         expect(frontFacade!.positions().length).toBeGreaterThan(0);
         expect(frontFacade!.inner().triangleCount()).toBeGreaterThan(0);
 
-        await save('test.booleans.house-facade.gltf', await frontFacade!.toGLTF());
+        await save(OUTPUT_DIR + 'test.booleans.house-facade.gltf', await frontFacade!.toGLTF());
     });
 });

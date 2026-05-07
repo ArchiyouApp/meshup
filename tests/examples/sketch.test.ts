@@ -5,6 +5,8 @@ import { Curve } from '../../src/Curve';
 import { Sketch } from '../../src/Sketch';
 import { save } from '../../src/utils';
 
+const OUTPUT_DIR = './tests/outputs/sketch/';
+
 beforeAll(async () =>
 {
     await initAsync();
@@ -65,7 +67,7 @@ describe('Sketch', () =>
         expect(pl3.normal().angle([1,0,0])).toBeCloseTo(0);
         expect(pl3.length()).toBeCloseTo(200);
 
-        await save('test.sketch.polar.gltf', await new ShapeCollection<Curve>(plortho, pl, pl2, pl3).toGLTF());
+        await save(OUTPUT_DIR + 'test.sketch.polar.gltf', await new ShapeCollection<Curve>(plortho, pl, pl2, pl3).toGLTF());
     });
     
 });

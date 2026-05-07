@@ -7,6 +7,8 @@ import { ShapeCollection, initAsync } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { save } from '../../src/utils';
 
+const OUTPUT_DIR = './tests/outputs/curves/';
+
 beforeAll(async () => 
 {
     await initAsync();
@@ -31,7 +33,7 @@ describe('Example: Curves', () =>
         expect(circle).toBeTruthy();
 
         // Save as GLTF to view in 3D 
-        await save('test.curves.basic.gltf', await new ShapeCollection(line, circle, pline, arc, curve).toGLTF());
+        await save(OUTPUT_DIR + 'test.curves.basic.gltf', await new ShapeCollection(line, circle, pline, arc, curve).toGLTF());
 
     });
 
@@ -55,8 +57,8 @@ describe('Example: Curves', () =>
     
         const col = new ShapeCollection(c, rect, circles, union!, unionOffset!);
 
-        await save('test.curves.ops.gltf', await col.toGLTF());
-        //save('test.curves.ops.svg', col.toSVG());
+        await save(OUTPUT_DIR + 'test.curves.ops.gltf', await col.toGLTF());
+        //save(OUTPUT_DIR + 'test.curves.ops.svg', col.toSVG());
     });
 
 

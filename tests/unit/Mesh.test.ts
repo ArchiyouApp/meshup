@@ -4,6 +4,8 @@ import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
 import { save } from '../../src/utils';
 
+const OUTPUT_DIR = './tests/outputs/mesh/';
+
 beforeAll(async () =>
 {
     await initAsync();
@@ -148,7 +150,7 @@ describe('Mesh.mirror()', () =>
 
         /*
         // Visual check
-        await save('test.mesh.mirror.center.gltf', await new ShapeCollection(
+        await save(OUTPUT_DIR + 'test.mesh.mirror.center.gltf', await new ShapeCollection(
             centerline, 
             b.copy().moveZ(20).opacity(0.5), 
             mirrored).toGLTF());
@@ -165,7 +167,7 @@ describe('Mesh.mirror()', () =>
 
         /*
         // Visual check
-        await save('test.mesh.mirror.position.gltf', await new ShapeCollection(
+        await save(OUTPUT_DIR + 'test.mesh.mirror.position.gltf', await new ShapeCollection(
             mirrorline, 
             b,
             mirrored).toGLTF());
@@ -182,7 +184,7 @@ describe('Mesh.mirror()', () =>
             b.center().copy().moveZ(50).round());
 
         // Visual check
-        await save('test.mesh.mirror.z.gltf', await new ShapeCollection(
+        await save(OUTPUT_DIR + 'test.mesh.mirror.z.gltf', await new ShapeCollection(
             mirrorline, 
             b,
             mirrored).toGLTF());
@@ -205,7 +207,7 @@ describe('Mesh.mirror()', () =>
         
 
         // Visual check
-        await save('test.mesh.mirror.offset.gltf', await new ShapeCollection(
+        await save(OUTPUT_DIR + 'test.mesh.mirror.offset.gltf', await new ShapeCollection(
             mirrorline,
             originline,
             mirroredLine,

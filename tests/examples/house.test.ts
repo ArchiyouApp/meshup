@@ -9,6 +9,8 @@ import { Sketch } from '../../src/Sketch';
 import { save } from '../../src/utils';
 import { rad } from '../../src/utils';
 
+const OUTPUT_DIR = './tests/outputs/house/';
+
 beforeAll(async () =>
 {
     await initAsync();
@@ -60,7 +62,7 @@ describe('Example: House', () =>
         const gltf = await house!.toGLTF();
         expect(house).toBeTruthy();
         
-        save('test.house.gltf', gltf );
+        save(OUTPUT_DIR + 'test.house.gltf', gltf );
         
     });
 
