@@ -1034,6 +1034,20 @@ export class MeshJs {
         return MeshJs.__wrap(ret);
     }
     /**
+     * @param {string} edge_id
+     * @param {number} radius
+     * @returns {MeshJs}
+     */
+    filletEdge(edge_id, radius) {
+        const ptr0 = passStringToWasm0(edge_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.meshjs_filletEdge(this.__wbg_ptr, ptr0, len0, radius);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return MeshJs.__wrap(ret[0]);
+    }
+    /**
      * @param {SketchJs} sketch_js
      * @returns {MeshJs}
      */
@@ -1088,6 +1102,33 @@ export class MeshJs {
         return ret;
     }
     /**
+     * @param {string} edge_id
+     * @param {number} distance
+     * @returns {MeshJs}
+     */
+    chamferEdge(edge_id, distance) {
+        const ptr0 = passStringToWasm0(edge_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.meshjs_chamferEdge(this.__wbg_ptr, ptr0, len0, distance);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return MeshJs.__wrap(ret[0]);
+    }
+    /**
+     * @param {Array<any>} edge_ids
+     * @param {number} radius
+     * @param {number} setback
+     * @returns {MeshJs}
+     */
+    filletEdges(edge_ids, radius, setback) {
+        const ret = wasm.meshjs_filletEdges(this.__wbg_ptr, edge_ids, radius, setback);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return MeshJs.__wrap(ret[0]);
+    }
+    /**
      * @param {MeshJs} other
      * @returns {MeshJs}
      */
@@ -1123,6 +1164,19 @@ export class MeshJs {
     vertexCount() {
         const ret = wasm.meshjs_vertexCount(this.__wbg_ptr);
         return ret >>> 0;
+    }
+    /**
+     * @param {Array<any>} edge_ids
+     * @param {number} distance
+     * @param {number} setback
+     * @returns {MeshJs}
+     */
+    chamferEdges(edge_ids, distance, setback) {
+        const ret = wasm.meshjs_chamferEdges(this.__wbg_ptr, edge_ids, distance, setback);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return MeshJs.__wrap(ret[0]);
     }
     /**
      * @param {PolygonJs[]} polygons
@@ -1579,6 +1633,13 @@ export class MeshJs {
         return MeshJs.__wrap(ret);
     }
     /**
+     * @returns {any}
+     */
+    discoverChamferEdges() {
+        const ret = wasm.meshjs_discoverChamferEdges(this.__wbg_ptr);
+        return ret;
+    }
+    /**
      * Create a triangulated mesh from a planar polygon (flat [x,y,z,...] outer boundary)
      * with interior holes (array of flat [x,y,z,...] arrays).
      *
@@ -1615,6 +1676,20 @@ export class MeshJs {
     }
     invalidateBoundingBox() {
         wasm.meshjs_invalidateBoundingBox(this.__wbg_ptr);
+    }
+    /**
+     * @param {Array<any>} edge_ids
+     * @param {number} width
+     * @param {number} depth
+     * @param {number} setback
+     * @returns {MeshJs}
+     */
+    chamferEdgesAsymmetric(edge_ids, width, depth, setback) {
+        const ret = wasm.meshjs_chamferEdgesAsymmetric(this.__wbg_ptr, edge_ids, width, depth, setback);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return MeshJs.__wrap(ret[0]);
     }
     /**
      * Find intersection points between a compound curve and this Mesh.

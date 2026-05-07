@@ -23,7 +23,7 @@ import { Point } from "./Point";
 import { Polygon } from "./Polygon";
 import { Vector } from "./Vector";
 import { isPointLike } from "./types"
-import type { Axis, PointLike } from "./types"
+import type { Axis, PointLike, ChamferEdgeDescriptor } from "./types"
 
 //// CONFIG ////
 
@@ -156,7 +156,7 @@ export class Selector
      *  parallel: <shape>|<axis|plane>
      *  Return subshapes whose orientation is parallel to the given axis or plane normal.
      */
-    private _parallel(target: Collection | Mesh | Curve): Array<Polygon | Curve>
+    private _parallel(target: Collection | Mesh | Curve): Array<Polygon | Curve | ChamferEdgeDescriptor>
     {
         const refNormal = this._refNormal();
         const shape = this.params.shape as string;
@@ -165,8 +165,11 @@ export class Selector
             return this._facesFromTarget(target)
                 .filter(f => this._normalIsParallel(f.normal(), refNormal));
         }
-        // edge / wire
-        // TODO: edge and wire selection from meshes not yet available
+        if (shape === 'edge')
+        {
+            return this._edgesFromTarget(target)
+                .filter(edge => this._edgeIsParallel(edge, refNormal));
+        }
         return [];
     }
 
@@ -252,6 +255,17 @@ export class Selector
         return [];
     }
 
+    /** Get all logical chamfer edges from a target */
+    private _edgesFromTarget(target: Collection | Mesh | Curve): Array<ChamferEdgeDescriptor>
+    {
+        if (target instanceof Mesh) return target.edges();
+        if (target instanceof Collection)
+        {
+            return target.meshes().toArray().flatMap(m => m.edges());
+        }
+        return [];
+    }
+
     /** Extract subshapes of the requested shape type from the target */
     private _subshapesFromTarget(target: Collection | Mesh | Curve): Array<any>
     {
@@ -272,8 +286,7 @@ export class Selector
                 if (target instanceof Curve) return [target];
                 return [];
             case 'edge':
-                // TODO: edge extraction not yet available
-                return [];
+                return this._edgesFromTarget(target);
             default:
                 return [];
         }
@@ -285,11 +298,75 @@ export class Selector
     private _shapeCenter(item: any): Point
     {
         if (item instanceof Point) return item;
+        if (this._isChamferEdgeDescriptor(item))
+        {
+            return this._edgeCenter(item);
+        }
         if (item instanceof Polygon || item instanceof Curve || item instanceof Mesh)
         {
             return item.center();
         }
         return new Point(0, 0, 0);
+    }
+
+    private _edgeCenter(edge: ChamferEdgeDescriptor): Point
+    {
+        if (edge.polyline.length === 0)
+        {
+            return new Point(0, 0, 0);
+        }
+
+        const totals = edge.polyline.reduce((acc, point) =>
+        {
+            acc.x += point.x;
+            acc.y += point.y;
+            acc.z += point.z;
+            return acc;
+        }, { x: 0, y: 0, z: 0 });
+
+        return new Point(
+            totals.x / edge.polyline.length,
+            totals.y / edge.polyline.length,
+            totals.z / edge.polyline.length,
+        );
+    }
+
+    private _edgeDirection(edge: ChamferEdgeDescriptor): Vector
+    {
+        const start = edge.polyline[0];
+        const end = edge.polyline[edge.polyline.length - 1];
+        return new Vector(end.x - start.x, end.y - start.y, end.z - start.z);
+    }
+
+    private _edgeIsParallel(edge: ChamferEdgeDescriptor, reference: Vector): boolean
+    {
+        if (edge.polyline.length < 2)
+        {
+            return false;
+        }
+
+        const direction = this._edgeDirection(edge);
+        if (direction.length() <= 1e-9 || reference.length() <= 1e-9)
+        {
+            return false;
+        }
+
+        if (this.params.axis)
+        {
+            return this._normalIsParallel(direction.normalize(), reference.normalize());
+        }
+
+        const tangent = direction.normalize();
+        const planeNormal = reference.normalize();
+        return Math.abs(tangent.dot(planeNormal)) < Math.sin((Selector.ANGLE_TOLERANCE * Math.PI) / 180);
+    }
+
+    private _isChamferEdgeDescriptor(item: any): item is ChamferEdgeDescriptor
+    {
+        return !!item
+            && typeof item.id === 'string'
+            && Array.isArray(item.polyline)
+            && Array.isArray(item.adjacentNormals);
     }
 
     /** Check if two normals are parallel (same or opposite direction) */

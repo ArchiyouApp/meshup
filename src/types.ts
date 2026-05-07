@@ -107,6 +107,30 @@ export interface ProjectEdgeOptions
   samples?: number; // HLR ray samples per edge
 }
 
+export interface ChamferEdgeDescriptor
+{
+  id: string;
+  kind: 'boundary' | 'regular' | 'non_manifold';
+  closedLoop: boolean;
+  faceCount: number;
+  dihedralAngleDeg: number | null;
+  adjacentPolygonIndices: number[];
+  polyline: Point[];
+  adjacentNormals: Vector[];
+}
+
+export interface ChamferOptions
+{
+  width?: number;
+  depth?: number;
+  setback?: number;
+}
+
+export interface FilletOptions
+{
+  setback?: number;
+}
+
 //// CONTAINER TYPES ////
 
 /** Union of all concrete shape classes usable in a Container. */

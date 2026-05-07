@@ -68,6 +68,9 @@ export const meshjs_adaptiveRefine: (a: number, b: number, c: number, d: number)
 export const meshjs_arrow: (a: number, b: number, c: number, d: number, e: any) => number;
 export const meshjs_boundingBox: (a: number) => any;
 export const meshjs_center: (a: number) => number;
+export const meshjs_chamferEdge: (a: number, b: number, c: number, d: number) => [number, number, number];
+export const meshjs_chamferEdges: (a: number, b: any, c: number, d: number) => [number, number, number];
+export const meshjs_chamferEdgesAsymmetric: (a: number, b: any, c: number, d: number, e: number) => [number, number, number];
 export const meshjs_clone: (a: number) => number;
 export const meshjs_closestPoint: (a: number, b: number, c: number, d: number) => number;
 export const meshjs_containsVertex: (a: number, b: number) => number;
@@ -77,6 +80,7 @@ export const meshjs_cube: (a: number, b: any) => number;
 export const meshjs_cuboid: (a: number, b: number, c: number, d: any) => number;
 export const meshjs_cylinder: (a: number, b: number, c: number, d: any) => number;
 export const meshjs_difference: (a: number, b: number) => number;
+export const meshjs_discoverChamferEdges: (a: number) => any;
 export const meshjs_distanceTo: (a: number, b: number) => number;
 export const meshjs_distanceToPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
 export const meshjs_distributeArc: (a: number, b: number, c: number, d: number, e: number) => number;
@@ -85,6 +89,8 @@ export const meshjs_distributeLinear: (a: number, b: number, c: number, d: numbe
 export const meshjs_distributeLinearComponents: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
 export const meshjs_egg: (a: number, b: number, c: number, d: number, e: any) => number;
 export const meshjs_ellipsoid: (a: number, b: number, c: number, d: number, e: number, f: any) => number;
+export const meshjs_filletEdge: (a: number, b: number, c: number, d: number) => [number, number, number];
+export const meshjs_filletEdges: (a: number, b: any, c: number, d: number) => [number, number, number];
 export const meshjs_filterPolygonsByMetadata: (a: number, b: any) => number;
 export const meshjs_flatten: (a: number) => number;
 export const meshjs_float: (a: number) => number;

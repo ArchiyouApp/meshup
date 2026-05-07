@@ -1,6 +1,7 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
+import { Selector } from '../../src/Selector';
 
 beforeAll(async () =>
 {
@@ -132,5 +133,114 @@ describe('Mesh.copy()', () =>
         const copy = original.copy() as Mesh;
         expect(copy).not.toBe(original);
         expect(copy.positions().length).toBe(original.positions().length);
+    });
+});
+
+describe('Mesh.edges()', () =>
+{
+    it('discovers the logical edges of a cube', () =>
+    {
+        const cube = Mesh.Cube(10);
+        const edges = cube.edges();
+
+        expect(edges).toHaveLength(12);
+        expect(edges.every(edge => edge.kind === 'regular')).toBe(true);
+        expect(edges.every(edge => edge.polyline.length === 2)).toBe(true);
+    });
+
+    it('returns stable ids for repeated discovery on the same mesh', () =>
+    {
+        const cube = Mesh.Cube(10);
+        const first = cube.edges().map(edge => edge.id);
+        const second = cube.edges().map(edge => edge.id);
+
+        expect(first).toEqual(second);
+    });
+});
+
+describe('Mesh.chamfer()', () =>
+{
+    it('cuts a single discovered cube edge', () =>
+    {
+        const cube = Mesh.Cube(10);
+        const edge = cube.edges().find(candidate =>
+            candidate.polyline.every(point => Math.abs(point.x - 5) < 1e-6)
+            && candidate.polyline.every(point => Math.abs(point.y - 5) < 1e-6));
+
+        expect(edge).toBeTruthy();
+
+        cube.chamfer(edge!.id, 1);
+
+        const positions = cube.positions();
+        expect(positions.some(point => Math.abs(point.x - 4) < 1e-6 && Math.abs(point.y - 5) < 1e-6)).toBe(true);
+        expect(positions.some(point => Math.abs(point.x - 5) < 1e-6 && Math.abs(point.y - 4) < 1e-6)).toBe(true);
+        expect(positions.some(point => Math.abs(point.x - 5) < 1e-6 && Math.abs(point.y - 5) < 1e-6)).toBe(false);
+    });
+
+    it('supports asymmetric width and depth chamfers', () =>
+    {
+        const cube = Mesh.Cube(10);
+        const edge = cube.edges().find(candidate =>
+            candidate.polyline.every(point => Math.abs(point.x - 5) < 1e-6)
+            && candidate.polyline.every(point => Math.abs(point.y - 5) < 1e-6));
+
+        expect(edge).toBeTruthy();
+
+        cube.chamfer(edge!.id, { width: 1, depth: 2 });
+
+        const positions = cube.positions();
+        const hasSmallInset = positions.some(point =>
+            (Math.abs(point.x - 4) < 1e-6 && Math.abs(point.y - 5) < 1e-6)
+            || (Math.abs(point.x - 5) < 1e-6 && Math.abs(point.y - 4) < 1e-6));
+        const hasLargeInset = positions.some(point =>
+            (Math.abs(point.x - 3) < 1e-6 && Math.abs(point.y - 5) < 1e-6)
+            || (Math.abs(point.x - 5) < 1e-6 && Math.abs(point.y - 3) < 1e-6));
+
+        expect(hasSmallInset).toBe(true);
+        expect(hasLargeInset).toBe(true);
+    });
+
+    it('supports selector-driven multi-edge chamfers with setback', () =>
+    {
+        const cube = Mesh.Cube(10);
+
+        cube.chamfer('edge|z', 1, { setback: 1 });
+
+        const positions = cube.positions();
+        expect(positions.some(point => Math.abs(point.x - 4) < 1e-6 && Math.abs(point.y - 5) < 1e-6 && Math.abs(Math.abs(point.z) - 4) < 1e-6)).toBe(true);
+        expect(positions.some(point => Math.abs(point.x - 5) < 1e-6 && Math.abs(point.y - 5) < 1e-6 && Math.abs(Math.abs(point.z) - 5) < 1e-6)).toBe(true);
+    });
+});
+
+describe('Mesh.fillet()', () =>
+{
+    it('rounds a single discovered cube edge', () =>
+    {
+        const cube = Mesh.Cube(10);
+        const edge = cube.edges().find(candidate =>
+            candidate.polyline.every(point => Math.abs(point.x - 5) < 1e-6)
+            && candidate.polyline.every(point => Math.abs(point.y - 5) < 1e-6));
+
+        expect(edge).toBeTruthy();
+
+        cube.fillet(edge!.id, 1);
+
+        const positions = cube.positions();
+        expect(positions.some(point => Math.abs(point.x - 4) < 1e-6 && Math.abs(point.y - 5) < 1e-6)).toBe(true);
+        expect(positions.some(point => Math.abs(point.x - 5) < 1e-6 && Math.abs(point.y - 4) < 1e-6)).toBe(true);
+        expect(positions.some(point => Math.abs(point.x - 5) < 1e-6 && Math.abs(point.y - 5) < 1e-6)).toBe(false);
+    });
+});
+
+describe('Selector edge support', () =>
+{
+    it('selects logical mesh edges', () =>
+    {
+        const cube = Mesh.Cube(10);
+        const selected = new Selector('edge|z').execute(cube);
+
+        expect(Array.isArray(selected)).toBe(true);
+        expect(selected).toHaveLength(4);
+        expect(selected.every(edge => edge.kind === 'regular')).toBe(true);
     });
 });

@@ -9,11 +9,12 @@
  * 
  */
 
-import type { CsgrsModule, Axis, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions } from './types';
+import type { CsgrsModule, Axis, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions, ChamferEdgeDescriptor, ChamferOptions, FilletOptions } from './types';
 import type { Container } from './Container';
 import { isPointLike } from './types';
 
 import { Curve, getCsgrs } from './index';
+import { Selector } from './Selector';
 import { Point } from './Point';
 import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
@@ -177,6 +178,80 @@ export class Mesh
     polygons(): Array<Polygon>
     {
         return (this.inner()?.polygons() ?? []).map(p => Polygon.from(p));
+    }
+
+    /** Discover stable logical mesh edges suitable for future per-edge chamfer operations. */
+    edges(): Array<ChamferEdgeDescriptor>
+    {
+        const rawEdges = this.inner()?.discoverChamferEdges() as any[] | undefined;
+        if (!Array.isArray(rawEdges)) return [];
+
+        return rawEdges.map((edge) =>
+        {
+            return {
+                id: String(edge?.id || ''),
+                kind: String(edge?.kind || 'boundary') as ChamferEdgeDescriptor['kind'],
+                closedLoop: !!edge?.closedLoop,
+                faceCount: Number(edge?.faceCount || 0),
+                dihedralAngleDeg: edge?.dihedralAngleDeg == null ? null : Number(edge.dihedralAngleDeg),
+                adjacentPolygonIndices: Array.isArray(edge?.adjacentPolygonIndices)
+                    ? edge.adjacentPolygonIndices.map((index: number) => Number(index))
+                    : [],
+                polyline: Array.isArray(edge?.polyline)
+                    ? edge.polyline.map((point: PointLike) => Point.from(point))
+                    : [],
+                adjacentNormals: Array.isArray(edge?.adjacentNormals)
+                    ? edge.adjacentNormals.map((normal: PointLike) => Vector.from(normal))
+                    : [],
+            };
+        });
+    }
+
+    private _isChamferEdgeDescriptor(value: unknown): value is ChamferEdgeDescriptor
+    {
+        return !!value
+            && typeof value === 'object'
+            && typeof (value as ChamferEdgeDescriptor).id === 'string'
+            && Array.isArray((value as ChamferEdgeDescriptor).polyline);
+    }
+
+    private _resolveMeshEdgeIds(selection: string | string[]): string[]
+    {
+        const availableEdges = this.edges();
+        const availableIds = new Set(availableEdges.map(edge => edge.id));
+
+        if (Array.isArray(selection))
+        {
+            const ids = selection
+                .filter((edgeId): edgeId is string => typeof edgeId === 'string' && edgeId.length > 0)
+                .filter((edgeId, index, all) => all.indexOf(edgeId) === index);
+
+            if (ids.length === 0 || !ids.every(edgeId => availableIds.has(edgeId)))
+            {
+                throw new Error('Mesh::chamfer(): Please supply valid discovered edge ids when using an array selection!');
+            }
+
+            return ids;
+        }
+
+        if (availableIds.has(selection))
+        {
+            return [selection];
+        }
+
+        const selected = new Selector(selection).execute(this);
+        const items = Array.isArray(selected) ? selected : selected == null ? [] : [selected];
+        const ids = items
+            .filter((item): item is ChamferEdgeDescriptor => this._isChamferEdgeDescriptor(item))
+            .map(edge => edge.id)
+            .filter((edgeId, index, all) => all.indexOf(edgeId) === index);
+
+        if (ids.length === 0)
+        {
+            throw new Error(`Mesh::chamfer(): Selector "${selection}" did not resolve to any chamferable mesh edges.`);
+        }
+
+        return ids;
     }
 
     
@@ -804,6 +879,67 @@ export class Mesh
             throw new Error("Mesh::difference(): Please supply a valid Mesh instance!");
         }
         return this.update(this.inner()?.difference(other.inner() as MeshJs));
+    }
+
+    /** Chamfer one or more discovered logical edges by id or selector. */
+    chamfer(edgeSelection: string | string[], distanceOrOptions: number | ChamferOptions, options: ChamferOptions = {}): this
+    {
+        const chamferOptions = typeof distanceOrOptions === 'number' ? options : distanceOrOptions;
+        const fallbackDistance = typeof distanceOrOptions === 'number' ? distanceOrOptions : undefined;
+        const width = chamferOptions.width ?? fallbackDistance;
+        const depth = chamferOptions.depth ?? fallbackDistance;
+
+        if (typeof width !== 'number' || !Number.isFinite(width) || width <= 0)
+        {
+            throw new Error('Mesh::chamfer(): Width must be a finite number greater than zero!');
+        }
+
+        if (typeof depth !== 'number' || !Number.isFinite(depth) || depth <= 0)
+        {
+            throw new Error('Mesh::chamfer(): Depth must be a finite number greater than zero!');
+        }
+
+        const setback = chamferOptions.setback ?? 0;
+        if (typeof setback !== 'number' || !Number.isFinite(setback) || setback < 0)
+        {
+            throw new Error('Mesh::chamfer(): Setback must be a finite number greater than or equal to zero!');
+        }
+
+        if ((typeof edgeSelection !== 'string' || edgeSelection.length === 0) && !Array.isArray(edgeSelection))
+        {
+            throw new Error('Mesh::chamfer(): Please supply a discovered edge id, an array of edge ids, or an edge selector string!');
+        }
+
+        const edgeIds = this._resolveMeshEdgeIds(edgeSelection);
+        if (Math.abs(width - depth) <= TOLERANCE)
+        {
+            return this.update(this.inner()?.chamferEdges(edgeIds, width, setback));
+        }
+
+        return this.update(this.inner()?.chamferEdgesAsymmetric(edgeIds, width, depth, setback));
+    }
+
+    /** Fillet one or more discovered logical edges by id or selector. */
+    fillet(edgeSelection: string | string[], radius: number, options: FilletOptions = {}): this
+    {
+        if (typeof radius !== 'number' || !Number.isFinite(radius) || radius <= 0)
+        {
+            throw new Error('Mesh::fillet(): Radius must be a finite number greater than zero!');
+        }
+
+        const setback = options.setback ?? 0;
+        if (typeof setback !== 'number' || !Number.isFinite(setback) || setback < 0)
+        {
+            throw new Error('Mesh::fillet(): Setback must be a finite number greater than or equal to zero!');
+        }
+
+        if ((typeof edgeSelection !== 'string' || edgeSelection.length === 0) && !Array.isArray(edgeSelection))
+        {
+            throw new Error('Mesh::fillet(): Please supply a discovered edge id, an array of edge ids, or an edge selector string!');
+        }
+
+        const edgeIds = this._resolveMeshEdgeIds(edgeSelection);
+        return this.update(this.inner()?.filletEdges(edgeIds, radius, setback));
     }
 
     /** Subtract given Mesh from the current (alias for difference) */

@@ -209,15 +209,19 @@ export class MeshJs {
   static octahedron(radius: number, metadata: any): MeshJs;
   static polyhedron(points: any, faces: any, metadata: any): MeshJs;
   convexHull(): MeshJs;
+  filletEdge(edge_id: string, radius: number): MeshJs;
   static fromSketch(sketch_js: SketchJs): MeshJs;
   static frustum_ptp(start: Point3Js, end: Point3Js, radius1: number, radius2: number, segments: number, metadata: any): MeshJs;
   static icosahedron(radius: number, metadata: any): MeshJs;
   renormalize(): MeshJs;
   triangulate(): MeshJs;
   boundingBox(): any;
+  chamferEdge(edge_id: string, distance: number): MeshJs;
+  filletEdges(edge_ids: Array<any>, radius: number, setback: number): MeshJs;
   intersection(other: MeshJs): MeshJs;
   toSTLASCII(): string;
   vertexCount(): number;
+  chamferEdges(edge_ids: Array<any>, distance: number, setback: number): MeshJs;
   static fromPolygons(polygons: PolygonJs[], metadata: any): MeshJs;
   minkowskiSum(other: MeshJs): MeshJs;
   sameMetadata(other: MeshJs): boolean;
@@ -332,6 +336,7 @@ export class MeshJs {
    */
   intersectPolyline(points: Point3Js[]): Point3Js[];
   removePoorTriangles(min_quality: number): MeshJs;
+  discoverChamferEdges(): any;
   /**
    * Create a triangulated mesh from a planar polygon (flat [x,y,z,...] outer boundary)
    * with interior holes (array of flat [x,y,z,...] arrays).
@@ -341,6 +346,7 @@ export class MeshJs {
   static fromPointsWithHoles(outer_points: Float64Array, hole_arrays: Float64Array[], metadata: any): MeshJs;
   static frustum_ptpComponents(start_x: number, start_y: number, start_z: number, end_x: number, end_y: number, end_z: number, radius1: number, radius2: number, segments: number, metadata: any): MeshJs;
   invalidateBoundingBox(): void;
+  chamferEdgesAsymmetric(edge_ids: Array<any>, width: number, depth: number, setback: number): MeshJs;
   /**
    * Find intersection points between a compound curve and this Mesh.
    * Each span of the compound curve is tessellated and tested against the mesh.
@@ -1016,6 +1022,9 @@ export interface InitOutput {
   readonly meshjs_arrow: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly meshjs_boundingBox: (a: number) => any;
   readonly meshjs_center: (a: number) => number;
+  readonly meshjs_chamferEdge: (a: number, b: number, c: number, d: number) => [number, number, number];
+  readonly meshjs_chamferEdges: (a: number, b: any, c: number, d: number) => [number, number, number];
+  readonly meshjs_chamferEdgesAsymmetric: (a: number, b: any, c: number, d: number, e: number) => [number, number, number];
   readonly meshjs_clone: (a: number) => number;
   readonly meshjs_closestPoint: (a: number, b: number, c: number, d: number) => number;
   readonly meshjs_containsVertex: (a: number, b: number) => number;
@@ -1025,6 +1034,7 @@ export interface InitOutput {
   readonly meshjs_cuboid: (a: number, b: number, c: number, d: any) => number;
   readonly meshjs_cylinder: (a: number, b: number, c: number, d: any) => number;
   readonly meshjs_difference: (a: number, b: number) => number;
+  readonly meshjs_discoverChamferEdges: (a: number) => any;
   readonly meshjs_distanceTo: (a: number, b: number) => number;
   readonly meshjs_distanceToPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
   readonly meshjs_distributeArc: (a: number, b: number, c: number, d: number, e: number) => number;
@@ -1033,6 +1043,8 @@ export interface InitOutput {
   readonly meshjs_distributeLinearComponents: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
   readonly meshjs_egg: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly meshjs_ellipsoid: (a: number, b: number, c: number, d: number, e: number, f: any) => number;
+  readonly meshjs_filletEdge: (a: number, b: number, c: number, d: number) => [number, number, number];
+  readonly meshjs_filletEdges: (a: number, b: any, c: number, d: number) => [number, number, number];
   readonly meshjs_filterPolygonsByMetadata: (a: number, b: any) => number;
   readonly meshjs_flatten: (a: number) => number;
   readonly meshjs_float: (a: number) => number;
