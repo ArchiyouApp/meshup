@@ -73,6 +73,15 @@ export { OBbox } from './OBbox';
 export { SceneNode } from './SceneNode';
 export type { SceneNodeShape } from './SceneNode';
 export { GLTFBuilder } from './GLTFBuilder';
+export {
+  BentleyLineStyleProperty,
+  BentleyLineStyleExtension,
+  EdgeVisibilityProperty,
+  EdgeVisibilityExtension,
+  dashPatternToUint16,
+  computeEdgeVisibilityBitfield,
+  createNodeIO,
+} from './GLTFBuilder';
 
 /** Convenience type alias for the meshup module namespace itself. */
 export type Meshup = typeof import('./index')
