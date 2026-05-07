@@ -235,7 +235,25 @@ export class BentleyLineStyleExtension extends Extension
         return new BentleyLineStyleProperty(this.document.getGraph());
     }
 
-    read(_context: ReaderContext): this { return this; }
+    read(context: ReaderContext): this
+    {
+        const json = context.jsonDoc.json as { materials?: any[] };
+        if (!json.materials) return this;
+
+        json.materials.forEach((matDef: any, matIdx: number) =>
+        {
+            const ext = matDef.extensions?.['BENTLEY_materials_line_style'];
+            if (!ext) return;
+            const material = context.materials[matIdx];
+            if (!material) return;
+            const prop = this.createProperty();
+            if (ext.width   !== undefined) prop.width   = ext.width;
+            if (ext.pattern !== undefined) prop.pattern = ext.pattern;
+            material.setExtension('BENTLEY_materials_line_style', prop);
+        });
+
+        return this;
+    }
 
     write(context: WriterContext): this
     {
@@ -293,7 +311,32 @@ export class EdgeVisibilityExtension extends Extension
         return new EdgeVisibilityProperty(this.document.getGraph());
     }
 
-    read(_context: ReaderContext): this { return this; }
+    read(context: ReaderContext): this
+    {
+        const json = context.jsonDoc.json as { meshes?: Array<{ primitives?: any[] }> };
+        if (!json.meshes) return this;
+
+        json.meshes.forEach((meshDef: any, meshIdx: number) =>
+        {
+            const mesh = context.meshes[meshIdx];
+            if (!mesh) return;
+            const primitives = mesh.listPrimitives();
+
+            (meshDef.primitives ?? []).forEach((primDef: any, primIdx: number) =>
+            {
+                const ext = primDef.extensions?.['EXT_mesh_primitive_edge_visibility'];
+                if (!ext) return;
+                const prim = primitives[primIdx];
+                if (!prim) return;
+                const prop = this.createProperty();
+                if (ext.visibility !== undefined) prop.visibilityAccessor = context.accessors[ext.visibility];
+                if (ext.material   !== undefined) prop.edgeMaterial       = context.materials[ext.material];
+                prim.setExtension('EXT_mesh_primitive_edge_visibility', prop);
+            });
+        });
+
+        return this;
+    }
 
     write(context: WriterContext): this
     {
