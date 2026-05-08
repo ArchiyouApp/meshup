@@ -39,6 +39,8 @@ import { GLTFJsonDocumentToString, remapAxis } from './utils';
 import { EDGE_PROJECTION_DEFAULTS } from './constants';
 import { Mesh } from './Mesh';
 import { Curve } from './Curve';
+import { Polygon } from './Polygon';
+import { Vertex } from './Vertex';
 import type { SceneNode } from './SceneNode';
 
 // ─── Utility: dash array → 16-bit repeating bitmask ──────────────────────────
@@ -442,7 +444,7 @@ export class GLTFBuilder
      * Geometry is written to the Document immediately; extension data is
      * queued for the applyExtensions() pass. Curve holes are added automatically.
      */
-    add(item: Mesh | Curve, name?: string): this
+    add(item: Mesh | Curve | Polygon | Vertex, name?: string): this
     {
         if (item.style.visible === false) return this;
         if (item instanceof Mesh)
@@ -452,6 +454,22 @@ export class GLTFBuilder
             const { node, primitive, indices, positions, normals } = this._meshToGLTFNode(item, n);
             this.addSceneChild(node);
             this.queueMeshExtData(primitive, indices, positions, normals, item.style);
+        }
+        else if (item instanceof Polygon)
+        {
+            const n = name ?? 'polygon';
+            if (item.vertices().length === 0) return this;
+            const mesh = item.toMesh();
+            const { node, primitive, indices, positions, normals } = this._meshToGLTFNode(mesh, n);
+            this.addSceneChild(node);
+            this.queueMeshExtData(primitive, indices, positions, normals, item.style);
+        }
+        else if (item instanceof Vertex)
+        {
+            const n = name ?? 'vertex';
+            const { node, material } = this._vertexToGLTFNode(item, n);
+            this.addSceneChild(node);
+            this.queueCurveExtData(material, item.style);
         }
         else
         {
@@ -577,6 +595,22 @@ export class GLTFBuilder
                 gltfNode.addChild(meshNode);
                 this.queueMeshExtData(primitive, indices, positions, normals, cascadedStyle);
             }
+            else if (shape instanceof Polygon || shape.type === 'Polygon')
+            {
+                const polygon = shape as unknown as Polygon;
+                if (polygon.vertices().length === 0) return;
+                const mesh = polygon.toMesh();
+                const { node: meshNode, primitive, indices, positions, normals } = this._meshToGLTFNode(mesh, name, cascadedStyle);
+                gltfNode.addChild(meshNode);
+                this.queueMeshExtData(primitive, indices, positions, normals, cascadedStyle);
+            }
+            else if (shape instanceof Vertex || shape.type === 'Vertex')
+            {
+                const vertex = shape as unknown as Vertex;
+                const { node: vertexNode, material } = this._vertexToGLTFNode(vertex, name, cascadedStyle);
+                gltfNode.addChild(vertexNode);
+                this.queueCurveExtData(material, cascadedStyle);
+            }
             else if (shape instanceof Curve || shape.type === 'Curve')
             {
                 const curve = shape as unknown as Curve;
@@ -604,9 +638,10 @@ export class GLTFBuilder
         const count = posRaw.length / 3;
         const posF32 = new Float32Array(count * 3);
         const normF32 = new Float32Array(count * 3);
+        const c = mesh.bbox().center();
         for (let i = 0; i < count; i++)
         {
-            [posF32[i * 3], posF32[i * 3 + 1], posF32[i * 3 + 2]] = remapAxis(posRaw[i * 3], posRaw[i * 3 + 1], posRaw[i * 3 + 2], this._up);
+            [posF32[i * 3], posF32[i * 3 + 1], posF32[i * 3 + 2]] = remapAxis(posRaw[i * 3] - c.x, posRaw[i * 3 + 1] - c.y, posRaw[i * 3 + 2] - c.z, this._up);
             [normF32[i * 3], normF32[i * 3 + 1], normF32[i * 3 + 2]] = remapAxis(normRaw[i * 3], normRaw[i * 3 + 1], normRaw[i * 3 + 2], this._up);
         }
         const idxCopy = new Uint32Array(indices.buffer.slice(0) as ArrayBuffer);
@@ -633,7 +668,8 @@ export class GLTFBuilder
             .setMaterial(material);
 
         const gltfMesh = this._doc.createMesh(name).addPrimitive(primitive);
-        const node = this._doc.createNode(name).setMesh(gltfMesh);
+        const [tx, ty, tz] = remapAxis(c.x, c.y, c.z, this._up);
+        const node = this._doc.createNode(name).setMesh(gltfMesh).setTranslation([tx, ty, tz]);
         return { node, primitive, indices: idxCopy, positions: posF32, normals: normF32 };
     }
 
@@ -643,9 +679,11 @@ export class GLTFBuilder
         const rawBuf = curve.toBuffer();
         const count = rawBuf.length / 3;
         const posF32 = new Float32Array(count * 3);
+        const bb = curve.bbox();
+        const c = bb ? bb.center() : { x: 0, y: 0, z: 0 };
         for (let i = 0; i < count; i++)
         {
-            [posF32[i * 3], posF32[i * 3 + 1], posF32[i * 3 + 2]] = remapAxis(rawBuf[i * 3], rawBuf[i * 3 + 1], rawBuf[i * 3 + 2], this._up);
+            [posF32[i * 3], posF32[i * 3 + 1], posF32[i * 3 + 2]] = remapAxis(rawBuf[i * 3] - c.x, rawBuf[i * 3 + 1] - c.y, rawBuf[i * 3 + 2] - c.z, this._up);
         }
 
         const gtBuf = this._doc.getRoot().listBuffers()[0] ?? this._doc.createBuffer();
@@ -669,7 +707,38 @@ export class GLTFBuilder
             .setMaterial(material);
 
         const gltfMesh = this._doc.createMesh(name).addPrimitive(prim);
-        const node = this._doc.createNode(name).setMesh(gltfMesh);
+        const [tx, ty, tz] = remapAxis(c.x, c.y, c.z, this._up);
+        const node = this._doc.createNode(name).setMesh(gltfMesh).setTranslation([tx, ty, tz]);
+        return { node, material };
+    }
+
+    /** Assemble a GltfNode for a Vertex as a GLTF POINTS primitive at local origin. */
+    private _vertexToGLTFNode(vertex: Vertex, name = 'vertex', style?: Style): { node: GltfNode; material: Material }
+    {
+        const posF32 = new Float32Array([0, 0, 0]);
+        const gtBuf = this._doc.getRoot().listBuffers()[0] ?? this._doc.createBuffer();
+        const posAcc = this._doc.createAccessor()
+            .setType(Accessor.Type.VEC3)
+            .setArray(posF32)
+            .setBuffer(gtBuf);
+
+        const matDef = (style ?? vertex.style).toGltfMaterial('vertex_material', true) as any;
+        const [r, g, b, a] = matDef.pbrMetallicRoughness.baseColorFactor;
+        const material = this._doc.createMaterial('vertex_material')
+            .setBaseColorFactor([r, g, b, a])
+            .setMetallicFactor(matDef.pbrMetallicRoughness.metallicFactor)
+            .setRoughnessFactor(matDef.pbrMetallicRoughness.roughnessFactor)
+            .setDoubleSided(matDef.doubleSided ?? true);
+        if (matDef.alphaMode) material.setAlphaMode(matDef.alphaMode as 'BLEND' | 'OPAQUE' | 'MASK');
+
+        const prim = this._doc.createPrimitive()
+            .setAttribute('POSITION', posAcc)
+            .setMode(Primitive.Mode.POINTS)
+            .setMaterial(material);
+
+        const gltfMesh = this._doc.createMesh(name).addPrimitive(prim);
+        const [tx, ty, tz] = remapAxis(vertex.x, vertex.y, vertex.z, this._up);
+        const node = this._doc.createNode(name).setMesh(gltfMesh).setTranslation([tx, ty, tz]);
         return { node, material };
     }
 
