@@ -1231,6 +1231,27 @@ export class MeshJs {
         return v1;
     }
     /**
+     * Split this mesh by a plane into two halves.
+     *
+     * Returns `[front_mesh, back_mesh]` where:
+     * - `front_mesh` contains polygons on the side the plane normal points toward.
+     * - `back_mesh` contains polygons on the opposite side.
+     *
+     * Polygons spanning the plane are split at the intersection using
+     * Sutherland-Hodgman clipping.  Coplanar polygons go to `front_mesh`.
+     * Either half may be empty (zero polygons) if the mesh lies entirely on
+     * one side of the plane.
+     * @param {PlaneJs} plane
+     * @returns {MeshJs[]}
+     */
+    splitByPlane(plane) {
+        _assertClass(plane, PlaneJs);
+        const ret = wasm.meshjs_splitByPlane(this.__wbg_ptr, plane.__wbg_ptr);
+        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
      * Number of triangles (handy to sanity-check).
      * @returns {number}
      */
@@ -4678,6 +4699,10 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbg_matrix4js_new = function(arg0) {
         const ret = Matrix4Js.__wrap(arg0);
+        return ret;
+    };
+    imports.wbg.__wbg_meshjs_new = function(arg0) {
+        const ret = MeshJs.__wrap(arg0);
         return ret;
     };
     imports.wbg.__wbg_meshjs_unwrap = function(arg0) {

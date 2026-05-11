@@ -133,6 +133,12 @@ export abstract class Shape
 
     alpha(a: number): this { return this.opacity(a); }
 
+    strokeWidth(width: number): this
+    {
+        this.style.strokeWidth = width;
+        return this;
+    }
+
     hide(): this
     {
         this.style.visible = false;

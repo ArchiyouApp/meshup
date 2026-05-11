@@ -1,8 +1,4 @@
-/**
- * tests/examples/curves.test.ts
- *
- */
-import { beforeAll, describe, it, expect, should } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import { ShapeCollection, initAsync } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { save } from '../../src/utils';
@@ -14,9 +10,9 @@ beforeAll(async () =>
     await initAsync();
 });
 
-describe('Example: Offsets', async () => 
+describe('Example: Offsets', async () =>
 {
-    it('Can do simple offsets', async () => 
+    it('Can do simple offsets', async () =>
     {
         const rect = Curve.Rect(100, 100).color('red');
         const offsets = rect.replicate(5, (c,i) => c.offset(i*10)!.moveZ((i+1)*20).color(255-i*50, 0, 0));
@@ -35,13 +31,11 @@ describe('Example: Offsets', async () =>
         expect(circles.isCompound()).toBe(true);
 
         const deg1 = circles.copy().toDegree1();
-        const circlesOffset = circles.copy().offset(-20); // inward OK, outward produces self-intersections
+        const circlesOffset = circles.copy().offset(-20);
         const circleOffsetFallback = circles.copy().offsetFallback(20);
     
         await save(OUTPUT_DIR + 'test.offsets.circles.gltf', await new ShapeCollection(circles!, deg1.moveZ(10), circlesOffset!.moveZ(20), circleOffsetFallback!.moveZ(30)
             /* circles!.copy().offset(20)!.color('yellow')*/).toGLTF());
         //await save(OUTPUT_DIR + 'test.curves.ops.svg', new ShapeCollection<circles, rect, cc, /*un!, unOffsets*/).toSVG());
     });
-
-
-});       
+});

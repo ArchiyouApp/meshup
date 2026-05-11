@@ -133,6 +133,7 @@ export const meshjs_schwarzP: (a: number, b: number, c: number, d: number, e: an
 export const meshjs_slice: (a: number, b: number) => number;
 export const meshjs_sliceComponents: (a: number, b: number, c: number, d: number, e: number) => number;
 export const meshjs_sphere: (a: number, b: number, c: number, d: any) => number;
+export const meshjs_splitByPlane: (a: number, b: number) => [number, number];
 export const meshjs_spurGearInvolute: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any) => number;
 export const meshjs_subdivideTriangles: (a: number, b: number) => number;
 export const meshjs_taubinSmooth: (a: number, b: number, c: number, d: number, e: number) => number;

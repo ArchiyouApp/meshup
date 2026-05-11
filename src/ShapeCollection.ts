@@ -38,6 +38,7 @@ export interface CollectableShape {
     // Styling
     color(c: any, g?: number, b?: number): this
     opacity?(o: number): this
+    hide(): this
 }
 
 export class ShapeCollection<S extends CollectableShape = Shape>
@@ -361,6 +362,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     dashed(dash: number[] = [2, 2]): this
     {
         this._shapes.forEach(shape => (shape as any).dashed?.(dash));
+        return this;
+    }
+
+    /** Hide Shapes in Collection */
+    hide(): this
+    {
+        this._shapes.forEach(shape => shape.hide());
         return this;
     }
 
@@ -779,15 +787,22 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return result;
     }
 
-    /** Copy this collection in a 3D grid, spaced uniformly */
-    grid(cx: number = 2, cy: number = 2, cz: number = 1, spacing: number = 10): ShapeCollection<S>
+    /** Copy this collection in a 3D grid, spaced uniformly or per axis */
+    grid(cx: number = 2, cy: number = 2, cz: number = 1, spacing: number | PointLike = 10): ShapeCollection<S>
     {
+        const spacingPoint = typeof spacing === 'number'
+            ? [spacing, spacing, spacing] as [number, number, number]
+            : Point.from(spacing).toArray() as [number, number, number]
         const result = new ShapeCollection<S>();
         for (let iz = 0; iz < cz; iz++)
         for (let iy = 0; iy < cy; iy++)
         for (let ix = 0; ix < cx; ix++)
         {
-            result.add(this.copy().translate(ix * spacing, iy * spacing, iz * spacing));
+            result.add(this.copy().translate(
+                ix * spacingPoint[0],
+                iy * spacingPoint[1],
+                iz * spacingPoint[2],
+            ));
         }
         return result;
     }

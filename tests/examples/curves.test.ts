@@ -1,20 +1,22 @@
-/**
- * tests/examples/curves.test.ts
- *
- */
-import { beforeAll, describe, it, expect, should } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import { ShapeCollection, initAsync } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { save } from '../../src/utils';
 
+<<<<<<< HEAD
 const OUTPUT_DIR = './tests/outputs/curves/';
 
 beforeAll(async () => 
+=======
+const SAVE_FOLDER = './tests/outputs/curves/';
+
+beforeAll(async () =>
+>>>>>>> main
 {
     await initAsync();
 });
 
-describe('Example: Curves', () => 
+describe('Example: Curves', () =>
 {
     it('Can create basic curves', async () =>
     {
@@ -32,9 +34,14 @@ describe('Example: Curves', () =>
         expect(curve).toBeTruthy();
         expect(circle).toBeTruthy();
 
+<<<<<<< HEAD
         // Save as GLTF to view in 3D 
         await save(OUTPUT_DIR + 'test.curves.basic.gltf', await new ShapeCollection(line, circle, pline, arc, curve).toGLTF());
 
+=======
+        await save(`${SAVE_FOLDER}test.curves.basic.gltf`,
+            await new ShapeCollection(line, circle, pline, arc, curve).toGLTF());
+>>>>>>> main
     });
 
     it('Can do operations on curves', async () =>
@@ -42,24 +49,21 @@ describe('Example: Curves', () =>
         const c = Curve.Circle(10).color('red');
         expect(c).toBeTruthy();
 
-        // Offsets
         const circles = c.replicate(5, (c,i) => c.offset((i+1)*2)!.color('purple'));
         expect(circles).toBeTruthy();
         expect(circles.length).toBe(5);
-        
-        // Boolean 
-        const rect = Curve.Rect(40, 40).color('yellow')
-                        .move(0,20);
 
+        const rect = Curve.Rect(40, 40).color('yellow').move(0,20);
         const union = c.copy().union(rect)?.moveZ(2).color('cyan');
-
         const unionOffset = union?.copy().offset(5)?.moveZ(5).color('yellow');
-    
+
         const col = new ShapeCollection(c, rect, circles, union!, unionOffset!);
 
+<<<<<<< HEAD
         await save(OUTPUT_DIR + 'test.curves.ops.gltf', await col.toGLTF());
         //save(OUTPUT_DIR + 'test.curves.ops.svg', col.toSVG());
+=======
+        await save(`${SAVE_FOLDER}test.curves.ops.gltf`, await col.toGLTF());
+>>>>>>> main
     });
-
-
-});       
+});

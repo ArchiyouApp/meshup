@@ -119,6 +119,20 @@ describe('Point.move()', () =>
     });
 });
 
+describe('Point.setX/Y/Z()', () =>
+{
+    it('sets individual coordinates in-place and stays chainable', () =>
+    {
+        const p = new Point(1, 2, 3);
+
+        expect(p.setX(10)).toBe(p);
+        expect(p.setY(20)).toBe(p);
+        expect(p.setZ(30)).toBe(p);
+
+        expect(p.toArray()).toEqual([10, 20, 30]);
+    });
+});
+
 describe('Point.round()', () =>
 {
     it('rounds to default tolerance', () =>

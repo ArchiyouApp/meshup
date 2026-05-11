@@ -5,100 +5,7 @@ import { Vector } from './Vector';
 import { Mesh } from './Mesh';
 import { Curve } from './Curve';
 import type { PointLike } from './types';
-import { TESSELATION_TOLERANCE } from './constants';
-
-/**
- * Jacobi eigendecomposition for a symmetric 3×3 covariance matrix.
- * Returns eigenvalues and eigenvectors sorted by *decreasing* eigenvalue
- * (i.e. the axis of greatest variance comes first).
- *
- * Matrix entries (upper-triangle only, rest is mirrored):
- *   | a00  a01  a02 |
- *   | a01  a11  a12 |
- *   | a02  a12  a22 |
- */
-function jacobi3(
-    a00: number, a01: number, a02: number,
-    a11: number, a12: number, a22: number,
-): { eigenvalues: [number, number, number]; axes: [[number, number, number], [number, number, number], [number, number, number]] }
-{
-    // Working copy of the full symmetric matrix
-    const A: number[][] = [
-        [a00, a01, a02],
-        [a01, a11, a12],
-        [a02, a12, a22],
-    ];
-
-    // Eigenvector accumulator – columns of V are unit eigenvectors
-    const V: number[][] = [
-        [1, 0, 0],
-        [0, 1, 0],
-        [0, 0, 1],
-    ];
-
-    for (let iter = 0; iter < 50; iter++) // perf: keep as loop
-    {
-        // Find the off-diagonal element with largest absolute value
-        let p = 0, q = 1;
-        let maxVal = Math.abs(A[0][1]);
-        if (Math.abs(A[0][2]) > maxVal) { maxVal = Math.abs(A[0][2]); p = 0; q = 2; }
-        if (Math.abs(A[1][2]) > maxVal) { maxVal = Math.abs(A[1][2]); p = 1; q = 2; }
-
-        if (maxVal < 1e-12) break; // Converged
-
-        // Rotation angle that zeros out A[p][q]
-        const theta = (A[q][q] - A[p][p]) / (2 * A[p][q]);
-        const t = theta >= 0
-            ? 1 / (theta + Math.sqrt(1 + theta * theta))
-            : 1 / (theta - Math.sqrt(1 + theta * theta));
-        const c = 1 / Math.sqrt(1 + t * t);
-        const s = t * c;
-
-        // Update diagonal elements
-        const newApp = A[p][p] - t * A[p][q];
-        const newAqq = A[q][q] + t * A[p][q];
-        A[p][p] = newApp;
-        A[q][q] = newAqq;
-        A[p][q] = 0;
-        A[q][p] = 0;
-
-        // Update the remaining rows/columns (r ≠ p, r ≠ q)
-        for (let r = 0; r < 3; r++) // perf: keep as loop
-        {
-            if (r !== p && r !== q)
-            {
-                const Apr = A[p][r];
-                const Aqr = A[q][r];
-                A[p][r] = c * Apr - s * Aqr;
-                A[r][p] = A[p][r];
-                A[q][r] = s * Apr + c * Aqr;
-                A[r][q] = A[q][r];
-            }
-        }
-
-        // Accumulate eigenvectors (update columns p and q of V)
-        for (let r = 0; r < 3; r++) // perf: keep as loop
-        {
-            const Vrp = V[r][p];
-            const Vrq = V[r][q];
-            V[r][p] = c * Vrp - s * Vrq;
-            V[r][q] = s * Vrp + c * Vrq;
-        }
-    }
-
-    // Pack results and sort by decreasing eigenvalue
-    const eigs = [
-        { val: A[0][0], vec: [V[0][0], V[1][0], V[2][0]] as [number, number, number] },
-        { val: A[1][1], vec: [V[0][1], V[1][1], V[2][1]] as [number, number, number] },
-        { val: A[2][2], vec: [V[0][2], V[1][2], V[2][2]] as [number, number, number] },
-    ];
-    eigs.sort((a, b) => b.val - a.val);
-
-    return {
-        eigenvalues: [eigs[0].val, eigs[1].val, eigs[2].val],
-        axes: [eigs[0].vec, eigs[1].vec, eigs[2].vec],
-    };
-}
+import { POINT_TOLERANCE, TESSELATION_TOLERANCE } from './constants';
 
 /**
  * PCA-based Oriented Bounding Box (OBB).
@@ -115,6 +22,11 @@ function jacobi3(
  *   - `axes()` – the three orthonormal principal axes as Vectors
  *   - `halfExtents()` – half-size along each axis
  *   - `corners()` – all 8 world-space corners of the box
+ * 
+ *  NOTE: resulting axis are ordered
+ *      axes()[0] = direction of greatest variance (maps to width)
+ *      axes()[1] = direction of second variance (maps to depth)
+ *      axes()[2] = direction of least variance (maps to height)
  */
 export class OBbox
 {
@@ -176,7 +88,7 @@ export class OBbox
         c00 /= n; c01 /= n; c02 /= n; c11 /= n; c12 /= n; c22 /= n;
 
         // PCA via Jacobi
-        const { axes } = jacobi3(c00, c01, c02, c11, c12, c22);
+        const { axes } = OBbox.jacobi3(c00, c01, c02, c11, c12, c22);
         const [a0, a1, a2] = axes;
 
         // Project all points onto each principal axis to determine extents
@@ -221,7 +133,15 @@ export class OBbox
     /** Build an OBbox from all vertices of a Mesh. */
     static fromMesh(m: Mesh): OBbox
     {
-        return OBbox.fromPoints(m.vertices());
+        const unique = new Map<string, Point>();
+
+        m.vertices().forEach(vertex =>
+        {
+            const rounded = new Point(vertex).round(POINT_TOLERANCE);
+            unique.set(`${rounded.x},${rounded.y},${rounded.z}`, rounded);
+        });
+
+        return OBbox.fromPoints(Array.from(unique.values()));
     }
 
     /** Build an OBbox from a tessellated Curve. */
@@ -354,5 +274,187 @@ export class OBbox
                 )
             )
         );
+    }
+
+    /**
+     * Quaternion that aligns this OBB's full principal frame to world XYZ.
+     *
+     * Unlike a shortest-arc "lay flat" rotation, this also resolves the in-plane
+     * twist so axis[0] aligns to +X, axis[1] to +Y, and axis[2] to +Z.
+     *
+     * Note: if two extents are equal (for example a square plate or a cube), the
+     * PCA frame inside that degenerate subspace is not unique, so the twist angle
+     * is inherently underdetermined.
+     */
+    toOrthoQuaternion(): { x: number; y: number; z: number; w: number }
+    {
+        let xAxis = this._axes[0].copy().normalize();
+        let yAxis = this._axes[1].copy().normalize();
+        let zAxis = this._axes[2].copy().normalize();
+
+        if (xAxis.copy().cross(yAxis).dot(zAxis) < 0)
+        {
+            yAxis.reverse();
+        }
+
+        if (zAxis.dot(Vector.from(0, 0, 1)) < 0)
+        {
+            xAxis.reverse();
+            zAxis.reverse();
+        }
+
+        if (xAxis.dot(Vector.from(1, 0, 0)) < 0)
+        {
+            xAxis.reverse();
+            yAxis.reverse();
+        }
+
+        return OBbox.quaternionFromRotationMatrix(
+            xAxis.x, xAxis.y, xAxis.z,
+            yAxis.x, yAxis.y, yAxis.z,
+            zAxis.x, zAxis.y, zAxis.z,
+        );
+    }
+
+    /**
+     * Jacobi eigendecomposition for a symmetric 3×3 covariance matrix.
+     * Returns eigenvalues and eigenvectors sorted by *decreasing* eigenvalue
+     * (i.e. the axis of greatest variance comes first).
+     *
+     * Matrix entries (upper-triangle only, rest is mirrored):
+     *   | a00  a01  a02 |
+     *   | a01  a11  a12 |
+     *   | a02  a12  a22 |
+     */
+    private static jacobi3(
+        a00: number, a01: number, a02: number,
+        a11: number, a12: number, a22: number,
+    ): { eigenvalues: [number, number, number]; axes: [[number, number, number], [number, number, number], [number, number, number]] }
+    {
+        // Working copy of the full symmetric matrix
+        const A: number[][] = [
+            [a00, a01, a02],
+            [a01, a11, a12],
+            [a02, a12, a22],
+        ];
+
+        // Eigenvector accumulator – columns of V are unit eigenvectors
+        const V: number[][] = [
+            [1, 0, 0],
+            [0, 1, 0],
+            [0, 0, 1],
+        ];
+
+        for (let iter = 0; iter < 50; iter++) // perf: keep as loop
+        {
+            // Find the off-diagonal element with largest absolute value
+            let p = 0, q = 1;
+            let maxVal = Math.abs(A[0][1]);
+            if (Math.abs(A[0][2]) > maxVal) { maxVal = Math.abs(A[0][2]); p = 0; q = 2; }
+            if (Math.abs(A[1][2]) > maxVal) { maxVal = Math.abs(A[1][2]); p = 1; q = 2; }
+
+            if (maxVal < 1e-12) break; // Converged
+
+            // Rotation angle that zeros out A[p][q]
+            const theta = (A[q][q] - A[p][p]) / (2 * A[p][q]);
+            const t = theta >= 0
+                ? 1 / (theta + Math.sqrt(1 + theta * theta))
+                : 1 / (theta - Math.sqrt(1 + theta * theta));
+            const c = 1 / Math.sqrt(1 + t * t);
+            const s = t * c;
+
+            // Update diagonal elements
+            const newApp = A[p][p] - t * A[p][q];
+            const newAqq = A[q][q] + t * A[p][q];
+            A[p][p] = newApp;
+            A[q][q] = newAqq;
+            A[p][q] = 0;
+            A[q][p] = 0;
+
+            // Update the remaining rows/columns (r ≠ p, r ≠ q)
+            for (let r = 0; r < 3; r++) // perf: keep as loop
+            {
+                if (r !== p && r !== q)
+                {
+                    const Apr = A[p][r];
+                    const Aqr = A[q][r];
+                    A[p][r] = c * Apr - s * Aqr;
+                    A[r][p] = A[p][r];
+                    A[q][r] = s * Apr + c * Aqr;
+                    A[r][q] = A[q][r];
+                }
+            }
+
+            // Accumulate eigenvectors (update columns p and q of V)
+            for (let r = 0; r < 3; r++) // perf: keep as loop
+            {
+                const Vrp = V[r][p];
+                const Vrq = V[r][q];
+                V[r][p] = c * Vrp - s * Vrq;
+                V[r][q] = s * Vrp + c * Vrq;
+            }
+        }
+
+        // Pack results and sort by decreasing eigenvalue
+        const eigs = [
+            { val: A[0][0], vec: [V[0][0], V[1][0], V[2][0]] as [number, number, number] },
+            { val: A[1][1], vec: [V[0][1], V[1][1], V[2][1]] as [number, number, number] },
+            { val: A[2][2], vec: [V[0][2], V[1][2], V[2][2]] as [number, number, number] },
+        ];
+        eigs.sort((a, b) => b.val - a.val);
+
+        return {
+            eigenvalues: [eigs[0].val, eigs[1].val, eigs[2].val],
+            axes: [eigs[0].vec, eigs[1].vec, eigs[2].vec],
+        };
+    }
+
+    private static quaternionFromRotationMatrix(
+        m00: number, m01: number, m02: number,
+        m10: number, m11: number, m12: number,
+        m20: number, m21: number, m22: number,
+    ): { x: number; y: number; z: number; w: number }
+    {
+        const trace = m00 + m11 + m22;
+        let x: number;
+        let y: number;
+        let z: number;
+        let w: number;
+
+        if (trace > 0)
+        {
+            const s = Math.sqrt(trace + 1) * 2;
+            w = 0.25 * s;
+            x = (m21 - m12) / s;
+            y = (m02 - m20) / s;
+            z = (m10 - m01) / s;
+        }
+        else if (m00 > m11 && m00 > m22)
+        {
+            const s = Math.sqrt(1 + m00 - m11 - m22) * 2;
+            w = (m21 - m12) / s;
+            x = 0.25 * s;
+            y = (m01 + m10) / s;
+            z = (m02 + m20) / s;
+        }
+        else if (m11 > m22)
+        {
+            const s = Math.sqrt(1 + m11 - m00 - m22) * 2;
+            w = (m02 - m20) / s;
+            x = (m01 + m10) / s;
+            y = 0.25 * s;
+            z = (m12 + m21) / s;
+        }
+        else
+        {
+            const s = Math.sqrt(1 + m22 - m00 - m11) * 2;
+            w = (m10 - m01) / s;
+            x = (m02 + m20) / s;
+            y = (m12 + m21) / s;
+            z = 0.25 * s;
+        }
+
+        const length = Math.hypot(w, x, y, z) || 1;
+        return { x: x / length, y: y / length, z: z / length, w: w / length };
     }
 }

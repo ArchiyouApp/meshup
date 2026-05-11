@@ -1,7 +1,10 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
+import { Point } from '../../src/Point';
+import { Polygon } from '../../src/Polygon';
 import { ShapeCollection } from '../../src/ShapeCollection';
+import { Vertex } from '../../src/Vertex';
 
 beforeAll(async () =>
 {
@@ -154,6 +157,38 @@ describe('Mesh.distanceTo()', () =>
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10).move(100, 0, 0);
         expect(a.distanceTo(b)).toBeGreaterThan(0);
+    });
+
+    it('returns the closest-point distance for a vertex', () =>
+    {
+        const cube = Mesh.Cube(10);
+        const vertex = new Vertex([20, 0, 0]);
+
+        expect(cube.distanceTo(vertex)).toBeCloseTo(15, 6);
+        expect(cube.distance(vertex)).toBeCloseTo(15, 6);
+    });
+
+    it('returns the closest-point distance for a point', () =>
+    {
+        const cube = Mesh.Cube(10);
+        const point = new Point(20, 0, 0);
+
+        expect(cube.distanceTo(point)).toBeCloseTo(15, 6);
+        expect(cube.distance(point)).toBeCloseTo(15, 6);
+    });
+
+    it('defers polygon distance through polygon.toMesh()', () =>
+    {
+        const cube = Mesh.Cube(10);
+        const polygon = Polygon.from([
+            [20, -5, -5],
+            [20, 5, -5],
+            [20, 5, 5],
+            [20, -5, 5],
+        ]);
+
+        expect(cube.distanceTo(polygon)).toBeCloseTo(cube.distanceTo(polygon.toMesh()), 6);
+        expect(cube.distance(polygon)).toBeCloseTo(15, 6);
     });
 });
 

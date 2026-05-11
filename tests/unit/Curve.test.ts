@@ -174,6 +174,19 @@ describe('Curve.center()', () =>
     });
 });
 
+describe('Curve.grid()', () =>
+{
+    it('accepts per-axis spacing as a vector-like 4th parameter', () =>
+    {
+        const curves = Curve.Line([0, 0, 0], [10, 0, 0]).grid(2, 2, 2, [5, 6, 7]);
+        const centers = curves.toArray().map(curve => curve.center().toArray());
+
+        expect(curves.length).toBe(8);
+        expect(centers).toContainEqual([5, 0, 0]);
+        expect(centers).toContainEqual([10, 6, 7]);
+    });
+});
+
 describe('Curve.toPolygon()', () =>
 {
     it('returns a Polygon for a closed curve', () =>
@@ -242,8 +255,54 @@ describe('Curve.extend()', async () =>
         expect(line1.distance(line2)).toBeCloseTo(0, 5);
 
         // visual check
+<<<<<<< HEAD
         await save(OUTPUT_DIR + 'test.curve.extendTo.gltf', 
+=======
+        await save('test.curve.extendTo.gltf',
+>>>>>>> main
             await new ShapeCollection<Curve>(line1, line2).toGLTF()
         );
     });
+});
+
+describe('Curve.extrude()', () =>
+{
+    it('returns a Mesh for an open curve', () =>
+    {
+        const c = Curve.Line([0, 0, 0], [10, 0, 0]);
+        const m = c.extrude(5);
+        expect(m).toBeInstanceOf(Mesh);
+    });
+
+    it('returns a Mesh for a closed curve', () =>
+    {
+        const c = Curve.Rect(5, 3);
+        const m = c.extrude(4);
+        expect(m).toBeInstanceOf(Mesh);
+    });
+
+    it('extruded open curve has triangles', () =>
+    {
+        const c = Curve.Line([0, 0, 0], [10, 0, 0]);
+        const m = c.extrude(5);
+        expect(m!.inner().triangleCount()).toBeGreaterThan(0);
+    });
+
+    it('respects a custom direction', async () =>
+    {
+        const c = Curve.Line([0, 0, 0], [10, 0, 0]);
+        const mZ = c.extrude(5, [0, 0, 1]);
+        const mY = c.extrude(5, [1, 1, 1]);
+        // Both should produce geometry; bboxes should differ in the extruded axis
+        expect(mZ!.bbox()!.max().z).toBeGreaterThan(0);
+        expect(mY!.bbox()!.max().y).toBeGreaterThan(0);
+        
+        const a = Curve.Arc([0,0,0],[10,40,0], [20,0,0]);
+        const mA = a.extrude(10, [0, 0, 1]).color('blue');
+        expect(mA!.bbox()!.max().z).toBeCloseTo(10,1);
+
+        await save('test.curve.extrude.direction.gltf', await new ShapeCollection<Mesh>(mZ, mY, mA).toGLTF());
+    });
+
+
 });

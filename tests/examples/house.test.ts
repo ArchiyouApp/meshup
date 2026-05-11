@@ -6,8 +6,7 @@ import { beforeAll, describe, it, expect, should } from 'vitest';
 import { ShapeCollection, initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { Sketch } from '../../src/Sketch';
-import { save } from '../../src/utils';
-import { rad } from '../../src/utils';
+import { save, rad } from '../../src/utils';
 
 const OUTPUT_DIR = './tests/outputs/house/';
 
@@ -16,7 +15,7 @@ beforeAll(async () =>
     await initAsync();
 });
 
-describe('Example: House', () => 
+describe('Example: House', () =>
 {
     const WIDTH = 400;
     const HEIGHT = 300; // wall height
@@ -25,7 +24,7 @@ describe('Example: House', () =>
     const ROOF_OVERHANG_FRONT = 50;
     const THICKNESS = 20;
 
-    it('Build a simple house', async () => 
+    it('Build a simple house', async () =>
     {
         const roofLinePoints = [
             [WIDTH/2, HEIGHT+Math.round(Math.tan(rad(ROOF_ANGLE)) * WIDTH/2)], [WIDTH,HEIGHT]];
@@ -51,18 +50,15 @@ describe('Example: House', () =>
                         .close()
                         .extrude(-(DEPTH+ROOF_OVERHANG_FRONT*2)) // extude in direction -y is normal for XZ plane
                         .move(0,-ROOF_OVERHANG_FRONT);
-                        
-        
+
         const door = Mesh.Box(100, 50, 200).move(WIDTH/2, 0, 200/2);
         frontFacade?.subtract(door);
-        
-        
+
         const house = new ShapeCollection(frontFacade!, backFacade!, wallLeft, wallRight, roof!);
 
-        const gltf = await house!.toGLTF();
         expect(house).toBeTruthy();
-        
-        save(OUTPUT_DIR + 'test.house.gltf', gltf );
+        const gltf = await house.toGLTF();
+        await save(OUTPUT_DIR + 'test.house.gltf', gltf );
         
     });
 

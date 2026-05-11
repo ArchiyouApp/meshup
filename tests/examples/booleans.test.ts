@@ -30,7 +30,7 @@ describe('Example: Booleans', () =>
         const a = Mesh.Cube(40).color('blue');
         const b = Mesh.Sphere(18).move(10, 10, 10).color('green');
         const c = a.copy().intersection(b);
-    
+
         expect(c.positions().length).toBeGreaterThan(0);
         expect(c.inner().triangleCount()).toBeGreaterThan(0);
 
@@ -89,5 +89,34 @@ describe('Example: Booleans', () =>
         expect(frontFacade!.inner().triangleCount()).toBeGreaterThan(0);
 
         await save(OUTPUT_DIR + 'test.booleans.house-facade.gltf', await frontFacade!.toGLTF());
+    });
+
+    it('separateIsolated: detects disconnected components without boolean op', () =>
+    {
+        const mesh = Mesh.fromPolygons([
+            [[0,0,0],[10,0,0],[5,10,0]],
+            [[100,0,0],[110,0,0],[105,10,0]],
+        ]);
+        const result = mesh.separateIsolated();
+        expect(result.count()).toBe(2);
+        result.forEach(m => expect(m.inner().triangleCount()).toBeGreaterThan(0));
+    });
+
+    it('separateIsolated: subtract boolean produces two separate meshes', async () =>
+    {
+        const boxW = Mesh.Box(50, 10, 10);
+        const boxV = Mesh.Box(10, 100, 10);
+        const result = boxW.copy().subtract(boxV).separateIsolated();
+
+        expect(result instanceof ShapeCollection).toBeTruthy();
+        expect(result.count()).toBe(2);
+        result.forEach(m =>
+        {
+            expect(m.positions().length).toBeGreaterThan(0);
+            expect(m.inner().triangleCount()).toBeGreaterThan(0);
+        });
+
+        await save(`${OUTPUT_DIR}test.booleans.isolated.gltf`,
+            await new ShapeCollection<Mesh>(result.toArray()).toGLTF());
     });
 });

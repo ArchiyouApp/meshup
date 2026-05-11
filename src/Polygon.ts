@@ -320,4 +320,14 @@ export class Polygon extends Shape
     {
         return Mesh.fromPolygons([this.vertices()]);
     }
+
+    async toGLTF(up: Axis = 'z'): Promise<string | undefined>
+    {
+        return this.toMesh().toGLTF(up);
+    }
+
+    async toGLB(up: Axis = 'z'): Promise<Uint8Array | undefined>
+    {
+        return this.toMesh().toGLB(up);
+    }
 }

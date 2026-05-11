@@ -1,9 +1,3 @@
-/**
- * tests/examples/basics.test.ts
- *
- * Integration-level tests that mirror typical library usage patterns.
- * These verify that common workflows produce sensible results end-to-end.
- */
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync, Point } from '../../src/index';
 import { ShapeCollection } from '../../src/ShapeCollection';
@@ -30,7 +24,7 @@ describe('Set up a basic scene hierarchy and export', () =>
                         .replicate(4, (c,i) => c.move(i*15, 0, 0).color(255-i*50, 0, 0))
                         .moveTo(0,0,0)
                         .moveZ(20);
-                        
+
         const spheres = Mesh.Sphere(5)
                             .row(3, 10)
                             .color('yellow')
@@ -43,32 +37,25 @@ describe('Set up a basic scene hierarchy and export', () =>
                         .moveZ(50);
 
         const scene = SceneNode.root();
-        scene.add(cyl); // on top level
-        const cubeLayer = scene.addLayer('cubes', cubes); // in a layer
+        scene.add(cyl);
+        const cubeLayer = scene.addLayer('cubes', cubes);
 
-        expect(cubeLayer.shapes().length).toBe(cubes.length); // should have all cubes
+        expect(cubeLayer.shapes().length).toBe(cubes.length);
 
         const sphereLayer = scene.addLayer('spheres', spheres);
-        expect(sphereLayer.shapes().length).toBe(spheres.length); // should have all spheres
+        expect(sphereLayer.shapes().length).toBe(spheres.length);
 
-        const lineLayer = scene.addLayer('lines', lines); 
-        expect(lineLayer.shapes().length).toBe(lines.length); // should have all lines
+        const lineLayer = scene.addLayer('lines', lines);
+        expect(lineLayer.shapes().length).toBe(lines.length);
 
-        // Copy a shape that is in the scene - should automatically add to scene as sibling
         cyl.copy().move(20).opacity(0.5);
         expect(scene.findAll(c => c.name === 'Mesh:Cylinder')?.length).toBe(2);
-    
-        // Explore graph
-        // console.log(JSON.stringify(scene.toGraph()));
 
-    
         const gltf = await scene.toGLTF();
         expect(gltf).toBeTruthy();
         save(OUTPUT_DIR + 'test.scene.gltf', gltf);
     });
 });
-
-
 
 describe('glTF extension exports', () =>
 {
@@ -82,18 +69,15 @@ describe('glTF extension exports', () =>
         expect(gltfStr).toBeTruthy();
         const gltf = JSON.parse(gltfStr!);
 
-        // Both extensions must be declared
         expect(gltf.extensionsUsed).toContain('EXT_mesh_primitive_edge_visibility');
         expect(gltf.extensionsUsed).toContain('BENTLEY_materials_line_style');
 
-        // Primitive must carry the edge-visibility extension with a valid accessor index
         const prim = gltf.meshes[0].primitives[0];
         const edgeVisExt = prim.extensions?.['EXT_mesh_primitive_edge_visibility'];
         expect(edgeVisExt).toBeDefined();
         expect(typeof edgeVisExt.visibility).toBe('number');
         expect(gltf.accessors[edgeVisExt.visibility]).toBeDefined();
 
-        // Edge material must carry BENTLEY_materials_line_style with correct values
         const edgeMatIdx = edgeVisExt.material;
         expect(typeof edgeMatIdx).toBe('number');
         const edgeMat = gltf.materials[edgeMatIdx];

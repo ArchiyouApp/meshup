@@ -242,6 +242,19 @@ export class MeshJs {
    */
   raycastAll(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, max_dist: number): RaycastHitJs[];
   /**
+   * Split this mesh by a plane into two halves.
+   *
+   * Returns `[front_mesh, back_mesh]` where:
+   * - `front_mesh` contains polygons on the side the plane normal points toward.
+   * - `back_mesh` contains polygons on the opposite side.
+   *
+   * Polygons spanning the plane are split at the intersection using
+   * Sutherland-Hodgman clipping.  Coplanar polygons go to `front_mesh`.
+   * Either half may be empty (zero polygons) if the mesh lies entirely on
+   * one side of the plane.
+   */
+  splitByPlane(plane: PlaneJs): MeshJs[];
+  /**
    * Number of triangles (handy to sanity-check).
    */
   triangleCount(): number;
@@ -1083,6 +1096,7 @@ export interface InitOutput {
   readonly meshjs_slice: (a: number, b: number) => number;
   readonly meshjs_sliceComponents: (a: number, b: number, c: number, d: number, e: number) => number;
   readonly meshjs_sphere: (a: number, b: number, c: number, d: any) => number;
+  readonly meshjs_splitByPlane: (a: number, b: number) => [number, number];
   readonly meshjs_spurGearInvolute: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any) => number;
   readonly meshjs_subdivideTriangles: (a: number, b: number) => number;
   readonly meshjs_taubinSmooth: (a: number, b: number, c: number, d: number, e: number) => number;

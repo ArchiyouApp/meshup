@@ -1,6 +1,6 @@
 //// GLOBAL SETTINGS ////
 
-export const TOLERANCE = 1e-6; // general tolerance for geometric comparisons, in world units
+export const TOLERANCE = 1e-5; // general tolerance for geometric comparisons, in world units
 
 // after Point operations we round to a given tolerance to avoid inaccuracies in further operations
 export const POINT_TOLERANCE = TOLERANCE; 

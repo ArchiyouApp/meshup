@@ -11,14 +11,15 @@ import { ShapeCollection  } from '../../src/ShapeCollection';
 // from project dir
 const OUTPUT_DIR = './tests/outputs/alignments/';
 
-beforeAll(async () => 
+
+beforeAll(async () =>
 {
     await initAsync();
 });
 
-describe('Example: Aligning Shapes', async () => 
+describe('Example: Aligning Shapes', async () =>
 {
-    it('Can align boxes by points', async () => 
+    it('Can align boxes by points', async () =>
     {
         const box = Mesh.BoxBetween([0,0,0],[50, 20, 30]).color('blue');
         const line = Curve.Line([0, 0, 0], [100, 50, 50]).color('gray');
@@ -33,4 +34,4 @@ describe('Example: Aligning Shapes', async () =>
             await new ShapeCollection(box, line, aligned, alignedScaled).toGLTF()); // OK
     });
 
-});       
+});
