@@ -3,15 +3,9 @@ import { ShapeCollection, initAsync } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { save } from '../../src/utils';
 
-<<<<<<< HEAD
 const OUTPUT_DIR = './tests/outputs/curves/';
 
 beforeAll(async () => 
-=======
-const SAVE_FOLDER = './tests/outputs/curves/';
-
-beforeAll(async () =>
->>>>>>> main
 {
     await initAsync();
 });
@@ -34,14 +28,9 @@ describe('Example: Curves', () =>
         expect(curve).toBeTruthy();
         expect(circle).toBeTruthy();
 
-<<<<<<< HEAD
         // Save as GLTF to view in 3D 
         await save(OUTPUT_DIR + 'test.curves.basic.gltf', await new ShapeCollection(line, circle, pline, arc, curve).toGLTF());
 
-=======
-        await save(`${SAVE_FOLDER}test.curves.basic.gltf`,
-            await new ShapeCollection(line, circle, pline, arc, curve).toGLTF());
->>>>>>> main
     });
 
     it('Can do operations on curves', async () =>
@@ -59,11 +48,7 @@ describe('Example: Curves', () =>
 
         const col = new ShapeCollection(c, rect, circles, union!, unionOffset!);
 
-<<<<<<< HEAD
         await save(OUTPUT_DIR + 'test.curves.ops.gltf', await col.toGLTF());
         //save(OUTPUT_DIR + 'test.curves.ops.svg', col.toSVG());
-=======
-        await save(`${SAVE_FOLDER}test.curves.ops.gltf`, await col.toGLTF());
->>>>>>> main
     });
 });
