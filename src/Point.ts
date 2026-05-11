@@ -109,6 +109,24 @@ export class Point
         return this._z;
     }
 
+    setX(x: number): Point
+    {
+        this._x = x;
+        return this;
+    }
+
+    setY(y: number): Point
+    {
+        this._y = y;
+        return this;
+    }
+
+    setZ(z: number): Point
+    {
+        this._z = z;
+        return this;
+    }
+
     /** Set the given axis component, mutating this point */
     setComponent(axis: Axis, coord: number): Point
     {

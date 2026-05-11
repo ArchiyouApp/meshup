@@ -9,6 +9,7 @@
 */
 
 import type { PointLike, Axis } from "./types";
+import { isPointLike } from "./types";
 import { Point } from "./Point";
 import { Vector } from "./Vector";
 import { Bbox } from "./Bbox";
@@ -155,6 +156,25 @@ export class Vertex extends Shape
   area(): undefined   { console.warn('Vertex.area(): a vertex is a point and has no area.');   return undefined; }
   volume(): undefined { console.warn('Vertex.volume(): a vertex is a point and has no volume.'); return undefined; }
 
+  /**
+   * Euclidean distance from this vertex to a PointLike (Point, Vertex, Vector, [x,y,z]).
+   * For other shapes (Mesh, Curve, Polygon …) delegates to `other.distanceTo(this)`.
+   */
+  distance(other: PointLike | Shape): number
+  {
+      if (isPointLike(other))
+      {
+          const p = new Point(other as PointLike);
+          const dx = this.x - p.x, dy = this.y - p.y, dz = this.z - p.z;
+          return Math.sqrt(dx * dx + dy * dy + dz * dz);
+      }
+      if (other instanceof Shape && typeof (other as any).distanceTo === 'function')
+      {
+          return (other as any).distanceTo(this);
+      }
+      throw new Error(`Vertex.distance(): unsupported type. Got: ${(other as any)?.constructor?.name ?? typeof other}`);
+  }
+
   //// SHAPE PROTOCOL ////
 
   override readonly type = 'Vertex' as const;
@@ -167,6 +187,11 @@ export class Vertex extends Shape
   override is2D(): boolean
   {
     return false;
+  }
+
+  center(): Point
+  {
+    return this.toPoint();
   }
 
   override bbox(): Bbox

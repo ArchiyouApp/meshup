@@ -137,6 +137,19 @@ describe('Mesh.copy()', () =>
     });
 });
 
+describe('Mesh.grid()', () =>
+{
+    it('accepts per-axis spacing as a vector-like 4th parameter', () =>
+    {
+        const meshes = Mesh.Cube(2).grid(2, 2, 2, [5, 6, 7]);
+        const centers = meshes.toArray().map(mesh => mesh.center().round(1e-9).toArray());
+
+        expect(meshes.length).toBe(8);
+        expect(centers).toContainEqual([0, 0, 0]);
+        expect(centers).toContainEqual([5, 6, 7]);
+    });
+});
+
 describe('Mesh.mirror()', () =>
 {
     it('Should mirror in center', async () =>

@@ -134,6 +134,12 @@ export class Bbox
         );
     }
 
+    maxSize(): number
+    {
+        const s = this.size();
+        return Math.max(s.x, s.y, s.z);
+    }
+
     width(): number
     {
         return this._max.x - this._min.x;
@@ -226,7 +232,7 @@ export class Bbox
     }
 
     /** Returns the axis with the largest extent */
-    maxSizAxis(): Axis
+    maxSizeAxis(): Axis
     {
         const w = this.width(), d = this.depth(), h = this.height();
         if (w >= d && w >= h) return 'x';

@@ -1671,6 +1671,41 @@ export class Curve extends Shape
         return this;
     }
 
+    grid(cx:number=2, cy:number=2, cz:number=1, spacing:number|PointLike=2):ShapeCollection<Curve>
+    {
+        if(typeof cx !== 'number' || typeof cy !== 'number' || typeof cz !== 'number')
+        {
+            throw new Error("Curve::grid(): Please supply valid numbers for counts along each axes!");
+        }
+
+        const spacingVector = (typeof spacing === 'number')
+            ? new Vector(spacing, spacing, spacing)
+            : Vector.from(spacing)
+        const curves = new ShapeCollection<Curve>()
+
+        for(let x=0; x<cx; x++)
+        {
+            for(let y=0; y<cy; y++)
+            {
+                for(let z=0; z<cz; z++)
+                {
+                    const curve = this.copy()
+                    if(curve)
+                    {
+                        curve.move(
+                            x * spacingVector.x,
+                            y * spacingVector.y,
+                            z * spacingVector.z,
+                        )
+                        curves.add(curve)
+                    }
+                }
+            }
+        }
+
+        return curves
+    }
+
     /** Extend this curve to another curve or shape collection.
      *  Fires a probe ray from each end along its tangent direction and finds
      *  the closest approach to `other` (= intersection for converging curves)

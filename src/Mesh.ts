@@ -25,6 +25,7 @@ import { GLTFBuilder } from './GLTFBuilder';
 import { MeshJs, PolygonJs, PlaneJs, Vector3Js, NurbsCurve3DJs, CompoundCurve3DJs } from './wasm/csgrs';
 import { Polygon } from './Polygon';
 import { ShapeCollection } from './ShapeCollection';
+import { Vertex } from './Vertex';
 
 import { Selector } from './Selector';
 
@@ -506,14 +507,19 @@ export class Mesh extends Shape
 
     /** Rotate Mesh by a quaternion given as components `(w, x, y, z)`.
      *  The quaternion is normalized internally, so non-unit input is safe.
+     *  NOTE: We guarantee the center is always to origin one
      */
     override rotateQuaternion(wOrObj: number | { w: number; x: number; y: number; z: number }, x?: number, y?: number, z?: number): this
     {
+        const originalCenter = this.bbox().center();
         const w = typeof wOrObj === 'object' ? wOrObj.w : wOrObj;
         const xv = typeof wOrObj === 'object' ? wOrObj.x : (x ?? 0);
         const yv = typeof wOrObj === 'object' ? wOrObj.y : (y ?? 0);
         const zv = typeof wOrObj === 'object' ? wOrObj.z : (z ?? 0);
         this._mesh = this.inner()?.rotateQuaternion(w, xv, yv, zv);
+        // Make sure we keep the center the same
+        this.moveTo(originalCenter);
+
         return this;
     }
 
@@ -787,7 +793,7 @@ export class Mesh extends Shape
         return this.update(this.inner()?.center());
     }
 
-    /** Place Mesh on a given height, by default at 0 
+    /** Place Mesh on a given height based on bbox, by default at 0 
      *  Used to place Meshes on a XY plane
     */
     place(z:number=0)
@@ -1111,12 +1117,16 @@ export class Mesh extends Shape
         return meshes;
     }
 
-    grid(cx:number=2, cy:number=2, cz:number=1, spacing:number=2):ShapeCollection
+    grid(cx:number=2, cy:number=2, cz:number=1, spacing:number|PointLike=2):ShapeCollection
     {
-        if(typeof cx !== 'number' || typeof cy !== 'number' || typeof cz !== 'number' || typeof spacing !== 'number')
+        if(typeof cx !== 'number' || typeof cy !== 'number' || typeof cz !== 'number')
         {
             throw new Error("Mesh::grid(): Please supply valid numbers for counts along each axes!");
         }
+        const spacingVector = (typeof spacing === 'number')
+            ? new Vector(spacing, spacing, spacing)
+            : Vector.from(spacing)
+
         const meshes = new ShapeCollection();
         for(let x=0; x<cx; x++)
         {
@@ -1127,7 +1137,11 @@ export class Mesh extends Shape
                     const mesh = this.copy();
                     if(mesh)
                     {
-                        mesh.move(x * spacing, y * spacing, z * spacing);
+                        mesh.move(
+                            x * spacingVector.x,
+                            y * spacingVector.y,
+                            z * spacingVector.z,
+                        );
                         meshes.add(mesh);
                     }
                 }
@@ -1302,12 +1316,34 @@ export class Mesh extends Shape
     }
 
     /**
-     * Minimum separating distance to another Mesh or Curve.
+     * Minimum separating distance to another Mesh, Curve, Point, Vertex, or Polygon.
      * For Curves the curve is tessellated and the minimum closestPoint distance
-     * across all samples is returned.  Returns `0` if they intersect.
+     * across all samples is returned. Returns `0` if they intersect.
+     * For Points the distance is measured from the point position to the
+     * closest point on the mesh surface.
+     * For Vertices the distance is measured from the vertex position to the
+     * closest point on the mesh surface.
+     * For Polygons the polygon is converted to a mesh first.
      */
-    distanceTo(other: Mesh | Curve): number
+    distanceTo(other: Mesh | Curve | Point | Vertex | Polygon): number
     {
+        if (other instanceof Point)
+        {
+            const r = this.closestPoint(other.x, other.y, other.z);
+            return r ? r.distance : Infinity;
+        }
+
+        if (other instanceof Vertex)
+        {
+            const r = this.closestPoint(other.x, other.y, other.z);
+            return r ? r.distance : Infinity;
+        }
+
+        if (other instanceof Polygon)
+        {
+            return this.distanceTo(other.toMesh());
+        }
+
         if (other instanceof Curve)
         {
             const pts = other.tessellate();
@@ -1318,10 +1354,22 @@ export class Mesh extends Shape
                 return r ? Math.min(minD, r.distance) : minD;
             }, Infinity);
         }
-        const a = this.inner();
-        const b = (other as Mesh).inner();
-        if (!a || !b) return Infinity;
-        return a.distanceTo(b);
+
+        if(other instanceof Mesh)
+        {
+            const a = this.inner();
+            const b = (other as Mesh).inner();
+            if (!a || !b) return Infinity;
+            return a.distanceTo(b);
+        }
+
+        throw new Error(`Mesh.distanceTo(): Unsupported type. Expected Mesh, Curve, Point, Vertex, or Polygon. Got: "${other?.constructor?.name}"`);
+    }
+
+    /** Alias for distanceTo */
+    distance(other: Mesh | Curve | Point | Vertex | Polygon): number
+    {
+        return this.distanceTo(other);
     }
 
     /**

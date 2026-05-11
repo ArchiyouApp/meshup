@@ -433,7 +433,9 @@ describe('SceneNode.toGLTF()', () =>
         expect(nodeNames).toContain('child');
     });
 
-    it('invisible container is excluded from GLTF', async () =>
+    // NOTE: invisible containers are exported too,
+    // but do get a flag defaultVisible false
+    it('invisible container is included in GLTF with defaultVisible false', async () =>
     {
         const root = new SceneNode('root');
         const hidden = new SceneNode('hiddenChild');
@@ -442,8 +444,10 @@ describe('SceneNode.toGLTF()', () =>
         root.addChild(hidden);
         const gltf = await root.toGLTF();
         const parsed = JSON.parse(gltf);
-        const nodeNames: string[] = (parsed.nodes ?? []).map((n: any) => n.name as string);
-        expect(nodeNames).not.toContain('hiddenChild');
+        const hiddenNode = (parsed.nodes ?? []).find((node: any) => node.name === 'hiddenChild');
+
+        expect(hiddenNode).toBeDefined();
+        expect(hiddenNode.extras?.defaultVisible).toBe(false);
     });
 
     it('toGLB() returns a Uint8Array', async () =>
