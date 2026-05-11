@@ -333,6 +333,7 @@ export class MeshJs {
   distanceToPlane(ox: number, oy: number, oz: number, nx: number, ny: number, nz: number): number;
   transformComponents(m00: number, m01: number, m02: number, m03: number, m10: number, m11: number, m12: number, m13: number, m20: number, m21: number, m22: number, m23: number, m30: number, m31: number, m32: number, m33: number): MeshJs;
   translateComponents(dx: number, dy: number, dz: number): MeshJs;
+  distanceToLegacy(other: MeshJs): number;
   /**
    * Find intersection points between a raw polyline (array of Point3Js) and this Mesh.
    * Each consecutive pair of points defines a segment tested against the mesh.
@@ -1041,6 +1042,7 @@ export interface InitOutput {
   readonly meshjs_cylinder: (a: number, b: number, c: number, d: any) => number;
   readonly meshjs_difference: (a: number, b: number) => number;
   readonly meshjs_distanceTo: (a: number, b: number) => number;
+  readonly meshjs_distanceToLegacy: (a: number, b: number) => number;
   readonly meshjs_distanceToPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
   readonly meshjs_distributeArc: (a: number, b: number, c: number, d: number, e: number) => number;
   readonly meshjs_distributeGrid: (a: number, b: number, c: number, d: number, e: number) => number;

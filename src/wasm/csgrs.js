@@ -1572,6 +1572,15 @@ export class MeshJs {
         return MeshJs.__wrap(ret);
     }
     /**
+     * @param {MeshJs} other
+     * @returns {number}
+     */
+    distanceToLegacy(other) {
+        _assertClass(other, MeshJs);
+        const ret = wasm.meshjs_distanceToLegacy(this.__wbg_ptr, other.__wbg_ptr);
+        return ret;
+    }
+    /**
      * Find intersection points between a raw polyline (array of Point3Js) and this Mesh.
      * Each consecutive pair of points defines a segment tested against the mesh.
      *

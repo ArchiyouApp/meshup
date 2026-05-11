@@ -208,6 +208,21 @@ export class Bbox
             && other._min.z >= this._min.z && other._max.z <= this._max.z;
     }
 
+    /** Minimum Euclidean distance between two axis-aligned bounding boxes. */
+    distance(other: Bbox): number
+    {
+        const dx = Math.max(0, other._min.x - this._max.x, this._min.x - other._max.x)
+        const dy = Math.max(0, other._min.y - this._max.y, this._min.y - other._max.y)
+        const dz = Math.max(0, other._min.z - this._max.z, this._min.z - other._max.z)
+
+        if (dx === 0 && dy === 0 && dz === 0)
+        {
+            return 0
+        }
+
+        return Math.sqrt(dx * dx + dy * dy + dz * dz)
+    }
+
     /** General contains check: accepts a Bbox, PointLike, or a shape with a bbox() method
      *  TODO: extend when shape types are more fully defined
      */

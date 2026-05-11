@@ -1315,6 +1315,15 @@ export class Mesh extends Shape
         return a.hits(b);
     }
 
+    /** Legacy uncached mesh-to-mesh distance path for side-by-side comparisons. */
+    distanceToLegacy(other: Mesh): number
+    {
+        const a = this.inner();
+        const b = other.inner();
+        if (!a || !b) return Infinity;
+        return a.distanceToLegacy(b);
+    }
+
     /**
      * Minimum separating distance to another Mesh, Curve, Point, Vertex, or Polygon.
      * For Curves the curve is tessellated and the minimum closestPoint distance
@@ -1407,7 +1416,7 @@ export class Mesh extends Shape
      * on the TypeScript side and passing the resulting grid to the WASM layer.
      *
      * @param sdfFn      Function `(x, y, z) => signedDistance`.
-     * @param bounds     Bounding box as `{ min: [x,y,z], max: [x,y,z] }`.
+     * @param bounds     Bounding box as `{ min: [x,y,z], ls: [x,y,z] }`.
      * @param resolution Grid resolution as `[nx, ny, nz]` (default `[30,30,30]`).
      * @param isoValue   Isosurface threshold (default `0.0`).
      */

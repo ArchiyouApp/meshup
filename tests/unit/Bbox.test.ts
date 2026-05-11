@@ -112,6 +112,45 @@ describe('Bbox classification', () =>
     });
 });
 
+describe('Bbox.distance()', () =>
+{
+    it('returns 0 for overlapping boxes', () =>
+    {
+        const left = new Bbox([0, 0, 0], [10, 10, 10]);
+        const right = new Bbox([5, 5, 5], [15, 15, 15]);
+        expect(left.distance(right)).toBe(0);
+        expect(right.distance(left)).toBe(0);
+    });
+
+    it('returns 0 for touching boxes', () =>
+    {
+        const left = new Bbox([0, 0, 0], [10, 10, 10]);
+        const right = new Bbox([10, 2, 2], [20, 8, 8]);
+        expect(left.distance(right)).toBe(0);
+    });
+
+    it('returns the gap for boxes separated along one axis', () =>
+    {
+        const left = new Bbox([0, 0, 0], [10, 10, 10]);
+        const right = new Bbox([13, 2, 2], [20, 8, 8]);
+        expect(left.distance(right)).toBe(3);
+    });
+
+    it('returns Euclidean distance for diagonal separation', () =>
+    {
+        const left = new Bbox([0, 0, 0], [2, 2, 2]);
+        const right = new Bbox([5, 6, 2], [7, 8, 4]);
+        expect(left.distance(right)).toBeCloseTo(5);
+    });
+
+    it('works for flat 2D boxes embedded in 3D space', () =>
+    {
+        const left = new Bbox([0, 0, 0], [10, 10, 0]);
+        const right = new Bbox([13, 14, 0], [20, 20, 0]);
+        expect(left.distance(right)).toBeCloseTo(5);
+    });
+});
+
 describe('Bbox shape generation', () =>
 {
     it('face||top returns a face on the top side of the bbox', () =>

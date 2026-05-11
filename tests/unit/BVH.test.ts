@@ -190,6 +190,51 @@ describe('Mesh.distanceTo()', () =>
         expect(cube.distanceTo(polygon)).toBeCloseTo(cube.distanceTo(polygon.toMesh()), 6);
         expect(cube.distance(polygon)).toBeCloseTo(15, 6);
     });
+
+    it('matches the legacy mesh-to-mesh distance path side-by-side', () =>
+    {
+        const left = Mesh.Sphere(20).move(-12, 3, 0);
+        const right = Mesh.Cylinder(12, 50).rotate(15, 'x').rotate(35, 'y').rotate(20, 'z').move(31, -4, 9);
+
+        const optimized = left.distanceTo(right);
+        const legacy = left.distanceToLegacy(right);
+
+        expect(optimized).toBeCloseTo(legacy, 6);
+        expect(right.distanceTo(left)).toBeCloseTo(optimized, 6);
+    });
+
+    it('compares optimized and legacy mesh distance timings side-by-side', () =>
+    {
+        const left = Mesh.Sphere(24).move(-18, 0, 0);
+        const right = Mesh.Cylinder(14, 60).rotate(25, 'x').rotate(15, 'y').rotate(35, 'z').move(36, 7, 5);
+        const iterations = 50;
+
+        const baselineOptimized = left.distanceTo(right);
+        const baselineLegacy = left.distanceToLegacy(right);
+        expect(baselineOptimized).toBeCloseTo(baselineLegacy, 6);
+
+        const optimizedStart = performance.now();
+        const optimizedDistances = Array.from({ length: iterations }, () => left.distanceTo(right));
+        const optimizedDuration = performance.now() - optimizedStart;
+
+        const legacyStart = performance.now();
+        const legacyDistances = Array.from({ length: iterations }, () => left.distanceToLegacy(right));
+        const legacyDuration = performance.now() - legacyStart;
+
+        optimizedDistances.forEach(distance =>
+        {
+            expect(distance).toBeCloseTo(baselineLegacy, 6);
+        });
+
+        legacyDistances.forEach(distance =>
+        {
+            expect(distance).toBeCloseTo(baselineLegacy, 6);
+        });
+
+        console.log(
+            `Mesh.distanceTo() comparison: optimized=${optimizedDuration.toFixed(2)}ms legacy=${legacyDuration.toFixed(2)}ms iterations=${iterations}`,
+        );
+    });
 });
 
 // ── projectToPlane ───────────────────────────────────────────────────────────

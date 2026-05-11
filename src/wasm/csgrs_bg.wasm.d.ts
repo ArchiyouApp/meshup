@@ -78,6 +78,7 @@ export const meshjs_cuboid: (a: number, b: number, c: number, d: any) => number;
 export const meshjs_cylinder: (a: number, b: number, c: number, d: any) => number;
 export const meshjs_difference: (a: number, b: number) => number;
 export const meshjs_distanceTo: (a: number, b: number) => number;
+export const meshjs_distanceToLegacy: (a: number, b: number) => number;
 export const meshjs_distanceToPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
 export const meshjs_distributeArc: (a: number, b: number, c: number, d: number, e: number) => number;
 export const meshjs_distributeGrid: (a: number, b: number, c: number, d: number, e: number) => number;
