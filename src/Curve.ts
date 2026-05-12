@@ -979,6 +979,12 @@ export class Curve extends Shape
         }
         catch (e)
         {
+            if(this.subtype() === 'Circle')
+            {
+                // all params are closest, just return start of domain for consistency
+                console.warn('Curve::paramClosestToPoint(): Curve is a circle, all parameters are equally close. Returning start of domain.');
+                return 0;
+            }
             console.error('Curve::paramClosestToPoint(): Error:', e);
             return null;
         }
