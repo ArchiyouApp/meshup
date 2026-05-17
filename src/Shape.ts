@@ -17,7 +17,9 @@ import { SceneNode } from './SceneNode';
 import { Bbox } from './Bbox';
 
 import type { PointLike, Axis } from './types';
+import { isPointLike } from './types';
 import type { ShapeCollection } from './ShapeCollection';
+import { Point } from './Point';
 
 import { uuid } from './utils';
 
@@ -72,6 +74,22 @@ export abstract class Shape
         return this._node;
     }
 
+    /** Get or set a name for this shape (stored in metadata).
+     *  - Called with a string: sets the name and returns this (chainable).
+     *  - Called with no arguments: returns the current name or undefined.
+     */
+    name(n: string): this;
+    name(): string | undefined;
+    name(n?: string): this | string | undefined
+    {
+        if (n !== undefined)
+        {
+            this.metadata.name = n;
+            return this;
+        }
+        return this.metadata.name as string | undefined;
+    }
+
     subtype(): string|null 
     { 
         return (this.metadata?.subtype as string) ?? null;
@@ -109,6 +127,54 @@ export abstract class Shape
     rotateX(angleDeg: number, pivot: PointLike = [0, 0, 0]): this { return this.rotateAround(angleDeg, 'x', pivot); }
     rotateY(angleDeg: number, pivot: PointLike = [0, 0, 0]): this { return this.rotateAround(angleDeg, 'y', pivot); }
     rotateZ(angleDeg: number, pivot: PointLike = [0, 0, 0]): this { return this.rotateAround(angleDeg, 'z', pivot); }
+
+    //// ALIGNMENT ////
+
+    /** Translate this shape so that the `pivot` point on its own bbox coincides with
+     *  the `alignment` point on `other`'s bbox.
+     *
+     *  Both `pivot` and `alignment` accept:
+     *  - A keyword string combining any of: left, right, front, back, top, bottom
+     *    (unspecified axes default to the centre of that axis)
+     *  - A PointLike [x%, y%, z%] where 0 = min-side and 1 = max-side
+     *
+     *  @example
+     *    box.align(shelf, 'bottom', 'top')  // sits box on top of shelf
+     *    box.align(other, 'center', 'center') // centres box on other
+     */
+    align(other: Shape, pivot: string | PointLike = 'center', alignment: string | PointLike = 'center'): this
+    {
+        const selfBbox  = this.bbox();
+        const otherBbox = other.bbox();
+        if (!selfBbox || !otherBbox) return this;
+
+        const fromPos = isPointLike(pivot)
+            ? Shape._bboxPercToPoint(selfBbox, pivot)
+            : selfBbox.corner(pivot as string);
+
+        const toPos = isPointLike(alignment)
+            ? Shape._bboxPercToPoint(otherBbox, alignment)
+            : otherBbox.corner(alignment as string);
+
+        return this.translate(toPos.x - fromPos.x, toPos.y - fromPos.y, toPos.z - fromPos.z);
+    }
+
+    /** Alias for align() */
+    alignTo(other: Shape, pivot: string | PointLike = 'center', alignment: string | PointLike = 'center'): this
+    {
+        return this.align(other, pivot, alignment);
+    }
+
+    /** Resolve a [x%, y%, z%] percentage triple to a world-space Point within `bb`. */
+    private static _bboxPercToPoint(bb: Bbox, perc: PointLike): Point
+    {
+        const p = new Point(perc);
+        return new Point(
+            bb.minX() + p.x * bb.width(),
+            bb.minY() + p.y * bb.depth(),
+            bb.minZ() + p.z * bb.height(),
+        );
+    }
 
     //// STYLING ////
 

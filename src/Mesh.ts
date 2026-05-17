@@ -1457,6 +1457,52 @@ export class Mesh extends Shape
         return Mesh.from(meshJs);
     }
 
+    //// LAYOUT & ALIGNMENT ////
+
+    /** Rotate the mesh to lay flat on the XY plane, then drop it so its bottom sits at Z = 0.
+     *  Uses OBbox principal-axis alignment so the dominant face ends up on the XY plane.
+     */
+    layflat(): this
+    {
+        const q = this.obbox().toOrthoQuaternion();
+        this.rotateQuaternion(q);
+        return this.translate(0, 0, -this.bbox().minZ());
+    }
+
+    /** Flatten a 3D mesh to its bottom-facing polygons projected onto the XY plane.
+     *  Finds all polygons whose normal is most aligned with -Z (or a given `axis`),
+     *  collapses them to Z = 0 and returns a new Mesh composed of those faces.
+     *
+     *  @param axis  Optional axis keyword ('x' | 'y' | 'z'). Selects polygons whose
+     *               normal is parallel to that axis.  Defaults to 'z' (bottom face).
+     */
+    flatten(axis: Axis = 'z'): Mesh
+    {
+        const axisVec = axis === 'x' ? Vector.from(1, 0, 0)
+                      : axis === 'y' ? Vector.from(0, 1, 0)
+                      :                Vector.from(0, 0, 1);
+
+        const flatPolys = this.polygons()
+            .filter(poly =>
+            {
+                const n = poly.normal();
+                const angle = Math.min(
+                    n.angle(axisVec),
+                    n.angle(axisVec.copy().reverse()),
+                );
+                return angle < TOLERANCE * 10;
+            })
+            .map(poly => poly.vertices().map(pt => new Point(pt.x, pt.y, 0)));
+
+        if (flatPolys.length === 0)
+        {
+            console.warn('Mesh.flatten(): no polygons found aligned with axis', axis, '— returning empty Mesh');
+            return new Mesh();
+        }
+
+        return Mesh.fromPolygons(flatPolys);
+    }
+
     //// EDGE PROJECTION AND SECTIONING ////
 
 

@@ -336,6 +336,12 @@ export class Bbox
         return this.getPlane('bottom');
     }
 
+    /** Returns the front polygon of this bbox (min-Y side) */
+    front(): Polygon|undefined
+    {
+        return this.getPlane('front');
+    }
+
     /** Returns the face, edge or vertex at the given named side of the bbox 
      *  
      *   alignments can be any combination of: 

@@ -2321,7 +2321,19 @@ export class Curve extends Shape
         this.style.strokeDash = dash;
         return this;
     }
-    
+
+    //// LAYOUT & ALIGNMENT ////
+
+    /** Rotate the curve to lay flat on the XY plane, then drop it so its lowest point sits at Z = 0.
+     *  Uses OBbox principal-axis alignment so the dominant direction ends up on the XY plane.
+     */
+    layflat(): this
+    {
+        const q = this.obbox().toOrthoQuaternion();
+        this.rotateQuaternion(q);
+        const bb = this.bbox();
+        return bb ? this.translate(0, 0, -bb.minZ()) : this;
+    }
 
     //// OUTPUTS ////
 
