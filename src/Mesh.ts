@@ -1563,6 +1563,12 @@ export class Mesh extends Shape
         
     }
 
+    /** Shorthand alias for {@link isometry}. */
+    iso(cam:PointLike = [-1,-1,1], all:boolean=true, samples: number = 16, featureAngle: number=10):ShapeCollection<Shape>
+    {
+        return this.isometry(cam, all, samples, featureAngle);
+    }
+
     /**
      * Project visible and hidden edges of this mesh onto a plane.
      *

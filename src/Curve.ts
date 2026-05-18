@@ -2357,10 +2357,11 @@ export class Curve extends Shape
      * without the outer `<svg>` wrapper. Used by SceneNode to compose hierarchies.
      * Assumes the curve is already 2D (on the XY plane). Use `is2D()` to check first.
      */
-    toSVGElem(): string
+    toSVGElem(cssClass?: string): string
     {
         const fmt = (n: number) => +n.toFixed(6);
         const to2D = (p: { x: number; y: number; z: number }): [number, number] => [p.x, -p.y];
+        const classAttr = cssClass ? ` class="${cssClass}"` : '';
 
         if (this.subtype() === 'Circle')
         {
@@ -2370,7 +2371,7 @@ export class Curve extends Shape
                 const cx = fmt((bb.min().x + bb.max().x) / 2);
                 const cy = fmt(-((bb.min().y + bb.max().y) / 2));
                 const r  = fmt((bb.max().x - bb.min().x) / 2);
-                return `<circle cx="${cx}" cy="${cy}" r="${r}" ${this.style.toSvgAttrs(true)}/>`;
+                return `<circle cx="${cx}" cy="${cy}" r="${r}"${classAttr} ${this.style.toSvgAttrs(true)}/>`;
             }
         }
 
@@ -2448,7 +2449,7 @@ export class Curve extends Shape
         if (this.isClosed()) pathParts.push('Z');
 
         const d = pathParts.join(' ');
-        return `<path d="${d}" ${this.style.toSvgAttrs(this.isClosed())}/>`;
+        return `<path d="${d}"${classAttr} ${this.style.toSvgAttrs(this.isClosed())}/>`;
     }
 
     /** Export this curve as a self-contained GLTF JSON string (LINE_STRIP). */

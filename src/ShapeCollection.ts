@@ -468,13 +468,19 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         const paths: string[] = [];
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
+        const curveToGroup = new Map<S, string>();
+        this._groups.forEach((groupCol, groupName) =>
+        {
+            groupCol.toArray().forEach(shape => curveToGroup.set(shape as S, groupName));
+        });
+
         curves.forEach(curve =>
         {
             const svg = (curve as any).toSVG();
-            const innerMatch = svg.match(/<svg[^>]*>([\s\S]*?)<\/svg>/);
             const vbMatch = svg.match(/viewBox="([^"]*)"/);
-            if (!innerMatch?.[1]) return;
-            paths.push(innerMatch[1]);
+            const groupName = curveToGroup.get(curve as unknown as S);
+            const cssClass = 'line' + (groupName ? ` ${groupName}` : '');
+            paths.push((curve as any).toSVGElem(cssClass));
             if (vbMatch)
             {
                 const [vx, vy, vw, vh] = vbMatch[1].split(' ').map(Number);
@@ -485,7 +491,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
         if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 1; maxY = 1; }
         const vb = `${minX} ${minY} ${maxX - minX} ${maxY - minY}`;
-        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}">${paths.join('')}</svg>`;
+        const style = '<style>.line{fill:none;stroke:black;stroke-width:0.25px}.hidden{stroke:#888;stroke-dasharray:3 2}</style>';
+        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}">${style}${paths.join('')}</svg>`;
     }
 
 

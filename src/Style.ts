@@ -441,8 +441,9 @@ export class Style
         const so = this._style.stroke?.opacity;
         if (so !== undefined && so !== 1) parts.push(`stroke-opacity="${so}"`);
 
-        const sw = this._style.stroke?.width ?? 1;
-        parts.push(`stroke-width="${sw}"`);
+        const sw = this._style.stroke?.width;
+        if (sw !== undefined) parts.push(`stroke-width="${sw}"`);
+        parts.push('vector-effect="non-scaling-stroke"');
 
         const dash = this._style.stroke?.dash;
         if (dash && dash.length > 0) parts.push(`stroke-dasharray="${dash.join(' ')}"`);
