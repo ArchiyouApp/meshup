@@ -315,6 +315,25 @@ export class Mesh extends Shape
         return this.from(mesh);
     }
 
+    /** Make a planar Mesh surface between two corner Points.
+     *  Automatically picks the base plane whose normal axis varies least between the corners.
+     */
+    static planeBetween(from: PointLike, to: PointLike): Mesh
+    {
+        const a = Point.from(from);
+        const b = Point.from(to);
+        const dx = Math.abs(b.x - a.x);
+        const dy = Math.abs(b.y - a.y);
+        const dz = Math.abs(b.z - a.z);
+        // Pick the base plane whose normal axis spans the least between the two points
+        const basePlane = (dz <= dy && dz <= dx) ? 'xy' as const
+                        : (dy <= dx)              ? 'xz' as const
+                        :                           'yz' as const;
+        const mesh = Curve.RectBetween(from, to, basePlane).toMesh();
+        if (!mesh) { throw new Error('Mesh.planeBetween(): failed to create mesh plane surface.') }
+        return mesh;
+    }
+
     static Sphere(radius: number): Mesh
     {
         const meshJs = getCsgrs()?.MeshJs.sphere(radius, 

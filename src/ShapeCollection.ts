@@ -46,6 +46,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     _shapes: Array<S> = [];
     _groups = new Map<string, ShapeCollection<S>>();
     private _fakeArrayLength = 0;
+    private _fakeGroupKeys = new Set<string>();
 
     constructor(...args: Array<CollectableShape | Array<any> | ShapeCollection<any>>)
     {
@@ -59,6 +60,31 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         for (let i = this._shapes.length; i < this._fakeArrayLength; i++) { delete (this as any)[i]; }
         this._shapes.forEach((shape, i) => { (this as any)[i] = shape; });
         this._fakeArrayLength = this._shapes.length;
+        this._setFakeGroupKeys();
+    }
+
+    /**
+     * Expose groups as instance properties (col.insulation, col.studs, ...) for
+     * direct access. Points at the live group collection so mutations like
+     * .hide() propagate to the real shapes. Never overwrites existing
+     * (real) properties; stale keys are removed when a group is gone.
+     */
+    _setFakeGroupKeys(): void
+    {
+        // drop keys whose group no longer exists
+        this._fakeGroupKeys.forEach(k =>
+        {
+            if (!this._groups.has(k)) { delete (this as any)[k]; this._fakeGroupKeys.delete(k); }
+        });
+        this._groups.forEach((groupCol, name) =>
+        {
+            if (this._fakeGroupKeys.has(name)) { (this as any)[name] = groupCol; return; }
+            if ((this as any)[name] === undefined) // don't clobber real props (shapes, methods, ...)
+            {
+                (this as any)[name] = groupCol;
+                this._fakeGroupKeys.add(name);
+            }
+        });
     }
 
     //// STATIC FACTORIES ////
@@ -120,6 +146,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         this.add(shapes);
         if (!this._groups.has(groupName)) this._groups.set(groupName, new ShapeCollection<S>());
         this._groups.get(groupName)?.add(shapes);
+        this._setFakeGroupKeys(); // group added after this.add()'s key refresh — sync now
         return this;
     }
 
@@ -133,6 +160,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         }
         this.remove(groupedShapes);
         this._groups.delete(groupName);
+        this._setFakeGroupKeys(); // drop the now-stale fake key
     }
 
     group(groupName: string): ShapeCollection<S> | undefined
