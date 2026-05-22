@@ -1,5 +1,7 @@
 //// GLOBAL SETTINGS ////
 
+import type { StyleData } from './Style';
+
 export const TOLERANCE = 1e-5; // general tolerance for geometric comparisons, in world units
 
 // after Point operations we round to a given tolerance to avoid inaccuracies in further operations
@@ -36,4 +38,13 @@ export const EDGE_PROJECTION_DEFAULTS = {
     featureAngle: 10, // degrees. Max angle between adjacent faces to be considered a "feature edge" and projected.
     samples: 32, // number of rays to cast per edge for hidden-line removal
 }
+
+export const SHAPE_DEFAULT_STYLE: StyleData = {
+    visible: true,
+    color: 'red',
+    opacity: 1.0,
+    fill: { color: 'red', opacity: 1.0 },
+    stroke: { color: 'red', opacity: 1.0, width: 1, dash: [], cap: 'butt', join: 'miter' },
+    material: null,
+};
 

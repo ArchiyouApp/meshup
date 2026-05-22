@@ -15,6 +15,7 @@
 export type StyleColor = string; // CSS color string, e.g. 'red', '#ff0000', 'rgba(255,0,0,1)'
 
 import { Color } from './Color';
+import { SHAPE_DEFAULT_STYLE } from './constants';
 import type { ColorInput } from './Color';
 export { Color } from './Color';
 export type { ColorInput } from './Color';
@@ -36,18 +37,6 @@ export type StyleData = {
     };
     material?: any; // TODO
 }
-
-//// SETTINGS ////
-
-const DEFAULT_STYLE: StyleData = {
-    visible: true,
-    color: 'red',
-    opacity: 1.0,
-    fill: { color: 'red', opacity: 1.0 },
-    stroke: { color: 'black', opacity: 1.0, width: 1, dash: [], cap: 'butt', join: 'miter' },
-    material: null,
-};
-
 /** Parse any ColorInput and return a canonical '#rrggbb' hex string. Throws on invalid input. */
 function resolveColor(color: ColorInput): string {
     return new Color(color).toHex();
@@ -67,9 +56,9 @@ export class Style
     constructor(init?: StyleData)
     {
         this._style = {
-            ...DEFAULT_STYLE,
-            fill: { ...DEFAULT_STYLE.fill },
-            stroke: { ...DEFAULT_STYLE.stroke },
+            ...SHAPE_DEFAULT_STYLE,
+            fill: { ...SHAPE_DEFAULT_STYLE.fill },
+            stroke: { ...SHAPE_DEFAULT_STYLE.stroke },
         };
         if (init) this.merge(init);
     }
@@ -116,7 +105,7 @@ export class Style
      * Accepts any valid CSS color string.
      */
     get color(): StyleColor {
-        return this._style.color ?? DEFAULT_STYLE.color!;
+        return this._style.color ?? SHAPE_DEFAULT_STYLE.color!;
     }
     set color(v: ColorInput)
     {
@@ -163,7 +152,7 @@ export class Style
     }
 
     get fillColor(): StyleColor {
-        return this._style.fill!.color ?? DEFAULT_STYLE.fill!.color!;
+        return this._style.fill!.color ?? SHAPE_DEFAULT_STYLE.fill!.color!;
     }
     set fillColor(v: ColorInput)
     {
@@ -224,7 +213,7 @@ export class Style
     }
 
     get strokeColor(): StyleColor {
-        return this._style.stroke!.color ?? DEFAULT_STYLE.stroke!.color!;
+        return this._style.stroke!.color ?? SHAPE_DEFAULT_STYLE.stroke!.color!;
     }
     set strokeColor(v: ColorInput)
     {
@@ -435,7 +424,7 @@ export class Style
         }
 
         // stroke
-        const sc = this._style.stroke?.color ?? 'black';
+        const sc = this._style.stroke?.color ?? SHAPE_DEFAULT_STYLE.stroke!.color!;
         parts.push(`stroke="${sc}"`);
 
         const so = this._style.stroke?.opacity;
@@ -470,13 +459,13 @@ export class Style
      */
     toGltfMaterial(name?: string, isLine: boolean = false): object {
         const colorStr = isLine
-            ? (this._style.stroke?.color ?? this._style.color ?? 'black')
-            : (this._style.fill?.color ?? this._style.color ?? 'red');
+            ? (this._style.stroke?.color ?? this._style.color ?? SHAPE_DEFAULT_STYLE.stroke!.color!)
+            : (this._style.fill?.color ?? this._style.color ?? SHAPE_DEFAULT_STYLE.fill!.color!);
 
         let r = 1, g = 0, b = 0;
         try
         {
-            [r, g, b] = new Color(colorStr ?? 'red').toRgb().map(v => v / 255) as [number, number, number];
+            [r, g, b] = new Color(colorStr ?? SHAPE_DEFAULT_STYLE.fill!.color!).toRgb().map(v => v / 255) as [number, number, number];
         } catch { /* leave defaults */ }
 
         const a = this._style.opacity ?? 1;
