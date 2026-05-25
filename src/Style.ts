@@ -19,6 +19,9 @@ import { SHAPE_DEFAULT_STYLE } from './constants';
 import type { ColorInput } from './Color';
 export { Color } from './Color';
 export type { ColorInput } from './Color';
+
+
+/** Data of Style */
 export type StyleData = {
     visible?: boolean;
     color?: StyleColor;
@@ -37,14 +40,6 @@ export type StyleData = {
     };
     material?: any; // TODO
 }
-/** Parse any ColorInput and return a canonical '#rrggbb' hex string. Throws on invalid input. */
-function resolveColor(color: ColorInput): string {
-    return new Color(color).toHex();
-}
-
-function isValidOpacity(v: number): boolean {
-    return typeof v === 'number' && isFinite(v) && v >= 0 && v <= 1;
-}
 
 /** Main Style class */
 export class Style
@@ -52,6 +47,17 @@ export class Style
     _style: StyleData;
     /** Tracks which top-level StyleData keys were explicitly set (not just defaults). */
     private _explicit = new Set<keyof StyleData>();
+
+    /** Parse any ColorInput and return a canonical '#rrggbb' hex string. Throws on invalid input. */
+    private static _resolveColor(color: ColorInput): string
+    {
+        return new Color(color).toHex();
+    }
+
+    private static _isValidOpacity(v: number): boolean
+    {
+        return typeof v === 'number' && isFinite(v) && v >= 0 && v <= 1;
+    }
 
     constructor(init?: StyleData)
     {
@@ -109,7 +115,7 @@ export class Style
     }
     set color(v: ColorInput)
     {
-        const n = resolveColor(v);
+        const n = Style._resolveColor(v);
         this._style.color = n;
         this._style.fill!.color = n;
         this._style.stroke!.color = n;
@@ -122,7 +128,7 @@ export class Style
     }
     set opacity(v: number)
     {
-        if (!isValidOpacity(v)) throw new RangeError(`Style.opacity must be between 0 and 1, got: ${v}`);
+        if (!Style._isValidOpacity(v)) throw new RangeError(`Style.opacity must be between 0 and 1, got: ${v}`);
         this._style.opacity = v;
         this._style.fill!.opacity = v;
         this._style.stroke!.opacity = v;
@@ -140,11 +146,11 @@ export class Style
         const update: NonNullable<StyleData['fill']> = {};
         if (v.color !== undefined)
         {
-            update.color = resolveColor(v.color);
+            update.color = Style._resolveColor(v.color);
         }
         if (v.opacity !== undefined)
         {
-            if (!isValidOpacity(v.opacity)) throw new RangeError(`Style.fill.opacity must be between 0 and 1, got: ${v.opacity}`);
+            if (!Style._isValidOpacity(v.opacity)) throw new RangeError(`Style.fill.opacity must be between 0 and 1, got: ${v.opacity}`);
             update.opacity = v.opacity;
         }
         this._style.fill = { ...this._style.fill, ...update };
@@ -156,7 +162,7 @@ export class Style
     }
     set fillColor(v: ColorInput)
     {
-        this._style.fill!.color = resolveColor(v);
+        this._style.fill!.color = Style._resolveColor(v);
         this._explicit.add('fill');
     }
 
@@ -165,7 +171,7 @@ export class Style
     }
     set fillOpacity(v: number)
     {
-        if (!isValidOpacity(v)) throw new RangeError(`Style.fillOpacity must be between 0 and 1, got: ${v}`);
+        if (!Style._isValidOpacity(v)) throw new RangeError(`Style.fillOpacity must be between 0 and 1, got: ${v}`);
         this._style.fill!.opacity = v;
         this._explicit.add('fill');
     }
@@ -181,11 +187,11 @@ export class Style
         const update: NonNullable<StyleData['stroke']> = {};
         if (v.color !== undefined)
         {
-            update.color = resolveColor(v.color);
+            update.color = Style._resolveColor(v.color);
         }
         if (v.opacity !== undefined)
         {
-            if (!isValidOpacity(v.opacity)) throw new RangeError(`Style.stroke.opacity must be between 0 and 1, got: ${v.opacity}`);
+            if (!Style._isValidOpacity(v.opacity)) throw new RangeError(`Style.stroke.opacity must be between 0 and 1, got: ${v.opacity}`);
             update.opacity = v.opacity;
         }
         if (v.width !== undefined)
@@ -217,7 +223,7 @@ export class Style
     }
     set strokeColor(v: ColorInput)
     {
-        this._style.stroke!.color = resolveColor(v);
+        this._style.stroke!.color = Style._resolveColor(v);
         this._explicit.add('stroke');
     }
 
@@ -226,7 +232,7 @@ export class Style
     }
     set strokeOpacity(v: number)
     {
-        if (!isValidOpacity(v)) throw new RangeError(`Style.strokeOpacity must be between 0 and 1, got: ${v}`);
+        if (!Style._isValidOpacity(v)) throw new RangeError(`Style.strokeOpacity must be between 0 and 1, got: ${v}`);
         this._style.stroke!.opacity = v;
         this._explicit.add('stroke');
     }

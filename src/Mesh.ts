@@ -1525,18 +1525,26 @@ export class Mesh extends Shape
     //// EDGE PROJECTION AND SECTIONING ////
 
 
-    /** Isometric projection with hidden lines
+    /** Isometric projection with optional hidden lines
      *  
      * @param cam normalizaed 3D position of the camera (default: [-1,-1,1], a common isometric view direction) 
-     * @param all Whether to include hidden edges (default: true)
+     * @param hiddenLines Whether to keep hidden projected edges in the result (default: false)
+     * @param includeHiddenShapes Single meshes have no hidden-shape filtering; accepted for API consistency and ignored.
      * @param samples Number of samples of edges to determine visibility (default: 16)
      * @param featureAngle Optional angle threshold to treat edges as "features" and always show them
      * 
      * @return CurveColection with groups 'visible' and 'hidden' for the respective edges
      *   use isometryResult.group('visible') and isometryResult.group('hidden') to access each separately
      */
-    isometry(cam:PointLike = [-1,-1,1], all:boolean=true, samples: number = 16, featureAngle: number=10):ShapeCollection<Shape>
+    isometry(
+        cam:PointLike = [-1,-1,1],
+        hiddenLines:boolean=false,
+        includeHiddenShapes:boolean=false,
+        samples: number = 16,
+        featureAngle: number=10,
+    ):ShapeCollection<Shape>
     {
+        void includeHiddenShapes;
         // from cam position to origin
         const camDirVec = (isPointLike(cam))
                         ? Point.from(cam).toVector().normalize()// .reverse()
@@ -1553,7 +1561,7 @@ export class Mesh extends Shape
                 samples: samples,
             } as ProjectEdgeOptions);
 
-        if(!all){ iso.removeGroup('hidden'); }
+        if(!hiddenLines){ iso.removeGroup('hidden'); }
 
         // Isometric projection result is on plane normal: place on XY plane
 
@@ -1583,9 +1591,15 @@ export class Mesh extends Shape
     }
 
     /** Shorthand alias for {@link isometry}. */
-    iso(cam:PointLike = [-1,-1,1], all:boolean=true, samples: number = 16, featureAngle: number=10):ShapeCollection<Shape>
+    iso(
+        cam:PointLike = [-1,-1,1],
+        hiddenLines:boolean=false,
+        includeHiddenShapes:boolean=false,
+        samples: number = 16,
+        featureAngle: number=10,
+    ):ShapeCollection<Shape>
     {
-        return this.isometry(cam, all, samples, featureAngle);
+        return this.isometry(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
     }
 
     /**
@@ -1607,7 +1621,7 @@ export class Mesh extends Shape
         const fa = optionsWithDefaults.featureAngle;
         const ns = optionsWithDefaults.samples;
 
-        const occJs = occluders.map(m => m.inner()).filter((m): m is MeshJs => m !== undefined);
+        const occJs = occluders.map(m => m.inner()).filter((m): m is MeshJs => m != null);
         const r = this.inner()?.projectEdges(vx, vy, vz || 0, ox, oy, oz || 0, nx, ny, nz || 0, fa, ns, occJs);
         if (!r)
         {

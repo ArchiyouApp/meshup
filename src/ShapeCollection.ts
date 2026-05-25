@@ -400,8 +400,16 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return this;
     }
 
-    //// BOOLEAN OPERATIONS ////
+    /** Show Shapes in Collection */
+    show(): this
+    {
+        const shapes = this._shapes as any[];
+        shapes.forEach(shape => shape.show?.());
+        return this;
+    }
 
+
+    /** Merge all polygons into one Mesh (without booleans) */
     merge(): any
     {
         const allPolygons = this._shapes
@@ -414,6 +422,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         if (!allPolygons.length) { console.error('ShapeCollection::merge(): No meshes. Returning empty mesh.'); return new Mesh(); }
         return Mesh.from(MeshJs.fromPolygons(allPolygons, {}));
     }
+
+    //// BOOLEAN OPERATIONS ////
 
     union(other?: Mesh | ShapeCollection<Mesh>): Mesh
     {
@@ -474,9 +484,117 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     //// ISOMETRY ////
 
-    isometry(cam: PointLike = [-1, -1, 1], includeHidden: boolean = true): ShapeCollection<any>
+    isometry(
+        cam: PointLike = [-1, -1, 1],
+        hiddenLines: boolean = false,
+        includeHiddenShapes: boolean = false,
+        samples: number = 16,
+        featureAngle: number=10,
+    ): ShapeCollection<any>
     {
-        return this.merge().isometry(cam, includeHidden);
+        const shapes = this._shapes as any[];
+        const projectedShapes = includeHiddenShapes
+            ? shapes
+            : shapes.filter(shape => shape.style?.visible !== false);
+        if (!projectedShapes.length) return new ShapeCollection<any>();
+
+        const meshes = projectedShapes.filter((s): s is Mesh => s instanceof Mesh);
+
+        // Single mesh (or no mesh): keep the original path
+        if (meshes.length <= 1)
+        {
+            return new ShapeCollection<any>(...projectedShapes)
+                .merge().isometry(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
+        }
+
+        // Multiple meshes: project each individually with siblings as occluders.
+        // Merging into a polygon soup first corrupts the dihedral angles at contact
+        // boundaries (coplanar faces from two meshes become adjacent in the merged
+        // topology, dropping below the feature-angle threshold and losing the edge).
+        const camDirVec = Point.from(cam).toVector().normalize();
+        const planeNormal = camDirVec.copy().reverse();
+        const options: ProjectEdgeOptions = {
+            viewDirection: camDirVec.toArray(),
+            planeNormal:   planeNormal.toArray(),
+            planeOrigin:   [0, 0, 0],
+            featureAngle,
+            samples,
+        };
+
+        // Tiny view-direction offset on the occluder prevents a WASM null-pointer
+        // that occurs when coplanar touching polygons are passed as occluders.
+        const [ex, ey, ez] = camDirVec.copy().scale(1e-4).toArray();
+
+        // Detect coplanar contact between any pair of meshes. When meshes touch
+        // their bboxes meet (distance == 0). In that case polygon-concatenating
+        // siblings into one occluder soup confuses the back-to-front HLR ray
+        // test and drops contact-boundary edges (e.g. stacked boxes n=2..11
+        // each lost the perimeter at every shared face). Fall back to passing
+        // siblings as *separate* occluders so each gets its own TriMesh + BVH.
+        // For non-touching collections the cheap polygon-concat occluder is
+        // safe and dramatically faster (e.g. ~50× faster for a 10×10×10 grid).
+        const bboxes = meshes.map(m => m.bbox()).filter((b): b is Bbox => !!b);
+        const anyTouching = bboxes.some((a, i) =>
+            bboxes.slice(i + 1).some(b => a.distance(b) === 0),
+        );
+
+        const iso = new ShapeCollection<any>();
+        meshes.forEach((mesh, index) =>
+        {
+            const siblings = meshes.filter((_, i) => i !== index);
+            let occluders: ShapeCollection<Mesh>;
+            if (anyTouching)
+            {
+                // Per-sibling occluders. Each needs a fresh copy because
+                // projectEdges (Vec<MeshJs>) takes ownership.
+                occluders = new ShapeCollection<Mesh>(
+                    ...siblings.map(m => m.copy() as Mesh),
+                );
+            }
+            else
+            {
+                const occluderMesh = siblings.length > 1
+                    ? new ShapeCollection<Mesh>(...siblings).merge() as Mesh
+                    : siblings[0];
+                occluders = occluderMesh
+                    ? new ShapeCollection<Mesh>(occluderMesh.copy().translate(ex, ey, ez))
+                    : new ShapeCollection<Mesh>();
+            }
+
+            const projected = mesh._projectEdges(options, occluders);
+            const hidden  = projected.group('hidden');
+            const visible = projected.group('visible');
+            if (hidden?.length)  iso.addGroup('hidden',  hidden);
+            if (visible?.length) iso.addGroup('visible', visible);
+        });
+
+        if (!hiddenLines) iso.removeGroup('hidden');
+
+        // Flatten the 3D projection to the XY plane and orient screen-up
+        // (mirrors the same steps done inside Mesh.isometry())
+        const flattenedIso = iso.rotateQuaternion(
+            planeNormal.rotationBetween(Vector.from(0, 0, 1)));
+
+        const mappedUpVec = planeNormal.copy().reverse().setZ(0);
+        if (mappedUpVec.x * mappedUpVec.x + mappedUpVec.y * mappedUpVec.y < 1e-9)
+        {
+            mappedUpVec.setX(0);
+            mappedUpVec.setY(1);
+        }
+
+        const twistRot = mappedUpVec.rotationBetween(Vector.from(0, 1, 0));
+        return flattenedIso.rotateQuaternion(twistRot).moveTo(0, 0, 0);
+    }
+
+    iso(
+        cam: PointLike = [-1, -1, 1],
+        hiddenLines: boolean = false,
+        includeHiddenShapes: boolean = false,
+        samples: number = 16,
+        featureAngle: number=10,
+    ): ShapeCollection<any>
+    {
+        return this.isometry(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
     }
 
     //// OUTPUTS ////

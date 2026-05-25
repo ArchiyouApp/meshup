@@ -85,4 +85,34 @@ describe('Example: Isometric projection with hidden lines', async () =>
                     iso.move(1000),
                     ).toGLTF());
     });
+
+    // Regression: iso of a vertical stack of N coplanar-touching boxes must
+    // preserve the perimeter edges where adjacent boxes meet. Previously this
+    // dropped contact-boundary edges for many N (e.g. N=5) but happened to
+    // work for some others (e.g. N=13), depending on whether the merged
+    // sibling-occluder happened to expose or hide each contact ring.
+    it.each([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13])(
+        'preserves contact edges between %i stacked boxes',
+        async (n) =>
+        {
+            const b1 = Mesh.Box(100, 100, 10);
+            const c = b1.replicate(n, (s, i) => s.move(0, 0, 10 * i));
+            const iso = c.isometry()?.group('visible')!;
+
+            await save(OUTPUT_DIR + `test.isometry.stack-${n}.gltf`,
+                await new ShapeCollection(c, iso.copy().move(200)).toGLTF());
+
+            console.log(`stack n=${n} → visible edges: ${iso.length}`);
+
+            // Each box, projected in isolation, contributes 9 visible edges
+            // for an iso view [-1,-1,1] (3 hidden of the cube's 12). When
+            // n boxes are stacked with shared faces, n-1 contact rings stay
+            // visible — at least 3 of the 4 perimeter edges per contact ring
+            // are visible from a [-1,-1,1] view, contributed once from each
+            // touching box (so 6 polylines per contact). Total ≥ 9 + 6(n-1).
+            // The buggy path collapses entire contact rings and undershoots.
+            const minExpected = 9 + 6 * (n - 1);
+            expect(iso.length).toBeGreaterThanOrEqual(minExpected);
+        },
+    );
 });

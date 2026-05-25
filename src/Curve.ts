@@ -1256,8 +1256,8 @@ export class Curve extends Shape
     override translate(px: PointLike | number, dy?: number, dz?: number): this
     {
         // NOTE: because PointLike matches [number], we need to check y and z first
-        const vec = (typeof dy === 'number' && typeof dz === 'number') 
-                        ? Point.from(px, dy || 0, dz || 0) 
+        const vec = (typeof dy === 'number' && (typeof dz === 'number' || dz === undefined)) 
+                        ? Point.from(px, dy, dz ?? 0) 
                         : Point.from(px); // throws error if invalid
 
         if(!vec){ throw new Error('Curve.translate(): Invalid translation input. Please use PointLike or valid offset coordinates.'); }
