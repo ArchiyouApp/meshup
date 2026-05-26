@@ -38,6 +38,12 @@ export const EDGE_PROJECTION_DEFAULTS = {
     featureAngle: 10, // degrees. Max angle between adjacent faces to be considered a "feature edge" and projected.
     samples: 32, // number of rays to cast per edge for hidden-line removal
 }
+export const EDGE_PROJECTION_LIMITS = {
+    featureAngleMin: 0,
+    featureAngleMax: 180,
+    minSamples: 2,
+    maxSamples: 4096,
+} as const;
 
 export const SHAPE_DEFAULT_STYLE: StyleData = {
     visible: true,

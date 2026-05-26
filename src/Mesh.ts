@@ -31,7 +31,7 @@ import { Selector } from './Selector';
 
 // Settings
 import { TOLERANCE, SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT,
-    SHAPES_CYLINDER_SEGMENTS_RADIAL,EDGE_PROJECTION_DEFAULTS, BASE_PLANE_NAME_TO_PLANE } from './constants';
+    SHAPES_CYLINDER_SEGMENTS_RADIAL, EDGE_PROJECTION_DEFAULTS, EDGE_PROJECTION_LIMITS, BASE_PLANE_NAME_TO_PLANE } from './constants';
 
     
 
@@ -1672,8 +1672,20 @@ export class Mesh extends Shape
         const [ vx, vy, vz ] = Point.from(optionsWithDefaults.viewDirection).toArray();
         const [ ox, oy, oz ] = Point.from(optionsWithDefaults.planeOrigin!).toArray();
         const [ nx, ny, nz ] = Point.from(optionsWithDefaults.planeNormal).toArray();
-        const fa = optionsWithDefaults.featureAngle;
-        const ns = optionsWithDefaults.samples;
+        const rawFeatureAngle = Number(optionsWithDefaults.featureAngle);
+        const rawSamples = Number(optionsWithDefaults.samples);
+        const fa = Number.isFinite(rawFeatureAngle)
+            ? Math.min(
+                EDGE_PROJECTION_LIMITS.featureAngleMax,
+                Math.max(EDGE_PROJECTION_LIMITS.featureAngleMin, rawFeatureAngle),
+            )
+            : EDGE_PROJECTION_DEFAULTS.featureAngle;
+        const ns = Number.isFinite(rawSamples)
+            ? Math.min(
+                EDGE_PROJECTION_LIMITS.maxSamples,
+                Math.max(EDGE_PROJECTION_LIMITS.minSamples, Math.round(rawSamples)),
+            )
+            : EDGE_PROJECTION_DEFAULTS.samples;
 
         const occJs = occluders.map(m => m.inner()).filter((m): m is MeshJs => m != null);
         const r = this.inner()?.projectEdges(vx, vy, vz || 0, ox, oy, oz || 0, nx, ny, nz || 0, fa, ns, occJs);

@@ -23,6 +23,8 @@ import { Bbox } from './Bbox';
 import { MeshJs } from './wasm/csgrs';
 import { GLTFBuilder } from './GLTFBuilder';
 
+import { TOLERANCE } from './constants';
+
 /** Minimal interface a shape must satisfy to be held in a ShapeCollection. */
 export interface CollectableShape {
     copy(): this
@@ -482,6 +484,231 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         throw new Error('ShapeCollection::_intersections(): not yet implemented');
     }
 
+    private _visibleProjectionMeshes(includeHiddenShapes: boolean): Mesh[]
+    {
+        const shapes = this._shapes as any[];
+        const projectedShapes = includeHiddenShapes
+            ? shapes
+            : shapes.filter(shape => shape.style?.visible !== false);
+
+        return projectedShapes.filter((shape): shape is Mesh => shape instanceof Mesh);
+    }
+
+    private static _makeProjectionOptions(
+        viewDirection: Vector,
+        planeNormal: Vector,
+        featureAngle: number,
+        samples: number,
+    ): ProjectEdgeOptions
+    {
+        return {
+            viewDirection: viewDirection.toArray(),
+            planeNormal: planeNormal.toArray(),
+            planeOrigin: [0, 0, 0],
+            featureAngle,
+            samples,
+        };
+    }
+
+    private static _bboxesTouch(a: Bbox | undefined, b: Bbox | undefined, tol: number = TOLERANCE): boolean
+    {
+        return !!a && !!b && a.distance(b) <= tol;
+    }
+
+    private static _appendProjectionGroups(target: ShapeCollection<any>, projected: ShapeCollection<any>): void
+    {
+        const hidden = projected.group('hidden');
+        const visible = projected.group('visible');
+        if (hidden?.length) target.addGroup('hidden', hidden);
+        if (visible?.length) target.addGroup('visible', visible);
+    }
+
+    private static _projectMultiMeshIsometry(
+        meshes: Mesh[],
+        camDirVec: Vector,
+        planeNormal: Vector,
+        hiddenLines: boolean,
+        samples: number,
+        featureAngle: number,
+    ): ShapeCollection<any>
+    {
+        const options = ShapeCollection._makeProjectionOptions(
+            camDirVec,
+            planeNormal,
+            featureAngle,
+            samples,
+        );
+        const [ex, ey, ez] = camDirVec.copy().scale(1e-4).toArray();
+        const meshBboxes = meshes.map(mesh => mesh.bbox());
+        const anyTouching = meshBboxes.some((a, index) =>
+            meshBboxes.slice(index + 1).some(b => ShapeCollection._bboxesTouch(a, b)));
+
+        const iso = new ShapeCollection<any>();
+        meshes.forEach((mesh, index) =>
+        {
+            const siblings = meshes.filter((_, siblingIndex) => siblingIndex !== index);
+            const myBbox = meshBboxes[index];
+            const touchingSibling = siblings.some(sibling =>
+                ShapeCollection._bboxesTouch(myBbox, meshBboxes[meshes.indexOf(sibling)]));
+
+            let sourceMesh = mesh;
+            if (anyTouching && touchingSibling)
+            {
+                const shiftAmount = (globalThis as any).__ISO_SHIFT__ ?? 1;
+                const shift = camDirVec.copy().scale(shiftAmount).toArray();
+                sourceMesh = (mesh.copy() as Mesh).translate(shift[0], shift[1], shift[2]);
+            }
+
+            let occluders: ShapeCollection<Mesh>;
+            if (anyTouching)
+            {
+                occluders = new ShapeCollection<Mesh>(
+                    ...siblings.map(sibling => sibling.copy() as Mesh),
+                );
+            }
+            else
+            {
+                const occluderMesh = siblings.length > 1
+                    ? new ShapeCollection<Mesh>(...siblings).merge() as Mesh
+                    : siblings[0];
+                occluders = occluderMesh
+                    ? new ShapeCollection<Mesh>((occluderMesh.copy() as Mesh).translate(ex, ey, ez))
+                    : new ShapeCollection<Mesh>();
+            }
+
+            const projected = sourceMesh._projectEdges(options, occluders);
+            ShapeCollection._appendProjectionGroups(iso, projected);
+        });
+
+        ShapeCollection._addCuboidContactPerimeters(
+            iso,
+            meshes,
+            camDirVec,
+            planeNormal,
+            featureAngle,
+        );
+
+        if (!hiddenLines && iso.group('hidden'))
+        {
+            iso.removeGroup('hidden');
+        }
+
+        return Mesh._flattenProjectionToScreen(iso, planeNormal);
+    }
+
+    private static _projectMergedProjectionWithContactFaces(
+        meshes: Mesh[],
+        viewDir: Vector,
+        planeNormal: Vector,
+        hiddenLines: boolean,
+        samples: number,
+        featureAngle: number,
+    ): ShapeCollection<any>
+    {
+        const merged = new ShapeCollection<Mesh>(...meshes).merge() as Mesh;
+        const options = ShapeCollection._makeProjectionOptions(
+            viewDir,
+            planeNormal,
+            featureAngle,
+            samples,
+        );
+        const iso = merged._projectEdges(options);
+
+        const TOL = 1e-3;
+        const AXES: Array<'x'|'y'|'z'> = ['x', 'y', 'z'];
+        const isCube = meshes.map(mesh => typeof (mesh as any).isCuboid === 'function'
+            ? (mesh as any).isCuboid()
+            : false);
+        const bboxes = meshes.map(mesh => mesh.bbox());
+        const sourceShift = (globalThis as any).__ISO_SHIFT__ ?? 1;
+        const faceShift = viewDir.copy().scale(Math.max(TOLERANCE * 100, sourceShift)).toArray();
+
+        const contactPoint = (
+            touchAxis: 'x'|'y'|'z',
+            touchPlane: number,
+            u: 'x'|'y'|'z',
+            uVal: number,
+            v: 'x'|'y'|'z',
+            vVal: number,
+        ): Point =>
+        {
+            const coords: Record<'x'|'y'|'z', number> = { x: 0, y: 0, z: 0 };
+            coords[touchAxis] = touchPlane;
+            coords[u] = uVal;
+            coords[v] = vVal;
+            return new Point(coords.x, coords.y, coords.z);
+        };
+
+        meshes.forEach((_, index) =>
+        {
+            const a = bboxes[index];
+            if (!a || !isCube[index]) return;
+
+            meshes.slice(index + 1).forEach((__, offset) =>
+            {
+                const otherIndex = index + offset + 1;
+                const b = bboxes[otherIndex];
+                if (!b || !isCube[otherIndex]) return;
+                if (a.distance(b) > TOL) return;
+
+                let touchAxis: 'x'|'y'|'z'|null = null;
+                let touchPlane = 0;
+                AXES.some(axis =>
+                {
+                    const axisName = axis.toUpperCase();
+                    const aMax = (a as any)['max' + axisName]();
+                    const aMin = (a as any)['min' + axisName]();
+                    const bMin = (b as any)['min' + axisName]();
+                    const bMax = (b as any)['max' + axisName]();
+                    if (Math.abs(aMax - bMin) < TOL)
+                    {
+                        touchAxis = axis;
+                        touchPlane = aMax;
+                        return true;
+                    }
+                    if (Math.abs(aMin - bMax) < TOL)
+                    {
+                        touchAxis = axis;
+                        touchPlane = aMin;
+                        return true;
+                    }
+                    return false;
+                });
+                if (!touchAxis) return;
+
+                const others = AXES.filter(axis => axis !== touchAxis) as Array<'x'|'y'|'z'>;
+                const u = others[0];
+                const v = others[1];
+                const uName = u.toUpperCase();
+                const vName = v.toUpperCase();
+
+                const cMinU = Math.max((a as any)['min' + uName](), (b as any)['min' + uName]());
+                const cMaxU = Math.min((a as any)['max' + uName](), (b as any)['max' + uName]());
+                const cMinV = Math.max((a as any)['min' + vName](), (b as any)['min' + vName]());
+                const cMaxV = Math.min((a as any)['max' + vName](), (b as any)['max' + vName]());
+                if (cMaxU - cMinU <= TOL || cMaxV - cMinV <= TOL) return;
+
+                const p00 = contactPoint(touchAxis, touchPlane, u, cMinU, v, cMinV);
+                const p10 = contactPoint(touchAxis, touchPlane, u, cMaxU, v, cMinV);
+                const p11 = contactPoint(touchAxis, touchPlane, u, cMaxU, v, cMaxV);
+                const p01 = contactPoint(touchAxis, touchPlane, u, cMinU, v, cMaxV);
+
+                const face = Mesh.fromPoints([p00, p10, p11, p01])
+                    .translate(faceShift[0], faceShift[1], faceShift[2]);
+                const occluders = new ShapeCollection<Mesh>(merged.copy() as Mesh);
+                const projected = face._projectEdges(options, occluders);
+                ShapeCollection._appendProjectionGroups(iso, projected);
+            });
+        });
+
+        if (!hiddenLines && iso.group('hidden'))
+        {
+            iso.removeGroup('hidden');
+        }
+
+        return Mesh._flattenProjectionToScreen(iso, planeNormal);
+    }
+
     //// ISOMETRY ////
 
     isometry(
@@ -492,130 +719,34 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         featureAngle: number=10,
     ): ShapeCollection<any>
     {
-        const shapes = this._shapes as any[];
-        const projectedShapes = includeHiddenShapes
-            ? shapes
-            : shapes.filter(shape => shape.style?.visible !== false);
-        if (!projectedShapes.length) return new ShapeCollection<any>();
-
-        const meshes = projectedShapes.filter((s): s is Mesh => s instanceof Mesh);
-
-        // Single mesh (or no mesh): keep the original path
-        if (meshes.length <= 1)
+        const meshes = this._visibleProjectionMeshes(includeHiddenShapes);
+        if (!meshes.length)
         {
-            return new ShapeCollection<any>(...projectedShapes)
-                .merge().isometry(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
+            return new ShapeCollection<any>();
+        }
+        if (meshes.length === 1)
+        {
+            return meshes[0].isometry(cam, hiddenLines, false, samples, featureAngle);
         }
 
-        // Multiple meshes: project each individually with siblings as occluders.
-        // Merging into a polygon soup first corrupts the dihedral angles at contact
-        // boundaries (coplanar faces from two meshes become adjacent in the merged
-        // topology, dropping below the feature-angle threshold and losing the edge).
         const camDirVec = Point.from(cam).toVector().normalize();
         const planeNormal = camDirVec.copy().reverse();
-        const options: ProjectEdgeOptions = {
-            viewDirection: camDirVec.toArray(),
-            planeNormal:   planeNormal.toArray(),
-            planeOrigin:   [0, 0, 0],
-            featureAngle,
+
+        // Technique: project the merged solid first, then add touching-face
+        // contact edges with a second HLR pass. The older per-mesh method
+        // projected each mesh against siblings and shifted touching meshes
+        // toward the camera; that preserved more contact edges, but it could
+        // overexpose edges that should be hidden and was slower on dense assemblies.
+        return ShapeCollection._projectMergedProjectionWithContactFaces(
+            meshes,
+            camDirVec,
+            planeNormal,
+            hiddenLines,
             samples,
-        };
-
-        // Tiny view-direction offset on the occluder prevents a WASM null-pointer
-        // that occurs when coplanar touching polygons are passed as occluders.
-        const [ex, ey, ez] = camDirVec.copy().scale(1e-4).toArray();
-
-        // Detect coplanar contact between any pair of meshes. When meshes touch
-        // their bboxes meet (distance == 0). In that case polygon-concatenating
-        // siblings into one occluder soup confuses the back-to-front HLR ray
-        // test and drops contact-boundary edges (e.g. stacked boxes n=2..11
-        // each lost the perimeter at every shared face). Fall back to passing
-        // siblings as *separate* occluders so each gets its own TriMesh + BVH.
-        // For non-touching collections the cheap polygon-concat occluder is
-        // safe and dramatically faster (e.g. ~50× faster for a 10×10×10 grid).
-        const bboxes = meshes.map(m => m.bbox()).filter((b): b is Bbox => !!b);
-        const anyTouching = bboxes.some((a, i) =>
-            bboxes.slice(i + 1).some(b => a.distance(b) === 0),
+            featureAngle,
         );
-
-        const iso = new ShapeCollection<any>();
-        const meshBboxes = meshes.map(m => m.bbox()!);
-        meshes.forEach((mesh, index) =>
-        {
-            const siblings = meshes.filter((_, i) => i !== index);
-            let occluders: ShapeCollection<Mesh>;
-            // When the source mesh shares any face with a sibling occluder,
-            // the HLR ray-cast classifies on-surface edges as hidden (an edge
-            // lying exactly in a coplanar occluder face occludes itself).
-            // Nudging the source mesh a tiny step *toward camera* along the
-            // view direction breaks that coincidence; because the nudge is
-            // parallel to the view direction, the screen-space projection is
-            // unchanged. We only do this when at least one sibling touches
-            // THIS mesh to avoid perturbing geometry unnecessarily.
-            let sourceMesh = mesh;
-            const myBbox = meshBboxes[index];
-            const touchingSibling = siblings.some(s =>
-            {
-                const sb = meshBboxes[meshes.indexOf(s)];
-                return !!myBbox && !!sb && myBbox.distance(sb) === 0;
-            });
-            if (anyTouching && touchingSibling)
-            {
-                // 1-unit nudge along the cam direction. Pure-view-direction
-                // translations project to zero on the screen plane (see
-                // _flattenProjectionToScreen), so the visible output is
-                // invariant under this shift — only the ray-cast geometry
-                // changes. Smaller shifts (<~0.9 absolute) sit inside the
-                // BVH/raycast precision band on typical CAD-scale scenes and
-                // leave edges still flagged hidden; 1.0 is the smallest
-                // round value that crosses the threshold reliably in our
-                // beam-pair / beam-grid regressions.
-                const k = (globalThis as any).__ISO_SHIFT__ ?? 1;
-                const shift = camDirVec.copy().scale(k).toArray();
-                sourceMesh = (mesh.copy() as Mesh).translate(shift[0], shift[1], shift[2]);
-            }
-
-            if (anyTouching)
-            {
-                // Per-sibling occluders. Each needs a fresh copy because
-                // projectEdges (Vec<MeshJs>) takes ownership.
-                occluders = new ShapeCollection<Mesh>(
-                    ...siblings.map(m => m.copy() as Mesh),
-                );
-            }
-            else
-            {
-                const occluderMesh = siblings.length > 1
-                    ? new ShapeCollection<Mesh>(...siblings).merge() as Mesh
-                    : siblings[0];
-                occluders = occluderMesh
-                    ? new ShapeCollection<Mesh>(occluderMesh.copy().translate(ex, ey, ez))
-                    : new ShapeCollection<Mesh>();
-            }
-
-            const projected = sourceMesh._projectEdges(options, occluders);
-            const hidden  = projected.group('hidden');
-            const visible = projected.group('visible');
-            if (hidden?.length)  iso.addGroup('hidden',  hidden);
-            if (visible?.length) iso.addGroup('visible', visible);
-        });
-
-        // Analytic contact-perimeter edges. The HLR ray-cast independently
-        // samples each source mesh's edges, so the same physical contact-edge
-        // is discretised twice and the two clip points drift apart — leaving
-        // dangling endpoints / misaligned polylines at the touching faces.
-        // For pairs of axis-aligned cuboids that share a face we know the
-        // contact rectangle exactly, so we generate its perimeter polylines
-        // analytically and append them to the visible group. Duplicates with
-        // the HLR-derived versions overlap exactly so there's no visual
-        // smear; the bug-causing misaligned ones get an exact partner.
-        ShapeCollection._addCuboidContactPerimeters(
-            iso, meshes, camDirVec, planeNormal, featureAngle);
-
-        if (!hiddenLines) iso.removeGroup('hidden');
-
-        return Mesh._flattenProjectionToScreen(iso, planeNormal);
     }
+        
 
     iso(
         cam: PointLike = [-1, -1, 1],
@@ -628,8 +759,39 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return this.isometry(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
     }
 
+    isoTest(
+        cam: PointLike = [-1, -1, 1],
+        hiddenLines: boolean = false,
+        includeHiddenShapes: boolean = false,
+        samples: number = 16,
+        featureAngle: number = 10,
+    ): ShapeCollection<any>
+    {
+        const meshes = this._visibleProjectionMeshes(includeHiddenShapes);
+        if (!meshes.length)
+        {
+            return new ShapeCollection<any>();
+        }
+        if (meshes.length === 1)
+        {
+            return meshes[0].isometry(cam, hiddenLines, false, samples, featureAngle);
+        }
+
+        const camDirVec = Point.from(cam).toVector().normalize();
+        const planeNormal = camDirVec.copy().reverse();
+
+        return ShapeCollection._projectMergedProjectionWithContactFaces(
+            meshes,
+            camDirVec,
+            planeNormal,
+            hiddenLines,
+            samples,
+            featureAngle,
+        );
+    }
+
     /** Orthographic elevation projection of every Mesh in this collection,
-     *  with HLR-driven hidden-line removal and per-mesh occluders.
+     *  using the merged-solid pass plus contact-face add-back.
      *  See {@link Mesh.elevation} for parameter semantics.
      */
     elevation(
@@ -640,89 +802,27 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         featureAngle: number = 10,
     ): ShapeCollection<any>
     {
-        const shapes = this._shapes as any[];
-        const projectedShapes = includeHiddenShapes
-            ? shapes
-            : shapes.filter(shape => shape.style?.visible !== false);
-        if (!projectedShapes.length) return new ShapeCollection<any>();
-
-        const meshes = projectedShapes.filter((s): s is Mesh => s instanceof Mesh);
-
-        // Single mesh (or none): delegate to Mesh.elevation()
-        if (meshes.length <= 1)
+        const meshes = this._visibleProjectionMeshes(includeHiddenShapes);
+        if (!meshes.length)
         {
-            return new ShapeCollection<any>(...projectedShapes)
-                .merge().elevation(from, hiddenLines, samples, featureAngle);
+            return new ShapeCollection<any>();
+        }
+        if (meshes.length === 1)
+        {
+            return meshes[0].elevation(from, hiddenLines, samples, featureAngle);
         }
 
-        const camDirVec = Mesh._resolveViewDirection(from);
-        const planeNormal = camDirVec.copy().reverse();
-        const options: ProjectEdgeOptions = {
-            viewDirection: camDirVec.toArray(),
-            planeNormal:   planeNormal.toArray(),
-            planeOrigin:   [0, 0, 0],
-            featureAngle,
+        const viewDir = Mesh._resolveViewDirection(from);
+        const planeNormal = viewDir.copy().reverse();
+
+        return ShapeCollection._projectMergedProjectionWithContactFaces(
+            meshes,
+            viewDir,
+            planeNormal,
+            hiddenLines,
             samples,
-        };
-
-        const [ex, ey, ez] = camDirVec.copy().scale(1e-4).toArray();
-
-        const bboxes = meshes.map(m => m.bbox()).filter((b): b is Bbox => !!b);
-        const anyTouching = bboxes.some((a, i) =>
-            bboxes.slice(i + 1).some(b => a.distance(b) === 0),
+            featureAngle,
         );
-
-        const elev = new ShapeCollection<any>();
-        const meshBboxes = meshes.map(m => m.bbox()!);
-        meshes.forEach((mesh, index) =>
-        {
-            const siblings = meshes.filter((_, i) => i !== index);
-            let occluders: ShapeCollection<Mesh>;
-            // See isometry() above — same view-direction source-mesh shift
-            // when a touching sibling could ray-classify on-surface contact
-            // edges as hidden.
-            let sourceMesh = mesh;
-            const myBbox = meshBboxes[index];
-            const touchingSibling = siblings.some(s =>
-            {
-                const sb = meshBboxes[meshes.indexOf(s)];
-                return !!myBbox && !!sb && myBbox.distance(sb) === 0;
-            });
-            if (anyTouching && touchingSibling)
-            {
-                const shift = camDirVec.copy().scale(1).toArray();
-                sourceMesh = (mesh.copy() as Mesh).translate(shift[0], shift[1], shift[2]);
-            }
-
-            if (anyTouching)
-            {
-                occluders = new ShapeCollection<Mesh>(
-                    ...siblings.map(m => m.copy() as Mesh),
-                );
-            }
-            else
-            {
-                const occluderMesh = siblings.length > 1
-                    ? new ShapeCollection<Mesh>(...siblings).merge() as Mesh
-                    : siblings[0];
-                occluders = occluderMesh
-                    ? new ShapeCollection<Mesh>(occluderMesh.copy().translate(ex, ey, ez))
-                    : new ShapeCollection<Mesh>();
-            }
-
-            const projected = sourceMesh._projectEdges(options, occluders);
-            const hidden  = projected.group('hidden');
-            const visible = projected.group('visible');
-            if (hidden?.length)  elev.addGroup('hidden',  hidden);
-            if (visible?.length) elev.addGroup('visible', visible);
-        });
-
-        ShapeCollection._addCuboidContactPerimeters(
-            elev, meshes, camDirVec, planeNormal, featureAngle);
-
-        if (!hiddenLines) elev.removeGroup('hidden');
-
-        return Mesh._flattenProjectionToScreen(elev, planeNormal);
     }
 
     /** Architectural section across every Mesh in this collection.
@@ -737,67 +837,19 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         featureAngle: number = 10,
     ): ShapeCollection<any>
     {
-        const shapes = this._shapes as any[];
-        const projectedShapes = includeHiddenShapes
-            ? shapes
-            : shapes.filter(shape => shape.style?.visible !== false);
-        if (!projectedShapes.length) return new ShapeCollection<any>();
-
-        const meshes = projectedShapes.filter((s): s is Mesh => s instanceof Mesh);
-
-        if (meshes.length <= 1)
+        const meshes = this._visibleProjectionMeshes(includeHiddenShapes);
+        if (!meshes.length)
         {
-            return new ShapeCollection<any>(...projectedShapes)
-                .merge().section(pivot, normal, hiddenLines, samples, featureAngle);
+            return new ShapeCollection<any>();
+        }
+        if (meshes.length === 1)
+        {
+            return meshes[0].section(pivot, normal, hiddenLines, samples, featureAngle);
         }
 
-        const sectionNormal = Mesh._resolveViewDirection(normal);
-        const pivotPoint    = Point.from(pivot);
-
-        // Same coplanar-touch detection + tiny view-direction offset as isometry()/elevation()
-        const viewDir = sectionNormal.copy().reverse();
-        const [ex, ey, ez] = viewDir.copy().scale(1e-4).toArray();
-        const bboxes = meshes.map(m => m.bbox()).filter((b): b is Bbox => !!b);
-        const anyTouching = bboxes.some((a, i) =>
-            bboxes.slice(i + 1).some(b => a.distance(b) === 0),
-        );
-
-        const result = new ShapeCollection<any>();
-        meshes.forEach((mesh, index) =>
-        {
-            const siblings = meshes.filter((_, i) => i !== index);
-            let occluders: ShapeCollection<Mesh>;
-            if (anyTouching)
-            {
-                occluders = new ShapeCollection<Mesh>(
-                    ...siblings.map(m => m.copy() as Mesh),
-                );
-            }
-            else
-            {
-                const occluderMesh = siblings.length > 1
-                    ? new ShapeCollection<Mesh>(...siblings).merge() as Mesh
-                    : siblings[0];
-                occluders = occluderMesh
-                    ? new ShapeCollection<Mesh>(occluderMesh.copy().translate(ex, ey, ez))
-                    : new ShapeCollection<Mesh>();
-            }
-
-            const projected = mesh._projectEdgesSection(
-                { pivot: pivotPoint, normal: sectionNormal, featureAngle, samples },
-                occluders);
-            const hidden  = projected.group('hidden');
-            const visible = projected.group('visible');
-            const cut     = projected.group('cut');
-            if (hidden?.length)  result.addGroup('hidden',  hidden);
-            if (visible?.length) result.addGroup('visible', visible);
-            if (cut?.length)     result.addGroup('cut',     cut);
-        });
-
-        if (!hiddenLines) result.removeGroup('hidden');
-
-        const planeNormal = sectionNormal.copy().reverse();
-        return Mesh._flattenProjectionToScreen(result, planeNormal);
+        return new ShapeCollection<Mesh>(...meshes)
+            .merge()
+            .section(pivot, normal, hiddenLines, samples, featureAngle);
     }
 
     //// OUTPUTS ////
