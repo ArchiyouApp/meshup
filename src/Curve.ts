@@ -143,7 +143,41 @@ export class Curve extends Shape
             if(newCurve) newCurves.add(newCurve);
         });
         return newCurves;
-    }   
+    }
+
+    /** Arrange copies of this Curve in a 3-D array.
+     *  @param sizes   Number of copies along [x, y, z] axes (default [2, 2, 1]).
+     *                 Non-integer values are floored; values < 1 map to 1.
+     *  @param offsets Distance between copy origins along [x, y, z].
+     *                 Defaults to the bbox extent on each axis so copies are placed adjacent.
+     *  @returns ShapeCollection<Curve> containing all copies (the original sits at [0,0,0]).
+     */
+    array(sizes: PointLike = [2, 2, 1], offsets?: PointLike): ShapeCollection<Curve>
+    {
+        const s = Point.from(sizes);
+        const nx = Math.max(1, Math.floor(s.x));
+        const ny = Math.max(1, Math.floor(s.y));
+        const nz = Math.max(1, Math.floor(s.z));
+
+        const bb = this.bbox();
+        const defaultOff = bb ? new Vector(bb.width(), bb.depth(), bb.height()) : new Vector(1, 1, 1);
+        const off = offsets ? Vector.from(offsets) : defaultOff;
+
+        const curves = new ShapeCollection<Curve>();
+        for (let x = 0; x < nx; x++)
+        {
+            for (let y = 0; y < ny; y++)
+            {
+                for (let z = 0; z < nz; z++)
+                {
+                    const curve = this.copy();
+                    curve.translate(x * off.x, y * off.y, z * off.z);
+                    curves.add(curve);
+                }
+            }
+        }
+        return curves;
+    }
 
     //// CREATION ////
     /*
@@ -1153,6 +1187,46 @@ export class Curve extends Shape
         return OBbox.fromCurve(this);
     }
 
+    /** Whether this Curve is essentially a cuboid (rectangle in 2D).
+     *
+     *  A single line is 1D and never a cuboid. For 2D-or-bigger curves, builds
+     *  the PCA-based OBB and checks every tessellated point: each point must
+     *  sit on the OBB surface — within ±halfExtent on every non-zero axis and
+     *  touching at least one face — within `tolerance`. Arcs / circles /
+     *  splines / non-rect polylines fail; tessellated rectangles pass even
+     *  when sides are subdivided.
+     */
+    isCuboid(tolerance: number = 0.5): boolean
+    {
+        const obb = this.obbox();
+        if (obb.is1D()) return false;
+        const halfExtents = obb.halfExtents();
+        const axes        = obb.axes();
+        const c           = obb.center();
+        const activeAxis: Array<0|1|2> = [0,1,2].filter(i => halfExtents[i] > tolerance) as Array<0|1|2>;
+        if (activeAxis.length < 2) return false;
+
+        // Tessellate at a tolerance tighter than the cuboid tolerance so arcs
+        // and splines are sampled finely enough to be flagged as non-cuboid.
+        const pts = this.tessellate(Math.min(tolerance * 0.5, TESSELATION_TOLERANCE));
+        if (!pts || pts.length === 0) return false;
+
+        for (const v of pts)
+        {
+            const dx = v.x - c.x, dy = v.y - c.y, dz = v.z - c.z;
+            let onAFace = false;
+            for (const i of activeAxis)
+            {
+                const a = axes[i];
+                const proj = dx * a.x + dy * a.y + dz * a.z;
+                if (Math.abs(proj) > halfExtents[i] + tolerance) return false;
+                if (Math.abs(Math.abs(proj) - halfExtents[i]) < tolerance) onAFace = true;
+            }
+            if (!onAFace) return false;
+        }
+        return true;
+    }
+
     /** Whether this curve lies in a 2D plane (zero extent on one axis) */
     is2D(): boolean
     {
@@ -1196,12 +1270,6 @@ export class Curve extends Shape
     edges(): ShapeCollection<Curve>
     {
         return this.segments();
-    }
-
-    /** Extrude and return a Mesh — alias for extrude with argument order matching old API */
-    _extruded(length: number, direction: PointLike): Mesh | null
-    {
-        return this.extrude(length, direction);
     }
 
     /** Store annotations on this curve — placeholder for old-API compat */
@@ -2200,9 +2268,11 @@ export class Curve extends Shape
     /** Extrude this curve along a direction to create a Mesh.
      *  If the curve is closed and planar, creates a solid extrusion.
      *  If the curve is open or non-planar, creates a swept surface.
+     *  @param length - The extrusion length (default: 1) 
      *  @param direction - The extrusion direction vector (default planar normal or [0,0,1])
-     *  @param length - The extrusion length (default: 1)
      *  @returns A new Mesh representing the extruded geometry
+     * 
+     *  NOTE: bring this into the Rust/WASM layer?
      */
     extrude(length: number, direction: PointLike = [0, 0, 1]): Mesh | null
     {
@@ -2230,6 +2300,47 @@ export class Curve extends Shape
                     return new VertexJs(pos, nor);
                 });
                 polygons.push(new PolygonJs(verts, {}));
+            }
+        }
+
+        // If closed and planar, add end caps so the result is a watertight solid
+        if (this.isClosed() && this.isPlanar())
+        {
+            const pts = this.tessellate();
+            // Drop the closing duplicate point if present (many closed curves repeat the first vertex)
+            const capPts = (pts.length > 1 && pts[0].distance(pts[pts.length - 1]) < 1e-6)
+                ? pts.slice(0, -1)
+                : pts;
+
+            if (capPts.length >= 3)
+            {
+                const extrusionDir = Vector.from(direction as any).normalize();
+                const curveNormal  = this.normalOrientation();
+
+                // When the curve normal is aligned with the extrusion direction, the original
+                // winding order faces "upward" — so the bottom cap needs reversed winding to
+                // face downward, and the top cap keeps the original winding.
+                // When the curve normal opposes the extrusion direction, the roles swap.
+                const needsReverse = curveNormal !== null
+                    ? curveNormal.dot(extrusionDir) > 0
+                    : true;
+
+                const bottomPts = needsReverse ? [...capPts].reverse() : capPts;
+                const topPts    = needsReverse ? capPts : [...capPts].reverse();
+
+                // Vertex normals: flat-shaded caps use ±extrusionDir
+                const botNorVec = new Vector3Js(-extrusionDir.x, -extrusionDir.y, -extrusionDir.z);
+                const topNorVec = new Vector3Js( extrusionDir.x,  extrusionDir.y,  extrusionDir.z);
+
+                const bottomVerts = bottomPts.map(p =>
+                    new VertexJs(new Point3Js(p.x, p.y, p.z), botNorVec)
+                );
+                const topVerts = topPts.map(p =>
+                    new VertexJs(new Point3Js(p.x + d.x, p.y + d.y, p.z + d.z), topNorVec)
+                );
+
+                polygons.push(new PolygonJs(bottomVerts, {}));
+                polygons.push(new PolygonJs(topVerts,    {}));
             }
         }
 
@@ -2268,6 +2379,11 @@ export class Curve extends Shape
         return poly;
     }
 
+    /** Alias for toPolygon() */
+    toFace(tolerance: number = TESSELATION_TOLERANCE): Polygon | undefined
+    {
+        return this.toPolygon(tolerance);
+    }
 
     toMesh(tolerance: number = TESSELATION_TOLERANCE): Mesh | undefined
     {

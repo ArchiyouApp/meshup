@@ -9,8 +9,8 @@
  * 
  */
 
-import type { CsgrsModule, Axis, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions } from './types';
-import { isAxis, isPointLike } from './types';
+import type { CsgrsModule, Axis, BasePlane, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions } from './types';
+import { isAxis, isBasePlane, isPointLike } from './types';
 
 import { Curve, getCsgrs } from './index';
 import { Shape } from './Shape';
@@ -30,8 +30,8 @@ import { Vertex } from './Vertex';
 import { Selector } from './Selector';
 
 // Settings
-import { TOLERANCE, SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT, 
-    SHAPES_CYLINDER_SEGMENTS_RADIAL,EDGE_PROJECTION_DEFAULTS } from './constants';
+import { TOLERANCE, SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT,
+    SHAPES_CYLINDER_SEGMENTS_RADIAL,EDGE_PROJECTION_DEFAULTS, BASE_PLANE_NAME_TO_PLANE } from './constants';
 
     
 
@@ -418,6 +418,50 @@ export class Mesh extends Shape
     obbox(): OBbox
     {
         return OBbox.fromMesh(this);
+    }
+
+    /** Whether this Mesh is essentially a cuboid (box / rectangular plate).
+     *
+     *  Builds the PCA-based OBB and checks every unique vertex against the box
+     *  surface in OBB-local coords: each vertex must lie within ±halfExtent on
+     *  every non-zero axis AND touch (within `tolerance`) at least one face
+     *  along a non-zero axis. Tessellated boxes (mid-edge / face-centre verts)
+     *  still pass; curved surfaces do not.
+     *
+     *  Pure 1D / point OBBs return false — neither is a box. */
+    isCuboid(tolerance: number = 0.5): boolean
+    {
+        const obb = this.obbox();
+        if (obb.is1D()) return false;
+        const halfExtents = obb.halfExtents();
+        const axes        = obb.axes();
+        const c           = obb.center();
+        const activeAxis: Array<0|1|2> = [0,1,2].filter(i => halfExtents[i] > tolerance) as Array<0|1|2>;
+        if (activeAxis.length < 2) return false;
+
+        // Use unique-rounded vertices to avoid wasting checks on duplicates.
+        const unique = new Map<string, Point>();
+        this.vertices().forEach(v =>
+        {
+            const r = new Point(v).round(tolerance);
+            unique.set(`${r.x},${r.y},${r.z}`, new Point(v));
+        });
+        if (unique.size === 0) return false;
+
+        for (const v of unique.values())
+        {
+            const dx = v.x - c.x, dy = v.y - c.y, dz = v.z - c.z;
+            let onAFace = false;
+            for (const i of activeAxis)
+            {
+                const a = axes[i];
+                const proj = dx * a.x + dy * a.y + dz * a.z;
+                if (Math.abs(proj) > halfExtents[i] + tolerance) return false; // outside box
+                if (Math.abs(Math.abs(proj) - halfExtents[i]) < tolerance) onAFace = true;
+            }
+            if (!onAFace) return false;
+        }
+        return true;
     }
 
     /** Copy current Mesh into a new one 
@@ -1128,7 +1172,7 @@ export class Mesh extends Shape
             const mesh = this.copy();
             if(mesh)
             {
-                mesh.move(dirVec.copy().scale(i * offsetSize + spacing));
+                mesh.move(dirVec.copy().scale(i * (offsetSize + spacing)));
                 meshes.add(mesh);
             }
         });
@@ -1163,6 +1207,40 @@ export class Mesh extends Shape
                         );
                         meshes.add(mesh);
                     }
+                }
+            }
+        }
+        return meshes;
+    }
+
+    /** Arrange copies of this Mesh in a 3-D array.
+     *  @param sizes   Number of copies along [x, y, z] axes (default [2, 2, 1]).
+     *                 Non-integer values are floored; values < 1 map to 1.
+     *  @param offsets Distance between copy origins along [x, y, z].
+     *                 Defaults to the bbox extent on each axis so copies are placed adjacent.
+     *  @returns ShapeCollection<Mesh> containing all copies (the original sits at [0,0,0]).
+     */
+    array(sizes: PointLike = [2, 2, 1], offsets?: PointLike): ShapeCollection<Mesh>
+    {
+        const s = Point.from(sizes);
+        const nx = Math.max(1, Math.floor(s.x));
+        const ny = Math.max(1, Math.floor(s.y));
+        const nz = Math.max(1, Math.floor(s.z));
+
+        const bb = this.bbox();
+        const defaultOff = new Vector(bb.width(), bb.depth(), bb.height());
+        const off = offsets ? Vector.from(offsets) : defaultOff;
+
+        const meshes = new ShapeCollection<Mesh>();
+        for (let x = 0; x < nx; x++)
+        {
+            for (let y = 0; y < ny; y++)
+            {
+                for (let z = 0; z < nz; z++)
+                {
+                    const mesh = this.copy();
+                    mesh.translate(x * off.x, y * off.y, z * off.z);
+                    meshes.add(mesh);
                 }
             }
         }
@@ -1547,12 +1625,12 @@ export class Mesh extends Shape
         void includeHiddenShapes;
         // from cam position to origin
         const camDirVec = (isPointLike(cam))
-                        ? Point.from(cam).toVector().normalize()// .reverse()
-                        : Vector.from([-1,-1,1]).normalize() // .reverse(); // default direction
+                        ? Point.from(cam).toVector().normalize()
+                        : Vector.from([-1,-1,1]).normalize();
         const planeNormal = camDirVec.copy().reverse();
 
         const iso = this._projectEdges(
-            { 
+            {
                 // NOTE: why is it called viewDirection - you would expect -cam? TODO: check in Rust layer
                 viewDirection: camDirVec.toArray(),
                 planeNormal: planeNormal.toArray(),
@@ -1563,31 +1641,7 @@ export class Mesh extends Shape
 
         if(!hiddenLines){ iso.removeGroup('hidden'); }
 
-        // Isometric projection result is on plane normal: place on XY plane
-
-        // Flatten the 3D projection onto the 2D XY plane (Z = [0,0,1])
-        const flattenedIso = iso.rotateQuaternion(
-                planeNormal.rotationBetween(Vector.from(0, 0, 1)));
-        
-        // Find where the original 3D UP [0,0,1] landed after flattening.
-        // A shortest arc rotation to [0,0,1] geometrically forces the original Z-axis 
-        // to map exactly to the inverted X and Y components of the original normal!
-        const mappedUpVec = planeNormal.copy().reverse().setZ(0);
-        
-        // Fallback: If looking perfectly straight down/up, X and Y are 0.
-        // In that case, we can assume it's already oriented properly.
-        if (mappedUpVec.x * mappedUpVec.x + mappedUpVec.y * mappedUpVec.y < TOLERANCE)
-        {
-            mappedUpVec.setX(0);
-            mappedUpVec.setY(1);
-        }
-
-        // Twist the flattened curves so the 3D Up aligns perfectly with 2D Screen Up [0,1,0]
-        const twistRot = mappedUpVec.rotationBetween(Vector.from(0, 1, 0));
-        
-        return flattenedIso.rotateQuaternion(twistRot)
-                .moveTo(0,0,0); // ensure centered at origin
-        
+        return Mesh._flattenProjectionToScreen(iso, planeNormal);
     }
 
     /** Shorthand alias for {@link isometry}. */
@@ -1645,16 +1699,288 @@ export class Mesh extends Shape
         polylines.forEach(points =>
         {
             curves.add(
-                (points.length === 2) 
-                    ? Curve.Line(points[0], points[1]) 
+                (points.length === 2)
+                    ? Curve.Line(points[0], points[1])
                     : Curve.Polyline(points)
                 )
         });
         return curves;
     }
 
-    // TODO: projectEdgesSection
+    /** Flatten a 3D projection onto the XY plane and orient so world-up maps
+     *  to screen-up [0,1,0]. Shared by isometry(), elevation(), section().
+     *
+     *  `planeNormal` is the projection plane normal in 3D (pointing toward the
+     *  viewer). After this, the result lies on Z=0, centered at the origin.
+     */
+    static _flattenProjectionToScreen<T extends {
+        rotateQuaternion(q: any): T;
+        moveTo(x: number, y: number, z: number): T;
+    }>(projection: T, planeNormal: Vector): T
+    {
+        // Flatten onto XY plane (Z = [0,0,1]) via shortest-arc rotation
+        const flattened = projection.rotateQuaternion(
+            planeNormal.rotationBetween(Vector.from(0, 0, 1)));
 
+        // Where the original 3D Up [0,0,1] landed: the shortest-arc rotation
+        // maps the original Z-axis to (-nx, -ny) in the XY plane.
+        const mappedUpVec = planeNormal.copy().reverse().setZ(0);
+
+        // Fallback: looking straight down/up — XY components are 0, already oriented.
+        if (mappedUpVec.x * mappedUpVec.x + mappedUpVec.y * mappedUpVec.y < TOLERANCE)
+        {
+            mappedUpVec.setX(0);
+            mappedUpVec.setY(1);
+        }
+
+        // Twist so mapped-up aligns with screen-up [0,1,0]
+        const twistRot = mappedUpVec.rotationBetween(Vector.from(0, 1, 0));
+        return flattened.rotateQuaternion(twistRot).moveTo(0, 0, 0);
+    }
+
+    /** Resolve a BasePlane name or PointLike direction into a normalized
+     *  camera-side direction vector (pointing from origin toward viewer).
+     *  For BasePlane, returns the plane's outward normal.
+     */
+    static _resolveViewDirection(from: PointLike | BasePlane): Vector
+    {
+        if (isBasePlane(from))
+        {
+            const n = BASE_PLANE_NAME_TO_PLANE[from].normal;
+            return Vector.from(n[0], n[1], n[2]).normalize();
+        }
+        return Point.from(from as PointLike).toVector().normalize();
+    }
+
+    /** Orthographic elevation projection with hidden-line removal.
+     *
+     *  Renders the mesh as seen from `from`, projected onto the plane through
+     *  the origin perpendicular to `from`. Same pipeline as {@link isometry}
+     *  but with a domain-friendly direction argument (BasePlane name or Vector).
+     *
+     *  @param from  Camera-side direction. Either a `BasePlane` name
+     *               ('front', 'back', 'left', 'right', 'top', 'bottom',
+     *               'xy', 'xz', 'yz') or a `PointLike` direction.
+     *  @param hiddenLines Keep hidden projected edges (default false).
+     *  @param samples HLR ray samples per edge (default 16).
+     *  @param featureAngle Min crease angle in degrees to keep an edge (default 10).
+     *  @returns ShapeCollection with groups 'visible' (and 'hidden' if requested).
+     */
+    elevation(
+        from: PointLike | BasePlane = 'front',
+        hiddenLines: boolean = false,
+        samples: number = 16,
+        featureAngle: number = 10,
+    ): ShapeCollection<Shape>
+    {
+        const camDirVec = Mesh._resolveViewDirection(from);
+        const planeNormal = camDirVec.copy().reverse();
+
+        const elev = this._projectEdges(
+            {
+                viewDirection: camDirVec.toArray(),
+                planeNormal:   planeNormal.toArray(),
+                planeOrigin:   [0, 0, 0],
+                featureAngle:  featureAngle,
+                samples:       samples,
+            } as ProjectEdgeOptions);
+
+        if (!hiddenLines) elev.removeGroup('hidden');
+
+        return Mesh._flattenProjectionToScreen(elev, planeNormal);
+    }
+
+    /** Architectural section: cut the mesh with a plane and project the
+     *  geometry beyond the cut onto that same plane with HLR.
+     *
+     *  The viewer looks along `-normal` (so for the default normal=[0,0,1]
+     *  the camera is above, looking down — the standard floor-plan setup).
+     *
+     *  @param pivot Any point on the section plane.
+     *  @param normal Section plane normal (BasePlane name or PointLike).
+     *                Default `[0,0,1]` (horizontal cut).
+     *  @param hiddenLines Keep hidden projected edges (default false).
+     *  @param samples HLR ray samples per edge (default 16).
+     *  @param featureAngle Min crease angle in degrees (default 10).
+     *  @returns ShapeCollection with groups 'cut', 'visible' (and 'hidden' if requested).
+     *
+     *  @remarks The underlying csgrs `slice()` drops Z when building the cut
+     *           sketch; this works correctly for cuts whose normal has a
+     *           non-trivial Z component. Vertical sections (normal in XY
+     *           plane) currently produce a degenerate cut profile.
+     */
+    section(
+        pivot: PointLike,
+        normal: PointLike | BasePlane = [0, 0, 1],
+        hiddenLines: boolean = false,
+        samples: number = 16,
+        featureAngle: number = 10,
+    ): ShapeCollection<Shape>
+    {
+        const sectionNormal = Mesh._resolveViewDirection(normal);
+        const pivotPoint    = Point.from(pivot);
+
+        const result = this._projectEdgesSection(
+            { pivot: pivotPoint, normal: sectionNormal, featureAngle, samples });
+
+        if (!hiddenLines) result.removeGroup('hidden');
+
+        // Projection plane faces the viewer (= -sectionNormal). Flatten using
+        // that as planeNormal so the result lands on XY screen-oriented.
+        const planeNormal = sectionNormal.copy().reverse();
+        return Mesh._flattenProjectionToScreen(result, planeNormal);
+    }
+
+    /** Slice + project edges through a section plane.
+     *
+     *  Calls into MeshJs.projectEdgesSection() and returns a ShapeCollection
+     *  with three groups: 'cut' (the cross-section polylines), 'visible' and
+     *  'hidden' (edges of the mesh beyond the cut, projected onto the section
+     *  plane with HLR). Output is in world 3D — caller is responsible for
+     *  flattening to a 2D frame if needed.
+     */
+    _projectEdgesSection(
+        options: {
+            pivot: Point,
+            normal: Vector,
+            featureAngle?: number,
+            samples?: number,
+        },
+        occluders: ShapeCollection<Mesh> = new ShapeCollection<Mesh>(),
+    ): ShapeCollection<Shape>
+    {
+        const { pivot, normal } = options;
+        const fa = options.featureAngle ?? EDGE_PROJECTION_DEFAULTS.featureAngle;
+        const ns = options.samples ?? EDGE_PROJECTION_DEFAULTS.samples;
+
+        // Section plane: normal . X = section_offset
+        const sectionOffset = normal.x * pivot.x + normal.y * pivot.y + normal.z * pivot.z;
+
+        // Camera sits on the +normal side, looking along -normal (e.g. floor
+        // plan: above, looking down). The WASM `view_normal` is the direction
+        // *toward the viewer* (matches Mesh.isometry()'s convention where
+        // viewDirection = cam-position direction). The projection-plane
+        // normal faces away from the viewer, into the scene (= -normal).
+        const view   = normal.copy();
+        const planeN = normal.copy().reverse();
+
+        const occJs = occluders.map(m => m.inner()).filter((m): m is MeshJs => m != null);
+
+        const inner = this.inner();
+        if (!inner)
+        {
+            console.error('Mesh::_projectEdgesSection(): mesh is empty');
+            return new ShapeCollection<Shape>();
+        }
+
+        // projectEdgesSection is feature-gated as "sketch" in csgrs; the
+        // optional-chaining call lets us fail soft if the WASM build was
+        // produced without that feature.
+        const r = (inner as any).projectEdgesSection?.(
+            normal.x, normal.y, normal.z, sectionOffset,
+            view.x, view.y, view.z,
+            pivot.x, pivot.y, pivot.z,
+            planeN.x, planeN.y, planeN.z,
+            fa, ns, occJs,
+        );
+        if (!r)
+        {
+            console.error(`Mesh::_projectEdgesSection(): projectEdgesSection unavailable or failed.`);
+            return new ShapeCollection<Shape>();
+        }
+
+        const result = new ShapeCollection<Shape>();
+        result.addGroup('hidden',  this._projectedPolylinesToShapeCollection(r.hiddenPolylines()));
+        result.addGroup('visible', this._projectedPolylinesToShapeCollection(r.visiblePolylines()));
+
+        // Cut sketch: parse debugGeometry() rings and lift to 3D using the
+        // section plane equation. (toArrays() returns triangulated geometry;
+        // toMultiPolygon() drops open chains.)
+        const cut = r.cutSketch?.();
+        if (cut)
+        {
+            const debug: string = cut.debugGeometry?.() ?? '';
+            const rings = Mesh._parseSketchDebugRings(debug);
+            const cutCurves = new ShapeCollection<Shape>();
+            for (const ring of rings)
+            {
+                const pts3 = Mesh._liftPointsToSectionPlane(ring.points, normal, sectionOffset);
+                if (ring.closed && pts3.length >= 2)
+                {
+                    // Ensure ring is explicitly closed
+                    const [fx, fy, fz] = pts3[0];
+                    const [lx, ly, lz] = pts3[pts3.length - 1];
+                    if (fx !== lx || fy !== ly || fz !== lz) pts3.push([fx, fy, fz]);
+                }
+                cutCurves.add(
+                    (pts3.length === 2)
+                        ? Curve.Line(pts3[0], pts3[1])
+                        : Curve.Polyline(pts3),
+                );
+            }
+            if (cutCurves.length) result.addGroup('cut', cutCurves);
+            cut.free?.();
+        }
+
+        r.free?.();
+        return result;
+    }
+
+    /** Parse SketchJs.debugGeometry() output into a list of rings. Each ring
+     *  is `{ points, closed }` where closed=true for Polygon exteriors/holes
+     *  and closed=false for LineStrings/Lines. Coordinates are at the format's
+     *  4-decimal precision (~0.0001 unit).
+     */
+    static _parseSketchDebugRings(debug: string): Array<{ points: Array<[number, number]>, closed: boolean }>
+    {
+        const rings: Array<{ points: Array<[number, number]>, closed: boolean }> = [];
+        const pointRe = /\[(-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?),(-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\]/g;
+
+        for (const rawLine of debug.split('\n'))
+        {
+            const line = rawLine.trim();
+            const isExterior   = /exterior\s*\(\d+\s+pts\)/.test(line);
+            const isHole       = /hole\[\d+\]\s*\(\d+\s+pts\)/.test(line);
+            const isLineString = /^Geometry\[\d+\]\s+LineString\s*\(\d+\s+pts\)/.test(line);
+            const isLine       = /^Geometry\[\d+\]\s+Line\s/.test(line);
+
+            if (!isExterior && !isHole && !isLineString && !isLine) continue;
+
+            const points: Array<[number, number]> = [];
+            const re = new RegExp(pointRe.source, 'g');
+            let m: RegExpExecArray | null;
+            while ((m = re.exec(line)) !== null)
+            {
+                points.push([parseFloat(m[1]), parseFloat(m[2])]);
+            }
+            if (points.length < 2) continue;
+
+            rings.push({ points, closed: isExterior || isHole });
+        }
+        return rings;
+    }
+
+    /** Lift 2D cut-sketch points (which come back in world XY with Z dropped)
+     *  back onto the section plane using `n · X = sectionOffset`.
+     *  Falls back to Z=0 when the plane is near-vertical (|n.z| < TOLERANCE);
+     *  in that case the cut profile is degenerate (see {@link section} note).
+     */
+    static _liftPointsToSectionPlane(
+        points: Array<[number, number]>,
+        normal: Vector,
+        sectionOffset: number,
+    ): Array<[number, number, number]>
+    {
+        if (Math.abs(normal.z) < TOLERANCE)
+        {
+            return points.map(([x, y]) => [x, y, 0] as [number, number, number]);
+        }
+        return points.map(([x, y]) =>
+        {
+            const z = (sectionOffset - normal.x * x - normal.y * y) / normal.z;
+            return [x, y, z] as [number, number, number];
+        });
+    }
 
 
 }

@@ -15,6 +15,9 @@
  *  The class is generic over S (the shape type it holds).
  *  The default S = Shape (Vertex| Curve| Polygon | Mesh ) preserves existing behaviour.
  *  SmartSceneNode uses S = SmartShape.
+ * 
+ *  NOTE: Scene management with SceneNode is optional in Meshup and not integrated into Shapes 
+ * 
  */
 
 
