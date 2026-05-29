@@ -44,12 +44,17 @@ describe('Example: Isometric projection with hidden lines', async () =>
         expect(boxIso.length).toBe(12);
         expect(boxIso.group('hidden')?.length).toBe(3);
         expect(boxIso.group('visible')?.length).toBe(9);
+        // Isometric silhouette of a cube is the hexagonal outline → 6 edges.
+        // Silhouette is a tagged subset of 'visible'; it must NOT inflate
+        // the total shape count.
+        expect(boxIso.group('silhouette')?.length).toBe(6);
 
         boxIso.group('hidden')?.color('blue').dashed();
         boxIso.group('visible')?.color('red');
+        boxIso.group('silhouette')?.color('green');
 
         const col = new ShapeCollection(box.move(-200), boxIso!)
-        
+
         await save(OUTPUT_DIR + 'test.isometry.box.gltf', await col.toGLTF());
         await save(OUTPUT_DIR + 'test.isometry.box.svg', boxIso.toSVG());
     });

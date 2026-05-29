@@ -1604,15 +1604,22 @@ export class Mesh extends Shape
 
 
     /** Isometric projection with optional hidden lines
-     *  
-     * @param cam normalizaed 3D position of the camera (default: [-1,-1,1], a common isometric view direction) 
+     *
+     * @param cam normalizaed 3D position of the camera (default: [-1,-1,1], a common isometric view direction)
      * @param hiddenLines Whether to keep hidden projected edges in the result (default: false)
      * @param includeHiddenShapes Single meshes have no hidden-shape filtering; accepted for API consistency and ignored.
      * @param samples Number of samples of edges to determine visibility (default: 16)
-     * @param featureAngle Optional angle threshold to treat edges as "features" and always show them
-     * 
-     * @return CurveColection with groups 'visible' and 'hidden' for the respective edges
-     *   use isometryResult.group('visible') and isometryResult.group('hidden') to access each separately
+     * @param featureAngle Minimum dihedral angle (degrees) at which an edge is treated
+     *   as a feature crease and kept. Range `[0, 180]`, monotonic — higher values drop
+     *   more edges. Default 10° keeps almost every triangle edge on smooth tessellated
+     *   surfaces (spheres, cylinders), which makes the HLR ray-cast pass the dominant
+     *   cost; raise it for large curved meshes.
+     *
+     * @return ShapeCollection with groups:
+     *   - `'visible'`: unoccluded projected edges
+     *   - `'hidden'`: occluded edges (only present when `hiddenLines=true`)
+     *   - `'silhouette'`: subset of `'visible'` forming the outer contour
+     *     (silhouette + open-mesh boundary edges) as classified by the Rust HLR
      */
     isometry(
         cam:PointLike = [-1,-1,1],
@@ -1660,7 +1667,10 @@ export class Mesh extends Shape
      * Project visible and hidden edges of this mesh onto a plane.
      *
      * @param options  View direction, projection plane, optional feature angle and sample count.
-     * @param occluders Other meshes that may occlude this mesh's edges.
+     * @param occluders Other meshes that may occlude this mesh's edges. Their
+     *   inner MeshJs handles are **cloned** before being passed to WASM, so the
+     *   original `Mesh` wrappers remain usable after this call (the cloned
+     *   handles are consumed by the WASM bridge — `Vec<MeshJs>` takes ownership).
      * @returns ShapeCollection<Curve> with two groups: 'visible' and 'hidden', containing the respective projected edges as Curves.
      */
     _projectEdges(options: ProjectEdgeOptions, occluders: ShapeCollection<Mesh> = new ShapeCollection<Mesh>()): ShapeCollection<Shape>
@@ -1687,7 +1697,14 @@ export class Mesh extends Shape
             )
             : EDGE_PROJECTION_DEFAULTS.samples;
 
-        const occJs = occluders.map(m => m.inner()).filter((m): m is MeshJs => m != null);
+        // WASM `projectEdges` takes `Vec<MeshJs>` (by value), which consumes
+        // each handle as wasm-bindgen reconstructs Rust values from the JS
+        // pointers. Cloning the inner MeshJs before passing keeps the
+        // caller's Mesh wrappers alive for further use across multiple
+        // projection calls (e.g. front+side+top of the same scene).
+        const occJs = occluders
+            .map(m => m.inner()?.clone?.())
+            .filter((m): m is MeshJs => m != null);
         const r = this.inner()?.projectEdges(vx, vy, vz || 0, ox, oy, oz || 0, nx, ny, nz || 0, fa, ns, occJs);
         if (!r)
         {
@@ -1698,11 +1715,37 @@ export class Mesh extends Shape
         const result = new ShapeCollection<Shape>();
         // First add hidden edges, so they are rendered below visible ones by default
         result.addGroup('hidden',  this._projectedPolylinesToShapeCollection(r.hiddenPolylines()));
-        result.addGroup('visible', this._projectedPolylinesToShapeCollection(r.visiblePolylines()));
-        
+        const visibleCurves = this._projectedPolylinesToShapeCollection(r.visiblePolylines());
+        result.addGroup('visible', visibleCurves);
+        // Tag the silhouette subset (outer contour). Rust returns indices into
+        // the visible polylines so we can register the same Curve instances
+        // under a second group label without inflating the shape count.
+        Mesh._tagSilhouetteFromIndices(result, visibleCurves, r.silhouetteIndices?.());
 
         r.free?.();
         return result;
+    }
+
+    /** Register a subset of the just-added visible Curves under the
+     *  'silhouette' group, where the subset is given as indices into the
+     *  visible polyline array returned by the Rust HLR. No-op when the
+     *  WASM build doesn't expose `silhouetteIndices()` or it returns empty.
+     */
+    static _tagSilhouetteFromIndices(
+        target: ShapeCollection<Shape>,
+        visibleCurves: ShapeCollection<Shape>,
+        indices: Uint32Array | number[] | undefined,
+    ): void
+    {
+        if (!indices || indices.length === 0) return;
+        const visibleArr = visibleCurves.toArray() as Shape[];
+        const silhouette = new ShapeCollection<Shape>();
+        for (let i = 0; i < indices.length; i++)
+        {
+            const idx = indices[i];
+            if (idx < visibleArr.length) silhouette.add(visibleArr[idx]);
+        }
+        if (silhouette.length) target.tagGroup('silhouette', silhouette);
     }
 
     _projectedPolylinesToShapeCollection(polylines: Array<[number, number, number][]>): ShapeCollection<Shape>
@@ -1776,7 +1819,10 @@ export class Mesh extends Shape
      *  @param hiddenLines Keep hidden projected edges (default false).
      *  @param samples HLR ray samples per edge (default 16).
      *  @param featureAngle Min crease angle in degrees to keep an edge (default 10).
-     *  @returns ShapeCollection with groups 'visible' (and 'hidden' if requested).
+     *    Range `[0, 180]`; monotonic. Increase on smooth tessellated geometry to
+     *    drop near-flat triangle edges before HLR sampling.
+     *  @returns ShapeCollection with groups 'visible', 'silhouette' (outer
+     *    contour, subset of 'visible'), and 'hidden' (only if requested).
      */
     elevation(
         from: PointLike | BasePlane = 'front',
@@ -1813,8 +1859,10 @@ export class Mesh extends Shape
      *                Default `[0,0,1]` (horizontal cut).
      *  @param hiddenLines Keep hidden projected edges (default false).
      *  @param samples HLR ray samples per edge (default 16).
-     *  @param featureAngle Min crease angle in degrees (default 10).
-     *  @returns ShapeCollection with groups 'cut', 'visible' (and 'hidden' if requested).
+     *  @param featureAngle Min crease angle in degrees (default 10). Range `[0, 180]`,
+     *    monotonic; raise to drop near-flat tessellation edges on smooth surfaces.
+     *  @returns ShapeCollection with groups 'cut', 'visible', 'silhouette'
+     *    (outer contour, subset of 'visible'), and 'hidden' (if requested).
      *
      *  @remarks The underlying csgrs `slice()` drops Z when building the cut
      *           sketch; this works correctly for cuts whose normal has a
@@ -1876,7 +1924,12 @@ export class Mesh extends Shape
         const view   = normal.copy();
         const planeN = normal.copy().reverse();
 
-        const occJs = occluders.map(m => m.inner()).filter((m): m is MeshJs => m != null);
+        // Same ownership note as in _projectEdges: clone occluders before
+        // passing so reusing the same MeshJs across multiple section/iso
+        // calls stays safe.
+        const occJs = occluders
+            .map(m => m.inner()?.clone?.())
+            .filter((m): m is MeshJs => m != null);
 
         const inner = this.inner();
         if (!inner)
@@ -1903,16 +1956,20 @@ export class Mesh extends Shape
 
         const result = new ShapeCollection<Shape>();
         result.addGroup('hidden',  this._projectedPolylinesToShapeCollection(r.hiddenPolylines()));
-        result.addGroup('visible', this._projectedPolylinesToShapeCollection(r.visiblePolylines()));
+        const visibleCurves = this._projectedPolylinesToShapeCollection(r.visiblePolylines());
+        result.addGroup('visible', visibleCurves);
+        Mesh._tagSilhouetteFromIndices(result, visibleCurves, r.silhouetteIndices?.());
 
-        // Cut sketch: parse debugGeometry() rings and lift to 3D using the
-        // section plane equation. (toArrays() returns triangulated geometry;
-        // toMultiPolygon() drops open chains.)
+        // Cut sketch: pull rings as typed coordinate buffers and lift back to
+        // 3D using the section plane equation. `rings()` is the strongly-typed
+        // path (Float64Array per ring + closed flag) and is preferred; older
+        // WASM builds without it fall back to parsing the human-readable
+        // `debugGeometry()` text. (toArrays() returns triangulated geometry
+        // and toMultiPolygon() drops open chains, so neither suffices here.)
         const cut = r.cutSketch?.();
         if (cut)
         {
-            const debug: string = cut.debugGeometry?.() ?? '';
-            const rings = Mesh._parseSketchDebugRings(debug);
+            const rings = Mesh._extractSketchRings(cut);
             const cutCurves = new ShapeCollection<Shape>();
             for (const ring of rings)
             {
@@ -1938,10 +1995,44 @@ export class Mesh extends Shape
         return result;
     }
 
+    /** Extract `{ points, closed }` rings from a `SketchJs`.
+     *  Prefers the typed `rings()` accessor (Float64Array buffers, exact
+     *  precision). Falls back to parsing `debugGeometry()` for older WASM
+     *  builds that predate `rings()` — in that fallback path coordinates are
+     *  rounded to 4 decimals (~0.0001 unit), so prefer keeping the WASM bundle
+     *  up to date.
+     */
+    static _extractSketchRings(sketch: any): Array<{ points: Array<[number, number]>, closed: boolean }>
+    {
+        const typedFn = sketch?.rings;
+        if (typeof typedFn === 'function')
+        {
+            const raw = typedFn.call(sketch) as Array<{ points: Float64Array, closed: boolean }>;
+            const out: Array<{ points: Array<[number, number]>, closed: boolean }> = [];
+            for (const ring of raw ?? [])
+            {
+                const flat = ring.points;
+                if (!flat || flat.length < 4) continue; // need at least 2 points
+                const pts: Array<[number, number]> = new Array(flat.length / 2);
+                for (let i = 0, j = 0; i < flat.length; i += 2, j++) // perf: keep as loop
+                {
+                    pts[j] = [flat[i], flat[i + 1]];
+                }
+                out.push({ points: pts, closed: !!ring.closed });
+            }
+            return out;
+        }
+        const debug: string = sketch?.debugGeometry?.() ?? '';
+        return Mesh._parseSketchDebugRings(debug);
+    }
+
     /** Parse SketchJs.debugGeometry() output into a list of rings. Each ring
      *  is `{ points, closed }` where closed=true for Polygon exteriors/holes
      *  and closed=false for LineStrings/Lines. Coordinates are at the format's
      *  4-decimal precision (~0.0001 unit).
+     *
+     *  Retained as a compatibility fallback for WASM builds that predate the
+     *  typed `SketchJs.rings()` accessor used by {@link _extractSketchRings}.
      */
     static _parseSketchDebugRings(debug: string): Array<{ points: Array<[number, number]>, closed: boolean }>
     {
@@ -1974,8 +2065,11 @@ export class Mesh extends Shape
 
     /** Lift 2D cut-sketch points (which come back in world XY with Z dropped)
      *  back onto the section plane using `n · X = sectionOffset`.
-     *  Falls back to Z=0 when the plane is near-vertical (|n.z| < TOLERANCE);
-     *  in that case the cut profile is degenerate (see {@link section} note).
+     *
+     *  When the plane is near-vertical (`|n.z| < TOLERANCE`) the section
+     *  profile is unrecoverable from the X/Y projection csgrs returns, so
+     *  this falls back to Z=0 and emits a one-shot console warning per
+     *  process. See {@link section} for the upstream limitation.
      */
     static _liftPointsToSectionPlane(
         points: Array<[number, number]>,
@@ -1985,6 +2079,7 @@ export class Mesh extends Shape
     {
         if (Math.abs(normal.z) < TOLERANCE)
         {
+            Mesh._warnVerticalSectionOnce();
             return points.map(([x, y]) => [x, y, 0] as [number, number, number]);
         }
         return points.map(([x, y]) =>
@@ -1992,6 +2087,19 @@ export class Mesh extends Shape
             const z = (sectionOffset - normal.x * x - normal.y * y) / normal.z;
             return [x, y, z] as [number, number, number];
         });
+    }
+
+    private static _verticalSectionWarned = false;
+    private static _warnVerticalSectionOnce(): void
+    {
+        if (Mesh._verticalSectionWarned) return;
+        Mesh._verticalSectionWarned = true;
+        console.warn(
+            'Mesh.section(): the cut plane is near-vertical (|normal.z| < TOLERANCE). ' +
+            'csgrs `slice()` drops Z when building the cut sketch, so the cut profile ' +
+            'is collapsed to Z=0 and is geometrically degenerate. ' +
+            'Visible/hidden projected edges remain correct.',
+        );
     }
 
 

@@ -152,6 +152,21 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return this;
     }
 
+    /** Tag shapes that are already in this collection as members of a named
+     *  group, without adding duplicate references to the parent.
+     *
+     *  Use this for cross-cutting classifications (e.g. silhouette ⊂ visible)
+     *  where the group is a logical subset of shapes already tracked elsewhere.
+     *  The caller is responsible for ensuring the shapes are already in `this`.
+     */
+    tagGroup(groupName: string, shapes: S | ShapeCollection<S>): this
+    {
+        if (!this._groups.has(groupName)) this._groups.set(groupName, new ShapeCollection<S>());
+        this._groups.get(groupName)?.add(shapes);
+        this._setFakeGroupKeys();
+        return this;
+    }
+
     removeGroup(groupName: string): void
     {
         const groupedShapes = this._groups.get(groupName);
@@ -519,8 +534,12 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     {
         const hidden = projected.group('hidden');
         const visible = projected.group('visible');
+        const silhouette = projected.group('silhouette');
         if (hidden?.length) target.addGroup('hidden', hidden);
         if (visible?.length) target.addGroup('visible', visible);
+        // silhouette is a subset of visible — use tagGroup so the same Curve
+        // objects aren't pushed into _shapes a second time (addGroup would duplicate them)
+        if (silhouette?.length) target.tagGroup('silhouette', silhouette);
     }
 
     private static _projectMultiMeshIsometry(

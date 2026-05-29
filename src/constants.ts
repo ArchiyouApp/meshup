@@ -15,6 +15,9 @@ export const SHAPES_CYLINDER_SEGMENTS_RADIAL = 32;
 
 export const MAIN_AXIS = ['x', 'y', 'z'];
 
+/** Authoritative coordinate system of the kernel (csgrs/WASM) and all meshup geometry. */
+export const KERNEL_COORDSYSTEM = { up: 'z', forward: 'y', right: 'x' } as const;
+
 export const BASE_PLANE_NAME_TO_PLANE = {
     'xy': { normal: [0,0,1], xDir: [1,0,0], yDir: [0,1,0] },
     'yz': { normal: [1,0,0], xDir: [0,1,0], yDir: [0,0,1] },

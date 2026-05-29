@@ -9,17 +9,17 @@ export function deg(radians: number): number
 }
 
 /**
- * Remap a 3-D point/vector from the source coordinate space (where `up` is the
- * up-axis) to GLTF's Y-up convention.
+ * Remap a 3-D point/vector from the kernel's native Z-up space to the
+ * requested output coordinate system (`up` = desired up-axis).
  *
- *   up='z'  (default) : [x,  z, -y]
- *   up='x'            : [y,  x,  z]
- *   up='y'            : [x,  z,  y]  (already Y-up, just reorder)
+ *   up='z'  (default) : identity — kernel Z-up output, no conversion
+ *   up='y'            : [x,  z, -y]  — Z-up → standard GLTF Y-up
+ *   up='x'            : [y,  x,  z]  — Z-up → X-up
  */
 export function remapAxis(x: number, y: number, z: number, up: 'x' | 'y' | 'z' = 'z'): [number, number, number] {
-    if (up === 'z') return [x,  z, -y];
+    if (up === 'y') return [x,  z, -y];
     if (up === 'x') return [y,  x,  z];
-    return [x, z,  y];
+    return [x, y,  z];
 }
 
 //// UUID ////

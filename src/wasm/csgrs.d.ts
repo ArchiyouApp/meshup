@@ -193,6 +193,12 @@ export class EdgeProjectionResultJs {
    * Shape: `Array< Array<[x: number, y: number, z: number]> >`
    */
   visiblePolylines(): any;
+  /**
+   * Returns indices into `visiblePolylines()` whose source edge is a
+   * silhouette or open-mesh boundary — i.e. the outer contour of the
+   * projection.
+   */
+  silhouetteIndices(): Uint32Array;
 }
 
 export class Matrix4Js {
@@ -291,7 +297,11 @@ export class MeshJs {
    * - `feature_angle_deg` – crease angle threshold in degrees (e.g. `15.0`).
    * - `n_samples` – HLR ray samples per edge segment (e.g. `8`).
    * - `occluders` – additional meshes that can occlude edges of `self`;
-   *   `self` is always included as an occluder.
+   *   `self` is always included as an occluder. **Ownership:** taken by
+   *   value (`Vec<MeshJs>`), so wasm-bindgen consumes the supplied JS
+   *   `MeshJs` handles. Callers that want to reuse an occluder across
+   *   multiple projection calls must `clone()` it first; the TS wrapper
+   *   does this automatically.
    */
   projectEdges(vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, feature_angle_deg: number, n_samples: number, occluders: MeshJs[]): EdgeProjectionResultJs;
   /**
@@ -831,6 +841,7 @@ export class SectionElevationResultJs {
   cutSketch(): SketchJs;
   hiddenPolylines(): any;
   visiblePolylines(): any;
+  silhouetteIndices(): Uint32Array;
 }
 
 export class SketchJs {
@@ -881,6 +892,19 @@ export class SketchJs {
   static star(num_points: number, outer_radius: number, inner_radius: number, metadata: any): SketchJs;
   static arrow(shaft_length: number, shaft_width: number, head_length: number, head_width: number, metadata: any): SketchJs;
   static heart(width: number, height: number, segments: number, metadata: any): SketchJs;
+  /**
+   * Typed accessor for ring geometry, intended for callers that need raw
+   * coordinates (e.g. lifting a 2-D cut profile back into 3-D).
+   *
+   * Returns `Array<{ points: Float64Array, closed: boolean }>` where each
+   * `points` array is a flat `[x0, y0, x1, y1, ...]` buffer.  Polygon
+   * exteriors and holes are emitted as separate `closed: true` rings;
+   * LineStrings and Lines come back as `closed: false`.
+   *
+   * Prefer this over `debugGeometry()` for programmatic consumers — the
+   * debug string is a human-readable summary and its format is not stable.
+   */
+  rings(): any;
   scale(sx: number, sy: number, sz: number): SketchJs;
   sweep(path: Point3Js[]): MeshJs;
   union(other: SketchJs): SketchJs;
@@ -1025,6 +1049,7 @@ export interface InitOutput {
   readonly compoundcurve3djs_translate: (a: number, b: number) => number;
   readonly compoundcurve3djs_trimRange: (a: number, b: number, c: number) => [number, number, number, number];
   readonly edgeprojectionresultjs_hiddenPolylines: (a: number) => any;
+  readonly edgeprojectionresultjs_silhouetteIndices: (a: number) => [number, number];
   readonly edgeprojectionresultjs_visiblePolylines: (a: number) => any;
   readonly matrix4js_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
   readonly matrix4js_toArray: (a: number) => [number, number];
@@ -1209,6 +1234,7 @@ export interface InitOutput {
   readonly sdfsamplejs_is_inside: (a: number) => number;
   readonly sectionelevationresultjs_cutSketch: (a: number) => number;
   readonly sectionelevationresultjs_hiddenPolylines: (a: number) => any;
+  readonly sectionelevationresultjs_silhouetteIndices: (a: number) => [number, number];
   readonly sectionelevationresultjs_visiblePolylines: (a: number) => any;
   readonly sketchjs_airfoilNACA4: (a: number, b: number, c: number, d: number, e: number, f: any) => number;
   readonly sketchjs_arrow: (a: number, b: number, c: number, d: number, e: any) => number;
@@ -1251,6 +1277,7 @@ export interface InitOutput {
   readonly sketchjs_revolve: (a: number, b: number, c: number) => [number, number, number];
   readonly sketchjs_rightTriangle: (a: number, b: number, c: any) => number;
   readonly sketchjs_ring: (a: number, b: number, c: number, d: any) => number;
+  readonly sketchjs_rings: (a: number) => any;
   readonly sketchjs_rotate: (a: number, b: number, c: number, d: number) => number;
   readonly sketchjs_roundedRectangle: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly sketchjs_scale: (a: number, b: number, c: number, d: number) => number;

@@ -914,6 +914,17 @@ export class EdgeProjectionResultJs {
         const ret = wasm.edgeprojectionresultjs_visiblePolylines(this.__wbg_ptr);
         return ret;
     }
+    /**
+     * Indices into visiblePolylines() whose source edge is a silhouette /
+     * open-mesh boundary (the outer contour).
+     * @returns {Uint32Array}
+     */
+    silhouetteIndices() {
+        const ret = wasm.edgeprojectionresultjs_silhouetteIndices(this.__wbg_ptr);
+        var v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
 }
 if (Symbol.dispose) EdgeProjectionResultJs.prototype[Symbol.dispose] = EdgeProjectionResultJs.prototype.free;
 
@@ -3497,6 +3508,15 @@ export class SectionElevationResultJs {
     visiblePolylines() {
         const ret = wasm.sectionelevationresultjs_visiblePolylines(this.__wbg_ptr);
         return ret;
+    }
+    /**
+     * @returns {Uint32Array}
+     */
+    silhouetteIndices() {
+        const ret = wasm.sectionelevationresultjs_silhouetteIndices(this.__wbg_ptr);
+        var v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
     }
 }
 if (Symbol.dispose) SectionElevationResultJs.prototype[Symbol.dispose] = SectionElevationResultJs.prototype.free;
