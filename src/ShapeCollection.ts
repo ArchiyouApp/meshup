@@ -86,6 +86,14 @@ export class ShapeCollection<S extends CollectableShape = Shape>
                 (this as any)[name] = groupCol;
                 this._fakeGroupKeys.add(name);
             }
+            else
+            {
+                console.warn(
+                    `ShapeCollection: group key "${name}" conflicts with an existing property or method ` +
+                    `and will not be accessible as a shortcut (col.${name}). ` +
+                    `Rename the group to avoid the collision.`
+                );
+            }
         });
     }
 
@@ -342,6 +350,17 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     moveToY(y: number): this { const bb = this.bbox(); return bb ? this.translate(0, y - bb.center().y, 0) : this; }
     moveToZ(z: number): this { const bb = this.bbox(); return bb ? this.translate(0, 0, z - bb.center().z) : this; }
 
+    /** Place the collection on a given height based on the collection bbox,
+     *  by default at 0. Used to place a set of shapes on the XY plane as one
+     *  unit rather than floating each child independently.
+     */
+    place(z: number = 0): this
+    {
+        const bb = this.bbox();
+        if (!bb) return this;
+        return this.translate(0, 0, z - bb.min().z);
+    }
+
     rotateX(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'x', origin); }
     rotateY(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'y', origin); }
     rotateZ(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'z', origin); }
@@ -542,79 +561,6 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         if (silhouette?.length) target.tagGroup('silhouette', silhouette);
     }
 
-    private static _projectMultiMeshIsometry(
-        meshes: Mesh[],
-        camDirVec: Vector,
-        planeNormal: Vector,
-        hiddenLines: boolean,
-        samples: number,
-        featureAngle: number,
-    ): ShapeCollection<any>
-    {
-        const options = ShapeCollection._makeProjectionOptions(
-            camDirVec,
-            planeNormal,
-            featureAngle,
-            samples,
-        );
-        const [ex, ey, ez] = camDirVec.copy().scale(1e-4).toArray();
-        const meshBboxes = meshes.map(mesh => mesh.bbox());
-        const anyTouching = meshBboxes.some((a, index) =>
-            meshBboxes.slice(index + 1).some(b => ShapeCollection._bboxesTouch(a, b)));
-
-        const iso = new ShapeCollection<any>();
-        meshes.forEach((mesh, index) =>
-        {
-            const siblings = meshes.filter((_, siblingIndex) => siblingIndex !== index);
-            const myBbox = meshBboxes[index];
-            const touchingSibling = siblings.some(sibling =>
-                ShapeCollection._bboxesTouch(myBbox, meshBboxes[meshes.indexOf(sibling)]));
-
-            let sourceMesh = mesh;
-            if (anyTouching && touchingSibling)
-            {
-                const shiftAmount = (globalThis as any).__ISO_SHIFT__ ?? 1;
-                const shift = camDirVec.copy().scale(shiftAmount).toArray();
-                sourceMesh = (mesh.copy() as Mesh).translate(shift[0], shift[1], shift[2]);
-            }
-
-            let occluders: ShapeCollection<Mesh>;
-            if (anyTouching)
-            {
-                occluders = new ShapeCollection<Mesh>(
-                    ...siblings.map(sibling => sibling.copy() as Mesh),
-                );
-            }
-            else
-            {
-                const occluderMesh = siblings.length > 1
-                    ? new ShapeCollection<Mesh>(...siblings).merge() as Mesh
-                    : siblings[0];
-                occluders = occluderMesh
-                    ? new ShapeCollection<Mesh>((occluderMesh.copy() as Mesh).translate(ex, ey, ez))
-                    : new ShapeCollection<Mesh>();
-            }
-
-            const projected = sourceMesh._projectEdges(options, occluders);
-            ShapeCollection._appendProjectionGroups(iso, projected);
-        });
-
-        ShapeCollection._addCuboidContactPerimeters(
-            iso,
-            meshes,
-            camDirVec,
-            planeNormal,
-            featureAngle,
-        );
-
-        if (!hiddenLines && iso.group('hidden'))
-        {
-            iso.removeGroup('hidden');
-        }
-
-        return Mesh._flattenProjectionToScreen(iso, planeNormal);
-    }
-
     private static _projectMergedProjectionWithContactFaces(
         meshes: Mesh[],
         viewDir: Vector,
@@ -749,7 +695,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         }
 
         const camDirVec = Point.from(cam).toVector().normalize();
-        const planeNormal = camDirVec.copy().reverse();
+        const planeNormal = camDirVec.copy(); // .reverse() removed. Now works. TODO: check why;
 
         // Technique: project the merged solid first, then add touching-face
         // contact edges with a second HLR pass. The older per-mesh method

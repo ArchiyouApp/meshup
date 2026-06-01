@@ -306,25 +306,25 @@ export class Bbox
         });
     }
     
-    /** Returns the back edge of this bbox as a Curve (max-Y side) */
+    /** Returns the back side Polygon (max-Y side) */
     back(): Polygon|undefined
     {
         return this.getPlane('back');    
     }
 
-    /** Returns the left edge of this bbox as a Curve (min-X side) */
+    /** Returns the left polygon of this bbox (min-X side) */
     left(): Polygon|undefined
     {
         return this.getPlane('left');
     }
 
-    /** Returns the right edge of this bbox as a Curve (max-X side) */
+    /** Returns the right polygon of this bbox (max-X side) */
     right(): Polygon|undefined
     {
         return this.getPlane('right');
     }
 
-    /** Returns the front edge of this bbox as a Curve (min-Y side) */
+    /** Returns the top polygon of this bbox (max-Z side) */
     top(): Polygon|undefined
     {
         return this.getPlane('top');

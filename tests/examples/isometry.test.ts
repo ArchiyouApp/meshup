@@ -72,9 +72,9 @@ describe('Example: Isometric projection with hidden lines', async () =>
     it('can do isometric projection of boxes difference', async () =>
     {
         const bigbox = Mesh.Cube(50);
-        const smallbox = Mesh.Cube(20).moveTo(bigbox.bbox().corner('leftfronttop'));
+        const smallbox = Mesh.Cube(20).moveTo(bigbox.bbox().corner('rightfronttop'));
         const diff = bigbox.subtract(smallbox)!;
-        const diffIso = diff.isometry();
+        const diffIso = diff.isometry([-1, -1, 1]);
 
         expect(diffIso).toBeTruthy();
         //expect(diffIso.group('hidden')?.length).toBe(9);

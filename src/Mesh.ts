@@ -1638,7 +1638,6 @@ export class Mesh extends Shape
 
         const iso = this._projectEdges(
             {
-                // NOTE: why is it called viewDirection - you would expect -cam? TODO: check in Rust layer
                 viewDirection: camDirVec.toArray(),
                 planeNormal: planeNormal.toArray(),
                 planeOrigin: [0, 0, 0],
@@ -1788,8 +1787,14 @@ export class Mesh extends Shape
             mappedUpVec.setY(1);
         }
 
-        // Twist so mapped-up aligns with screen-up [0,1,0]
-        const twistRot = mappedUpVec.rotationBetween(Vector.from(0, 1, 0));
+        // Twist so mapped-up aligns with screen-up [0,1,0].
+        // When mappedUpVec is anti-parallel to [0,1,0] (dot ≈ -1), rotationBetween
+        // picks an arbitrary perpendicular axis. Using the Z-axis there would flip
+        // screen-X, so we explicitly use a 180° rotation around X instead.
+        const dotUp = mappedUpVec.dot(Vector.from(0, 1, 0));
+        const twistRot = dotUp < -(1 - TOLERANCE)
+            ? { x: 1, y: 0, z: 0, w: 0 }   // 180° around X — preserves screen-X
+            : mappedUpVec.rotationBetween(Vector.from(0, 1, 0));
         return flattened.rotateQuaternion(twistRot).moveTo(0, 0, 0);
     }
 
