@@ -1,11 +1,3 @@
-import { Point3Js } from './wasm/csgrs.js';
-
-import { Point } from './Point';
-import { Vector } from './Vector';
-import { Mesh } from './Mesh';
-import { Curve } from './Curve';
-import type { PointLike } from './types';
-import { POINT_TOLERANCE, TESSELATION_TOLERANCE } from './constants';
 
 /**
  * PCA-based Oriented Bounding Box (OBB).
@@ -27,7 +19,24 @@ import { POINT_TOLERANCE, TESSELATION_TOLERANCE } from './constants';
  *      axes()[0] = direction of greatest variance (maps to width)
  *      axes()[1] = direction of second variance (maps to depth)
  *      axes()[2] = direction of least variance (maps to height)
+ * 
+ *      Based on common language: 
+ *      - length() as alias for axes()[0] since it's the most commonly used as the longest dimension
+ *      - thickness as alias 
+ * 
+ *      
+ * 
  */
+
+import { Point3Js } from './wasm/csgrs.js';
+
+import { Point } from './Point';
+import { Vector } from './Vector';
+import { Mesh } from './Mesh';
+import { Curve } from './Curve';
+import type { PointLike } from './types';
+import { POINT_TOLERANCE, TESSELATION_TOLERANCE } from './constants';
+
 export class OBbox
 {
     private _center: Point;
@@ -224,6 +233,12 @@ export class OBbox
     width(): number
     {
         return this._halfExtents[0] * 2;
+    }
+
+    /** Length is commonly used as longest side  */
+    length(): number
+    {
+        return this.width();
     }
 
     /** Full size along principal axis[1] (second-variance direction). */

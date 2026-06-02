@@ -117,36 +117,40 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         this._setFakeArrayKeys();
     }
 
-    add(shapes: S | ShapeCollection<any> | Array<any>): this
-    {        
-        if (Shape.isShape(shapes))
+    add(...shapes: Array<S | ShapeCollection<any> | Array<any>>): this
+    {
+        shapes.forEach(shapeArg =>
         {
-            this._shapes.push(shapes as S);
-        }
-        else if (Array.isArray(shapes) || ShapeCollection.isShapeCollection(shapes))
-        {
-            const addShapes: S[] = ShapeCollection.isShapeCollection(shapes)
-                ? shapes.toArray() as unknown as S[]
-                : (shapes as any[])
-                    .filter(s => {
-                        // HACKY: If you want to force any instance to be accepted as a shape, 
-                        // implement isShapeClass() on it to return true, and ShapeCollection will accept it. 
-                        return Shape.isShape(s) || s.isShapeClass?.();
-                    }) as S[];
+            if (Shape.isShape(shapeArg))
+            {
+                this._shapes.push(shapeArg as S);
+            }
+            else if (Array.isArray(shapeArg) || ShapeCollection.isShapeCollection(shapeArg))
+            {
+                const addShapes: S[] = ShapeCollection.isShapeCollection(shapeArg)
+                    ? shapeArg.toArray() as unknown as S[]
+                    : (shapeArg as any[])
+                        .filter(s => {
+                            // HACKY: If you want to force any instance to be accepted as a shape, 
+                            // implement isShapeClass() on it to return true, and ShapeCollection will accept it. 
+                            return Shape.isShape(s) || s.isShapeClass?.();
+                        }) as S[];
 
-            this._shapes.push(...addShapes);
-        }
-        else
-        {
-            console.error(`ShapeCollection::add(): Invalid shape(s). Supply something [<Shape>|<ShapeCollection>|Array<Shape>]. Skipping:`, shapes);
-        }
+                this._shapes.push(...addShapes);
+            }
+            else
+            {
+                console.error(`ShapeCollection::add(): Invalid shape(s). Supply something [<Shape>|<ShapeCollection>|Array<Shape>]. Skipping:`, shapeArg);
+            }
+        });
+
         this._setFakeArrayKeys();
         return this;
     }
 
-    push(shapes: S | ShapeCollection<any>): void
+    push(...shapes: Array<S | ShapeCollection<any> | Array<any>>): void
     {
-        this.add(shapes);
+        this.add(...shapes);
     }
 
     //// GROUPS ////
@@ -324,6 +328,32 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return new Bbox([minX, minY, minZ], [maxX, maxY, maxZ]);
     }
 
+    /**
+     * Returns the shape with the smallest distance to `to`.
+     * For a PointLike, the distance is from each shape's bbox center to `to`.
+     * For a CollectableShape, the bbox center of `to` is used as reference.
+     * Throws if the collection is empty or the reference point cannot be resolved.
+     */
+    nearest(to: PointLike | CollectableShape): S
+    {
+        if (!this._shapes.length) throw new Error('ShapeCollection::nearest(): collection is empty.');
+
+        const refPoint = (typeof (to as CollectableShape).bbox === 'function')
+            ? (to as CollectableShape).bbox()?.center()
+            : Point.from(to as PointLike);
+
+        if (!refPoint) throw new Error('ShapeCollection::nearest(): could not determine reference point from `to`.');
+
+        return this._shapes.reduce((best, shape) =>
+        {
+            const bestCenter = best.bbox()?.center();
+            const shapeCenter = shape.bbox()?.center();
+            if (!shapeCenter) return best;
+            if (!bestCenter) return shape;
+            return shapeCenter.distance(refPoint) < bestCenter.distance(refPoint) ? shape : best;
+        });
+    }
+
     //// TRANSFORMS ////
 
     translate(vecOrX: PointLike | number, dy?: number, dz?: number): this
@@ -339,7 +369,9 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     moveTo(...args: any[]): this
     {
-        const target = Point.from(args);
+        const target = (args.length === 1)
+            ? Point.from(args[0])
+            : Point.from(args[0], args[1], args[2]);
         const bb = this.bbox();
         if (!bb) return this;
         const c = bb.center();

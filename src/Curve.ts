@@ -541,12 +541,13 @@ export class Curve extends Shape
     }
 
     /** Create a closed rectangle defined by two opposite corner points.
-     *  The rectangle lies on the given base plane; each corner is projected onto it.
+     *  The rectangle lies on the given base plane; if omitted, the plane is inferred
+     *  from the axis with the smallest span between the two points.
      *  @param from  - first corner
      *  @param to    - opposite corner
-     *  @param plane - base plane (default: 'xy')
+     *  @param plane - optional base plane override
      */
-    static RectBetween(from: PointLike, to: PointLike, plane: BasePlane = 'xy'): Curve
+    static RectBetween(from: PointLike, to: PointLike, plane?: BasePlane): Curve
     {
         if (!isPointLike(from) || !isPointLike(to))
         {
@@ -555,7 +556,14 @@ export class Curve extends Shape
 
         const a = Point.from(from);
         const b = Point.from(to);
-        const def = BASE_PLANE_NAME_TO_PLANE[plane];
+        const dx = Math.abs(b.x - a.x);
+        const dy = Math.abs(b.y - a.y);
+        const dz = Math.abs(b.z - a.z);
+        const resolvedPlane = plane
+            ?? ((dz <= dy && dz <= dx) ? 'xy' as const
+                : (dy <= dx) ? 'xz' as const
+                : 'yz' as const);
+        const def = BASE_PLANE_NAME_TO_PLANE[resolvedPlane];
         const xDir = Vector.from(def.xDir as [number, number, number]);
         const yDir = Vector.from(def.yDir as [number, number, number]);
 
@@ -799,8 +807,6 @@ export class Curve extends Shape
      */
     getOnPlane(tolerance: number = 1e-6): { normal: Vector, x: Vector, y: Vector } | null
     {
-        console.log('==== GET ON PLANE ====');
-
         if (this._curve instanceof NurbsCurve3DJs)
         {
             const result = this._curve.getOnPlane(tolerance);
@@ -1655,6 +1661,65 @@ export class Curve extends Shape
         return this;
     }
 
+    private _getPlanarFrame(tolerance: number = 1e-6): { origin: Point; normal: Vector; x: Vector; y: Vector }
+    {
+        const plane = this.getOnPlane(tolerance);
+
+        if (!plane)
+        {
+            throw new Error('Curve::_getPlanarFrame(): Curve is not planar.');
+        }
+
+        return {
+            origin: Point.from(this.start()),
+            normal: plane.normal.copy().normalize(),
+            x: plane.x.copy().normalize(),
+            y: plane.y.copy().normalize(),
+        };
+    }
+
+    private _toLocalXY(
+        frame: { origin: Point; normal: Vector; x: Vector; y: Vector },
+        curve: Curve = this.copy(),
+    ): Curve
+    {
+        const localCurve = curve;
+        const sourcePoints: [PointLike, PointLike, PointLike] = [
+            frame.origin,
+            frame.origin.copy().move(frame.x.toArray()),
+            frame.origin.copy().move(frame.y.toArray()),
+        ];
+        const targetPoints: [PointLike, PointLike, PointLike] = [
+            [0, 0, 0],
+            [1, 0, 0],
+            [0, 1, 0],
+        ];
+
+        localCurve.alignByPoints(sourcePoints, targetPoints);
+        return localCurve;
+    }
+
+    private _fromLocalXY(
+        curve: Curve,
+        frame: { origin: Point; normal: Vector; x: Vector; y: Vector },
+    ): Curve
+    {
+        const worldCurve = curve.copy();
+        const sourcePoints: [PointLike, PointLike, PointLike] = [
+            [0, 0, 0],
+            [1, 0, 0],
+            [0, 1, 0],
+        ];
+        const targetPoints: [PointLike, PointLike, PointLike] = [
+            frame.origin,
+            frame.origin.copy().move(frame.x.toArray()),
+            frame.origin.copy().move(frame.y.toArray()),
+        ];
+
+        worldCurve.alignByPoints(sourcePoints, targetPoints);
+        return worldCurve;
+    }
+
     /** Merge consecutive collinear line spans into single segments.
      *  If only one span remains, unwraps to a single NurbsCurve. */
     mergeColinearLines(colinearTol: number = 1e-3): this
@@ -1865,48 +1930,61 @@ export class Curve extends Shape
     /** Offset a Curve a given amount (+ or -) and optionally provide corner type (default:sharp) */
     offset(distance: number, cornerType:'sharp'|'round'|'smooth'='sharp'): Curve|null
     {
-        if(!this.isPlanar()){ throw new Error(`Curve:offset(): Cannot offset a 2D curve!`);}
+        if(!this.isPlanar()){ throw new Error(`Curve::offset(): Cannot offset a non-planar curve!`);}
 
         // Fast path for circles: offsetting a circle just changes its radius 
         // Curvo offsetting is quite slow 
         if(this.subtype() === 'Circle')
         {
-            const bb = this.bbox();
-            if(bb)
+            const center = this.center();
+            const normal = this.normal() ?? undefined;
+            const radius = center.distance(this.start());
+            const newRadius = radius + distance;
+
+            if(newRadius <= 0)
             {
-                const r = (bb.max().x - bb.min().x) / 2;
-                const center = bb.center();
-                const normal = this.normal() ?? undefined;
-                const newRadius = r + distance;
-                if(newRadius <= 0) return null;
-                return this.update(Curve.Circle(newRadius, center, normal));
+                return null;
             }
+
+            return this.update(Curve.Circle(newRadius, center, normal));
+        }
+
+        const planarFrame = this._getPlanarFrame();
+        const localCurve = this._toLocalXY(planarFrame, this.copy());
+
+        // Sharp offsets of degree-1 compounds are already exact in polyline form,
+        // and Curvo's compound offset can still fail on simple ortho loops like rectBetween().
+        if (cornerType === 'sharp' && localCurve.isCompound() && localCurve.maxDegree() === 1)
+        {
+            const fallbackCurve = localCurve.offsetFallback(distance);
+            return fallbackCurve ? this.update(this._fromLocalXY(fallbackCurve, planarFrame)) : null;
         }
 
         // Curvo offsetting of Compound Curves with degree > 1 is not not robust
         // Use fallback method with geo-buf crate which tesselates the curve to degree 1 before offsetting
-        if(this.isCompound() && this.maxDegree() > 1)
+        if(localCurve.isCompound() && localCurve.maxDegree() > 1)
         { 
             console.warn(`Curve::offset(): You are offsetting a CompoundCurve with degree > 1. This is currently not robust, so we tesselated the Curve. This results is loss of quality!`);
-            return this.offsetFallback(distance);
+            const fallbackCurve = localCurve.offsetFallback(distance);
+            return fallbackCurve ? this.update(this._fromLocalXY(fallbackCurve, planarFrame)) : null;
         }
         
         let offsettedCurve;
         try 
         {
-            if(this.isCompound())
+            if(localCurve.isCompound())
             { 
                 // merge collinear lines to avoid Curvo's offset issues with consecutive lines
                 console.info(`Curve::offset(): Merging collinear lines before offsetting to improve Curvo's handling of consecutive line segments in CompoundCurves.`);
-                this.mergeColinearLines();
+                localCurve.mergeColinearLines();
             }
             const t = performance.now();
-            offsettedCurve = Curve.fromCsgrs(this.inner().offset(distance, cornerType));
+            offsettedCurve = Curve.fromCsgrs(localCurve.inner().offset(distance, cornerType));
         }
         catch (e)
         {
-            console.error(`Curve::offset(): Error during offset: "${e}". Trying fallback offset method.`);
-            offsettedCurve = this.offsetFallback(distance);
+            console.warn(`Curve::offset(): Primary offset failed: "${e}". Trying fallback offset method.`);
+            offsettedCurve = localCurve.offsetFallback(distance);
         }
 
         if(!offsettedCurve)
@@ -1915,22 +1993,24 @@ export class Curve extends Shape
             return this;
         }
 
-        return this.update(offsettedCurve);  
+        return this.update(this._fromLocalXY(offsettedCurve, planarFrame));  
     }
 
     /** Fallback offset using the geo crate's OffsetCurve algorithm via a tessellated polyline.
      *  Use when Curvo's NURBS offset fails or produces degenerate results.
      *  Always tessellates to a degree-1 polyline first.
-     *  Curve must be planar (in the XY plane).
+     *  Curve must be planar.
      */
     offsetFallback(distance: number): Curve|null
     {
         if(!this.isPlanar()){ throw new Error(`Curve:offsetFallback(): Cannot offset a non-planar curve!`); }
 
-        // Tessellate to degree-1 polyline for geo-based offsetting
-        const curve = this.toDegree1();
+        const planarFrame = this._getPlanarFrame();
+        const localCurve = this._toLocalXY(planarFrame, this.copy());
+        const degreeOneCurve = localCurve.toDegree1();
+        const offsettedCurve = Curve.fromCsgrs(degreeOneCurve.inner()?.offsetGeo(distance));
 
-        return this.update(Curve.fromCsgrs(curve.inner()?.offsetGeo(distance)));
+        return this.update(this._fromLocalXY(offsettedCurve, planarFrame));
     }
     
 

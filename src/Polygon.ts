@@ -6,11 +6,13 @@
  */
 
 import type { PointLike, Axis } from './types';
+import { isPointLike } from './types';
 import { Shape } from './Shape';
 import { Point } from './Point';
 import { Vector } from './Vector';
 import { Vertex } from './Vertex';
 import { Mesh } from './Mesh';
+import { Curve } from './Curve';
 import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { PolygonJs, VertexJs } from './wasm/csgrs';
@@ -59,6 +61,28 @@ export class Polygon extends Shape
             poly._polygon = new PolygonJs(p.map(v => Point.from(v).toVertexJs()), {});
         }
         return poly;
+    }
+
+    /** Create a planar rectangular Polygon spanning between two points.
+     *  Mirrors Mesh.planeBetween() but yields a single Polygon instead of a Mesh. */
+    static planeBetween(from: PointLike, to: PointLike): Polygon
+    {
+        const a = Point.from(from);
+        const b = Point.from(to);
+        const dx = Math.abs(b.x - a.x);
+        const dy = Math.abs(b.y - a.y);
+        const dz = Math.abs(b.z - a.z);
+        // Pick the base plane whose normal axis spans the least between the two points
+        const basePlane = (dz <= dy && dz <= dx) ? 'xy' as const
+                        : (dy <= dx)              ? 'xz' as const
+                        :                           'yz' as const;
+
+        const corners = Curve.RectBetween(from, to, basePlane).points();
+        // RectBetween returns a closed polyline (last point repeats the first) — drop it.
+        const verts = (corners.length > 1 && corners[0].equals(corners[corners.length - 1]))
+            ? corners.slice(0, -1)
+            : corners;
+        return new Polygon(verts);
     }
 
     //// SHAPE PROTOCOL ////
@@ -152,9 +176,20 @@ export class Polygon extends Shape
     override copy(): this
     {
         const verts = this.vertices().map(p => p.toVertexJs());
-        const p = Object.create(Polygon.prototype) as Polygon;
+        const p = new Polygon(this.vertices());
         p._polygon = new PolygonJs(verts, {});
-        p.style.merge(this.style.toData());
+        p.style.merge(this.style.explicitData() as any);
+        p.metadata = { ...this.metadata };
+
+        if (this.node())
+        {
+            const parent = this.node()?.parent() || this.node();
+            if (parent)
+            {
+                parent.addShape(p);
+            }
+        }
+
         return p as this;
     }
 
@@ -185,6 +220,22 @@ export class Polygon extends Shape
     obbox(): OBbox
     {
         return OBbox.fromPoints(this.vertices());
+    }
+
+    /** Minimum distance from this polygon surface to a point, mesh, or curve. */
+    distance(other: PointLike | Mesh | Curve): number
+    {
+        if (isPointLike(other))
+        {
+            return this.toMesh().distance(Point.from(other));
+        }
+
+        if (other instanceof Mesh || other instanceof Curve)
+        {
+            return this.toMesh().distance(other);
+        }
+
+        throw new Error('Polygon.distance(): Unsupported type. Expected PointLike, Mesh, or Curve.');
     }
 
     //// MEASUREMENTS ////
@@ -281,16 +332,63 @@ export class Polygon extends Shape
         return this._polygon.subdivideTriangles(levels).map(p => Polygon.from(p));
     }
 
+    /**
+     * Offset this polygon's boundary by `distance` (positive = outward, negative = inward).
+     *
+     * Polygons have no native offset, so we route through Curve: the boundary is
+     * converted to a closed planar Curve, offset there, then converted back to a
+     * Polygon. Returns null when the offset fails or degenerates.
+     *
+     * @param distance    Offset distance; positive grows the polygon, negative shrinks it.
+     * @param cornerType  How to treat convex corners (passed through to Curve.offset).
+     */
+    offset(distance: number, cornerType: 'sharp' | 'round' | 'smooth' = 'sharp'): this | null
+    {
+        // TODO: offset interior holes too (inward, with negated distance)
+        if (this.hasHoles())
+        {
+            console.warn('Polygon.offset(): interior holes are not yet offset; only the outer boundary is processed.');
+        }
+
+        const boundary = Curve.Polyline(this.vertices()).close();
+        const offsetCurve = boundary.offset(distance, cornerType);
+        if (!offsetCurve)
+        {
+            console.warn('Polygon.offset(): Curve.offset() failed; polygon left unchanged.');
+            return null;
+        }
+
+        let pts = offsetCurve.points();
+        // A closed curve repeats its start point at the end — drop the duplicate.
+        if (pts.length > 1 && pts[0].equals(pts[pts.length - 1]))
+        {
+            pts = pts.slice(0, -1);
+        }
+        if (pts.length < 3)
+        {
+            console.warn(`Polygon.offset(): offset produced ${pts.length} vertices (<3); polygon left unchanged.`);
+            return null;
+        }
+
+        // Mutate in place: replace the inner PolygonJs with the offset boundary.
+        // `style` lives on the Shape base and is preserved untouched.
+        const verts: VertexJs[] = pts.map(p => Point.from(p).toVertexJs());
+        this._polygon = new PolygonJs(verts, {});
+        return this;
+    }
+
     //// 3D OPERATIONS ////
 
     /**
      * Extrude this polygon into a closed solid Mesh.
      * @param length     Distance to extrude.
-     * @param direction  Direction vector (default: +Z).
+     * @param direction  Direction vector (default: polygon normal).
      */
-    extrude(length: number, direction: PointLike = [0, 0, 1]): Mesh
+    extrude(length: number, direction?: PointLike): Mesh
     {
-        const dir = Vector.from(direction).normalize().scale(length);
+        const baseDirection = direction ? Vector.from(direction) : this.normal();
+        const dir = baseDirection.normalize().scale(length);
+
         const bottom: Point[] = this.vertices();
         const top: Point[] = bottom.map(p =>
             new Point(p.x + dir.x, p.y + dir.y, p.z + dir.z)

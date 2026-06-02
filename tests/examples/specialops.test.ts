@@ -64,21 +64,36 @@ describe('Mesh.split()', () =>
             await new ShapeCollection<Mesh>(result).toGLTF());
     });
 
-    it('splits a cube with another Mesh (intersection/difference)', async () =>
+    it('splits a cube with another Mesh and removes the cutter volume', async () =>
     {
         const cube = Mesh.Cube(40);
         const cutter = Mesh.Box(80, 80, 20).moveZ(10); // slab cutting through the top half
         const result = cube.copy().split(cutter);
 
-        expect(result.count()).toBe(2);
+        expect(result.count()).toBe(1);
 
         result.first().color('blue');
         
         result.forEach(m => expect(m.inner().triangleCount()).toBeGreaterThan(0));
+        expect(result.first().bbox().max().z).toBeCloseTo(0, 1);
 
         await save(`${SAVE_FOLDER}test.specialops.split.mesh.gltf`,
             await new ShapeCollection<Mesh>(
                 cube.opacity(0.5), cutter.opacity(0.5), result).toGLTF());
+    });
+
+    it('splits a tall box into two meshes when the cutter removes the middle', () =>
+    {
+        const tall = Mesh.Box(10, 10, 1000);
+        const cutter = Mesh.Box(100, 100, 100);
+        const result = tall.copy().split(cutter);
+
+        expect(result.count()).toBe(2);
+        result.forEach(m => expect(m.inner().triangleCount()).toBeGreaterThan(0));
+
+        const sorted = result.toArray().sort((a, b) => a.bbox().center().z - b.bbox().center().z);
+        expect(sorted[0].bbox().max().z).toBeCloseTo(-50, 1);
+        expect(sorted[1].bbox().min().z).toBeCloseTo(50, 1);
     });
 
     it('returns one piece when the plane misses the mesh entirely', () =>

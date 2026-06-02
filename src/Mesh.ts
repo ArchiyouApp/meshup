@@ -320,18 +320,9 @@ export class Mesh extends Shape
      */
     static planeBetween(from: PointLike, to: PointLike): Mesh
     {
-        const a = Point.from(from);
-        const b = Point.from(to);
-        const dx = Math.abs(b.x - a.x);
-        const dy = Math.abs(b.y - a.y);
-        const dz = Math.abs(b.z - a.z);
-        // Pick the base plane whose normal axis spans the least between the two points
-        const basePlane = (dz <= dy && dz <= dx) ? 'xy' as const
-                        : (dy <= dx)              ? 'xz' as const
-                        :                           'yz' as const;
-        const mesh = Curve.RectBetween(from, to, basePlane).toMesh();
-        if (!mesh) { throw new Error('Mesh.planeBetween(): failed to create mesh plane surface.') }
-        return mesh;
+        // Delegate the base-plane selection + rect construction to Polygon.planeBetween(),
+        // then convert to a Mesh — keeps the geometry logic in one place.
+        return Polygon.planeBetween(from, to).toMesh();
     }
 
     static Sphere(radius: number): Mesh
@@ -1081,22 +1072,29 @@ export class Mesh extends Shape
     /**
      * Split this mesh into two pieces using a cutting `other`.
      *
-     * - `Mesh`    — the pieces are computed via intersection and difference.
+     * - `Mesh`    — the cutter volume is removed and the remaining isolated pieces are returned.
      * - `Polygon` — the polygon's plane is used as the cutting plane.
      * - `PlaneJs` — the plane is used directly (front side = direction the normal points).
      *
-     * Returns a `ShapeCollection<Mesh>` with up to two entries (front/positive side first,
-     * back/negative side second). Empty halves are omitted from the result.
+     * Returns a `ShapeCollection<Mesh>` with one entry per remaining piece. For plane-based
+     * splits this is typically up to two entries (front/positive side first, back/negative
+     * side second). Empty results are omitted.
      */
     split(other: Mesh | Polygon | PlaneJs): ShapeCollection<Mesh>
     {
         if (other instanceof Mesh)
         {
-            const front = this.copy().intersection(other);
-            const back  = this.copy().difference(other);
-            const parts: Mesh[] = [];
-            if (front.inner().triangleCount() > 0) parts.push(front);
-            if (back.inner().triangleCount() > 0)  parts.push(back);
+            const remainder = this.copy().difference(other);
+            if (remainder.inner().triangleCount() === 0)
+            {
+                return new ShapeCollection<Mesh>();
+            }
+
+            const parts = remainder
+                .separateIsolated()
+                .toArray()
+                .filter(mesh => mesh.inner().triangleCount() > 0);
+
             return new ShapeCollection<Mesh>(parts);
         }
 
@@ -1412,6 +1410,46 @@ export class Mesh extends Shape
         return a.hits(b);
     }
 
+    /**
+     * Get amount of overlap [0-1] between this mesh and the given other mesh.
+     *
+     * Mirrors the old brep-kernel semantics: the overlap is measured as
+     * `intersectionVolume / this.volume()`. Returns `0` for non-overlapping,
+     * invalid, or zero-volume meshes.
+     */
+    overlapPerc(other: Mesh): number
+    {
+        if (!other || !(other instanceof Mesh))
+        {
+            throw new Error('Mesh::overlapPerc(): Please supply a valid Mesh instance!');
+        }
+
+        const thisVolume = this.volume();
+        if (thisVolume == null || thisVolume <= 0)
+        {
+            return 0.0;
+        }
+
+        if (!this.hits(other))
+        {
+            return 0.0;
+        }
+
+        try
+        {
+            const overlappingMesh = this.copy().intersection(other);
+            const overlappingVolume = overlappingMesh.volume();
+            return (overlappingVolume != null && overlappingVolume > 0)
+                ? overlappingVolume / thisVolume
+                : 0.0;
+        }
+        catch (e)
+        {
+            console.warn('Mesh::overlapPerc(): Failed to calculate overlap percentage.', e);
+            return 0.0;
+        }
+    }
+
     /** Legacy uncached mesh-to-mesh distance path for side-by-side comparisons. */
     distanceToLegacy(other: Mesh): number
     {
@@ -1469,7 +1507,7 @@ export class Mesh extends Shape
             return a.distanceTo(b);
         }
 
-        throw new Error(`Mesh.distanceTo(): Unsupported type. Expected Mesh, Curve, Point, Vertex, or Polygon. Got: "${other?.constructor?.name}"`);
+        throw new Error('Mesh.distanceTo(): Unsupported type. Expected Mesh, Curve, Point, Vertex, or Polygon.');
     }
 
     /** Alias for distanceTo */

@@ -2,8 +2,10 @@ import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Polygon } from '../../src/Polygon';
 import { Mesh } from '../../src/Mesh';
+import { Curve } from '../../src/Curve';
 import { Bbox } from '../../src/Bbox';
 import { OBbox } from '../../src/OBbox';
+import { Vector } from '../../src/Vector';
 
 beforeAll(async () =>
 {
@@ -129,6 +131,83 @@ describe('Polygon.extrude()', () =>
         // extrude along +y should produce depth > 0
         expect(bbox.depth()).toBeGreaterThan(0);
     });
+
+    it('uses the polygon normal when direction is omitted', () =>
+    {
+        const p = Polygon.planeBetween([0, 0, 0], [2, 0, 3]);
+        const extrusionLength = 4;
+        const m = p.extrude(extrusionLength);
+
+        const delta = Vector.from(m.center()).subtract(p.center());
+        const normal = p.normal().normalize();
+
+        expect(delta.dot(normal)).toBeCloseTo(extrusionLength / 2, 6);
+        expect(delta.copy().cross(normal).length()).toBeCloseTo(0, 6);
+    });
+});
+
+describe('Polygon.planeBetween()', () =>
+{
+    it('returns a Polygon with 4 corners', () =>
+    {
+        const p = Polygon.planeBetween([0, 0, 0], [2, 3, 0]);
+        expect(p).instanceOf(Polygon);
+        expect(p.vertices().length).toBe(4);
+    });
+
+    it('spans the bounding box between the two points (XY plane)', () =>
+    {
+        const p = Polygon.planeBetween([0, 0, 0], [2, 3, 0]);
+        const bb = p.bbox();
+        expect(bb.width()).toBeCloseTo(2);
+        expect(bb.depth()).toBeCloseTo(3);
+    });
+
+    it('is planar on the axis with least span (XZ plane)', () =>
+    {
+        const p = Polygon.planeBetween([0, 0, 0], [2, 0, 3]);
+        // all vertices share y = 0
+        p.vertices().forEach(v => expect(v.y).toBeCloseTo(0));
+    });
+});
+
+describe('Polygon.offset()', () =>
+{
+    it('mutates in place and returns this', () =>
+    {
+        const p = new Polygon(SQUARE);
+        const o = p.offset(0.5);
+        expect(o).instanceOf(Polygon);
+        expect(o).toBe(p); // in-place mutation: same object
+    });
+
+    it('outward offset grows the bounding box', () =>
+    {
+        const p = new Polygon(SQUARE);
+        const o = p.offset(0.5)!;
+        const bb = o.bbox();
+        // unit square (0..1) offset outward by 0.5 → roughly (-0.5..1.5)
+        expect(bb.min().x).toBeLessThan(0);
+        expect(bb.min().y).toBeLessThan(0);
+        expect(bb.max().x).toBeGreaterThan(1);
+        expect(bb.max().y).toBeGreaterThan(1);
+    });
+
+    it('inward offset shrinks the bounding box', () =>
+    {
+        const p = new Polygon(SQUARE);
+        const o = p.offset(-0.25)!;
+        const bb = o.bbox();
+        expect(bb.width()).toBeLessThan(1);
+        expect(bb.depth()).toBeLessThan(1);
+    });
+
+    it('offset result is a closed polygon with at least 3 vertices', () =>
+    {
+        const p = new Polygon(TRIANGLE);
+        const o = p.offset(0.2)!;
+        expect(o.vertices().length).toBeGreaterThanOrEqual(3);
+    });
 });
 
 describe('Mesh.polygons()', () =>
@@ -217,5 +296,28 @@ describe('Polygon.obbox()', () =>
         const ob = p.obbox();
         expect(ob.center().x).toBeCloseTo(0.5);
         expect(ob.center().y).toBeCloseTo(0.5);
+    });
+});
+
+describe('Polygon.distance()', () =>
+{
+    it('measures distance to a point above the polygon plane', () =>
+    {
+        const p = new Polygon(SQUARE);
+        expect(p.distance([0.5, 0.5, 3])).toBeCloseTo(3, 6);
+    });
+
+    it('measures distance to a parallel curve', () =>
+    {
+        const p = new Polygon(SQUARE);
+        const line = Curve.Line([0.5, 0.5, 2], [1.5, 0.5, 2]);
+        expect(p.distance(line)).toBeCloseTo(2, 6);
+    });
+
+    it('measures distance to a separated mesh', () =>
+    {
+        const p = new Polygon(SQUARE);
+        const cube = Mesh.Cube(1).move(0.5, 0.5, 5.5);
+        expect(p.distance(cube)).toBeCloseTo(5, 6);
     });
 });

@@ -3,6 +3,7 @@ import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
 import { ShapeCollection as Collection } from '../../src/ShapeCollection';
+import { Point } from '../../src/Point';
 
 let cube1: Mesh;
 let cube2: Mesh;
@@ -67,6 +68,13 @@ describe('Collection.add()', () =>
         c.add(new Collection(cube2));
         expect(c.count()).toBe(2);
     });
+
+    it('adds multiple shapes passed as separate arguments', () =>
+    {
+        const c = new Collection();
+        c.add(cube1, cube2);
+        expect(c.count()).toBe(2);
+    });
 });
 
 describe('Collection accessors', () =>
@@ -116,6 +124,20 @@ describe('Collection accessors', () =>
         const curves = c.curves();
         expect(curves.toArray().every(s => s instanceof Curve)).toBe(true);
         expect(curves.length).toBe(1);
+    });
+});
+
+describe('Collection.moveTo()', () =>
+{
+    it('accepts a Point instance as target', () =>
+    {
+        const c = new Collection(cube1.copy());
+        c.moveTo(new Point(10, 20, 30));
+        const center = c.bbox()!.center();
+
+        expect(center.x).toBeCloseTo(10);
+        expect(center.y).toBeCloseTo(20);
+        expect(center.z).toBeCloseTo(30);
     });
 });
 

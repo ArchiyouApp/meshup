@@ -223,6 +223,44 @@ describe('Curve.toMesh()', () =>
     });
 });
 
+describe('Curve.offset()', () =>
+{
+    it('infers the XZ plane in RectBetween when Y span is zero', () =>
+    {
+        const rect = Curve.RectBetween([0, 0, 0], [100, 0, 100]);
+
+        rect.points().forEach(point =>
+        {
+            expect(point.y).toBeCloseTo(0, 6);
+        });
+    });
+
+    it('offsets an XZ planar rectangle while keeping it on the same plane', () =>
+    {
+        const rect = Curve.Rect(10, 6, [0, 0, 0], 'xz');
+        const offsetRect = rect.copy().offset(2);
+
+        expect(offsetRect).toBeTruthy();
+        expect(offsetRect!.area()).toBeGreaterThan(rect.area()!);
+        expect(offsetRect!.normal()!.isParallel(rect.normal()!)).toBe(true);
+
+        offsetRect!.points().forEach(point =>
+        {
+            expect(point.y).toBeCloseTo(0, 6);
+        });
+    });
+
+    it('offsets a circle on a non-XY plane by changing its radius along the same normal', () =>
+    {
+        const circle = Curve.Circle(5, [0, 0, 0], [0, 1, 0]);
+        const offsetCircle = circle.copy().offset(2);
+
+        expect(offsetCircle).toBeTruthy();
+        expect(offsetCircle!.center().distance(offsetCircle!.start())).toBeCloseTo(7, 6);
+        expect(offsetCircle!.normal()!.isParallel(circle.normal()!)).toBe(true);
+    });
+});
+
 describe('Curve.extend()', async () =>
 {
     it('Should extend a polyline correctly', () =>
