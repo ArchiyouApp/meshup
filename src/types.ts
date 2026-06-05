@@ -42,8 +42,10 @@ export type PointLike = number | Point | Vector | Vertex |
   Point3Js |  Vector3Js | VertexJs | Array<number> | 
   { x: number; y: number; z: number; };
 
-export function isPointLike(obj: any): obj is PointLike {
+export function isPointLike(obj: any): obj is PointLike 
+{
   return typeof obj === 'number' || // single number (x), treated as [x,0,0]
+    isAxis(obj) || // x,y,z as shorthand for unit vectors
     obj instanceof Point ||
     obj instanceof Vector ||
     obj instanceof Vertex ||
@@ -52,7 +54,6 @@ export function isPointLike(obj: any): obj is PointLike {
     obj instanceof VertexJs ||
     (Array.isArray(obj) && obj.every(item => typeof item === 'number')) || // [x], [x,y], [x,y,z] - needs to be numbers
     typeof obj === 'object' && obj !== null && 'x' in obj && 'y' in obj && 'z' in obj
-  
 }
 
 

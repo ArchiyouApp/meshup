@@ -124,9 +124,9 @@ export abstract class Shape
     moveY(dy: number): this { return this.translate(0, dy, 0); }
     moveZ(dz: number): this { return this.translate(0, 0, dz); }
 
-    rotateX(angleDeg: number, pivot: PointLike = [0, 0, 0]): this { return this.rotateAround(angleDeg, 'x', pivot); }
-    rotateY(angleDeg: number, pivot: PointLike = [0, 0, 0]): this { return this.rotateAround(angleDeg, 'y', pivot); }
-    rotateZ(angleDeg: number, pivot: PointLike = [0, 0, 0]): this { return this.rotateAround(angleDeg, 'z', pivot); }
+    rotateX(angleDeg: number, pivot?: PointLike): this { return this.rotateAround(angleDeg, 'x', pivot); }
+    rotateY(angleDeg: number, pivot?: PointLike): this { return this.rotateAround(angleDeg, 'y', pivot); }
+    rotateZ(angleDeg: number, pivot?: PointLike): this { return this.rotateAround(angleDeg, 'z', pivot); }
 
     //// ALIGNMENT ////
 

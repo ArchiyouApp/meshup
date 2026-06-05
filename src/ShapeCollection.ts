@@ -328,6 +328,50 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return new Bbox([minX, minY, minZ], [maxX, maxY, maxZ]);
     }
 
+    area(): number | undefined
+    {
+        let totalArea = 0;
+        let hasArea = false;
+
+        this._shapes.forEach(shape =>
+        {
+            const area = (shape as any).area?.();
+            if (area === undefined) return;
+            totalArea += area;
+            hasArea = true;
+        });
+
+        if (!hasArea)
+        {
+            console.warn('ShapeCollection.area(): no shapes in the collection provide area.');
+            return undefined;
+        }
+
+        return totalArea;
+    }
+
+    volume(): number | undefined
+    {
+        let totalVolume = 0;
+        let hasVolume = false;
+
+        this._shapes.forEach(shape =>
+        {
+            const volume = (shape as any).volume?.();
+            if (volume === undefined) return;
+            totalVolume += volume;
+            hasVolume = true;
+        });
+
+        if (!hasVolume)
+        {
+            console.warn('ShapeCollection.volume(): no shapes in the collection provide volume.');
+            return undefined;
+        }
+
+        return totalVolume;
+    }
+
     /**
      * Returns the shape with the smallest distance to `to`.
      * For a PointLike, the distance is from each shape's bbox center to `to`.
@@ -397,9 +441,16 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     rotateY(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'y', origin); }
     rotateZ(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'z', origin); }
 
-    rotate(angleDeg: number, axis: Axis = 'z', origin: PointLike = { x: 0, y: 0, z: 0 }): this
+    rotate(angleDeg: number, axis: Axis = 'z', origin?: PointLike): this
     {
-        this._shapes.forEach(shape => shape.rotate?.(angleDeg, axis, origin));
+        if (origin)
+        {
+            this._shapes.forEach(shape => shape.rotateAround?.(angleDeg, axis, origin));
+        }
+        else
+        {
+            this._shapes.forEach(shape => shape.rotate?.(angleDeg, axis));
+        }
         return this;
     }
 
@@ -1176,19 +1227,25 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     //// PATTERNS ////
 
-    /** Copy this collection count times in a line along direction, spaced by spacing */
+    /** Copy this collection count times in a line along direction with spacing */
     row(count: number, spacing: number = 10, direction: PointLike | Axis = 'x'): ShapeCollection<S>
     {
-        const dir: PointLike = direction === 'x' ? [1, 0, 0]
-                             : direction === 'y' ? [0, 1, 0]
-                             : direction === 'z' ? [0, 0, 1]
-                             : direction as PointLike;
+        if(!Point.isPointLike(direction)){ throw new Error(`ShapeCollection::row(): Invalid direction: ${direction}`); }
+        
+        const dirVec = Vector.from(direction).normalize();
+        const bbox = this.bbox();
+        const offsetSize = new Vector(bbox.width(), bbox.depth(), bbox.height())
+                                    .scale(dirVec)
+                                    .length();
+
         const result = new ShapeCollection<S>();
-        for (let i = 0; i < count; i++)
+
+        new Array(count).fill(null).forEach((_, i) =>
         {
-            const delta: PointLike = [(dir as number[])[0] * spacing * i, (dir as number[])[1] * spacing * i, (dir as number[])[2] * spacing * i];
-            result.add(this.copy().translate(delta));
-        }
+            const s = (i === 0) ? this : this.copy();
+            result.add(s.move(dirVec.copy().scale(i * (offsetSize + spacing))));
+        });
+
         return result;
     }
 

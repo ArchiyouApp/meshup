@@ -27,7 +27,7 @@ export class Point
     private _z: number = 0;
 
     /** Make a Point out of different entities */
-    constructor(x: PointLike|number, y?: number, z?: number)
+    constructor(x: PointLike|number|Axis, y?: number, z?: number)
     {
         if (typeof x === 'number' && (typeof y === 'number' || y === undefined) && (typeof z === 'number' || z === undefined))
         {
@@ -35,6 +35,13 @@ export class Point
             this._y = y || 0;
             this._z = z || 0;
         }
+        else if (isAxis(x))
+        {
+            this._x = (x === 'x') ? 1 : 0;
+            this._y = (x === 'y') ? 1 : 0;
+            this._z = (x === 'z') ? 1 : 0;
+        }
+
         else if (Array.isArray(x) && x.length >= 1 && x.every(c => typeof c === 'number'))
         {
             this._x = x[0];
@@ -90,6 +97,12 @@ export class Point
         point._y += (Math.random() - 0.5) * range;
         point._z += (Math.random() - 0.5) * range;
         return point;
+    }
+
+    /** Convenience method to check if an object is PointLike */
+    static isPointLike(obj: any): obj is PointLike
+    {
+        return isPointLike(obj);
     }
 
     //// GETTERS / SETTERS

@@ -6,7 +6,9 @@
  */
 
 import type { PointLike, Axis } from './types';
-import { isPointLike } from './types';
+import { isPointLike, isAxis } from './types';
+import { rad } from './utils';
+import { TOLERANCE } from './constants';
 import { Shape } from './Shape';
 import { Point } from './Point';
 import { Vector } from './Vector';
@@ -139,39 +141,159 @@ export class Polygon extends Shape
 
     //// TRANSFORMS ////
 
-    override translate(_px: PointLike | number, _dy?: number, _dz?: number): this
+    /** Apply a position and normal transform function to all vertices (outer + holes) and rebuild _polygon. */
+    private _applyVertexTransform(
+        transformPos: (v: Vector) => Vector,
+        transformNorm: (v: Vector) => Vector,
+    ): void
     {
-        throw new Error('Polygon.translate(): not yet implemented');
+        const transformVerts = (verts: VertexJs[]): VertexJs[] =>
+            verts.map(v =>
+            {
+                const pos  = transformPos(Vector.from(v.position().x, v.position().y, v.position().z));
+                const norm = transformNorm(Vector.from(v.normal().x, v.normal().y, v.normal().z));
+                return new VertexJs(pos.toPoint().toPoint3Js(), norm.toVector3Js());
+            });
+
+        const rawVerts  = this._polygon.vertices() as VertexJs[];
+        const rawHoles  = this._polygon.holes()    as VertexJs[][];
+        const metaStr   = this._polygon.metadata();
+        const meta      = metaStr !== undefined ? JSON.parse(metaStr) : {};
+
+        this._polygon = new PolygonJs(transformVerts(rawVerts), meta);
+        for (const hole of (rawHoles || []))
+        {
+            this._polygon.addHole(transformVerts(hole));
+        }
     }
 
-    override rotate(_angleDeg: number, _axis?: Axis | PointLike, _pivot?: PointLike): this
+    override translate(px: PointLike | number, dy?: number, dz?: number): this
     {
-        throw new Error('Polygon.rotate(): not yet implemented');
+        const delta = (typeof dy === 'number')
+            ? Point.from(px, dy, dz ?? 0)
+            : Point.from(px);
+
+        this._applyVertexTransform(
+            pos  => Vector.from(pos.x + delta.x, pos.y + delta.y, pos.z + delta.z),
+            norm => norm,
+        );
+        return this;
     }
 
-    override rotateAround(_angleDeg: number, _axis: Axis | PointLike, _pivot?: PointLike): this
+    override rotate(angleDeg: number, axis: Axis | PointLike = 'z'): this
     {
-        throw new Error('Polygon.rotateAround(): not yet implemented');
+        const a    = rad(angleDeg) / 2;
+        const axVec = Vector.from(axis).normalize();
+        const sin  = Math.sin(a);
+        const w    = Math.cos(a), xv = axVec.x * sin, yv = axVec.y * sin, zv = axVec.z * sin;
+
+        this._applyVertexTransform(
+            pos  => pos.copy().rotateQuaternion(w, xv, yv, zv),
+            norm => norm.copy().rotateQuaternion(w, xv, yv, zv),
+        );
+        return this;
     }
 
-    override rotateQuaternion(_w: number | { w: number; x: number; y: number; z: number }, _x?: number, _y?: number, _z?: number): this
+    override rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot?: PointLike): this
     {
-        throw new Error('Polygon.rotateQuaternion(): not yet implemented');
+        const p = pivot ? Point.from(pivot) : this.center();
+        this.translate(-p.x, -p.y, -p.z);
+        this.rotate(angleDeg, axis);
+        this.translate(p.x, p.y, p.z);
+        return this;
     }
 
-    override scale(_factor: number | PointLike, _origin?: PointLike): this
+    override rotateQuaternion(wOrObj: number | { w: number; x: number; y: number; z: number }, x?: number, y?: number, z?: number): this
     {
-        throw new Error('Polygon.scale(): not yet implemented');
+        const originalCenter = this.center();
+        const w  = typeof wOrObj === 'object' ? wOrObj.w : wOrObj;
+        const xv = typeof wOrObj === 'object' ? wOrObj.x : (x ?? 0);
+        const yv = typeof wOrObj === 'object' ? wOrObj.y : (y ?? 0);
+        const zv = typeof wOrObj === 'object' ? wOrObj.z : (z ?? 0);
+
+        this._applyVertexTransform(
+            pos  => pos.copy().rotateQuaternion(w, xv, yv, zv),
+            norm => norm.copy().rotateQuaternion(w, xv, yv, zv),
+        );
+
+        // Preserve center (match Mesh.rotateQuaternion behavior)
+        const newCenter = this.center();
+        this.translate(
+            originalCenter.x - newCenter.x,
+            originalCenter.y - newCenter.y,
+            originalCenter.z - newCenter.z,
+        );
+        return this;
     }
 
-    override mirror(_dir: Axis | PointLike, _pos?: PointLike): this
+    override scale(factor: number | PointLike, origin?: PointLike): this
     {
-        throw new Error('Polygon.mirror(): not yet implemented');
+        const [sx, sy, sz] = (typeof factor === 'number')
+            ? [factor, factor, factor]
+            : [Point.from(factor).x, Point.from(factor).y, Point.from(factor).z];
+
+        const o = origin ? Point.from(origin) : new Point(0, 0, 0);
+
+        this._applyVertexTransform(
+            pos  => Vector.from(
+                o.x + (pos.x - o.x) * sx,
+                o.y + (pos.y - o.y) * sy,
+                o.z + (pos.z - o.z) * sz,
+            ),
+            norm => norm, // normals stay unit vectors
+        );
+        return this;
     }
 
-    override mirrorX(_x?: number): this { throw new Error('Polygon.mirrorX(): not yet implemented'); }
-    override mirrorY(_y?: number): this { throw new Error('Polygon.mirrorY(): not yet implemented'); }
-    override mirrorZ(_z?: number): this { throw new Error('Polygon.mirrorZ(): not yet implemented'); }
+    override mirror(dir: Axis | PointLike, pos?: number | PointLike): this
+    {
+        const planeNormal = isPointLike(dir)
+            ? Point.from(dir as PointLike).toVector()
+            : Vector.from(dir as Axis);
+
+        let planePosition: Point;
+        if ((planeNormal.length() - 1) > TOLERANCE && pos === undefined)
+        {
+            planePosition = Point.from(planeNormal.toArray() as PointLike);
+            planeNormal.normalize();
+        }
+        else
+        {
+            planeNormal.normalize();
+            planePosition = pos
+                ? (isAxis(dir) && typeof pos === 'number')
+                    ? new Point(0, 0, 0).setComponent(dir as Axis, pos)
+                    : Point.from(pos as PointLike)
+                : this.center();
+        }
+
+        this._applyVertexTransform(
+            pos =>
+            {
+                const rel = Vector.from(pos.x - planePosition.x, pos.y - planePosition.y, pos.z - planePosition.z);
+                const d   = rel.dot(planeNormal.inner());
+                return Vector.from(
+                    pos.x - 2 * d * planeNormal.x,
+                    pos.y - 2 * d * planeNormal.y,
+                    pos.z - 2 * d * planeNormal.z,
+                );
+            },
+            norm =>
+            {
+                const dn = norm.dot(planeNormal.inner());
+                return Vector.from(
+                    norm.x - 2 * dn * planeNormal.x,
+                    norm.y - 2 * dn * planeNormal.y,
+                    norm.z - 2 * dn * planeNormal.z,
+                );
+            },
+        );
+        return this;
+    }
+
+    override mirrorX(x?: number): this { return this.mirror('x', x ?? 0); }
+    override mirrorY(y?: number): this { return this.mirror('y', y ?? 0); }
+    override mirrorZ(z?: number): this { return this.mirror('z', z ?? 0); }
 
     override copy(): this
     {

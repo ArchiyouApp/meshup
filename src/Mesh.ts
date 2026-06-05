@@ -582,9 +582,10 @@ export class Mesh extends Shape
      *  @param axis     - 'x' | 'y' | 'z' or an arbitrary direction vector (PointLike)
      *  @param pivot    - point the axis passes through (default: world origin)
      */
-    override rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
+    override rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot?: PointLike): this
     {
-        const p = Point.from(pivot);
+        // if pivot not provided, rotate around center of mesh by default
+        const p = (!pivot) ? this.center() : Point.from(pivot);
         this.translate(-p.x, -p.y, -p.z);
         this.rotate(angleDeg, axis);
         this.translate(p.x, p.y, p.z);
@@ -1152,22 +1153,30 @@ export class Mesh extends Shape
 
     //// CREATING MESH COLLECTIONS ////
 
-    /** Create a series of new Meshes along a given Vector and given distance from pivots 
-     *  We don't use csgrs distribute_linear() because it merges meshes into one
-     *  We want to output a collection of individual meshes
+    /** Create a row of copies of this Mesh with specific spacing between them
+     * 
+     *  Spacing is measured from the bounding boxes of the meshes, so they are placed adjacent plus the specified spacing.
+     * 
+     *  @param count     - number of copies in the row (including the original)
+     *  @param spacing   - distance between bounding boxes of copies (default: 10)
+     *  @param direction - direction of the row (default: 'x')
+     *  
+     *  NOTE: We don't use csgrs distribute_linear() because it merges meshes into one
+     *      We want to output a collection of individual meshes
     */
-    row(count:number, spacing:number=10, direction:PointLike|Axis='x'):ShapeCollection
+    row(count:number, spacing:number=10, direction:PointLike|Axis='x'):ShapeCollection<Mesh>
     {
-        const meshes = new ShapeCollection();
         const dirVec = Vector.from(direction).normalize(); // auto converts Axis
         const bbox = this.bbox();
         const offsetSize = new Vector(bbox.width(), bbox.depth(), bbox.height())
                             .scale(dirVec)
                             .length();
 
+        const meshes = new ShapeCollection<Mesh>();
+
         new Array(count).fill(0).forEach((_, i) =>
         {
-            const mesh = this.copy();
+            const mesh = (i === 0) ? this : this.copy();
             if(mesh)
             {
                 mesh.move(dirVec.copy().scale(i * (offsetSize + spacing)));
