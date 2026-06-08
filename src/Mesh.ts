@@ -162,10 +162,18 @@ export class Mesh extends Shape
         }
     }
 
-    /** Get polygons of the Mesh as wrapped Polygon instances */
-    polygons(): Array<Polygon>
+    /** Get polygons (faces) of the Mesh as a ShapeCollection of wrapped Polygon instances */
+    polygons(): ShapeCollection<Polygon>
     {
-        return (this.inner()?.polygons() ?? []).map(p => Polygon.from(p));
+        return new ShapeCollection<Polygon>(
+            (this.inner()?.polygons() ?? []).map(p => Polygon.from(p)),
+        );
+    }
+
+    /** Get faces of the Mesh as a ShapeCollection of Polygons (alias of polygons()) */
+    faces(): ShapeCollection<Polygon>
+    {
+        return this.polygons();
     }
 
     
@@ -358,7 +366,7 @@ export class Mesh extends Shape
     /** Surface area — sum of all polygon face areas */
     area(): number
     {
-        return this.polygons().reduce((sum, poly) => sum + poly.area(), 0);
+        return this.polygons().toArray().reduce((sum, poly) => sum + poly.area(), 0);
     }
 
     /** Volume */

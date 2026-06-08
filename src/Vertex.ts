@@ -14,7 +14,9 @@ import { Point } from "./Point";
 import { Vector } from "./Vector";
 import { Bbox } from "./Bbox";
 import { Shape } from "./Shape";
+import { Style } from "./Style";
 import { VertexJs  } from "./wasm/csgrs";
+import { uuid } from "./utils";
 
 export class Vertex extends Shape
 {
@@ -32,6 +34,12 @@ export class Vertex extends Shape
   static from(v: VertexJs): Vertex
   {
     const vertex = Object.create(Vertex.prototype) as Vertex;
+    // Object.create bypasses the constructor, so manually initialize Shape fields
+    (vertex as any)['_id'] = uuid();
+    (vertex as any)['type'] = 'Vertex';
+    vertex._node = null;
+    vertex.style = new Style();
+    vertex.metadata = {};
     vertex._vertex = v;
     return vertex;
   }

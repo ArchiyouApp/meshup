@@ -13,11 +13,14 @@ import { Shape } from './Shape';
 import { Point } from './Point';
 import { Vector } from './Vector';
 import { Vertex } from './Vertex';
+import { ShapeCollection } from './ShapeCollection';
 import { Mesh } from './Mesh';
 import { Curve } from './Curve';
 import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { PolygonJs, VertexJs } from './wasm/csgrs';
+import { Style } from './Style';
+import { uuid } from './utils';
 
 export class Polygon extends Shape
 {
@@ -54,6 +57,12 @@ export class Polygon extends Shape
     static from(p: PolygonJs | Array<PointLike>): Polygon
     {
         const poly = Object.create(Polygon.prototype) as Polygon;
+        // Object.create bypasses the constructor, so manually initialize Shape fields
+        (poly as any)['_id'] = uuid();
+        (poly as any)['type'] = 'Polygon';
+        poly._node = null;
+        poly.style = new Style();
+        poly.metadata = {};
         if (p instanceof PolygonJs)
         {
             poly._polygon = p;
@@ -104,10 +113,12 @@ export class Polygon extends Shape
 
     //// ACCESSORS ////
 
-    /** Vertices of this polygon as Points */
-    vertices(): Array<Point>
+    /** Vertices of this polygon as a ShapeCollection of Vertices (position + normal preserved) */
+    vertices(): ShapeCollection<Vertex>
     {
-        return (this._polygon.vertices() as VertexJs[]).map(v => Point.from(v.position()));
+        return new ShapeCollection<Vertex>(
+            (this._polygon.vertices() as VertexJs[]).map(v => Vertex.from(v)),
+        );
     }
 
     /** Number of interior holes */
@@ -297,8 +308,9 @@ export class Polygon extends Shape
 
     override copy(): this
     {
-        const verts = this.vertices().map(p => p.toVertexJs());
-        const p = new Polygon(this.vertices());
+        const vertList = this.vertices().toArray();
+        const verts = vertList.map(v => v.inner());
+        const p = new Polygon(vertList);
         p._polygon = new PolygonJs(verts, {});
         p.style.merge(this.style.explicitData() as any);
         p.metadata = { ...this.metadata };
@@ -320,7 +332,7 @@ export class Polygon extends Shape
     /** Centroid of the polygon (average of vertex positions) */
     center(): Point
     {
-        const verts = this.vertices();
+        const verts = this.vertices().toArray();
         const sx = verts.reduce((acc, v) => acc + v.x, 0);
         const sy = verts.reduce((acc, v) => acc + v.y, 0);
         const sz = verts.reduce((acc, v) => acc + v.z, 0);
@@ -341,7 +353,7 @@ export class Polygon extends Shape
     /** Oriented bounding box of this polygon (minimum-volume via PCA) */
     obbox(): OBbox
     {
-        return OBbox.fromPoints(this.vertices());
+        return OBbox.fromPoints(this.vertices().toArray());
     }
 
     /** Minimum distance from this polygon surface to a point, mesh, or curve. */
@@ -365,7 +377,7 @@ export class Polygon extends Shape
     /** Total perimeter — sum of all edge lengths */
     perimeter(): number
     {
-        const verts = this.vertices();
+        const verts = this.vertices().toArray();
         const n = verts.length;
         let total = 0;
         for (let i = 0; i < n; i++)
@@ -393,7 +405,7 @@ export class Polygon extends Shape
     /** Area using triangle-fan cross-product method (works for planar polygons in 3D) */
     area(): number
     {
-        const verts = this.vertices();
+        const verts = this.vertices().toArray();
         const n = verts.length;
         if (n < 3) return 0;
         const v0 = verts[0];
@@ -472,7 +484,7 @@ export class Polygon extends Shape
             console.warn('Polygon.offset(): interior holes are not yet offset; only the outer boundary is processed.');
         }
 
-        const boundary = Curve.Polyline(this.vertices()).close();
+        const boundary = Curve.Polyline(this.vertices().toArray()).close();
         const offsetCurve = boundary.offset(distance, cornerType);
         if (!offsetCurve)
         {
@@ -511,7 +523,7 @@ export class Polygon extends Shape
         const baseDirection = direction ? Vector.from(direction) : this.normal();
         const dir = baseDirection.normalize().scale(length);
 
-        const bottom: Point[] = this.vertices();
+        const bottom: Vertex[] = this.vertices().toArray();
         const top: Point[] = bottom.map(p =>
             new Point(p.x + dir.x, p.y + dir.y, p.z + dir.z)
         );
@@ -538,7 +550,7 @@ export class Polygon extends Shape
     /** Polygon is basically Mesh with one polygon */
     toMesh(): Mesh
     {
-        return Mesh.fromPolygons([this.vertices()]);
+        return Mesh.fromPolygons([this.vertices().toArray()]);
     }
 
     async toGLTF(up: Axis = 'z'): Promise<string | undefined>

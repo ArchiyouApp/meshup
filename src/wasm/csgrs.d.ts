@@ -314,6 +314,11 @@ export class MeshJs {
   sliceComponents(normal_x: number, normal_y: number, normal_z: number, offset: number): SketchJs;
   distributeLinear(count: number, direction: Vector3Js, spacing: number): MeshJs;
   /**
+   * Merge coplanar, edge-adjacent faces back into n-gons. Applied
+   * automatically after boolean ops; exposed for manual use too.
+   */
+  reconstructNgons(): MeshJs;
+  /**
    * Rotate this mesh by a unit quaternion given as components `(w, x, y, z)`.
    * The quaternion is normalized before use, so non-unit input is safe.
    */
@@ -1111,6 +1116,7 @@ export interface InitOutput {
   readonly meshjs_raycastAll: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
   readonly meshjs_raycastBatchVisibility: (a: number, b: any, c: number, d: number, e: number, f: number) => any;
   readonly meshjs_raycastFirst: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
+  readonly meshjs_reconstructNgons: (a: number) => number;
   readonly meshjs_removePoorTriangles: (a: number, b: number) => number;
   readonly meshjs_renormalize: (a: number) => number;
   readonly meshjs_rotate: (a: number, b: number, c: number, d: number) => number;

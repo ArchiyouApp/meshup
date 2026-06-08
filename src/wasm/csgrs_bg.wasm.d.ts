@@ -123,6 +123,7 @@ export const meshjs_projectToPlane: (a: number, b: number, c: number, d: number,
 export const meshjs_raycastAll: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
 export const meshjs_raycastBatchVisibility: (a: number, b: any, c: number, d: number, e: number, f: number) => any;
 export const meshjs_raycastFirst: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
+export const meshjs_reconstructNgons: (a: number) => number;
 export const meshjs_removePoorTriangles: (a: number, b: number) => number;
 export const meshjs_renormalize: (a: number) => number;
 export const meshjs_rotate: (a: number, b: number, c: number, d: number) => number;

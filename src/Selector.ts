@@ -232,10 +232,10 @@ export class Selector
     /** Get all faces (Polygons) from a target */
     private _facesFromTarget(target: ShapeCollection | Mesh | Curve): Array<Polygon>
     {
-        if (target instanceof Mesh) return target.polygons();
+        if (target instanceof Mesh) return target.polygons().toArray();
         if (target instanceof ShapeCollection)
         {
-            return target.meshes().toArray().flatMap(m => m.polygons());
+            return target.meshes().toArray().flatMap(m => m.polygons().toArray());
         }
         return [];
     }

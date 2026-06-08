@@ -874,7 +874,9 @@ if (Symbol.dispose) CompoundCurve3DJs.prototype[Symbol.dispose] = CompoundCurve3
  * Edge projection result returned to JavaScript.
  *
  * Call `visiblePolylines()` / `hiddenPolylines()` to get the serialised
- * polyline data as a JS array of arrays of `[x, y, z]` triplets.
+ * polyline data as a JS array of arrays of `[x, y, z]` triplets, and
+ * `silhouetteIndices()` to get the indices of the polylines in
+ * `visiblePolylines()` that form the outer contour.
  */
 export class EdgeProjectionResultJs {
     static __wrap(ptr) {
@@ -915,8 +917,9 @@ export class EdgeProjectionResultJs {
         return ret;
     }
     /**
-     * Indices into visiblePolylines() whose source edge is a silhouette /
-     * open-mesh boundary (the outer contour).
+     * Returns indices into `visiblePolylines()` whose source edge is a
+     * silhouette or open-mesh boundary — i.e. the outer contour of the
+     * projection.
      * @returns {Uint32Array}
      */
     silhouetteIndices() {
@@ -1362,7 +1365,11 @@ export class MeshJs {
      * - `feature_angle_deg` – crease angle threshold in degrees (e.g. `15.0`).
      * - `n_samples` – HLR ray samples per edge segment (e.g. `8`).
      * - `occluders` – additional meshes that can occlude edges of `self`;
-     *   `self` is always included as an occluder.
+     *   `self` is always included as an occluder. **Ownership:** taken by
+     *   value (`Vec<MeshJs>`), so wasm-bindgen consumes the supplied JS
+     *   `MeshJs` handles. Callers that want to reuse an occluder across
+     *   multiple projection calls must `clone()` it first; the TS wrapper
+     *   does this automatically.
      * @param {number} vx
      * @param {number} vy
      * @param {number} vz
@@ -1421,6 +1428,15 @@ export class MeshJs {
     distributeLinear(count, direction, spacing) {
         _assertClass(direction, Vector3Js);
         const ret = wasm.meshjs_distributeLinear(this.__wbg_ptr, count, direction.__wbg_ptr, spacing);
+        return MeshJs.__wrap(ret);
+    }
+    /**
+     * Merge coplanar, edge-adjacent faces back into n-gons. Applied
+     * automatically after boolean ops; exposed for manual use too.
+     * @returns {MeshJs}
+     */
+    reconstructNgons() {
+        const ret = wasm.meshjs_reconstructNgons(this.__wbg_ptr);
         return MeshJs.__wrap(ret);
     }
     /**
@@ -3879,6 +3895,23 @@ export class SketchJs {
     static heart(width, height, segments, metadata) {
         const ret = wasm.sketchjs_heart(width, height, segments, metadata);
         return SketchJs.__wrap(ret);
+    }
+    /**
+     * Typed accessor for ring geometry, intended for callers that need raw
+     * coordinates (e.g. lifting a 2-D cut profile back into 3-D).
+     *
+     * Returns `Array<{ points: Float64Array, closed: boolean }>` where each
+     * `points` array is a flat `[x0, y0, x1, y1, ...]` buffer.  Polygon
+     * exteriors and holes are emitted as separate `closed: true` rings;
+     * LineStrings and Lines come back as `closed: false`.
+     *
+     * Prefer this over `debugGeometry()` for programmatic consumers — the
+     * debug string is a human-readable summary and its format is not stable.
+     * @returns {any}
+     */
+    rings() {
+        const ret = wasm.sketchjs_rings(this.__wbg_ptr);
+        return ret;
     }
     /**
      * @param {number} sx

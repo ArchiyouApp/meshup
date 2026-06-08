@@ -289,7 +289,7 @@ export class Bbox
     /** get all planes as polygons of this bbox */
     planes(): Array<Polygon>
     {
-       return this.box().polygons();
+       return this.box().polygons().toArray();
     }
 
     /** Get side face of bbox  
