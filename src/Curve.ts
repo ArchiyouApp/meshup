@@ -1845,6 +1845,39 @@ export class Curve extends Shape
         return curves
     }
 
+    /** Create a row of copies of this Curve with specific spacing between them
+     *
+     *  Spacing is measured from the bounding boxes of the curves, so they are placed adjacent plus the specified spacing.
+     *
+     *  @param count     - number of copies in the row (including the original)
+     *  @param spacing   - distance between bounding boxes of copies (default: 10)
+     *  @param direction - direction of the row (default: 'x')
+    */
+    row(count:number, spacing:number=10, direction:PointLike|Axis='x'):ShapeCollection<Curve>
+    {
+        const dirVec = Vector.from(direction).normalize(); // auto converts Axis
+        const bbox = this.bbox();
+        const offsetSize = bbox
+            ? new Vector(bbox.width(), bbox.depth(), bbox.height())
+                .scale(dirVec)
+                .length()
+            : 0;
+
+        const curves = new ShapeCollection<Curve>();
+
+        new Array(count).fill(0).forEach((_, i) =>
+        {
+            const curve = (i === 0) ? this : this.copy();
+            if(curve)
+            {
+                curve.move(dirVec.copy().scale(i * (offsetSize + spacing)));
+                curves.add(curve);
+            }
+        });
+
+        return curves;
+    }
+
     /** Extend this curve to another curve or shape collection.
      *  Fires a probe ray from each end along its tangent direction and finds
      *  the closest approach to `other` (= intersection for converging curves)
@@ -1978,7 +2011,6 @@ export class Curve extends Shape
                 console.info(`Curve::offset(): Merging collinear lines before offsetting to improve Curvo's handling of consecutive line segments in CompoundCurves.`);
                 localCurve.mergeColinearLines();
             }
-            const t = performance.now();
             offsettedCurve = Curve.fromCsgrs(localCurve.inner().offset(distance, cornerType));
         }
         catch (e)

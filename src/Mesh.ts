@@ -927,18 +927,23 @@ export class Mesh extends Shape
         return this.union(other);
     }
 
-    /** Subtract given Mesh from the current */
-    difference(other:Mesh): this
+    /** Subtract a Mesh — or every Mesh in a ShapeCollection — from the current */
+    difference(other:Mesh|ShapeCollection<Mesh>): this
     {
+        if(ShapeCollection.isShapeCollection(other))
+        {
+            other.meshes().toArray().forEach(mesh => this.difference(mesh));
+            return this;
+        }
         if(!other || !(other instanceof Mesh))
         {
-            throw new Error("Mesh::difference(): Please supply a valid Mesh instance!");
+            throw new Error("Mesh::difference(): Please supply a valid Mesh instance or ShapeCollection<Mesh>!");
         }
         return this.update(this.inner()?.difference(other.inner() as MeshJs));
     }
 
-    /** Subtract given Mesh from the current (alias for difference) */
-    subtract(other:Mesh): this
+    /** Subtract a Mesh (or ShapeCollection<Mesh>) from the current (alias for difference) */
+    subtract(other:Mesh|ShapeCollection<Mesh>): this
     {
         return this.difference(other);
     }

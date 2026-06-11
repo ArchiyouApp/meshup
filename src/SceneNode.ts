@@ -372,6 +372,14 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         return this;
     }
 
+    /** Make this container's lines dashed. Pass a custom dash pattern
+     *  (e.g. [10, 4]) or omit for the default 5px dash / 5px gap. */
+    dashed(dash: number[] = [5, 5]): this
+    {
+        this.style.stroke = { dash };
+        return this;
+    }
+
     /** Show or hide this container (and all its contents) during export. */
     visible(v: boolean): this
     {
