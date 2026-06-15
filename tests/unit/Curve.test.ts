@@ -340,3 +340,61 @@ describe('Curve.extrude()', () =>
 
 
 });
+
+describe('Curve.union()', () =>
+{
+    it('merges two overlapping closed curves into a single Curve', () =>
+    {
+        const res = Curve.Rect(40, 40).union(Curve.Rect(40, 40).moveX(20));
+        expect(res).toBeInstanceOf(Curve);
+        expect((res as Curve).isClosed()).toBe(true);
+    });
+
+    it('returns a ShapeCollection for genuinely disjoint curves', () =>
+    {
+        const res = Curve.Circle(5).union(Curve.Circle(5).moveX(100));
+        expect(res).toBeInstanceOf(ShapeCollection);
+        expect((res as ShapeCollection<Curve>).count()).toBe(2);
+    });
+
+    // Regression: a circle whose radius equals the rect half-width is tangent to the
+    // side edges; placing its centre on the top edge lands the tangent points on the
+    // corners. curvo then silently returns the two inputs unmerged — meshup's
+    // escalating-perturbation retry (wasm/meshup.rs) recovers the single region.
+    it('merges a circle tangent at the rect corners (degenerate case)', () =>
+    {
+        const w = 30, h = 100;
+        const r = Curve.Rect(w, h);
+        const ct = Curve.Circle(w / 2).moveY(h / 2);
+        const res = r.union(ct);
+        expect(res).toBeInstanceOf(Curve);
+        const c = res as Curve;
+        expect(c.isClosed()).toBe(true);
+        // Result spans the rect plus the protruding top of the circle.
+        const bb = c.bbox();
+        expect(bb.maxY()).toBeGreaterThan(h / 2);       // circle bulges above the rect top
+        expect(bb.minY()).toBeCloseTo(-h / 2, 1);       // rect bottom preserved
+    });
+
+    // Regression: chaining a second union onto an already-merged (compound) result with
+    // another corner-tangent circle. curvo is non-deterministic here (RNG-seeded
+    // tessellation) and errors outright on some runs; the geo polygon-boolean fallback
+    // (wasm/meshup.rs) makes the result reliable. Run several times to catch the flakiness.
+    it('merges rect + two corner-tangent circles (chained union, robust over repeats)', () =>
+    {
+        const w = 30, h = 100;
+        for (let i = 0; i < 10; i++)
+        {
+            const r = Curve.Rect(w, h);
+            const ct = Curve.Circle(w / 2).moveY(h / 2);
+            const cb = ct.copy().mirrorY(0);
+            const pl = r.union(ct).union(cb);
+            expect(pl).toBeInstanceOf(Curve);
+            const c = pl as Curve;
+            expect(c.isClosed()).toBe(true);
+            const bb = c.bbox();
+            expect(bb.maxY()).toBeGreaterThan(h / 2);   // top circle bulge
+            expect(bb.minY()).toBeLessThan(-h / 2);     // bottom circle bulge
+        }
+    });
+});

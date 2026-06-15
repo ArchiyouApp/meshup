@@ -942,10 +942,11 @@ export class Mesh extends Shape
         return this.update(this.inner()?.difference(other.inner() as MeshJs));
     }
 
-    /** Subtract a Mesh (or ShapeCollection<Mesh>) from the current (alias for difference) */
-    subtract(other:Mesh|ShapeCollection<Mesh>): this
+    /** Subtract one or more Meshes (or ShapeCollections) from the current */
+    subtract(...others: (Mesh|ShapeCollection<Mesh>)[]): this
     {
-        return this.difference(other);
+        others.forEach(other => this.difference(other));
+        return this;
     }
 
     /** Keep only intersection of the current Mesh with another */
@@ -1617,11 +1618,49 @@ export class Mesh extends Shape
     //// LAYOUT & ALIGNMENT ////
 
     /** Rotate the mesh to lay flat on the XY plane, then drop it so its bottom sits at Z = 0.
-     *  Uses OBbox principal-axis alignment so the dominant face ends up on the XY plane.
+     *  Aligns the thinnest OBB axis (least-variance = dominant face normal) with world +Z
+     *  using a shortest-arc rotation so the in-plane orientation is never disturbed.
+     *  This avoids the instability of toOrthoQuaternion() on symmetric plates where the
+     *  two largest PCA eigenvalues are equal and their eigenvectors are numerically arbitrary.
+     *
+     *  Fast path: if Z is already clearly the shortest AABB dimension, the mesh is already
+     *  flat — skip the O(n·50) PCA and only translate to Z = 0.
      */
     layflat(): this
     {
-        const q = this.obbox().toOrthoQuaternion();
+        const bb = this.bbox();
+        const xSpan = bb.maxX() - bb.minX();
+        const ySpan = bb.maxY() - bb.minY();
+        const zSpan = bb.maxZ() - bb.minZ();
+
+        // Fast path: Z is unambiguously the thinnest dimension (< half of both X and Y
+        // spans), so the mesh is already lying flat — no rotation needed.
+        if (zSpan <= xSpan && zSpan <= ySpan && zSpan < Math.min(xSpan, ySpan) * 0.5)
+            return Math.abs(bb.minZ()) > 1e-10 ? this.translate(0, 0, -bb.minZ()) : this;
+
+        // Full path: find the thin axis via OBB and rotate it to +Z.
+        // axes()[2] is the axis of least variance — the thickness / face-normal direction.
+        let thinAxis = this.obbox().axes()[2].copy();
+        if (thinAxis.dot(Vector.from(0, 0, 1)) < 0) thinAxis.reverse();
+
+        const dot = thinAxis.dot(Vector.from(0, 0, 1));
+        let q: { x: number; y: number; z: number; w: number };
+        if (dot >= 1 - 1e-10)
+        {
+            q = { x: 0, y: 0, z: 0, w: 1 };
+        }
+        else if (dot <= -1 + 1e-10)
+        {
+            q = { x: 1, y: 0, z: 0, w: 0 };              // upside-down: flip around X
+        }
+        else
+        {
+            const cr = thinAxis.copy().cross(Vector.from(0, 0, 1));
+            const qw = 1 + dot;
+            const len = Math.hypot(cr.x, cr.y, cr.z, qw) || 1;
+            q = { x: cr.x / len, y: cr.y / len, z: cr.z / len, w: qw / len };
+        }
+
         this.rotateQuaternion(q);
         return this.translate(0, 0, -this.bbox().minZ());
     }

@@ -51,6 +51,28 @@ describe('Example: Booleans', () =>
         await save(OUTPUT_DIR + 'test.booleans.holes.gltf', await box.toGLTF());
     });
 
+    it('keeps subtracted holes after a move (hole rings transform too)', async () =>
+    {
+        // Regression: a face's interior hole rings are stored separately from
+        // the outer ring. Mesh.transform() must move them too, otherwise the
+        // hole geometry is left behind and the hole vanishes after a move.
+        const box = Mesh.Box(100, 10, 100);
+        const hole = Mesh.Cylinder(10, 50).rotateX(90);
+        box.subtract(hole);
+
+        const volAfterSubtract = box.volume();
+        const trisAfterSubtract = box.inner().triangleCount();
+        expect(volAfterSubtract).toBeLessThan(100 * 10 * 100); // hole removed material
+
+        box.move(100, 0, 0);
+
+        // A pure translation must not change volume or topology.
+        expect(box.volume()).toBeCloseTo(volAfterSubtract, 1);
+        expect(box.inner().triangleCount()).toBe(trisAfterSubtract);
+
+        await save(OUTPUT_DIR + 'test.booleans.hole-after-move.gltf', await box.toGLTF());
+    });
+
     it('subtracts a sphere from a box corner', async () =>
     {
         const box = Mesh.Cube(50);

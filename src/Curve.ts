@@ -2553,11 +2553,32 @@ export class Curve extends Shape
     //// LAYOUT & ALIGNMENT ////
 
     /** Rotate the curve to lay flat on the XY plane, then drop it so its lowest point sits at Z = 0.
-     *  Uses OBbox principal-axis alignment so the dominant direction ends up on the XY plane.
+     *  Uses a shortest-arc rotation to align the thinnest OBB axis with world +Z, leaving the
+     *  in-plane orientation untouched (avoids instability for symmetric curves with equal eigenvalues).
      */
     layflat(): this
     {
-        const q = this.obbox().toOrthoQuaternion();
+        let thinAxis = this.obbox().axes()[2].copy();
+        if (thinAxis.dot(Vector.from(0, 0, 1)) < 0) thinAxis.reverse();
+
+        const dot = thinAxis.dot(Vector.from(0, 0, 1));
+        let q: { x: number; y: number; z: number; w: number };
+        if (dot >= 1 - 1e-10)
+        {
+            q = { x: 0, y: 0, z: 0, w: 1 };
+        }
+        else if (dot <= -1 + 1e-10)
+        {
+            q = { x: 1, y: 0, z: 0, w: 0 };
+        }
+        else
+        {
+            const cr = thinAxis.copy().cross(Vector.from(0, 0, 1));
+            const qw = 1 + dot;
+            const len = Math.hypot(cr.x, cr.y, cr.z, qw) || 1;
+            q = { x: cr.x / len, y: cr.y / len, z: cr.z / len, w: qw / len };
+        }
+
         this.rotateQuaternion(q);
         const bb = this.bbox();
         return bb ? this.translate(0, 0, -bb.minZ()) : this;

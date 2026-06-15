@@ -127,6 +127,36 @@ describe('Collection accessors', () =>
     });
 });
 
+describe('Collection.union() — no argument, merge by type', () =>
+{
+    it('unions overlapping closed curves into a single outline', () =>
+    {
+        // Mirrors the user scenario: a rect with two circles overlapping it
+        const r  = Curve.Rect(100, 60);
+        const ct = Curve.Circle(30).moveY(30);
+        const cb = Curve.Circle(30).moveY(-30);
+        const result = new Collection(r, ct, cb).union();
+        expect(result).toBeInstanceOf(Curve);
+    });
+
+    it('unions all meshes into a single Mesh', () =>
+    {
+        const result = new Collection(cube1.copy(), cube2.copy().moveX(3)).union();
+        expect(result).toBeInstanceOf(Mesh);
+    });
+
+    it('returns a mixed collection when both meshes and curves are present', () =>
+    {
+        const result = new Collection(cube1.copy(), Curve.Rect(20, 20), Curve.Circle(8)).union();
+        expect(Collection.isShapeCollection(result)).toBe(true);
+    });
+
+    it('returns null for an empty collection', () =>
+    {
+        expect(new Collection().union()).toBeNull();
+    });
+});
+
 describe('Collection.moveTo()', () =>
 {
     it('accepts a Point instance as target', () =>

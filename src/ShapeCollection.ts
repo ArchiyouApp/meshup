@@ -544,14 +544,58 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     //// BOOLEAN OPERATIONS ////
 
-    union(other?: Mesh | ShapeCollection<Mesh>): Mesh
+    /** Boolean union.
+     *  - `union(other)`  : union all Meshes in this collection together with `other`
+     *                      (mesh boolean), returning a single Mesh.
+     *  - `union()`       : no argument → merge the collection's own shapes *by type*.
+     *                      Unions Meshes into one Mesh and closed Curves into their
+     *                      combined outline(s). Returns the single result when there is
+     *                      only one, otherwise a ShapeCollection of the per-type results.
+     */
+    union(other?: Mesh | ShapeCollection<Mesh>): Mesh | Curve | ShapeCollection<any> | null
     {
+        if (other === undefined) return this._unionByType();
+
         const meshesToUnion = this.meshes().toArray();
         if (other instanceof Mesh) meshesToUnion.push(other);
         else if (ShapeCollection.isShapeCollection(other)) meshesToUnion.push(...other.meshes().toArray());
-        else if (other !== undefined) console.warn(`ShapeCollection::union(): Invalid argument. Only Mesh or ShapeCollection allowed.`, other);
+        else console.warn(`ShapeCollection::union(): Invalid argument. Only Mesh or ShapeCollection allowed.`, other);
         if (!meshesToUnion.length) { console.warn('ShapeCollection::union(): No meshes. Returning empty mesh.'); return new Mesh(); }
         return meshesToUnion.slice(1).reduce((acc, mesh) => acc.union(mesh), meshesToUnion[0]);
+    }
+
+    /** Merge the collection's own shapes grouped by type: all Meshes union into a single
+     *  Mesh, all closed Curves union into their combined outline(s). Used by `union()`
+     *  when called with no argument. */
+    private _unionByType(): Mesh | Curve | ShapeCollection<any> | null
+    {
+        const results: Array<Mesh | Curve | ShapeCollection<Curve>> = [];
+
+        // Meshes → single Mesh
+        if (this.meshes().length) results.push(this.mergeAll());
+
+        // Curves → chained boolean union. NOTE: we don't use unionAll() here because
+        // Curve.union() returns a single Curve, so chaining must keep that result as the
+        // accumulator (unionAll mishandles this and drops curves after the first union).
+        const curves = this.curves().toArray();
+        if (curves.length)
+        {
+            let acc: Curve | ShapeCollection<Curve> = curves[0];
+            for (let i = 1; i < curves.length; i++)
+            {
+                if (!(acc instanceof Curve)) break; // disjoint result: stop chaining
+                const next = acc.union(curves[i]);
+                if (next) acc = next;
+            }
+            results.push(acc);
+        }
+
+        if (results.length === 0) { console.warn('ShapeCollection::union(): No Mesh or Curve shapes to union.'); return null; }
+        if (results.length === 1) return results[0] instanceof ShapeCollection ? results[0].checkSingle() as any : results[0];
+
+        // Mixed types: flatten any curve-collection result into the combined collection
+        const flat = results.flatMap(r => ShapeCollection.isShapeCollection(r) ? r.toArray() : [r]);
+        return new ShapeCollection<any>(...flat as any[]);
     }
 
     subtract(other: Mesh | ShapeCollection<Mesh>): this
