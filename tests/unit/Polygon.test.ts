@@ -321,3 +321,95 @@ describe('Polygon.distance()', () =>
         expect(p.distance(cube)).toBeCloseTo(5, 6);
     });
 });
+
+describe('Polygon.split()', () =>
+{
+    // The user's motivating example: a thin crescent split by a vertical line.
+    const crescent = (): Polygon =>
+    {
+        const pl = Curve.Polyline([0, 0, 0], [100, 50, 0], [200, 0, 0]);
+        const pl2 = pl.copy().offset(10)!;
+        return pl.copy().connect(pl2).toPolygon()!;
+    };
+
+    it('splits a polygon into two polygons with a crossing line', () =>
+    {
+        const poly = crescent();
+        const result = poly.split(Curve.Line([100, -50, 0], [100, 100, 0]));
+
+        expect(result).not.toBeNull();
+        expect(result!.count()).toBe(2);
+        result!.toArray().forEach(p => expect(p).toBeInstanceOf(Polygon));
+        // An exact split (default gap 0): the pieces tile the original area.
+        const sum = result!.toArray().reduce((s, p) => s + p.area(), 0);
+        expect(sum).toBeCloseTo(poly.area(), 1);
+    });
+
+    it('splits an axis-aligned box (edges parallel to the cut) reliably', () =>
+    {
+        const box = Curve.Rect(200, 100).toPolygon()!;
+        const result = box.split(Curve.Line([0, -80, 0], [0, 80, 0]));
+        expect(result).not.toBeNull();
+        expect(result!.count()).toBe(2);
+        result!.toArray().forEach(p => expect(p.area()).toBeCloseTo(10000, 0));
+    });
+
+    it('extends the cut so a line ending inside the polygon still splits it', () =>
+    {
+        const box = Curve.Rect(200, 100).toPolygon()!;
+        // Endpoints are inside the box; the cut is extended to pass all the way through.
+        const result = box.split(Curve.Line([0, -10, 0], [0, 10, 0]));
+        expect(result).not.toBeNull();
+        expect(result!.count()).toBe(2);
+    });
+
+    it('splits a polygon lying on a non-XY (XZ) plane', () =>
+    {
+        const box = Curve.Rect(200, 100, [0, 0, 0], 'xz').toPolygon()!;
+        const result = box.split(Curve.Line([0, 0, -80], [0, 0, 80]));
+        expect(result).not.toBeNull();
+        expect(result!.count()).toBe(2);
+    });
+
+    it('leaves a seam when a positive gap is given', () =>
+    {
+        const box = Curve.Rect(200, 100).toPolygon()!;
+        const result = box.split(Curve.Line([0, -80, 0], [0, 80, 0]), 10);
+        expect(result).not.toBeNull();
+        expect(result!.count()).toBe(2);
+        // A 10-wide seam over the 100-tall cut removes ~1000 of the 20000 area.
+        const sum = result!.toArray().reduce((s, p) => s + p.area(), 0);
+        expect(sum).toBeLessThan(box.area());
+        expect(sum).toBeCloseTo(19000, -2);
+    });
+
+    it('splits with a closed Polygon band that spans the shape', () =>
+    {
+        const box = Curve.Rect(200, 100).toPolygon()!;
+        const band = Curve.Rect(10, 300).toPolygon()!;
+        const result = box.split(band);
+        expect(result).not.toBeNull();
+        expect(result!.count()).toBe(2);
+    });
+
+    it('returns null (with warning) when the cutter misses the polygon', () =>
+    {
+        const box = Curve.Rect(200, 100).toPolygon()!;
+        const result = box.split(Curve.Line([300, -50, 0], [300, 100, 0]));
+        expect(result).toBeNull();
+    });
+
+    it('returns null (with warning) for a self-intersecting cutter', () =>
+    {
+        const box = Curve.Rect(200, 100).toPolygon()!;
+        const bowtie = Curve.Polyline([0, -50, 0], [200, 100, 0], [200, -50, 0], [0, 100, 0]);
+        expect(bowtie.selfIntersecting()).toBe(true);
+        expect(box.split(bowtie)).toBeNull();
+    });
+
+    it('returns null for an invalid gap', () =>
+    {
+        const box = Curve.Rect(200, 100).toPolygon()!;
+        expect(box.split(Curve.Line([0, -80, 0], [0, 80, 0]), -5)).toBeNull();
+    });
+});

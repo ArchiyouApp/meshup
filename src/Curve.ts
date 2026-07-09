@@ -20,7 +20,7 @@
 
 import { ANGLE_COMPARE_TOLERANCE, TESSELATION_TOLERANCE, BASE_PLANE_NAME_TO_PLANE } from './constants';
 
-import { NurbsCurve3DJs, CompoundCurve3DJs, NurbsSurfaceJs, Vector3Js, BooleanRegionJs, VertexJs, Point3Js, PolygonJs } from "./wasm/csgrs";
+import { NurbsCurve3DJs, CompoundCurve3DJs, NurbsSurfaceJs, Vector3Js, BooleanRegionJs, VertexJs, Point3Js, PolygonJs, SketchJs } from "./wasm/csgrs";
 
 import { ShapeCollection, getCsgrs, Mesh } from './index';
 import { Shape } from './Shape';
@@ -40,6 +40,9 @@ import { GLTFBuilder } from './GLTFBuilder';
 
 export class Curve extends Shape
 {
+    /** Below this length a curve is considered degenerate (zero-length) and rejected. */
+    static readonly ZERO_LENGTH_TOLERANCE = 1e-7;
+
     // inherits: _id, _node, style, metadata from Shape
     _curve: NurbsCurve3DJs|CompoundCurve3DJs|undefined = undefined;
 
@@ -192,10 +195,61 @@ export class Curve extends Shape
         return newCurve;
     }
 
+    /** Convert a csgrs `SketchJs` (2-D geometry) into meshup `Curve`s.
+     *
+     *  Each ring from `SketchJs.rings()` becomes one polyline `Curve` on the XY
+     *  plane (z = 0). Polygon exteriors and holes come back as separate
+     *  `closed: true` rings; LineStrings/Lines as `closed: false`. Degenerate
+     *  rings are skipped.
+     *
+     *  This is the inverse of {@link Sketch._toSketchJs} and the bridge the
+     *  {@link Importer} uses for SVG / GeoJSON / DXF import.
+     *
+     *  NOTE: rings are returned as a flat collection — hole↔exterior nesting is
+     *  not reconstructed, and source styling (SVG colors etc.) is not carried by
+     *  `rings()` and is therefore dropped.
+     */
+    static fromSketchJs(sketch: SketchJs): ShapeCollection<Curve>
+    {
+        if(!sketch) { throw new Error('Curve::fromSketchJs(): Invalid SketchJs'); }
+
+        const rings = Mesh._extractSketchRings(sketch); // { points:[[x,y]...], closed }[]
+        const curves = new ShapeCollection<Curve>();
+
+        rings.forEach((ring) =>
+        {
+            if(!ring.points || ring.points.length < 2) { return; } // need at least 2 points
+            const pts: Array<[number, number, number]> = ring.points.map(([x, y]) => [x, y, 0]);
+
+            // Defensively close a ring flagged closed whose endpoints don't coincide
+            // (geo exteriors already repeat the first point, so this is usually a no-op).
+            if(ring.closed)
+            {
+                const [fx, fy, fz] = pts[0];
+                const [lx, ly, lz] = pts[pts.length - 1];
+                if(Math.hypot(fx - lx, fy - ly, fz - lz) > Curve.ZERO_LENGTH_TOLERANCE)
+                {
+                    pts.push([fx, fy, fz]);
+                }
+            }
+
+            try { curves.add(Curve.Polyline(pts)); }
+            catch(e){ console.warn('Curve.fromSketchJs(): skipped a degenerate ring:', (e as Error)?.message); }
+        });
+
+        return curves;
+    }
+
     static Line(start: PointLike, end: PointLike): Curve
     {
         if(!isPointLike(start) || !isPointLike(end)){ throw new Error('Curve.Line(): Invalid start or end point. Please supply a PointLike: [x,y], [x,y,z], Point, Vector etc'); }
-        return this.Polyline([Point.from(start), Point.from(end)]); // We can use polyline here
+        const startPt = Point.from(start);
+        const endPt = Point.from(end);
+        if(startPt.distance(endPt) < Curve.ZERO_LENGTH_TOLERANCE)
+        {
+            throw new Error(`Curve.Line(): Cannot create a zero-length line — start and end are the same point (${startPt.toString()}). Please supply two distinct points.`);
+        }
+        return this.Polyline([startPt, endPt]); // We can use polyline here
     }
 
     /** Make a polyline curve with corners given by control points */
@@ -216,9 +270,18 @@ export class Curve extends Shape
             controlPoints = controlPoints as Array<PointLike>; // already in correct format
         }
 
+        // Reject degenerate input that would produce a zero-length curve: fewer than two
+        // points, or all points coincident (cumulative path length ~ 0).
+        const points = (controlPoints as Array<PointLike>).map(p => Point.from(p));
+        const totalLength = points.reduce((sum, p, i) => i === 0 ? 0 : sum + points[i - 1].distance(p), 0);
+        if(points.length < 2 || totalLength < Curve.ZERO_LENGTH_TOLERANCE)
+        {
+            throw new Error(`Curve.Polyline(): Cannot create a zero-length curve — the ${points.length} supplied point(s) are coincident (e.g. ${points[0]?.toString()}). Please supply at least two distinct points.`);
+        }
+
         return Curve.fromCsgrs(
             getCsgrs()?.NurbsCurve3DJs?.makePolyline(
-                controlPoints.map(p => Point.from(p).toPoint3Js()),
+                points.map(p => p.toPoint3Js()),
                 true,
             )
         );
@@ -766,16 +829,18 @@ export class Curve extends Shape
         }
     }
     
-    spans(): Array<Curve>
+    spans(): ShapeCollection<Curve>
     {
         if(!this.isCompound())
         {
             // If not compound, return self as single span for consistent API
-            return [this];
+            return new ShapeCollection<Curve>(this);
         }
         else
         {
-            return (this.inner() as CompoundCurve3DJs).spans().map(span => Curve.fromCsgrs(span));
+            return new ShapeCollection<Curve>(
+                (this.inner() as CompoundCurve3DJs).spans().map(span => Curve.fromCsgrs(span))
+            );
         }
     }
 
@@ -799,6 +864,84 @@ export class Curve extends Shape
         }
         // For compound curves, check via getOnPlane
         return this.getOnPlane() !== null;
+    }
+
+    /** Whether this curve is a single straight segment (all sampled points collinear). */
+    isStraight(tolerance: number = 1e-6): boolean
+    {
+        const pts = this.tessellate();
+        if (pts.length < 2) { return false; }
+
+        const a = pts[0];
+        const b = pts[pts.length - 1];
+        const dir = Vector.from(b.x - a.x, b.y - a.y, b.z - a.z);
+        if (dir.length() < tolerance) { return false; } // degenerate / closed
+        dir.normalize();
+
+        for (let i = 1; i < pts.length - 1; i++)
+        {
+            const ap = Vector.from(pts[i].x - a.x, pts[i].y - a.y, pts[i].z - a.z);
+            if (dir.copy().cross(ap).length() > tolerance) { return false; }
+        }
+        return true;
+    }
+
+    /** Whether this (planar) curve crosses itself.
+     *
+     *  The curve is tessellated into a polyline, projected onto its own plane, and
+     *  every pair of non-adjacent segments is tested for a proper crossing. Segments
+     *  that share an endpoint by construction (consecutive segments, and the closing
+     *  wrap-around pair of a closed curve) are skipped.
+     *
+     *  Useful to reject degenerate inputs before operations that assume a simple
+     *  (non-self-intersecting) curve — e.g. splitting a Polygon with a cutting curve.
+     *
+     *  Non-planar curves are not supported: a warning is emitted and `false` returned.
+     *
+     *  @param tolerance planar-fit tolerance passed to getOnPlane()
+     */
+    selfIntersecting(tolerance: number = 1e-6): boolean
+    {
+        const plane = this.getOnPlane(tolerance);
+        if (!plane)
+        {
+            console.warn('Curve::selfIntersecting(): curve is not planar; self-intersection test is not applicable. Returning false.');
+            return false;
+        }
+
+        // Project each tessellated point onto the plane's in-plane axes → 2D (u, v)
+        let pts: Array<[number, number]> = this.tessellate().map(p =>
+        {
+            const v = p.toVector();
+            return [v.dot(plane.x), v.dot(plane.y)] as [number, number];
+        });
+
+        const closed = this.isClosed();
+        // A closed curve repeats its start point at the end — drop the duplicate so the
+        // wrap-around segment (last → first) is formed via modulo indexing instead.
+        if (closed && pts.length > 1)
+        {
+            const [fx, fy] = pts[0];
+            const [lx, ly] = pts[pts.length - 1];
+            if (Math.hypot(fx - lx, fy - ly) < 1e-9) { pts = pts.slice(0, -1); }
+        }
+
+        const n = pts.length;
+        if (n < 4) { return false; } // need at least 2 non-adjacent segments to cross
+        const segCount = closed ? n : n - 1;
+
+        for (let i = 0; i < segCount; i++)
+        {
+            const a1 = pts[i];
+            const a2 = pts[(i + 1) % n];
+            for (let j = i + 2; j < segCount; j++)
+            {
+                // Skip the wrap-around pair of a closed curve (segment 0 and last share a vertex)
+                if (closed && i === 0 && j === segCount - 1) { continue; }
+                if (_seg2DProperlyIntersect(a1, a2, pts[j], pts[(j + 1) % n])) { return true; }
+            }
+        }
+        return false;
     }
 
     /** Get the plane of the Curve as { normal, x, y }.
@@ -1064,7 +1207,7 @@ export class Curve extends Shape
     /** Minimum distance to another PointLike or Curve
      *  Returns null if the closest parameter cannot be determined.
      */
-    distance(to: PointLike|Curve): number|null
+    distance(to: PointLike|Curve|Mesh|Polygon): number|null
     {
         if(isPointLike(to))
         {
@@ -1073,6 +1216,15 @@ export class Curve extends Shape
         else if(to instanceof Curve)
         {
             return this._distanceToCurve(to);
+        }
+        // Surface shapes measure curve↔surface distance themselves (Polygon → its mesh).
+        else if(to instanceof Mesh)
+        {
+            return to.distanceTo(this);
+        }
+        else if(to instanceof Polygon)
+        {
+            return to.toMesh().distanceTo(this);
         }
         return null;
     }
@@ -1247,10 +1399,39 @@ export class Curve extends Shape
         return Vector.from(this.end()).subtract(Vector.from(this.start()));
     }
 
-    /** Returns the start and end vertices as a two-element array (edge-like) */
-    vertices(): [Vertex, Vertex]
+    /** Corner vertices along this Curve, in order.
+     *  - a straight line or single arc/spline span yields [start, end]
+     *  - polylines and rects yield every corner (segment junction) vertex
+     *  Coincident consecutive points (including the wrap for closed curves) are
+     *  collapsed, so a closed rect returns its 4 distinct corners. */
+    vertices(): ShapeCollection<Vertex>
     {
-        return [this.start(), this.end()];
+        const EPS = 1e-6;
+        const segs = this.segments().toArray();
+
+        // Ordered list of candidate points: each segment's start, plus the final
+        // end for open curves (a closed curve's final end coincides with the start).
+        const points: Point[] = segs.map(seg => new Point(seg.start()));
+        if (!this.isClosed() && segs.length > 0)
+        {
+            points.push(new Point(segs[segs.length - 1].end()));
+        }
+
+        // Collapse consecutive duplicates, and the wrap-around pair for closed curves.
+        const unique: Point[] = [];
+        for (const p of points)
+        {
+            if (unique.length === 0 || unique[unique.length - 1].distance(p) > EPS)
+            {
+                unique.push(p);
+            }
+        }
+        if (this.isClosed() && unique.length > 1 && unique[0].distance(unique[unique.length - 1]) <= EPS)
+        {
+            unique.pop();
+        }
+
+        return new ShapeCollection<Vertex>(...unique.map(p => new Vertex(p)));
     }
 
     /** Return all atomic segments of this Curve.
@@ -1259,7 +1440,7 @@ export class Curve extends Shape
      */
     segments(): ShapeCollection<Curve>
     {
-        const segs: Curve[] = this.spans().flatMap(span =>
+        const segs: Curve[] = this.spans().toArray().flatMap(span =>
         {
             const inner = span.inner() as NurbsCurve3DJs;
             if (inner.degree() === 1)
@@ -1960,6 +2141,28 @@ export class Curve extends Shape
         return t > 0 ? t : null;
     }
 
+    /** Sign correction so that a positive offset distance always enlarges a curve
+     *  (bigger bbox / enclosed area) and a negative one always shrinks it, regardless
+     *  of the curve's winding direction or point order.
+     *  Curvo/geo-buf offset a fixed side relative to the curve's own point order, so a
+     *  curve wound/traversed the other way (e.g. after reverse()) would otherwise grow on
+     *  "negative" and shrink on "positive". For open curves there is no true winding, so we
+     *  use the signed area of the polygon formed by virtually closing start back to end —
+     *  this captures which side the curve bulges towards relative to its own chord.
+     *  Expects a curve already expressed in local XY (z ~ 0). */
+    private _offsetOrientationSign(localCurve: Curve): number
+    {
+        const pts = localCurve.tessellate();
+        let signedArea = 0;
+        for(let i = 0; i < pts.length; i++)
+        {
+            const a = pts[i];
+            const b = pts[(i + 1) % pts.length];
+            signedArea += (a.x * b.y - b.x * a.y);
+        }
+        return signedArea < 0 ? -1 : 1;
+    }
+
     /** Offset a Curve a given amount (+ or -) and optionally provide corner type (default:sharp) */
     offset(distance: number, cornerType:'sharp'|'round'|'smooth'='sharp'): Curve|null
     {
@@ -2011,7 +2214,8 @@ export class Curve extends Shape
                 console.info(`Curve::offset(): Merging collinear lines before offsetting to improve Curvo's handling of consecutive line segments in CompoundCurves.`);
                 localCurve.mergeColinearLines();
             }
-            offsettedCurve = Curve.fromCsgrs(localCurve.inner().offset(distance, cornerType));
+            const orientationSign = this._offsetOrientationSign(localCurve);
+            offsettedCurve = Curve.fromCsgrs(localCurve.inner().offset(distance * orientationSign, cornerType));
         }
         catch (e)
         {
@@ -2039,8 +2243,16 @@ export class Curve extends Shape
 
         const planarFrame = this._getPlanarFrame();
         const localCurve = this._toLocalXY(planarFrame, this.copy());
+
+        // geo-buf's offsetGeo only produces valid results for CCW input: reverse CW curves
+        // before offsetting (with an unmodified, "positive grows" distance) and reverse the
+        // result back so the returned curve keeps the original winding direction.
+        const isCW = this._offsetOrientationSign(localCurve) < 0;
+        if(isCW){ localCurve.reverse(); }
+
         const degreeOneCurve = localCurve.toDegree1();
         const offsettedCurve = Curve.fromCsgrs(degreeOneCurve.inner()?.offsetGeo(distance));
+        if(isCW){ offsettedCurve?.reverse(); }
 
         return this.update(this._fromLocalXY(offsettedCurve, planarFrame));
     }
@@ -2118,41 +2330,43 @@ export class Curve extends Shape
      *  - maxGap < distance(other) - can't connect
      *  - maxGap >= distance(other) - connect closest endpoints
      */
-    connectTo(other:Curve, maxGap?: number):this 
+    connect(other:Curve, maxGap?: number):this
     {
-        if(!(other instanceof Curve)){ throw new Error(`Curve::connectTo(): Expected a Curve. Got: ${other}`); }
+        if(!(other instanceof Curve)){ throw new Error(`Curve::connect(): Expected a Curve. Got: ${other}`); }
 
-        const curEndpoints = [{ point: new Point(this.start()), used: false }, { point: new Point(this.end()), used: false }];
-        const otherEndpoints = [{ point: new Point(other.start()), used: false }, { point: new Point(other.end()), used: false }];
-        
-        // Find closest pair of endpoints and create extra lines
+        const curStart = new Point(this.start());
+        const curEnd   = new Point(this.end());
+        const otherStart = new Point(other.start());
+        const otherEnd   = new Point(other.end());
+
+        // Two complementary ways to pair the endpoints of both curves into a single
+        // continuous loop. Pick the one with the smallest total gap: that is the
+        // non-crossing pairing (crossing connectors always have a larger total length).
+        const pairingA = [[curStart, otherStart], [curEnd, otherEnd]] as const;   // start↔start, end↔end
+        const pairingB = [[curStart, otherEnd], [curEnd, otherStart]] as const;   // start↔end,   end↔start
+        const totalGap = (pairing: typeof pairingA) => pairing.reduce((sum, [a, b]) => sum + a.distance(b), 0);
+        const bestPairing = totalGap(pairingA) <= totalGap(pairingB) ? pairingA : pairingB;
+
+        // Create a connector line for each pair within maxGap (undefined = always connect).
         const addedLines: Array<Curve> = [];
-
-        curEndpoints.forEach(curEndpoint => 
+        bestPairing.forEach(([a, b]) =>
         {
-            otherEndpoints.forEach(otherEndpoint => 
+            const dist = a.distance(b);
+            if (maxGap === undefined || dist <= maxGap)
             {
-                // skip if either endpoint already used
-                if(curEndpoint.used || otherEndpoint.used){ return; }
-
-                const dist = curEndpoint.point.distance(otherEndpoint.point);
-                if (maxGap === undefined || dist <= maxGap)
-                {
-                    curEndpoint.used = true;
-                    otherEndpoint.used = true;
-                    const line = Curve.Line(curEndpoint.point, otherEndpoint.point); 
-                    addedLines.push(line);
-                }
-            });
+                addedLines.push(Curve.Line(a, b));
+            }
         });
 
-        // Combine original spans with added lines and create a new CompoundCurve
-        const combinedCurves = new ShapeCollection<Curve>(...this.spans().concat(addedLines)).combine();
+        // Combine both curves' spans with the added connector lines into a new CompoundCurve
+        const combinedCurves = new ShapeCollection<Curve>(
+                    ...this.spans().toArray().concat(
+                            other.spans().toArray()).concat(addedLines)).combine();
         // The combined collection should always be a Curve or CompoundCurve
         // But just to make sure:
         if(combinedCurves.count() > 1)
         {
-            console.warn(`Curve::connectTo(): Unexpected result: more than one combined curve. Check connectivity and maxGap.`, combinedCurves);
+            console.warn(`Curve::connect(): Unexpected result: more than one combined curve. Check connectivity and maxGap.`, combinedCurves);
         }
 
         this._curve = combinedCurves.first()?.inner();
@@ -2386,12 +2600,30 @@ export class Curve extends Shape
      * 
      *  NOTE: bring this into the Rust/WASM layer?
      */
-    extrude(length: number, direction: PointLike = [0, 0, 1]): Mesh | null
+    extrude(length: number, direction?: PointLike): Mesh | Polygon | null
     {
         if (!this._curve) { return null; }
 
-        const d = Vector.from(direction as any).normalize().scale(length);
+        // Default to the curve's own planar normal so a closed planar curve extrudes
+        // perpendicular to its own plane rather than always along world Z.
+        const resolvedDirection = direction ?? (this.isPlanar() ? this.normal() : null) ?? [0, 0, 1];
+
+        const d = Vector.from(resolvedDirection as any).normalize().scale(length);
         const dirVec = new Vector3Js(d.x, d.y, d.z);
+
+        // A straight, open curve sweeps into a single flat quad. Return a planar Polygon
+        // (which itself has .extrude() to build a solid) rather than a Mesh.
+        if (!this.isClosed() && this.isStraight())
+        {
+            const s = this.start();
+            const e = this.end();
+            return new Polygon([
+                [s.x,       s.y,       s.z],
+                [e.x,       e.y,       e.z],
+                [e.x + d.x, e.y + d.y, e.z + d.z],
+                [s.x + d.x, s.y + d.y, s.z + d.z],
+            ]);
+        }
 
         const surfaces: NurbsSurfaceJs[] = this.isCompound()
             ? (this._curve as CompoundCurve3DJs).extrude(dirVec)
@@ -2426,7 +2658,7 @@ export class Curve extends Shape
 
             if (capPts.length >= 3)
             {
-                const extrusionDir = Vector.from(direction as any).normalize();
+                const extrusionDir = Vector.from(resolvedDirection as any).normalize();
                 const curveNormal  = this.normalOrientation();
 
                 // When the curve normal is aligned with the extrusion direction, the original
@@ -2460,13 +2692,146 @@ export class Curve extends Shape
         return Mesh.from(this._csgrs.MeshJs.fromPolygons(polygons, {}));
     }
 
-    
+    /** Loft a ruled surface/solid through this curve and one or more other curves.
+     *  Delegates the surface math to the curvo/csgrs native `NurbsCurve3DJs.loft`.
+     *
+     *  - **Open profiles** → a lofted surface. Two straight open curves give a single flat
+     *    `Polygon` (quad); any other open loft returns a triangulated surface `Mesh`.
+     *  - **Closed profiles** → a `Mesh`. With `solid = true` (default) end caps are added at
+     *    the first and last profile for a watertight solid; with `solid = false` only the
+     *    open tube wall is returned.
+     *
+     *  @param others  A single Curve or an array of Curves to loft through (in order after this).
+     *  @param solid   When all profiles are closed, cap the ends into a watertight solid (default true).
+     *  @returns A new Mesh or Polygon, or null on invalid input.
+     */
+    loft(others: Curve | Curve[], solid: boolean = true): Mesh | Polygon | null
+    {
+        if (!this._curve) { return null; }
+
+        const otherList = Array.isArray(others) ? others : [others];
+        const profiles: Curve[] = [this, ...otherList];
+
+        if (profiles.some(p => !(p instanceof Curve) || !p.inner()))
+        {
+            console.warn('Curve::loft(): all inputs must be initialized Curves.');
+            return null;
+        }
+        if (profiles.length < 2)
+        {
+            console.warn('Curve::loft(): need at least two profile curves to loft.');
+            return null;
+        }
+
+        const allClosed = profiles.every(p => p.isClosed());
+        const allStraightOpen = profiles.every(p => !p.isClosed() && p.isStraight());
+
+        // Two straight open curves loft into a single flat quad — return a planar Polygon
+        // (which itself has .extrude()) rather than a tessellated Mesh, matching extrude().
+        if (allStraightOpen && profiles.length === 2)
+        {
+            const s0 = profiles[0].start(); const e0 = profiles[0].end();
+            const s1 = profiles[1].start(); const e1 = profiles[1].end();
+            return new Polygon([
+                [s0.x, s0.y, s0.z],
+                [e0.x, e0.y, e0.z],
+                [e1.x, e1.y, e1.z],
+                [s1.x, s1.y, s1.z],
+            ]);
+        }
+
+        // Loft span-wise. spans() returns [self] for non-compound curves, so this handles
+        // both single and compound profiles uniformly. All profiles must share a span count.
+        const spanLists = profiles.map(p => p.spans());
+        const spanCount = spanLists[0].length;
+        if (!spanLists.every(sl => sl.length === spanCount))
+        {
+            console.warn('Curve::loft(): profiles have differing span counts — cannot loft.');
+            return null;
+        }
+
+        const surfaces: NurbsSurfaceJs[] = [];
+        try
+        {
+            for (let j = 0; j < spanCount; j++)
+            {
+                // Clone: the native static loft takes ownership of and frees its inputs,
+                // so pass copies to keep the caller's curves (and cap geometry below) valid.
+                const group = spanLists.map(sl => (sl[j].inner() as NurbsCurve3DJs).clone());
+                surfaces.push(NurbsCurve3DJs.loft(group));
+            }
+        }
+        catch (e)
+        {
+            console.warn('Curve::loft(): native loft failed:', e);
+            return null;
+        }
+
+        const polygons: PolygonJs[] = [];
+        for (const surf of surfaces)
+        {
+            const { positions, normals, indices } = surf.toArrays() as
+                { positions: Float32Array; normals: Float32Array; indices: Uint32Array };
+
+            for (let i = 0; i < indices.length; i += 3)
+            {
+                const verts = [0, 1, 2].map(k => {
+                    const vi = indices[i + k] * 3;
+                    const pos = new Point3Js(positions[vi], positions[vi + 1], positions[vi + 2]);
+                    const nor = new Vector3Js(normals[vi], normals[vi + 1], normals[vi + 2]);
+                    return new VertexJs(pos, nor);
+                });
+                polygons.push(new PolygonJs(verts, {}));
+            }
+        }
+
+        // Cap the two end profiles into a watertight solid when all profiles are closed.
+        if (allClosed && solid)
+        {
+            const first = profiles[0];
+            const last  = profiles[profiles.length - 1];
+            // Outward cap normals point away from the neighbouring profile.
+            const firstOut = Vector.from(first.center()).subtracted(profiles[1].center()).normalize();
+            const lastOut  = Vector.from(last.center()).subtracted(profiles[profiles.length - 2].center()).normalize();
+
+            const firstCap = this._makeCap(first, firstOut);
+            const lastCap  = this._makeCap(last, lastOut);
+            if (firstCap) { polygons.push(firstCap); }
+            if (lastCap)  { polygons.push(lastCap); }
+        }
+
+        if (polygons.length === 0) { return null; }
+        return Mesh.from(this._csgrs.MeshJs.fromPolygons(polygons, {}));
+    }
+
+    /** Build a single cap face for a closed profile, wound so its normal faces `outward`. */
+    private _makeCap(profile: Curve, outward: Vector): PolygonJs | null
+    {
+        const pts = profile.tessellate();
+        // Drop the closing duplicate point if present (closed curves repeat the first vertex).
+        const capPts = (pts.length > 1 && pts[0].distance(pts[pts.length - 1]) < 1e-6)
+            ? pts.slice(0, -1)
+            : pts;
+        if (capPts.length < 3) { return null; }
+
+        const curveNormal = profile.normalOrientation();
+        // Keep original winding when the curve's own normal already faces outward, else reverse.
+        const needsReverse = curveNormal !== null ? curveNormal.dot(outward) < 0 : false;
+        const orderedPts = needsReverse ? [...capPts].reverse() : capPts;
+
+        const norVec = new Vector3Js(outward.x, outward.y, outward.z);
+        const verts = orderedPts.map(p => new VertexJs(new Point3Js(p.x, p.y, p.z), norVec));
+        return new PolygonJs(verts, {});
+    }
+
+
 
     //// TRANSFORMATION TO OTHER TYPES ////
 
     /** Convert this curve to a Polygon via tessellation (including hole rings if present). */
     toPolygon(tolerance: number = TESSELATION_TOLERANCE): Polygon | undefined
     {
+        this.close(); // ensure the curve is closed before tessellation
         const points = this.tessellate(tolerance);
 
         if (points.length < 3)
@@ -2976,6 +3341,27 @@ function _appendArcSvg(
     const largeArcFlag = sweepToEnd > Math.PI ? 1 : 0;
 
     pathParts.push(`A${r} ${r} 0 ${largeArcFlag} ${sweepFlag} ${fmt(end2D[0])} ${fmt(end2D[1])}`);
+}
+
+/** Test whether two 2D segments (p1→p2) and (p3→p4) properly cross — i.e. each
+ *  segment straddles the line through the other. Collinear/endpoint-only touches
+ *  are intentionally NOT counted, keeping the test robust against tessellation
+ *  artifacts on near-tangent curves. */
+function _seg2DProperlyIntersect(
+    p1: [number, number], p2: [number, number],
+    p3: [number, number], p4: [number, number],
+): boolean
+{
+    const cross = (a: [number, number], b: [number, number], c: [number, number]) =>
+        (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+
+    const d1 = cross(p3, p4, p1);
+    const d2 = cross(p3, p4, p2);
+    const d3 = cross(p1, p2, p3);
+    const d4 = cross(p1, p2, p4);
+
+    return (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0))
+         && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)));
 }
 
 /** Compute the circumcircle of three 2D points. Returns null if points are collinear. */

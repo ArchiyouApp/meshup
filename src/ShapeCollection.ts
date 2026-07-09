@@ -213,6 +213,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     //// COPY / CLONE ////
 
+    /** Deep copy of ShapeCollection, creating duplicates of Shapes */
     copy(): ShapeCollection<S>
     {
         return new ShapeCollection<S>(...this._shapes.map(s => s.copy() as S));
@@ -640,9 +641,63 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         throw new Error('ShapeCollection::intersecting(): not yet implemented');
     }
 
-    intersections(other: S): ShapeCollection<any>
+    /** Intersect every shape in this collection with `other` (a Curve, Mesh, or another
+     *  ShapeCollection), aggregating all resulting intersections into one collection:
+     *    - Curves yield their intersection Curves (curve∩curve outlines, curve∩mesh cuts)
+     *    - Meshes yield the boolean-intersection volume Mesh (mesh∩mesh)
+     *  When `other` is a collection, each of this collection's shapes is intersected with
+     *  each of its shapes. Returns an empty ShapeCollection when there are no intersections. */
+    intersections(other: Curve | Mesh | ShapeCollection<any>): ShapeCollection<any>
     {
-        throw new Error('ShapeCollection::_intersections(): not yet implemented');
+        const others = ShapeCollection.isShapeCollection(other) ? (other as ShapeCollection<any>).toArray() : [other];
+        const result = new ShapeCollection<any>();
+        this._shapes.forEach(shape =>
+        {
+            others.forEach(o =>
+            {
+                const hit = ShapeCollection._pairIntersection(shape, o);
+                if (hit) result.add(hit as any);
+            });
+        });
+        return result;
+    }
+
+    /** Get only the first intersection (of possibly many) — a Curve or Mesh. Returns null
+     *  if none. See intersections() for how the collection is intersected with `other`. */
+    intersection(other: Curve | Mesh | ShapeCollection<any>): Curve | Mesh | null
+    {
+        const all = this.intersections(other);
+        return all.length ? all.first() as Curve | Mesh : null;
+    }
+
+    /** Intersect a single shape with a single other shape, dispatched by kernel type.
+     *  Returns the intersection geometry (a ShapeCollection<Curve>, a Mesh, or a Curve),
+     *  or null when they do not intersect / the pair is unsupported. */
+    private static _pairIntersection(shape: CollectableShape, other: any): ShapeCollection<any> | Mesh | Curve | null
+    {
+        // Curve (or any shape exposing intersections()) → intersection Curves.
+        if (typeof (shape as any).intersections === 'function')
+        {
+            const hit = (shape as any).intersections(other) as ShapeCollection<Curve> | null;
+            return (hit && hit.length) ? hit : null;
+        }
+        // Mesh ∩ Mesh → boolean-intersection volume. Mesh.intersection() mutates in place,
+        // so work on a detached clone (not Mesh.copy(), which attaches a scene sibling) to
+        // keep the collection's meshes and the scene graph untouched.
+        if (shape instanceof Mesh && other instanceof Mesh)
+        {
+            const clone = shape.inner()?.clone();
+            if (!clone) return null;
+            const volume = Mesh.from(clone).intersection(other);
+            return (volume?.inner()?.triangleCount() ?? 0) > 0 ? volume : null;
+        }
+        // Mesh ∩ Curve → delegate to the Curve so we still get intersection Curves.
+        if (shape instanceof Mesh && typeof (other as any)?.intersections === 'function')
+        {
+            const hit = (other as Curve).intersections(shape) as ShapeCollection<Curve> | null;
+            return (hit && hit.length) ? hit : null;
+        }
+        return null;
     }
 
     private _visibleProjectionMeshes(includeHiddenShapes: boolean): Mesh[]

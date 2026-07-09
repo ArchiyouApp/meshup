@@ -187,15 +187,23 @@ export class Point
 
     //// RELATIONSHIPS WITH OTHER POINTS ////
 
-    distance(to: PointLike): number
+    distance(to: PointLike | { distance?: Function, distanceTo?: Function }): number
     {
-        if(!isPointLike(to)){ throw new Error(`Point::distance(): Invalid parameter: ${to}`); }
-        const otherPoint = new Point(to);
-        const dx = this._x - otherPoint._x;
-        const dy = this._y - otherPoint._y;
-        const dz = this._z - otherPoint._z;
-        // NOTE: could use WASM Vector3Js for this calculation, but might not be faster
-        return Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if(isPointLike(to))
+        {
+            const otherPoint = new Point(to);
+            const dx = this._x - otherPoint._x;
+            const dy = this._y - otherPoint._y;
+            const dz = this._z - otherPoint._z;
+            // NOTE: could use WASM Vector3Js for this calculation, but might not be faster
+            return Math.sqrt(dx*dx + dy*dy + dz*dz);
+        }
+        // A shape (Curve, Polygon, Mesh, …) knows how to measure to a point — delegate to it.
+        // (Duck-typed to avoid importing those modules here and deepening the import cycle.)
+        const shape = to as any;
+        if (typeof shape?.distanceTo === 'function') return shape.distanceTo(this); // Mesh
+        if (typeof shape?.distance === 'function')   return shape.distance(this);   // Curve, Polygon
+        throw new Error(`Point::distance(): Invalid parameter: ${to}`);
     }
 
     sameCoordAt(other:PointLike): Axis|null

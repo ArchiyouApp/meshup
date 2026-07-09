@@ -73,6 +73,8 @@ export { OBbox } from './OBbox';
 export { SceneNode } from './SceneNode';
 export type { SceneNodeShape } from './SceneNode';
 export { GLTFBuilder } from './GLTFBuilder';
+export { Importer } from './Importer';
+export type { ImportFormat, ImportOptions } from './Importer';
 export type { StyleData } from './Style';
 
 export {

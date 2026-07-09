@@ -52,6 +52,47 @@ describe('Curve.Line()', () =>
     {
         expect(() => Curve.Line('bad' as any, [0, 0, 0])).toThrow();
     });
+
+    it('throws for a zero-length line (coincident start and end)', () =>
+    {
+        expect(() => Curve.Line([5, 5, 5], [5, 5, 5])).toThrow(/zero-length/i);
+    });
+
+    it('throws for a near-zero-length line (within tolerance)', () =>
+    {
+        expect(() => Curve.Line([0, 0, 0], [1e-9, 0, 0])).toThrow(/zero-length/i);
+    });
+});
+
+describe('Curve.vertices()', () =>
+{
+    it('returns [start, end] for a straight line', () =>
+    {
+        const c = Curve.Line([0, 0, 0], [10, 0, 0]);
+        const vs = c.vertices();
+        expect(vs.length).toBe(2);
+        expect(vs.first().distance([0, 0, 0])).toBeCloseTo(0);
+        expect(vs.last().distance([10, 0, 0])).toBeCloseTo(0);
+    });
+
+    it('returns every corner of an open polyline', () =>
+    {
+        const c = Curve.Polyline([[0, 0, 0], [5, 0, 0], [5, 5, 0], [0, 5, 0]]);
+        expect(c.vertices().length).toBe(4);
+    });
+
+    it('returns 4 distinct corners for a closed rect', () =>
+    {
+        const c = Curve.Rect(10, 6, [0, 0, 0], 'xy');
+        expect(c.isClosed()).toBe(true);
+        expect(c.vertices().length).toBe(4);
+    });
+
+    it('returns [start, end] for a single arc/spline span', () =>
+    {
+        const c = Curve.Circle(5).isClosed() ? Curve.Arc([0, 0, 0], [5, 5, 0], [10, 0, 0]) : Curve.Line([0,0,0],[1,0,0]);
+        expect(c.vertices().length).toBe(2);
+    });
 });
 
 describe('Curve.Polyline()', () =>
@@ -73,6 +114,16 @@ describe('Curve.Polyline()', () =>
         const c = Curve.Polyline([0,0,0], [10,0,0], [10,10,0]);
         expect(c).toBeTruthy();
         expect(c.length()).toBeGreaterThan(0);
+    });
+
+    it('throws for a single point', () =>
+    {
+        expect(() => Curve.Polyline([[1, 2, 3]])).toThrow(/zero-length/i);
+    });
+
+    it('throws when all points are coincident', () =>
+    {
+        expect(() => Curve.Polyline([[1, 1, 1], [1, 1, 1], [1, 1, 1]])).toThrow(/zero-length/i);
     });
 });
 
@@ -301,9 +352,18 @@ describe('Curve.extend()', async () =>
 
 describe('Curve.extrude()', () =>
 {
-    it('returns a Mesh for an open curve', () =>
+    it('returns a Polygon for a straight open curve (flat sweep)', () =>
     {
         const c = Curve.Line([0, 0, 0], [10, 0, 0]);
+        const p = c.extrude(5);
+        expect(p).toBeInstanceOf(Polygon);
+        // ...and that Polygon can itself be extruded into a solid Mesh
+        expect((p as Polygon).extrude(5)).toBeInstanceOf(Mesh);
+    });
+
+    it('returns a Mesh for a curved open curve (swept surface)', () =>
+    {
+        const c = Curve.Arc([0, 0, 0], [10, 40, 0], [20, 0, 0]);
         const m = c.extrude(5);
         expect(m).toBeInstanceOf(Mesh);
     });
@@ -315,10 +375,23 @@ describe('Curve.extrude()', () =>
         expect(m).toBeInstanceOf(Mesh);
     });
 
-    it('extruded open curve has triangles', () =>
+    it('defaults to the curve\'s own planar normal, not world Z, for a curve on another plane', () =>
     {
-        const c = Curve.Line([0, 0, 0], [10, 0, 0]);
-        const m = c.extrude(5);
+        // A closed curve lying in the XZ plane (constant y): its own normal is along Y.
+        const c = Curve.Rect(5, 3, [0, 0, 0], 'xz');
+        expect(c.normal()!.y).toBeCloseTo(1, 5);
+
+        const m = c.extrude(4) as Mesh;
+        const bbox = m.bbox()!;
+        // Extrusion should have grown along Y (the curve's normal), not Z.
+        expect(bbox.max().y - bbox.min().y).toBeCloseTo(4, 5);
+        expect(bbox.max().z - bbox.min().z).toBeCloseTo(3, 5);
+    });
+
+    it('extruded curved open curve has triangles', () =>
+    {
+        const c = Curve.Arc([0, 0, 0], [10, 40, 0], [20, 0, 0]);
+        const m = c.extrude(5) as Mesh;
         expect(m!.inner().triangleCount()).toBeGreaterThan(0);
     });
 
@@ -339,6 +412,39 @@ describe('Curve.extrude()', () =>
     });
 
 
+});
+
+describe('Curve.selfIntersecting()', () =>
+{
+    it('is false for a straight line', () =>
+    {
+        expect(Curve.Line([100, -50, 0], [100, 100, 0]).selfIntersecting()).toBe(false);
+    });
+
+    it('is false for a simple open polyline', () =>
+    {
+        expect(Curve.Polyline([0, 0, 0], [100, 50, 0], [200, 0, 0]).selfIntersecting()).toBe(false);
+    });
+
+    it('is false for a simple closed square', () =>
+    {
+        expect(Curve.Polyline([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]]).close().selfIntersecting()).toBe(false);
+    });
+
+    it('is true for a self-crossing (figure-eight) open polyline', () =>
+    {
+        expect(Curve.Polyline([0, 0, 0], [10, 10, 0], [10, 0, 0], [0, 10, 0]).selfIntersecting()).toBe(true);
+    });
+
+    it('is true for a self-crossing closed bowtie', () =>
+    {
+        expect(Curve.Polyline([[0, 0, 0], [10, 10, 0], [10, 0, 0], [0, 10, 0]]).close().selfIntersecting()).toBe(true);
+    });
+
+    it('works on a non-XY plane (XZ)', () =>
+    {
+        expect(Curve.Line([0, 0, 0], [10, 0, 10]).selfIntersecting()).toBe(false);
+    });
 });
 
 describe('Curve.union()', () =>
@@ -378,6 +484,48 @@ describe('Curve.union()', () =>
 
     // Regression: chaining a second union onto an already-merged (compound) result with
     // another corner-tangent circle. curvo is non-deterministic here (RNG-seeded
+    it('connect() closes a polyline with its offset, including both curves\' bodies', () =>
+    {
+        const pl = Curve.Polyline([0, 0, 0], [100, 50, 0], [200, 0, 0]);
+        const pl2 = pl.copy().offset(10) as Curve;
+        const connected = pl.connect(pl2);
+
+        expect(connected.isClosed()).toBe(true);
+
+        // The other curve's middle vertex (offset of [100,50]) must survive — the
+        // old connect() dropped other.spans() and only kept its endpoints.
+        const pts = connected.tessellate();
+        const hasOffsetMiddle = pts.some(p => Math.abs(p.x - 100) < 1 && p.y > 55);
+        expect(hasOffsetMiddle).toBe(true);
+
+        // Resulting polygon is a valid thin ribbon that renders (non-zero mesh).
+        const poly = connected.toPolygon() as Polygon;
+        expect(poly).toBeInstanceOf(Polygon);
+        expect(poly.area()).toBeGreaterThan(0);
+        expect(poly.toMesh()!.inner().triangleCount()).toBeGreaterThan(0);
+    });
+
+    it('connect() picks the non-crossing pairing by minimum total gap', () =>
+    {
+        // Two anti-parallel segments: the near endpoints are start↔end / end↔start.
+        // A greedy start↔start, end↔end pairing would cross (figure-8); the
+        // minimum-total-gap pairing forms a clean 100 x 10 rectangle.
+        const a = Curve.Line([0, 0, 0], [100, 0, 0]);
+        const b = Curve.Line([100, 10, 0], [0, 10, 0]);
+        const connected = a.connect(b);
+
+        expect(connected.isClosed()).toBe(true);
+
+        const poly = connected.toPolygon() as Polygon;
+        expect(poly).toBeInstanceOf(Polygon);
+        // Non-crossing loop => full rectangle area (~1000). A crossing bowtie would
+        // collapse to a near-zero / degenerate area.
+        expect(poly.area()).toBeCloseTo(1000, 0);
+        const bb = connected.bbox();
+        expect(bb.width()).toBeCloseTo(100, 3);
+        expect(bb.depth()).toBeCloseTo(10, 3);
+    });
+
     // tessellation) and errors outright on some runs; the geo polygon-boolean fallback
     // (wasm/meshup.rs) makes the result reliable. Run several times to catch the flakiness.
     it('merges rect + two corner-tangent circles (chained union, robust over repeats)', () =>

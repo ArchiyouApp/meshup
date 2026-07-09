@@ -176,10 +176,10 @@ export class Vertex extends Shape
           const dx = this.x - p.x, dy = this.y - p.y, dz = this.z - p.z;
           return Math.sqrt(dx * dx + dy * dy + dz * dz);
       }
-      if (other instanceof Shape && typeof (other as any).distanceTo === 'function')
-      {
-          return (other as any).distanceTo(this);
-      }
+      // A shape knows how to measure to a point — delegate to it.
+      const shape = other as any;
+      if (typeof shape?.distanceTo === 'function') return shape.distanceTo(this); // Mesh
+      if (typeof shape?.distance === 'function')   return shape.distance(this);   // Curve, Polygon
       throw new Error(`Vertex.distance(): unsupported type. Got: ${(other as any)?.constructor?.name ?? typeof other}`);
   }
 
@@ -211,6 +211,6 @@ export class Vertex extends Shape
 
   toString(): string
   {
-    return `Vertex(${this.x}, ${this.y}, ${this.z})`;
+    return `<Vertex(${this.x}, ${this.y}, ${this.z})>`;
   }
 }

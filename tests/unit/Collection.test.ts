@@ -188,3 +188,63 @@ describe('ShapeCollection<Curve>', () =>
         expect(cc.count()).toBe(1);
     });
 });
+
+describe('Collection.intersections() / intersection()', () =>
+{
+    it('aggregates intersections of each shape with another Curve', () =>
+    {
+        const col = new Collection<Curve>(Curve.Rect(20, 20, [0, 0, 0]));
+        const other = Curve.Rect(20, 20, [10, 10, 0]);
+        const hits = col.intersections(other);
+        expect(hits).toBeInstanceOf(Collection);
+        expect(hits.length).toBeGreaterThan(0);
+    });
+
+    it('intersection() returns only the first intersection as a single Curve', () =>
+    {
+        const col = new Collection<Curve>(Curve.Rect(20, 20, [0, 0, 0]));
+        const first = col.intersection(Curve.Rect(20, 20, [10, 10, 0]));
+        expect(first).toBeInstanceOf(Curve);
+    });
+
+    it('returns an empty collection / null when there is no intersection', () =>
+    {
+        const col = new Collection<Curve>(Curve.Rect(20, 20, [0, 0, 0]));
+        const far = Curve.Rect(5, 5, [100, 100, 0]);
+        expect(col.intersections(far).length).toBe(0);
+        expect(col.intersection(far)).toBeNull();
+    });
+
+    it('accepts another ShapeCollection as the other operand', () =>
+    {
+        const col = new Collection<Curve>(Curve.Rect(20, 20, [0, 0, 0]));
+        const others = new Collection<Curve>(
+            Curve.Rect(20, 20, [10, 10, 0]),
+            Curve.Rect(20, 20, [-10, -10, 0]),
+        );
+        expect(col.intersections(others).length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('intersects Meshes: returns the boolean-intersection volume Mesh', () =>
+    {
+        const a = Mesh.Cube(40);
+        const b = Mesh.Cube(40).move(15, 10, 5);
+        const col = new Collection<Mesh>(a);
+        const hits = col.intersections(b);
+        expect(hits.length).toBe(1);
+        expect(hits.first()).toBeInstanceOf(Mesh);
+        expect((hits.first() as Mesh).inner().triangleCount()).toBeGreaterThan(0);
+        // source mesh must be left intact (Mesh.intersection mutates in place)
+        expect(a.inner().triangleCount()).toBeGreaterThan(0);
+    });
+
+    it('intersection() returns the first Mesh volume; empty/null when meshes do not overlap', () =>
+    {
+        const a = Mesh.Cube(20);
+        const col = new Collection<Mesh>(a);
+        expect(col.intersection(Mesh.Cube(20).move(5, 5, 5))).toBeInstanceOf(Mesh);
+        const far = Mesh.Cube(10).move(1000, 0, 0);
+        expect(col.intersections(far).length).toBe(0);
+        expect(col.intersection(far)).toBeNull();
+    });
+});

@@ -38,4 +38,38 @@ describe('Example: Offsets', async () =>
             /* circles!.copy().offset(20)!.color('yellow')*/).toGLTF());
         //await save(OUTPUT_DIR + 'test.curves.ops.svg', new ShapeCollection<circles, rect, cc, /*un!, unOffsets*/).toSVG());
     });
+
+    it('Positive offset always grows and negative always shrinks a closed curve, regardless of winding direction', () =>
+    {
+        const rect = Curve.Rect(100, 100);
+        const rectReversed = rect.copy().reverse();
+
+        expect(rect.copy().offset(10)!.area()!).toBeGreaterThan(rect.area()!);
+        expect(rect.copy().offset(-10)!.area()!).toBeLessThan(rect.area()!);
+
+        // Same behaviour must hold for a curve wound the other way around
+        expect(rectReversed.copy().offset(10)!.area()!).toBeGreaterThan(rectReversed.area()!);
+        expect(rectReversed.copy().offset(-10)!.area()!).toBeLessThan(rectReversed.area()!);
+
+        // ...and for the geo-buf based fallback offset method
+        expect(rect.copy().offsetFallback(10)!.area()!).toBeGreaterThan(rect.area()!);
+        expect(rect.copy().offsetFallback(-10)!.area()!).toBeLessThan(rect.area()!);
+        expect(rectReversed.copy().offsetFallback(10)!.area()!).toBeGreaterThan(rectReversed.area()!);
+        expect(rectReversed.copy().offsetFallback(-10)!.area()!).toBeLessThan(rectReversed.area()!);
+    });
+
+    it('Positive offset always grows and negative always shrinks an open (peaked) polyline', () =>
+    {
+        // A shallow "tent" shape lying in the XZ plane, as seen in real world scripts
+        const WIDTH = 100;
+        const MID = 50;
+        const pl1 = Curve.Polyline([0, 0, 0], [WIDTH * MID / 100, 0, 20], [WIDTH, 0, 0]);
+        expect(pl1.isClosed()).toBe(false);
+
+        const grown = pl1.copy().offset(1)!;
+        const shrunk = pl1.copy().offset(-1)!;
+
+        expect(grown.bbox().width()).toBeGreaterThan(pl1.bbox().width());
+        expect(shrunk.bbox().width()).toBeLessThan(pl1.bbox().width());
+    });
 });

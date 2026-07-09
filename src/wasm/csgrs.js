@@ -153,6 +153,13 @@ function isLikeNone(x) {
     return x === undefined || x === null;
 }
 
+function passArray8ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 1, 1) >>> 0;
+    getUint8ArrayMemory0().set(arg, ptr / 1);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+
 function passArrayF64ToWasm0(arg, malloc) {
     const ptr = malloc(arg.length * 8, 8) >>> 0;
     getFloat64ArrayMemory0().set(arg, ptr / 8);
@@ -372,6 +379,50 @@ export class BooleanRegionJs {
     }
 }
 if (Symbol.dispose) BooleanRegionJs.prototype[Symbol.dispose] = BooleanRegionJs.prototype.free;
+
+/**
+ * Sample position for subsampled chroma
+ * @enum {0 | 1 | 2}
+ */
+export const ChromaSamplePosition = Object.freeze({
+    /**
+     * The source video transfer function must be signaled
+     * outside the AV1 bitstream.
+     */
+    Unknown: 0, "0": "Unknown",
+    /**
+     * Horizontally co-located with (0, 0) luma sample, vertically positioned
+     * in the middle between two luma samples.
+     */
+    Vertical: 1, "1": "Vertical",
+    /**
+     * Co-located with (0, 0) luma sample.
+     */
+    Colocated: 2, "2": "Colocated",
+});
+
+/**
+ * Chroma subsampling format
+ * @enum {0 | 1 | 2 | 3}
+ */
+export const ChromaSampling = Object.freeze({
+    /**
+     * Both vertically and horizontally subsampled.
+     */
+    Cs420: 0, "0": "Cs420",
+    /**
+     * Horizontally subsampled.
+     */
+    Cs422: 1, "1": "Cs422",
+    /**
+     * Not subsampled.
+     */
+    Cs444: 2, "2": "Cs444",
+    /**
+     * Monochrome.
+     */
+    Cs400: 3, "3": "Cs400",
+});
 
 /**
  * Result of a closest-surface-point query returned to JavaScript.
@@ -874,9 +925,7 @@ if (Symbol.dispose) CompoundCurve3DJs.prototype[Symbol.dispose] = CompoundCurve3
  * Edge projection result returned to JavaScript.
  *
  * Call `visiblePolylines()` / `hiddenPolylines()` to get the serialised
- * polyline data as a JS array of arrays of `[x, y, z]` triplets, and
- * `silhouetteIndices()` to get the indices of the polylines in
- * `visiblePolylines()` that form the outer contour.
+ * polyline data as a JS array of arrays of `[x, y, z]` triplets.
  */
 export class EdgeProjectionResultJs {
     static __wrap(ptr) {
@@ -917,16 +966,13 @@ export class EdgeProjectionResultJs {
         return ret;
     }
     /**
-     * Returns indices into `visiblePolylines()` whose source edge is a
-     * silhouette or open-mesh boundary — i.e. the outer contour of the
-     * projection.
+     * Indices into `visiblePolylines()` whose source edge is a silhouette or
+     * open-mesh boundary — i.e. the outer contour of the projection.
      * @returns {Uint32Array}
      */
     silhouetteIndices() {
         const ret = wasm.edgeprojectionresultjs_silhouetteIndices(this.__wbg_ptr);
-        var v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
+        return ret;
     }
 }
 if (Symbol.dispose) EdgeProjectionResultJs.prototype[Symbol.dispose] = EdgeProjectionResultJs.prototype.free;
@@ -1048,6 +1094,36 @@ export class MeshJs {
         return MeshJs.__wrap(ret);
     }
     /**
+     * Import a **DXF** drawing (closed polylines / circles → faces) as a Mesh.
+     * @param {Uint8Array} dxf_data
+     * @param {any} metadata
+     * @returns {MeshJs}
+     */
+    static fromDXF(dxf_data, metadata) {
+        const ptr0 = passArray8ToWasm0(dxf_data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.meshjs_fromDXF(ptr0, len0, metadata);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return MeshJs.__wrap(ret[0]);
+    }
+    /**
+     * Import a Wavefront **OBJ** mesh from its text content.
+     * @param {string} obj_data
+     * @param {any} metadata
+     * @returns {MeshJs}
+     */
+    static fromOBJ(obj_data, metadata) {
+        const ptr0 = passStringToWasm0(obj_data, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.meshjs_fromOBJ(ptr0, len0, metadata);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return MeshJs.__wrap(ret[0]);
+    }
+    /**
      * @param {SketchJs} sketch_js
      * @returns {MeshJs}
      */
@@ -1055,6 +1131,21 @@ export class MeshJs {
         _assertClass(sketch_js, SketchJs);
         const ret = wasm.meshjs_fromSketch(sketch_js.__wbg_ptr);
         return MeshJs.__wrap(ret);
+    }
+    /**
+     * Import a binary or ASCII **STL** mesh from raw bytes.
+     * @param {Uint8Array} stl_data
+     * @param {any} metadata
+     * @returns {MeshJs}
+     */
+    static fromSTL(stl_data, metadata) {
+        const ptr0 = passArray8ToWasm0(stl_data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.meshjs_fromSTL(ptr0, len0, metadata);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return MeshJs.__wrap(ret[0]);
     }
     /**
      * @param {Point3Js} start
@@ -1100,6 +1191,21 @@ export class MeshJs {
     boundingBox() {
         const ret = wasm.meshjs_boundingBox(this.__wbg_ptr);
         return ret;
+    }
+    /**
+     * Import a **glTF 2.0** model (`.glb` or `.gltf`) as a single merged Mesh.
+     * @param {Uint8Array} data
+     * @param {any} metadata
+     * @returns {MeshJs}
+     */
+    static fromGLTF(data, metadata) {
+        const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.meshjs_fromGLTF(ptr0, len0, metadata);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return MeshJs.__wrap(ret[0]);
     }
     /**
      * @param {MeshJs} other
@@ -1365,11 +1471,7 @@ export class MeshJs {
      * - `feature_angle_deg` – crease angle threshold in degrees (e.g. `15.0`).
      * - `n_samples` – HLR ray samples per edge segment (e.g. `8`).
      * - `occluders` – additional meshes that can occlude edges of `self`;
-     *   `self` is always included as an occluder. **Ownership:** taken by
-     *   value (`Vec<MeshJs>`), so wasm-bindgen consumes the supplied JS
-     *   `MeshJs` handles. Callers that want to reuse an occluder across
-     *   multiple projection calls must `clone()` it first; the TS wrapper
-     *   does this automatically.
+     *   `self` is always included as an occluder.
      * @param {number} vx
      * @param {number} vy
      * @param {number} vz
@@ -2851,6 +2953,23 @@ export class NurbsSurfaceJs {
 }
 if (Symbol.dispose) NurbsSurfaceJs.prototype[Symbol.dispose] = NurbsSurfaceJs.prototype.free;
 
+/**
+ * Allowed pixel value range
+ *
+ * C.f. `VideoFullRangeFlag` variable specified in ISO/IEC 23091-4/ITU-T H.273
+ * @enum {0 | 1}
+ */
+export const PixelRange = Object.freeze({
+    /**
+     * Studio swing representation
+     */
+    Limited: 0, "0": "Limited",
+    /**
+     * Full swing representation
+     */
+    Full: 1, "1": "Full",
+});
+
 export class PlaneJs {
     static __wrap(ptr) {
         ptr = ptr >>> 0;
@@ -3512,6 +3631,14 @@ export class SectionElevationResultJs {
         return SketchJs.__wrap(ret);
     }
     /**
+     * Indices into `visiblePolylines()` forming the outer silhouette contour.
+     * @returns {Uint32Array}
+     */
+    silhouetteIndices() {
+        const ret = wasm.sectionelevationresultjs_silhouetteIndices(this.__wbg_ptr);
+        return ret;
+    }
+    /**
      * @returns {any}
      */
     hiddenPolylines() {
@@ -3524,15 +3651,6 @@ export class SectionElevationResultJs {
     visiblePolylines() {
         const ret = wasm.sectionelevationresultjs_visiblePolylines(this.__wbg_ptr);
         return ret;
-    }
-    /**
-     * @returns {Uint32Array}
-     */
-    silhouetteIndices() {
-        const ret = wasm.sectionelevationresultjs_silhouetteIndices(this.__wbg_ptr);
-        var v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
     }
 }
 if (Symbol.dispose) SectionElevationResultJs.prototype[Symbol.dispose] = SectionElevationResultJs.prototype.free;
@@ -3897,16 +4015,10 @@ export class SketchJs {
         return SketchJs.__wrap(ret);
     }
     /**
-     * Typed accessor for ring geometry, intended for callers that need raw
-     * coordinates (e.g. lifting a 2-D cut profile back into 3-D).
-     *
-     * Returns `Array<{ points: Float64Array, closed: boolean }>` where each
-     * `points` array is a flat `[x0, y0, x1, y1, ...]` buffer.  Polygon
-     * exteriors and holes are emitted as separate `closed: true` rings;
-     * LineStrings and Lines come back as `closed: false`.
-     *
-     * Prefer this over `debugGeometry()` for programmatic consumers — the
-     * debug string is a human-readable summary and its format is not stable.
+     * Typed accessor for ring geometry. Returns
+     * `Array<{ points: Float64Array([x0,y0,x1,y1,...]), closed: boolean }>`.
+     * Polygon exteriors and holes are emitted as separate `closed: true`
+     * rings; LineStrings / Lines come back as `closed: false`.
      * @returns {any}
      */
     rings() {
@@ -4103,6 +4215,21 @@ export class SketchJs {
         return SketchJs.__wrap(ret);
     }
     /**
+     * Import 2-D geometry from DXF as a Sketch (curves). See `Sketch::from_dxf`.
+     * @param {Uint8Array} dxf_data
+     * @param {any} metadata
+     * @returns {SketchJs}
+     */
+    static fromDXF(dxf_data, metadata) {
+        const ptr0 = passArray8ToWasm0(dxf_data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.sketchjs_fromDXF(ptr0, len0, metadata);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return SketchJs.__wrap(ret[0]);
+    }
+    /**
      * @param {string} geo_json
      * @param {any} metadata
      * @returns {SketchJs}
@@ -4240,6 +4367,14 @@ export class SketchJs {
     }
 }
 if (Symbol.dispose) SketchJs.prototype[Symbol.dispose] = SketchJs.prototype.free;
+
+/**
+ * @enum {0 | 1}
+ */
+export const Tune = Object.freeze({
+    Psnr: 0, "0": "Psnr",
+    Psychovisual: 1, "1": "Psychovisual",
+});
 
 export class Vector3Js {
     static __wrap(ptr) {
@@ -4677,6 +4812,17 @@ function __wbg_get_imports() {
     imports.wbg.__wbg_getRandomValues_1c61fac11405ffdc = function() { return handleError(function (arg0, arg1) {
         globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
     }, arguments) };
+    imports.wbg.__wbg_getRandomValues_9b655bdd369112f2 = function() { return handleError(function (arg0, arg1) {
+        globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
+    }, arguments) };
+    imports.wbg.__wbg_getTime_ad1e9878a735af08 = function(arg0) {
+        const ret = arg0.getTime();
+        return ret;
+    };
+    imports.wbg.__wbg_getTimezoneOffset_45389e26d6f46823 = function(arg0) {
+        const ret = arg0.getTimezoneOffset();
+        return ret;
+    };
     imports.wbg.__wbg_get_6b7bd52aca3f9671 = function(arg0, arg1) {
         const ret = arg0[arg1 >>> 0];
         return ret;
@@ -4771,6 +4917,10 @@ function __wbg_get_imports() {
         const ret = MeshJs.__unwrap(arg0);
         return ret;
     };
+    imports.wbg.__wbg_new_0_23cedd11d9b40c9d = function() {
+        const ret = new Date();
+        return ret;
+    };
     imports.wbg.__wbg_new_1ba21ce319a06297 = function() {
         const ret = new Object();
         return ret;
@@ -4787,6 +4937,10 @@ function __wbg_get_imports() {
         const ret = new Error();
         return ret;
     };
+    imports.wbg.__wbg_new_b2db8aa2650f793a = function(arg0) {
+        const ret = new Date(arg0);
+        return ret;
+    };
     imports.wbg.__wbg_new_from_slice_9a48ef80d2a51f94 = function(arg0, arg1) {
         const ret = new Float64Array(getArrayF64FromWasm0(arg0, arg1));
         return ret;
@@ -4801,6 +4955,10 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbg_new_no_args_cb138f77cf6151ee = function(arg0, arg1) {
         const ret = new Function(getStringFromWasm0(arg0, arg1));
+        return ret;
+    };
+    imports.wbg.__wbg_new_with_year_month_day_hr_min_sec_b77701fa8c756a9f = function(arg0, arg1, arg2, arg3, arg4, arg5) {
+        const ret = new Date(arg0 >>> 0, arg1, arg2, arg3, arg4, arg5);
         return ret;
     };
     imports.wbg.__wbg_next_138a17bbf04e926c = function(arg0) {

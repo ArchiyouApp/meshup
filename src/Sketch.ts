@@ -77,6 +77,7 @@ import { Point } from "./Point";
 import { ShapeCollection } from "./ShapeCollection";
 import { Curve } from "./Curve";
 import { Mesh, getCsgrs } from "./index";
+import { Importer } from "./Importer";
 
 import type { Axis, BasePlane, PointLike } from "./types";
 import { isBasePlane, isPointLike } from "./types";
@@ -98,7 +99,29 @@ export class Sketch
     constructor(plane: BasePlane|PolygonJs = 'xy')
     {
         this._setWorkingPlane(plane);
-        this._pushCursor(new Point(0,0)); 
+        this._pushCursor(new Point(0,0));
+    }
+
+    //// IMPORT SHORTCUTS ////
+    /* Thin static factories delegating to the Importer. They return curves in
+       the XY plane (z=0), consistent with Sketch.end(). */
+
+    /** Import an SVG document into a `ShapeCollection<Curve>`. See {@link Importer.fromSVG}. */
+    static fromSVG(svg: string): ShapeCollection<Curve>
+    {
+        return Importer.fromSVG(svg);
+    }
+
+    /** Import GeoJSON into a `ShapeCollection<Curve>`. See {@link Importer.fromGeoJSON}. */
+    static fromGeoJSON(json: string|object): ShapeCollection<Curve>
+    {
+        return Importer.fromGeoJSON(json);
+    }
+
+    /** Import a DXF drawing as 2-D curves. See {@link Importer.fromDXF}. */
+    static fromDXF(data: string|Uint8Array|ArrayBuffer): ShapeCollection<Curve>
+    {
+        return Importer.fromDXF(data);
     }
 
     _setWorkingPlane(plane: BasePlane|PolygonJs): void
@@ -233,14 +256,15 @@ export class Sketch
             {
                 const p = Point.fromSketchCoords(cur, coords);
                 if(p)
-                { 
-                    const l = Curve.Line(cur.at, p);
-
-                    if(l.length() === 0)
+                {
+                    // Skip zero-length segments (Curve.Line would throw on coincident points)
+                    if(cur.at.distance(p) < Curve.ZERO_LENGTH_TOLERANCE)
                     {
                         console.warn(`Sketch::lineTo(): Zero length line from ${cur.at} to ${p}. Skipping.`);
                         return;
                     }
+
+                    const l = Curve.Line(cur.at, p);
                     this._curves.add(l);
                     // make end of line (and its tangent) the new cursor
                     this._pushCursor(p, l.tangentAt(l.end()) || Vector.from(1,0,0));

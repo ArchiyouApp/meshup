@@ -23,6 +23,48 @@ export class BooleanRegionJs {
   readonly exterior: CompoundCurve3DJs;
 }
 
+/**
+ * Sample position for subsampled chroma
+ */
+export enum ChromaSamplePosition {
+  /**
+   * The source video transfer function must be signaled
+   * outside the AV1 bitstream.
+   */
+  Unknown = 0,
+  /**
+   * Horizontally co-located with (0, 0) luma sample, vertically positioned
+   * in the middle between two luma samples.
+   */
+  Vertical = 1,
+  /**
+   * Co-located with (0, 0) luma sample.
+   */
+  Colocated = 2,
+}
+
+/**
+ * Chroma subsampling format
+ */
+export enum ChromaSampling {
+  /**
+   * Both vertically and horizontally subsampled.
+   */
+  Cs420 = 0,
+  /**
+   * Horizontally subsampled.
+   */
+  Cs422 = 1,
+  /**
+   * Not subsampled.
+   */
+  Cs444 = 2,
+  /**
+   * Monochrome.
+   */
+  Cs400 = 3,
+}
+
 export class ClosestPointResultJs {
   private constructor();
   free(): void;
@@ -194,9 +236,8 @@ export class EdgeProjectionResultJs {
    */
   visiblePolylines(): any;
   /**
-   * Returns indices into `visiblePolylines()` whose source edge is a
-   * silhouette or open-mesh boundary — i.e. the outer contour of the
-   * projection.
+   * Indices into `visiblePolylines()` whose source edge is a silhouette or
+   * open-mesh boundary — i.e. the outer contour of the projection.
    */
   silhouetteIndices(): Uint32Array;
 }
@@ -215,12 +256,28 @@ export class MeshJs {
   static octahedron(radius: number, metadata: any): MeshJs;
   static polyhedron(points: any, faces: any, metadata: any): MeshJs;
   convexHull(): MeshJs;
+  /**
+   * Import a **DXF** drawing (closed polylines / circles → faces) as a Mesh.
+   */
+  static fromDXF(dxf_data: Uint8Array, metadata: any): MeshJs;
+  /**
+   * Import a Wavefront **OBJ** mesh from its text content.
+   */
+  static fromOBJ(obj_data: string, metadata: any): MeshJs;
   static fromSketch(sketch_js: SketchJs): MeshJs;
+  /**
+   * Import a binary or ASCII **STL** mesh from raw bytes.
+   */
+  static fromSTL(stl_data: Uint8Array, metadata: any): MeshJs;
   static frustum_ptp(start: Point3Js, end: Point3Js, radius1: number, radius2: number, segments: number, metadata: any): MeshJs;
   static icosahedron(radius: number, metadata: any): MeshJs;
   renormalize(): MeshJs;
   triangulate(): MeshJs;
   boundingBox(): any;
+  /**
+   * Import a **glTF 2.0** model (`.glb` or `.gltf`) as a single merged Mesh.
+   */
+  static fromGLTF(data: Uint8Array, metadata: any): MeshJs;
   intersection(other: MeshJs): MeshJs;
   toSTLASCII(): string;
   vertexCount(): number;
@@ -297,11 +354,7 @@ export class MeshJs {
    * - `feature_angle_deg` – crease angle threshold in degrees (e.g. `15.0`).
    * - `n_samples` – HLR ray samples per edge segment (e.g. `8`).
    * - `occluders` – additional meshes that can occlude edges of `self`;
-   *   `self` is always included as an occluder. **Ownership:** taken by
-   *   value (`Vec<MeshJs>`), so wasm-bindgen consumes the supplied JS
-   *   `MeshJs` handles. Callers that want to reuse an occluder across
-   *   multiple projection calls must `clone()` it first; the TS wrapper
-   *   does this automatically.
+   *   `self` is always included as an occluder.
    */
   projectEdges(vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, feature_angle_deg: number, n_samples: number, occluders: MeshJs[]): EdgeProjectionResultJs;
   /**
@@ -692,6 +745,22 @@ export class NurbsSurfaceJs {
   translate(offset: Vector3Js): NurbsSurfaceJs;
 }
 
+/**
+ * Allowed pixel value range
+ *
+ * C.f. `VideoFullRangeFlag` variable specified in ISO/IEC 23091-4/ITU-T H.273
+ */
+export enum PixelRange {
+  /**
+   * Studio swing representation
+   */
+  Limited = 0,
+  /**
+   * Full swing representation
+   */
+  Full = 1,
+}
+
 export class PlaneJs {
   free(): void;
   [Symbol.dispose](): void;
@@ -844,9 +913,12 @@ export class SectionElevationResultJs {
   free(): void;
   [Symbol.dispose](): void;
   cutSketch(): SketchJs;
+  /**
+   * Indices into `visiblePolylines()` forming the outer silhouette contour.
+   */
+  silhouetteIndices(): Uint32Array;
   hiddenPolylines(): any;
   visiblePolylines(): any;
-  silhouetteIndices(): Uint32Array;
 }
 
 export class SketchJs {
@@ -898,16 +970,10 @@ export class SketchJs {
   static arrow(shaft_length: number, shaft_width: number, head_length: number, head_width: number, metadata: any): SketchJs;
   static heart(width: number, height: number, segments: number, metadata: any): SketchJs;
   /**
-   * Typed accessor for ring geometry, intended for callers that need raw
-   * coordinates (e.g. lifting a 2-D cut profile back into 3-D).
-   *
-   * Returns `Array<{ points: Float64Array, closed: boolean }>` where each
-   * `points` array is a flat `[x0, y0, x1, y1, ...]` buffer.  Polygon
-   * exteriors and holes are emitted as separate `closed: true` rings;
-   * LineStrings and Lines come back as `closed: false`.
-   *
-   * Prefer this over `debugGeometry()` for programmatic consumers — the
-   * debug string is a human-readable summary and its format is not stable.
+   * Typed accessor for ring geometry. Returns
+   * `Array<{ points: Float64Array([x0,y0,x1,y1,...]), closed: boolean }>`.
+   * Polygon exteriors and holes are emitted as separate `closed: true`
+   * rings; LineStrings / Lines come back as `closed: false`.
    */
   rings(): any;
   scale(sx: number, sy: number, sz: number): SketchJs;
@@ -928,6 +994,10 @@ export class SketchJs {
   static polygon(points: any, metadata: any): SketchJs;
   revolve(angle_degrees: number, segments: number): MeshJs;
   static crescent(outer_r: number, inner_r: number, offset: number, segments: number, metadata: any): SketchJs;
+  /**
+   * Import 2-D geometry from DXF as a Sketch (curves). See `Sketch::from_dxf`.
+   */
+  static fromDXF(dxf_data: Uint8Array, metadata: any): SketchJs;
   static fromGeo(geo_json: string, metadata: any): SketchJs;
   static fromSVG(svg_data: string, metadata: any): SketchJs;
   isEmpty(): boolean;
@@ -941,6 +1011,11 @@ export class SketchJs {
   transform(mat: Matrix4Js): SketchJs;
   translate(offset: Vector3Js): SketchJs;
   static trapezoid(top_width: number, bottom_width: number, height: number, top_offset: number, metadata: any): SketchJs;
+}
+
+export enum Tune {
+  Psnr = 0,
+  Psychovisual = 1,
 }
 
 export class Vector3Js {
@@ -1054,7 +1129,7 @@ export interface InitOutput {
   readonly compoundcurve3djs_translate: (a: number, b: number) => number;
   readonly compoundcurve3djs_trimRange: (a: number, b: number, c: number) => [number, number, number, number];
   readonly edgeprojectionresultjs_hiddenPolylines: (a: number) => any;
-  readonly edgeprojectionresultjs_silhouetteIndices: (a: number) => [number, number];
+  readonly edgeprojectionresultjs_silhouetteIndices: (a: number) => any;
   readonly edgeprojectionresultjs_visiblePolylines: (a: number) => any;
   readonly matrix4js_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
   readonly matrix4js_toArray: (a: number) => [number, number];
@@ -1083,8 +1158,12 @@ export interface InitOutput {
   readonly meshjs_filterPolygonsByMetadata: (a: number, b: any) => number;
   readonly meshjs_flatten: (a: number) => number;
   readonly meshjs_float: (a: number) => number;
+  readonly meshjs_fromDXF: (a: number, b: number, c: any) => [number, number, number];
+  readonly meshjs_fromGLTF: (a: number, b: number, c: any) => [number, number, number];
+  readonly meshjs_fromOBJ: (a: number, b: number, c: any) => [number, number, number];
   readonly meshjs_fromPointsWithHoles: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly meshjs_fromPolygons: (a: number, b: number, c: any) => number;
+  readonly meshjs_fromSTL: (a: number, b: number, c: any) => [number, number, number];
   readonly meshjs_fromSdfValues: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
   readonly meshjs_fromSketch: (a: number) => number;
   readonly meshjs_frustum: (a: number, b: number, c: number, d: number, e: any) => number;
@@ -1240,7 +1319,7 @@ export interface InitOutput {
   readonly sdfsamplejs_is_inside: (a: number) => number;
   readonly sectionelevationresultjs_cutSketch: (a: number) => number;
   readonly sectionelevationresultjs_hiddenPolylines: (a: number) => any;
-  readonly sectionelevationresultjs_silhouetteIndices: (a: number) => [number, number];
+  readonly sectionelevationresultjs_silhouetteIndices: (a: number) => any;
   readonly sectionelevationresultjs_visiblePolylines: (a: number) => any;
   readonly sketchjs_airfoilNACA4: (a: number, b: number, c: number, d: number, e: number, f: any) => number;
   readonly sketchjs_arrow: (a: number, b: number, c: number, d: number, e: any) => number;
@@ -1260,6 +1339,7 @@ export interface InitOutput {
   readonly sketchjs_extrude: (a: number, b: number) => number;
   readonly sketchjs_extrudeVector: (a: number, b: number) => number;
   readonly sketchjs_extrudeVectorComponents: (a: number, b: number, c: number, d: number) => number;
+  readonly sketchjs_fromDXF: (a: number, b: number, c: any) => [number, number, number];
   readonly sketchjs_fromGeo: (a: number, b: number, c: any) => [number, number, number];
   readonly sketchjs_fromMesh: (a: number) => number;
   readonly sketchjs_fromSVG: (a: number, b: number, c: any) => [number, number, number];

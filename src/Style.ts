@@ -135,6 +135,16 @@ export class Style
         this._explicit.add('opacity');
     }
 
+    /** Material reference or render spec ({ pbr, textures, ... }) — used by GLTF export. */
+    get material(): any {
+        return this._style.material;
+    }
+    set material(v: any)
+    {
+        this._style.material = v;
+        this._explicit.add('material');
+    }
+
     //// FILL ////
 
     get fill(): NonNullable<StyleData['fill']> {
@@ -474,14 +484,27 @@ export class Style
             [r, g, b] = new Color(colorStr ?? SHAPE_DEFAULT_STYLE.fill!.color!).toRgb().map(v => v / 255) as [number, number, number];
         } catch { /* leave defaults */ }
 
-        const a = this._style.opacity ?? 1;
+        // A material may be threaded through as a render spec ({ pbr, textures, ... })
+        // or a bare name string. When a pbr block is present it overrides the
+        // per-style color/opacity and the hardcoded metallic/roughness defaults.
+        const pbr = (this._style.material && typeof this._style.material === 'object')
+            ? (this._style.material as any).pbr
+            : undefined;
+
+        if (pbr?.color)
+        {
+            try { [r, g, b] = new Color(pbr.color).toRgb().map(v => v / 255) as [number, number, number]; }
+            catch { /* keep style color */ }
+        }
+
+        const a = pbr?.alpha ?? this._style.opacity ?? 1;
 
         const mat: Record<string, any> = {
             name: name ?? 'material',
             pbrMetallicRoughness: {
                 baseColorFactor: [r, g, b, a],
-                metallicFactor: 0.0,
-                roughnessFactor: 0.8,
+                metallicFactor: pbr?.metallic ?? 0.0,
+                roughnessFactor: pbr?.roughness ?? 0.8,
             },
             doubleSided: true,
         };

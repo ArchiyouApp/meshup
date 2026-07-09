@@ -268,6 +268,63 @@ export class Mesh extends Shape
         return this.from(getCsgrs().MeshJs.fromPolygons(polygons, {}));
     }
 
+    //// FILE IMPORT ////
+    /* Thin static factories over the Rust/WASM importers. Binary formats take
+       Uint8Array|ArrayBuffer; OBJ takes text. See also the Importer class. */
+
+    /** Import a Wavefront OBJ mesh from its text content.
+     *  NOTE: requires a WASM build that exposes MeshJs.fromOBJ (cast to any to
+     *  decouple from the generated csgrs.d.ts — see Importer). */
+    static fromOBJ(obj: string, metadata: any = null): Mesh
+    {
+        if(typeof obj !== 'string' || obj.trim().length === 0)
+        {
+            throw new Error('Mesh.fromOBJ(): expected a non-empty OBJ string.');
+        }
+        return this.from((getCsgrs().MeshJs as any).fromOBJ(obj, metadata));
+    }
+
+    /** Import a binary or ASCII STL mesh. Accepts raw bytes or ASCII text. */
+    static fromSTL(data: string|Uint8Array|ArrayBuffer, metadata: any = null): Mesh
+    {
+        const bytes = Mesh._toBytes(data);
+        if(bytes.length === 0){ throw new Error('Mesh.fromSTL(): empty STL data.'); }
+        return this.from((getCsgrs().MeshJs as any).fromSTL(bytes, metadata));
+    }
+
+    /** Import a DXF drawing as a Mesh. Accepts raw bytes or ASCII text. Only
+     *  closed polylines / circles become faces (open line-art is dropped) — for
+     *  2-D DXF curves use the planned Sketch.fromDXF instead. */
+    static fromDXF(data: string|Uint8Array|ArrayBuffer, metadata: any = null): Mesh
+    {
+        const bytes = Mesh._toBytes(data);
+        if(bytes.length === 0){ throw new Error('Mesh.fromDXF(): empty DXF data.'); }
+        return this.from((getCsgrs().MeshJs as any).fromDXF(bytes, metadata));
+    }
+
+    /** Import a glTF 2.0 model (.glb or .gltf) as a single merged Mesh.
+     *  Materials + node hierarchy are flattened; converts glTF Y-up → Z-up.
+     *  Self-contained .glb / base64 .gltf only (no Draco / external buffers). */
+    static fromGLTF(data: string|Uint8Array|ArrayBuffer, metadata: any = null): Mesh
+    {
+        const bytes = Mesh._toBytes(data);
+        if(bytes.length === 0){ throw new Error('Mesh.fromGLTF(): empty glTF data.'); }
+        return this.from((getCsgrs().MeshJs as any).fromGLTF(bytes, metadata));
+    }
+
+    /** Import a binary glTF (.glb). Alias for {@link Mesh.fromGLTF}. */
+    static fromGLB(data: Uint8Array|ArrayBuffer, metadata: any = null): Mesh
+    {
+        return this.fromGLTF(data, metadata);
+    }
+
+    /** Coerce string (UTF-8) / ArrayBuffer / Uint8Array input to bytes. */
+    private static _toBytes(data: string|Uint8Array|ArrayBuffer): Uint8Array
+    {
+        if(typeof data === 'string'){ return new TextEncoder().encode(data); }
+        return data instanceof Uint8Array ? data : new Uint8Array(data);
+    }
+
 
     // MESH PRIMITIVES
 
@@ -1280,7 +1337,7 @@ export class Mesh extends Shape
 
     toString(): string
     {
-        return `<Mesh id=${this.id} vertices=${this.vertices().length} polygons=${this.polygons().length}>`;
+        return `<Mesh id=${this.id()} vertices=${this.vertices().length} polygons=${this.polygons().length}>`;
     }
 
     toPolygons(): undefined|Array<PolygonJs>
@@ -1513,13 +1570,7 @@ export class Mesh extends Shape
 
         if (other instanceof Curve)
         {
-            const pts = other.tessellate();
-            if (!pts || pts.length === 0) return Infinity;
-            return pts.reduce<number>((minD, p) =>
-            {
-                const r = this.closestPoint(p.x, p.y, p.z);
-                return r ? Math.min(minD, r.distance) : minD;
-            }, Infinity);
+            return this._distanceToCurve(other);
         }
 
         if(other instanceof Mesh)
@@ -1537,6 +1588,63 @@ export class Mesh extends Shape
     distance(other: Mesh | Curve | Point | Vertex | Polygon): number
     {
         return this.distanceTo(other);
+    }
+
+    /**
+     * Minimum distance between this mesh surface and a Curve.
+     *
+     * A polyline's tessellation only yields its corner points, so sampling those
+     * alone misses a segment that passes through (or alongside) the mesh — that was
+     * the "95 instead of 0" bug. Instead we walk every tessellated segment:
+     *   1. Raycast along the segment (bounded by its length) → an exact 0 when the
+     *      segment crosses the surface transversally.
+     *   2. Densely sample the segment and take the min surface closest-point
+     *      distance → handles coplanar overlap and the true gap when apart.
+     * Sampling density is scale-aware, derived from the mesh's size.
+     */
+    private _distanceToCurve(curve: Curve): number
+    {
+        const pts = curve.tessellate();
+        if (!pts || pts.length === 0) return Infinity;
+
+        if (pts.length === 1)
+        {
+            const r = this.closestPoint(pts[0].x, pts[0].y, pts[0].z);
+            return r ? r.distance : Infinity;
+        }
+
+        const extent = this.bbox()?.maxSize() ?? 0;
+        const spacing = (extent > 0 ? extent : 1) / 50; // ~50 samples across the mesh extent
+
+        let minD = Infinity;
+        for (let i = 0; i < pts.length - 1 && minD > 0; i++)
+        {
+            const a = pts[i], b = pts[i + 1];
+            const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+            const segLen = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+            // 1. Exact 0 on a transversal crossing.
+            if (segLen > 0)
+            {
+                const inv = 1 / segLen;
+                const hit = this.raycast([a.x, a.y, a.z], [dx * inv, dy * inv, dz * inv], segLen, false);
+                if (hit) return 0;
+            }
+
+            // 2. Dense point sampling (covers coplanar overlap and the apart case).
+            const steps = Math.min(Math.max(1, Math.ceil(segLen / spacing)), 4096);
+            for (let s = 0; s <= steps; s++)
+            {
+                const t = s / steps;
+                const r = this.closestPoint(a.x + dx * t, a.y + dy * t, a.z + dz * t);
+                if (r && r.distance < minD)
+                {
+                    minD = r.distance;
+                    if (minD === 0) return 0;
+                }
+            }
+        }
+        return minD;
     }
 
     /**
@@ -1851,6 +1959,9 @@ export class Mesh extends Shape
         const curves = new ShapeCollection<Shape>();
         polylines.forEach(points =>
         {
+            // HLR projection can emit degenerate polylines (an edge seen head-on collapses
+            // to coincident points). Skip those — Curve.Line/Polyline reject zero-length input.
+            if (!Mesh._polylineHasLength(points)) return;
             curves.add(
                 (points.length === 2)
                     ? Curve.Line(points[0], points[1])
@@ -1858,6 +1969,22 @@ export class Mesh extends Shape
                 )
         });
         return curves;
+    }
+
+    /** True when a raw polyline spans a non-zero distance (has at least two points
+     *  that are not coincident within Curve.ZERO_LENGTH_TOLERANCE). */
+    static _polylineHasLength(points: Array<[number, number, number]>): boolean
+    {
+        if (points.length < 2) return false;
+        let total = 0;
+        for (let i = 1; i < points.length; i++)
+        {
+            const [ax, ay, az] = points[i - 1];
+            const [bx, by, bz] = points[i];
+            total += Math.sqrt((bx - ax) ** 2 + (by - ay) ** 2 + (bz - az) ** 2);
+            if (total >= Curve.ZERO_LENGTH_TOLERANCE) return true;
+        }
+        return false;
     }
 
     /** Flatten a 3D projection onto the XY plane and orient so world-up maps

@@ -356,20 +356,19 @@ export class Polygon extends Shape
         return OBbox.fromPoints(this.vertices().toArray());
     }
 
-    /** Minimum distance from this polygon surface to a point, mesh, or curve. */
-    distance(other: PointLike | Mesh | Curve): number
+    /** Minimum distance from this polygon surface to a point, vertex, curve, polygon, or mesh. */
+    distance(other: PointLike | Mesh | Curve | Polygon): number
     {
-        if (isPointLike(other))
+        // Measure against this polygon's mesh; Mesh.distanceTo() handles every supported
+        // type (Point/Vertex/Curve/Polygon/Mesh), so we just reduce the point-like case.
+        const target = isPointLike(other) ? Point.from(other) : other;
+
+        if (target instanceof Point || target instanceof Mesh || target instanceof Curve || target instanceof Polygon)
         {
-            return this.toMesh().distance(Point.from(other));
+            return this.toMesh().distanceTo(target);
         }
 
-        if (other instanceof Mesh || other instanceof Curve)
-        {
-            return this.toMesh().distance(other);
-        }
-
-        throw new Error('Polygon.distance(): Unsupported type. Expected PointLike, Mesh, or Curve.');
+        throw new Error('Polygon.distance(): Unsupported type. Expected PointLike, Vertex, Curve, Polygon, or Mesh.');
     }
 
     //// MEASUREMENTS ////
@@ -509,6 +508,231 @@ export class Polygon extends Shape
         const verts: VertexJs[] = pts.map(p => Point.from(p).toVertexJs());
         this._polygon = new PolygonJs(verts, {});
         return this;
+    }
+
+    /** Build a large closed region covering one side of an open spine polyline (used by
+     *  split()). One edge of the region runs along the spine, offset inward by `near` (the
+     *  half-gap); the opposite edge runs `far` away on the chosen side, so the region acts
+     *  as a half-plane clipped to a big rectangle. The spine ends are extended by `far` so
+     *  the region fully spans the polygon.
+     *  @param spinePts  Ordered points along the cut, already projected onto the plane.
+     *  @param normal    Unit plane normal.
+     *  @param near      Offset of the inner (spine-side) edge; 0 for an exact split.
+     *  @param far       Offset of the outer edge (large enough to cover the polygon).
+     *  @param side      +1 or -1 — which side of the spine the region covers.
+     */
+    private _buildSideRegion(spinePts: Array<Point>, normal: Vector, near: number, far: number, side: number): Curve
+    {
+        const pts = spinePts.map(p => p.copy());
+
+        // Extend both ends along their end directions so the cut fully crosses the polygon.
+        const dirFrom = (a: Point, b: Point) => a.toVector().subtract(b.toVector()).normalize().scale(far);
+        const startDir = dirFrom(pts[0], pts[1]);
+        const endDir   = dirFrom(pts[pts.length - 1], pts[pts.length - 2]);
+        pts.unshift(new Point(pts[0].x + startDir.x, pts[0].y + startDir.y, pts[0].z + startDir.z));
+        const last = pts[pts.length - 1];
+        pts.push(new Point(last.x + endDir.x, last.y + endDir.y, last.z + endDir.z));
+
+        const unitNormal = normal.copy().normalize();
+        const perpAt = (i: number): Vector =>
+        {
+            const prev = pts[Math.max(0, i - 1)];
+            const next = pts[Math.min(pts.length - 1, i + 1)];
+            const tangent = next.toVector().subtract(prev.toVector()).normalize();
+            return unitNormal.copy().cross(tangent).normalize().scale(side);
+        };
+        const offsetPt = (p: Point, perp: Vector, dist: number) =>
+            new Point(p.x + perp.x * dist, p.y + perp.y * dist, p.z + perp.z * dist);
+
+        // Inner edge follows the (curved) cut, offset by the half-gap `near`.
+        const inner = pts.map((p, i) => offsetPt(p, perpAt(i), near));
+        // Outer edge is just the two far-offset endpoints — a single straight far boundary
+        // keeps the region simple (offsetting every point by a huge `far` would fold a curve).
+        const outerEnd   = offsetPt(pts[pts.length - 1], perpAt(pts.length - 1), far);
+        const outerStart = offsetPt(pts[0], perpAt(0), far);
+
+        // Closed loop: forward along the inner (cut) edge, then across to the far boundary.
+        // Drop collinear intermediate points — consecutive collinear segments make curvo's
+        // curve boolean flaky, and a straight cut should reduce to a clean 4-corner region.
+        const loop = this._dropCollinear([...inner, outerEnd, outerStart], far * 1e-6);
+        return Curve.Polyline(loop).close();
+    }
+
+    /** Remove points that lie on the straight segment between their (cyclic) neighbours,
+     *  within `tol`. Used to keep knife strips free of redundant collinear vertices. */
+    private _dropCollinear(points: Array<Point>, tol: number): Array<Point>
+    {
+        const n = points.length;
+        if (n < 3) { return points; }
+
+        const kept: Array<Point> = [];
+        for (let i = 0; i < n; i++)
+        {
+            const prev = kept.length ? kept[kept.length - 1] : points[(i - 1 + n) % n];
+            const cur  = points[i];
+            const next = points[(i + 1) % n];
+            const a = cur.toVector().subtract(prev.toVector());
+            const b = next.toVector().subtract(cur.toVector());
+            // Perpendicular distance of `cur` from the prev→next line ≈ |a × b| / |next - prev|
+            const baseLen = next.toVector().subtract(prev.toVector()).length();
+            const dropIt = baseLen > 1e-12 && a.cross(b).length() / baseLen <= tol;
+            if (!dropIt) { kept.push(cur); }
+        }
+        return kept.length >= 3 ? kept : points;
+    }
+
+    /**
+     * Split this polygon into two (or more) polygons with a cutting Curve or Polygon.
+     *
+     * The actual cutting is done by the robust Rust-layer curve boolean:
+     *  - An OPEN cutter (a line/curve that crosses the polygon) is turned into two large
+     *    half-plane regions, one on each side of the cut, and the polygon is intersected
+     *    with each — yielding one clean piece per side. This avoids relying on a single
+     *    boolean to "fall apart" into two, which the underlying curve boolean does not do
+     *    reliably for axis-aligned cuts. The cut is extended past both ends so it only has
+     *    to *pass through* the polygon, not reach its edges exactly.
+     *  - A CLOSED cutter (closed Curve or Polygon) is subtracted directly; if it spans the
+     *    polygon like a band, the result naturally falls into multiple pieces.
+     *
+     * Guards & warnings:
+     *  - The cutter must be planar. It is projected onto this polygon's plane, so a cutter
+     *    drawn on a parallel/coincident plane still works (any plane, not just XY).
+     *  - Self-intersecting cutters are rejected (see Curve.selfIntersecting()) to avoid
+     *    degenerate, overcomplicated split shapes.
+     *  - If the result does not actually split into ≥2 pieces (e.g. the cutter misses the
+     *    polygon), a warning is emitted and `null` is returned.
+     *
+     * @param other  Cutting Curve (open or closed) or Polygon.
+     * @param gap    Optional seam width left between the pieces (default 0 = exact split,
+     *               pieces meet along the cut). A positive value removes a strip of this
+     *               width centred on the cut.
+     * @returns ShapeCollection<Polygon> of the resulting pieces, or null if no split happened.
+     */
+    split(other: Curve | Polygon, gap: number = 0): ShapeCollection<Polygon> | null
+    {
+        if (!(other instanceof Curve) && !(other instanceof Polygon))
+        {
+            console.warn('Polygon.split(): expected a Curve or Polygon to split with. Returning null.');
+            return null;
+        }
+        if (gap < 0)
+        {
+            console.warn('Polygon.split(): gap must be >= 0. Returning null.');
+            return null;
+        }
+        if (this.hasHoles())
+        {
+            console.warn('Polygon.split(): polygon has interior holes; only the outer boundary is split and holes are dropped.');
+        }
+
+        // This polygon's boundary as a closed, planar Curve (same route used by offset()).
+        const boundary = Curve.Polyline(this.vertices().toArray()).close();
+
+        // The cutter as a Curve "spine". A Polygon cutter uses its closed boundary.
+        // `spine` is only ever read (tessellate / isClosed / selfIntersecting), never mutated,
+        // so the incoming Curve is used directly — no copy (which would leak a scene sibling).
+        const spine = (other instanceof Polygon)
+            ? Curve.Polyline(other.vertices().toArray()).close()
+            : other;
+
+        if (!spine.isPlanar())
+        {
+            console.warn('Polygon.split(): the cutting Curve is not planar; cannot split reliably. Returning null.');
+            return null;
+        }
+        if (spine.selfIntersecting())
+        {
+            console.warn('Polygon.split(): the cutting Curve is self-intersecting; refusing to split to avoid degenerate shapes. Returning null.');
+            return null;
+        }
+
+        // Scale reference for the safety extension / half-plane size.
+        const size = this.bbox().size();
+        const diag = Math.hypot(size.x, size.y, size.z) || 1;
+        const far = diag * 4; // large enough that the half-plane regions cover the polygon
+
+        // Everything happens in this polygon's plane. Projecting the cutter onto that plane
+        // guarantees the boolean operands are coplanar and lets the regions be built with plain
+        // vector maths (works on any plane, unlike Curve.offset() which needs the XY plane).
+        const normal = this.normal().normalize();
+        const planePt = this.center();
+        const project = (p: Point): Point =>
+        {
+            const d = p.toVector().subtract(planePt.toVector()).dot(normal.inner());
+            return new Point(p.x - normal.x * d, p.y - normal.y * d, p.z - normal.z * d);
+        };
+
+        // Collect the resulting piece curves.
+        let regionCurves: Array<Curve>;
+
+        if (spine.isClosed())
+        {
+            // Closed cutter: subtract it directly; a band-like cutter splits the polygon.
+            const knife = Curve.Polyline(spine.tessellate().map(project)).close();
+            const diff = boundary.difference(knife);
+            if (diff === null)
+            {
+                console.warn('Polygon.split(): boolean subtraction failed. Returning null.');
+                return null;
+            }
+            regionCurves = (diff instanceof Curve) ? [diff] : diff.toArray();
+        }
+        else
+        {
+            // Open cutter: intersect the polygon with a big region on each side of the cut.
+            const spinePts = spine.tessellate().map(project);
+            if (spinePts.length < 2)
+            {
+                console.warn('Polygon.split(): the cutting Curve is degenerate (fewer than 2 points). Returning null.');
+                return null;
+            }
+            const near = gap / 2; // inner edge offset from the cut on each side (0 → exact split)
+            const regionPlus  = this._buildSideRegion(spinePts, normal, near, far, +1);
+            const regionMinus = this._buildSideRegion(spinePts, normal, near, far, -1);
+
+            const pieceOf = (region: Curve): Array<Curve> =>
+            {
+                const r = boundary.copy().intersection(region);
+                if (r === null) { return []; }
+                return (r instanceof Curve) ? [r] : r.toArray();
+            };
+            regionCurves = [...pieceOf(regionPlus), ...pieceOf(regionMinus)];
+        }
+
+        if (regionCurves.length < 2)
+        {
+            console.warn('Polygon.split(): the cutter does not fully cross the polygon, so it was not split. '
+                       + 'Make sure the split Curve passes all the way through the polygon. Returning null.');
+            return null;
+        }
+
+        const pieces = regionCurves
+            .map(c => c.toPolygon())
+            .filter((p): p is Polygon => p !== undefined);
+
+        if (pieces.length < 2)
+        {
+            console.warn(`Polygon.split(): only ${pieces.length} valid piece(s) could be built from the split result. Returning null.`);
+            return null;
+        }
+
+        // Sanity check: the pieces should tile the polygon (their areas may sum to slightly
+        // less than the original when a gap is removed, but never more). A larger sum means
+        // the pieces overlap — a degenerate result the underlying boolean can produce for
+        // awkward (e.g. strongly curved) cutters. Reject it rather than return garbage.
+        const polyArea = this.area();
+        const sumArea = pieces.reduce((s, p) => s + p.area(), 0);
+        if (polyArea > 0 && sumArea > polyArea * 1.05)
+        {
+            console.warn('Polygon.split(): the resulting pieces overlap (combined area exceeds the polygon), '
+                       + 'so a clean split could not be made with this cutter — try a simpler (e.g. straighter) cut. Returning null.');
+            return null;
+        }
+
+        // Preserve this polygon's styling on each piece.
+        pieces.forEach(p => p.style.merge(this.style.explicitData() as any));
+
+        return new ShapeCollection<Polygon>(...pieces);
     }
 
     //// 3D OPERATIONS ////

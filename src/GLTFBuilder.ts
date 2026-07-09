@@ -30,12 +30,31 @@ import
     PropertyType,
     Scene as GltfScene,
     Node as GltfNode,
+    Texture,
     type ReaderContext,
     type WriterContext,
 } from '@gltf-transform/core';
 import { Style } from './Style';
 
 import { GLTFJsonDocumentToString, remapAxis } from './utils';
+
+/** Decode a base64 image (raw or `data:` URI) into bytes + mime type, in Node or the browser. */
+function decodeImageData(data: string): { bytes: Uint8Array; mime: string }
+{
+    let mime = 'image/jpeg';
+    let b64 = data;
+    const m = /^data:([^;]+);base64,(.*)$/s.exec(data);
+    if (m) { mime = m[1]; b64 = m[2]; }
+    let bytes: Uint8Array;
+    if (typeof Buffer !== 'undefined') { bytes = new Uint8Array(Buffer.from(b64, 'base64')); }
+    else
+    {
+        const bin = atob(b64);
+        bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    }
+    return { bytes, mime };
+}
 import { EDGE_PROJECTION_DEFAULTS } from './constants';
 import { Mesh } from './Mesh';
 import { Curve } from './Curve';
@@ -661,28 +680,183 @@ export class GLTFBuilder
         const gtBuf = this._doc.getRoot().listBuffers()[0] ?? this._doc.createBuffer();
         const posAcc = this._doc.createAccessor().setType(Accessor.Type.VEC3).setArray(posF32).setBuffer(gtBuf);
         const normAcc = this._doc.createAccessor().setType(Accessor.Type.VEC3).setArray(normF32).setBuffer(gtBuf);
-        const idxAcc = this._doc.createAccessor().setType(Accessor.Type.SCALAR).setArray(idxCopy).setBuffer(gtBuf);
+        const st = (style ?? mesh.style);
+        const matDef = st.toGltfMaterial('mesh_material', false) as any;
+        const pbr = matDef.pbrMetallicRoughness;
 
-        const matDef = (style ?? mesh.style).toGltfMaterial('mesh_material', false) as any;
-        const [r, g, b, a] = matDef.pbrMetallicRoughness.baseColorFactor;
-        const material = this._doc.createMaterial('mesh_material')
-            .setBaseColorFactor([r, g, b, a])
-            .setMetallicFactor(matDef.pbrMetallicRoughness.metallicFactor)
-            .setRoughnessFactor(matDef.pbrMetallicRoughness.roughnessFactor)
-            .setDoubleSided(matDef.doubleSided ?? true);
-        if (matDef.alphaMode) material.setAlphaMode(matDef.alphaMode as 'BLEND' | 'OPAQUE' | 'MASK');
-
-        const primitive = this._doc.createPrimitive()
-            .setAttribute('POSITION', posAcc)
-            .setAttribute('NORMAL', normAcc)
-            .setIndices(idxAcc)
-            .setMode(Primitive.Mode.TRIANGLES)
-            .setMaterial(material);
-
-        const gltfMesh = this._doc.createMesh(name).addPrimitive(primitive);
+        const gltfMesh = this._doc.createMesh(name);
         const [tx, ty, tz] = remapAxis(c.x, c.y, c.z, this._up);
         const node = this._doc.createNode(name).setMesh(gltfMesh).setTranslation([tx, ty, tz]);
-        return { node, primitive, indices: idxCopy, positions: posF32, normals: normF32 };
+
+        // Base material factory (PBR ± an optional role texture with a given wrap mode).
+        const makeMaterial = (nm: string, texData?: string, wrap = 10497): Material =>
+        {
+            const m = this._doc.createMaterial(nm)
+                .setBaseColorFactor(pbr.baseColorFactor)
+                .setMetallicFactor(pbr.metallicFactor)
+                .setRoughnessFactor(pbr.roughnessFactor)
+                .setDoubleSided(matDef.doubleSided ?? true);
+            if (matDef.alphaMode) m.setAlphaMode(matDef.alphaMode as 'BLEND' | 'OPAQUE' | 'MASK');
+            if (texData)
+            {
+                m.setBaseColorTexture(this._getMaterialTexture(texData, nm));
+                const info = m.getBaseColorTextureInfo();
+                if (info) info.setWrapS(wrap as any).setWrapT(wrap as any);
+            }
+            return m;
+        };
+
+        const spec: any = (st as any)._style?.material;
+        const sectionTex = (spec && typeof spec === 'object' && spec.textures?.section?.data) ? spec.textures.section : null;
+        const sidesTex   = (spec && typeof spec === 'object' && spec.textures?.sides?.data)   ? spec.textures.sides   : null;
+
+        // No material textures → single PBR primitive (original behaviour).
+        if (!sectionTex && !sidesTex)
+        {
+            const idxAcc = this._doc.createAccessor().setType(Accessor.Type.SCALAR).setArray(idxCopy).setBuffer(gtBuf);
+            const primitive = this._doc.createPrimitive()
+                .setAttribute('POSITION', posAcc).setAttribute('NORMAL', normAcc)
+                .setIndices(idxAcc).setMode(Primitive.Mode.TRIANGLES)
+                .setMaterial(makeMaterial('mesh_material'));
+            gltfMesh.addPrimitive(primitive);
+            return { node, primitive, indices: idxCopy, positions: posF32, normals: normF32 };
+        }
+
+        // Textured. Split faces into `section` (the two end faces, normal ∥ the longest
+        // OBB axis) and `sides` (the rest). `section` fits its texture once at real-world
+        // scale, randomly offset, non-repeating; `sides` tiles at real-world scale.
+        const modelUnitMM: number = (spec && spec.modelUnitMM) || 1;
+        const { sectionUV, sidesUV, sectionIdx, sidesIdx } =
+            this._planarUVsForMaterial(posF32, normF32, idxCopy, count, modelUnitMM, sectionTex, sidesTex);
+
+        // Independent UV accessors so each role uses its own mapping.
+        const sidesUVAcc = this._doc.createAccessor().setType(Accessor.Type.VEC2).setArray(sidesUV as any).setBuffer(gtBuf);
+        const sectionUVAcc = sectionIdx.length
+            ? this._doc.createAccessor().setType(Accessor.Type.VEC2).setArray(sectionUV as any).setBuffer(gtBuf)
+            : sidesUVAcc;
+
+        const buildPrim = (idxArr: number[], uvAccessor: any, material: Material) =>
+        {
+            const ia = this._doc.createAccessor().setType(Accessor.Type.SCALAR).setArray(new Uint32Array(idxArr)).setBuffer(gtBuf);
+            return this._doc.createPrimitive()
+                .setAttribute('POSITION', posAcc).setAttribute('NORMAL', normAcc).setAttribute('TEXCOORD_0', uvAccessor)
+                .setIndices(ia).setMode(Primitive.Mode.TRIANGLES).setMaterial(material);
+        };
+
+        const built: Array<{ prim: Primitive; idx: Uint32Array }> = [];
+        if (sidesIdx.length)
+        {
+            const prim = buildPrim(sidesIdx, sidesUVAcc, makeMaterial('mesh_sides', sidesTex?.data, 10497 /* REPEAT */));
+            gltfMesh.addPrimitive(prim);
+            built.push({ prim, idx: new Uint32Array(sidesIdx) });
+        }
+        if (sectionIdx.length)
+        {
+            const prim = buildPrim(sectionIdx, sectionUVAcc, makeMaterial('mesh_section', sectionTex?.data ?? sidesTex?.data, 33071 /* CLAMP_TO_EDGE */));
+            gltfMesh.addPrimitive(prim);
+            built.push({ prim, idx: new Uint32Array(sectionIdx) });
+        }
+
+        // First primitive is returned for the caller's edge-extension queue; queue the rest here.
+        for (let i = 1; i < built.length; i++) this.queueMeshExtData(built[i].prim, built[i].idx, posF32, normF32, st);
+        const primary = built[0];
+        return { node, primitive: primary.prim, indices: primary.idx, positions: posF32, normals: normF32 };
+    }
+
+    /** Cache of embedded material textures, keyed by role+data, deduped across primitives. */
+    private _materialTextureCache = new Map<string, Texture>();
+
+    /** Get or create a deduped gltf Texture from an embedded base64 data URI. */
+    private _getMaterialTexture(data: string, name: string): Texture
+    {
+        const key = String(data).slice(0, 64) + `:${data.length}`;
+        let texture = this._materialTextureCache.get(key);
+        if (!texture)
+        {
+            const { bytes, mime } = decodeImageData(data);
+            texture = this._doc.createTexture(name).setImage(bytes).setMimeType(mime);
+            this._materialTextureCache.set(key, texture);
+        }
+        return texture;
+    }
+
+    /**
+     * Split an (unindexed, per-face-normal) mesh into `section` vs `sides` faces and
+     * compute per-role UVs at real-world scale.
+     *
+     *  - The longest OBB axis is the "length"; the two faces whose normal is parallel
+     *    to it are the `section` (end) faces. Their texture is fitted once at real
+     *    scale, randomly offset, and clamped (non-repeating).
+     *  - All other faces are `sides`, box-mapped and tiled at real scale.
+     *
+     * Returns per-vertex UV arrays (length count*2) plus the triangle index lists per
+     * role. A UV array is meaningful only at the vertices its role's indices reference.
+     */
+    private _planarUVsForMaterial(
+        posF32: Float32Array, normF32: Float32Array, idx: Uint32Array, count: number,
+        modelUnitMM: number, sectionTex: any, sidesTex: any):
+        { sectionUV: Float32Array; sidesUV: Float32Array; sectionIdx: number[]; sidesIdx: number[] }
+    {
+        // Longest axis (from centered positions) → the beam/board length.
+        const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+        for (let i = 0; i < count; i++) for (let k = 0; k < 3; k++)
+        { const v = posF32[i * 3 + k]; if (v < mn[k]) mn[k] = v; if (v > mx[k]) mx[k] = v; }
+        const ext = [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]];
+        const lengthAxis = ext[0] >= ext[1] && ext[0] >= ext[2] ? 0 : (ext[1] >= ext[2] ? 1 : 2);
+        const [axA, axB] = [0, 1, 2].filter(a => a !== lengthAxis); // the two cross-section axes
+
+        // Classify each triangle by its (per-face) normal's dominant axis.
+        const role = new Uint8Array(count); // 1 = section, 0 = sides
+        const sectionIdx: number[] = [], sidesIdx: number[] = [];
+        const tris = Math.floor(idx.length / 3);
+        for (let t = 0; t < tris; t++)
+        {
+            const v0 = idx[t * 3];
+            const nx = Math.abs(normF32[v0 * 3]), ny = Math.abs(normF32[v0 * 3 + 1]), nz = Math.abs(normF32[v0 * 3 + 2]);
+            const dom = nx >= ny && nx >= nz ? 0 : (ny >= nz ? 1 : 2);
+            const isSection = !!sectionTex && dom === lengthAxis;
+            const list = isSection ? sectionIdx : sidesIdx;
+            for (let s = 0; s < 3; s++) { const v = idx[t * 3 + s]; list.push(v); role[v] = isSection ? 1 : 0; }
+        }
+
+        // Section face extents (over the two cross-section axes) for a real-scale fit.
+        let sMinA = Infinity, sMaxA = -Infinity, sMinB = Infinity, sMaxB = -Infinity;
+        for (let i = 0; i < count; i++) if (role[i] === 1)
+        {
+            const a = posF32[i * 3 + axA], b = posF32[i * 3 + axB];
+            if (a < sMinA) sMinA = a; if (a > sMaxA) sMaxA = a; if (b < sMinB) sMinB = b; if (b > sMaxB) sMaxB = b;
+        }
+        const secW = (sectionTex?.realWidth ?? 150), secH = (sectionTex?.realHeight ?? 150);
+        const spanA = (sMaxA - sMinA) * modelUnitMM / secW, spanB = (sMaxB - sMinB) * modelUnitMM / secH;
+        const offA = Math.random() * Math.max(0, 1 - spanA), offB = Math.random() * Math.max(0, 1 - spanB);
+
+        // Sides texture is directional: its Y (v, realHeight) is the longitudinal grain
+        // direction. Default to a 562×1000 mm tile so v maps the long axis.
+        const sidW = (sidesTex?.realWidth ?? 562), sidH = (sidesTex?.realHeight ?? 1000);
+
+        const sectionUV = new Float32Array(count * 2), sidesUV = new Float32Array(count * 2);
+        for (let i = 0; i < count; i++)
+        {
+            if (role[i] === 1)
+            {
+                // real-scale, randomly offset, non-repeating crop of the section image
+                const a = posF32[i * 3 + axA], b = posF32[i * 3 + axB];
+                sectionUV[i * 2] = (a - sMinA) * modelUnitMM / secW + offA;
+                sectionUV[i * 2 + 1] = (b - sMinB) * modelUnitMM / secH + offB;
+            }
+            else
+            {
+                // Sides: align texture-V with the material's LONGITUDINAL (length) axis so
+                // the grain runs down the beam; U spans the cross-width axis. The side face's
+                // normal is one of the two non-length axes; the width axis is the other one.
+                const nx = Math.abs(normF32[i * 3]), ny = Math.abs(normF32[i * 3 + 1]), nz = Math.abs(normF32[i * 3 + 2]);
+                const N = nx >= ny && nx >= nz ? 0 : (ny >= nz ? 1 : 2);
+                const widthAxis = (N === axA) ? axB : axA;
+                sidesUV[i * 2] = posF32[i * 3 + widthAxis] * modelUnitMM / sidW;   // U → cross width (realWidth)
+                sidesUV[i * 2 + 1] = posF32[i * 3 + lengthAxis] * modelUnitMM / sidH; // V → length (realHeight, grain)
+            }
+        }
+        return { sectionUV, sidesUV, sectionIdx, sidesIdx };
     }
 
     /** Assemble a GltfNode for a Curve from its raw toBuffer() data. */
