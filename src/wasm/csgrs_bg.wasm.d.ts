@@ -90,6 +90,8 @@ export const meshjs_ellipsoid: (a: number, b: number, c: number, d: number, e: n
 export const meshjs_filterPolygonsByMetadata: (a: number, b: any) => number;
 export const meshjs_flatten: (a: number) => number;
 export const meshjs_float: (a: number) => number;
+export const meshjs_from3MF: (a: number, b: number, c: any) => [number, number, number];
+export const meshjs_fromAMF: (a: number, b: number, c: any) => [number, number, number];
 export const meshjs_fromDXF: (a: number, b: number, c: any) => [number, number, number];
 export const meshjs_fromGLTF: (a: number, b: number, c: any) => [number, number, number];
 export const meshjs_fromOBJ: (a: number, b: number, c: any) => [number, number, number];

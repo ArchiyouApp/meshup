@@ -18,9 +18,11 @@
  *                 use Mesh.fromDXF for DXF solids as a mesh)
  *    - glTF/GLB → ShapeCollection<Mesh>    via MeshJs.fromGLTF (merged mesh;
  *                 materials/hierarchy flattened, Y-up→Z-up)
+ *    - AMF      → ShapeCollection<Mesh>    via MeshJs.fromAMF (plain or zipped)
+ *    - 3MF      → ShapeCollection<Mesh>    via MeshJs.from3MF (geometry only)
  *
  *  Reserved (throw until the Rust importers land — see the Importer plan):
- *    - PLY / AMF / 3MF   (3D → Mesh)
+ *    - PLY   (3D → Mesh)
  */
 
 import { getCsgrs, ShapeCollection, Curve, Mesh } from './index';
@@ -40,7 +42,7 @@ export interface ImportOptions
 
 /** Formats detectable/routable but not yet implemented (pending Rust importers). */
 const NOT_YET_IMPLEMENTED: ReadonlyArray<ImportFormat> =
-    ['ply', 'amf', '3mf'];
+    ['ply'];
 
 export class Importer
 {
@@ -62,6 +64,8 @@ export class Importer
             case 'dxf':     return Importer.fromDXF(data, opts);
             case 'glb':
             case 'gltf':    return Importer.fromGLTF(data, opts);
+            case 'amf':     return Importer.fromAMF(data, opts);
+            case '3mf':     return Importer.from3MF(data, opts);
             default:
                 if(NOT_YET_IMPLEMENTED.includes(format as ImportFormat))
                 {
@@ -185,6 +189,18 @@ export class Importer
         return new ShapeCollection<Mesh>(Mesh.fromGLTF(Importer._toBytes(data)));
     }
 
+    /** Import an AMF model (plain XML or zipped) as a merged Mesh. */
+    static fromAMF(data: string | Uint8Array | ArrayBuffer, _opts: ImportOptions = {}): ShapeCollection<Mesh>
+    {
+        return new ShapeCollection<Mesh>(Mesh.fromAMF(Importer._toBytes(data)));
+    }
+
+    /** Import a 3MF package as a merged Mesh (geometry only). */
+    static from3MF(data: string | Uint8Array | ArrayBuffer, _opts: ImportOptions = {}): ShapeCollection<Mesh>
+    {
+        return new ShapeCollection<Mesh>(Mesh.from3MF(Importer._toBytes(data)));
+    }
+
     //// FORMAT DETECTION ////
 
     /** Best-effort format detection from magic bytes / content sniffing. */
@@ -207,6 +223,7 @@ export class Importer
         const trimmed = head.replace(/^﻿/, '').trimStart();
 
         if(/<svg[\s>]/i.test(head) || (/^<\?xml/i.test(trimmed) && /<svg[\s>]/i.test(head))) { return 'svg'; }
+        if(/<amf[\s>]/i.test(head)) { return 'amf'; } // plain-XML AMF (zipped AMF looks like a ZIP)
         if(/"type"\s*:\s*"(FeatureCollection|Feature|Point|MultiPoint|LineString|MultiLineString|Polygon|MultiPolygon|GeometryCollection)"/.test(head)) { return 'geojson'; }
         if(/^solid\s/i.test(trimmed)) { return 'stl'; } // ASCII STL (binary STL has no reliable magic)
         if(/^ply\r?\n/i.test(trimmed)) { return 'ply'; }

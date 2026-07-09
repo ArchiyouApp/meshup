@@ -26,6 +26,58 @@ const gltfReady = (): boolean =>
     catch { return false; }
 };
 
+const xmlMeshReady = (): boolean =>
+{
+    try { return typeof (getCsgrs() as any)?.MeshJs?.from3MF === 'function'; }
+    catch { return false; }
+};
+
+/** CRC-32 (IEEE) for the stored-ZIP builder below. */
+const crc32 = (bytes: Uint8Array): number =>
+{
+    let crc = 0xFFFFFFFF;
+    for(let i = 0; i < bytes.length; i++)
+    {
+        crc ^= bytes[i];
+        for(let j = 0; j < 8; j++) { crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1)); }
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+};
+
+/** Build a minimal single-entry STORED (uncompressed) ZIP — enough for a 3MF. */
+const makeStoredZip = (name: string, content: string): Uint8Array =>
+{
+    const enc = new TextEncoder();
+    const nb = enc.encode(name), data = enc.encode(content);
+    const crc = crc32(data), n = data.length, fn = nb.length;
+    const b: number[] = [];
+    const u16 = (v: number) => b.push(v & 0xff, (v >>> 8) & 0xff);
+    const u32 = (v: number) => b.push(v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff);
+    u32(0x04034b50); u16(20); u16(0); u16(0); u16(0); u16(0); u32(crc); u32(n); u32(n); u16(fn); u16(0);
+    nb.forEach(x => b.push(x)); data.forEach(x => b.push(x));
+    const cStart = b.length;
+    u32(0x02014b50); u16(20); u16(20); u16(0); u16(0); u16(0); u16(0); u32(crc); u32(n); u32(n);
+    u16(fn); u16(0); u16(0); u16(0); u16(0); u32(0); u32(0); nb.forEach(x => b.push(x));
+    const cEnd = b.length;
+    u32(0x06054b50); u16(0); u16(0); u16(1); u16(1); u32(cEnd - cStart); u32(cStart); u16(0);
+    return new Uint8Array(b);
+};
+
+const TETRA_3MF_MODEL = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+  <resources><object id="1" type="model"><mesh>
+    <vertices>
+      <vertex x="0" y="0" z="0"/><vertex x="10" y="0" z="0"/>
+      <vertex x="0" y="10" z="0"/><vertex x="0" y="0" z="10"/>
+    </vertices>
+    <triangles>
+      <triangle v1="0" v2="2" v3="1"/><triangle v1="0" v2="1" v3="3"/>
+      <triangle v1="0" v2="3" v3="2"/><triangle v1="1" v2="2" v3="3"/>
+    </triangles>
+  </mesh></object></resources>
+  <build><item objectid="1"/></build>
+</model>`;
+
 const SVG_RECT = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
     <rect x="10" y="10" width="80" height="80" fill="red"/>
 </svg>`;
@@ -125,11 +177,11 @@ describe('Importer: load() auto-detect', () =>
         expect(() => Importer.load(glb)).toThrow(/glTF (import|parse) error/i);
     });
 
-    it('reports a still-unimplemented format (3MF/ZIP) as not-yet-implemented', () =>
+    it('reports a still-unimplemented format (PLY) as not-yet-implemented', () =>
     {
-        const zip = new Uint8Array([0x50, 0x4B, 0x03, 0x04, 0, 0, 0, 0]); // 'PK..' → 3mf
-        expect(Importer.detectFormat(zip)).toBe('3mf');
-        expect(() => Importer.load(zip)).toThrow(/not implemented yet/);
+        const ply = 'ply\nformat ascii 1.0\nelement vertex 0\nend_header\n';
+        expect(Importer.detectFormat(ply)).toBe('ply');
+        expect(() => Importer.load(ply)).toThrow(/not implemented yet/);
     });
 
     it('throws on unknown content', () =>
@@ -252,6 +304,39 @@ describe('Importer: glTF/GLB (round-trip)', () =>
         expect(dims[0]).toBeCloseTo(10, 1);
         expect(dims[2]).toBeCloseTo(10, 1);
         expect(imported.toBuffer()!.indices.length).toBeGreaterThan(0);
+    });
+});
+
+describe('Importer: AMF (round-trip)', () =>
+{
+    it('exports a cube to AMF and re-imports it', (ctx) =>
+    {
+        if(!xmlMeshReady()){ ctx.skip(); return; }
+        const cube = Mesh.Cube(10);
+        const amf = cube.toAMF()!;
+        expect(typeof amf).toBe('string');
+        const imported = Mesh.fromAMF(amf);
+        const bb = imported.bbox()!;
+        expect(bb.width()).toBeCloseTo(10, 2);
+        expect(bb.depth()).toBeCloseTo(10, 2);
+        expect(bb.height()).toBeCloseTo(10, 2);
+        expect(imported.toBuffer()!.indices.length).toBeGreaterThan(0);
+    });
+});
+
+describe('Importer: 3MF', () =>
+{
+    it('imports a tetrahedron from a minimal 3MF package', (ctx) =>
+    {
+        if(!xmlMeshReady()){ ctx.skip(); return; }
+        const zip = makeStoredZip('3D/3dmodel.model', TETRA_3MF_MODEL);
+        expect(Importer.detectFormat(zip)).toBe('3mf');
+        const mesh = Mesh.from3MF(zip);
+        const bb = mesh.bbox()!;
+        expect(bb.width()).toBeCloseTo(10, 2);
+        expect(bb.depth()).toBeCloseTo(10, 2);
+        expect(bb.height()).toBeCloseTo(10, 2);
+        expect(mesh.toBuffer()!.indices.length).toBe(12); // 4 triangles
     });
 });
 

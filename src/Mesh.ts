@@ -318,6 +318,22 @@ export class Mesh extends Shape
         return this.fromGLTF(data, metadata);
     }
 
+    /** Import an AMF model (plain XML or zipped) as a merged Mesh. */
+    static fromAMF(data: string|Uint8Array|ArrayBuffer, metadata: any = null): Mesh
+    {
+        const bytes = Mesh._toBytes(data);
+        if(bytes.length === 0){ throw new Error('Mesh.fromAMF(): empty AMF data.'); }
+        return this.from((getCsgrs().MeshJs as any).fromAMF(bytes, metadata));
+    }
+
+    /** Import a 3MF package as a merged Mesh (geometry only). */
+    static from3MF(data: Uint8Array|ArrayBuffer, metadata: any = null): Mesh
+    {
+        const bytes = Mesh._toBytes(data);
+        if(bytes.length === 0){ throw new Error('Mesh.from3MF(): empty 3MF data.'); }
+        return this.from((getCsgrs().MeshJs as any).from3MF(bytes, metadata));
+    }
+
     /** Coerce string (UTF-8) / ArrayBuffer / Uint8Array input to bytes. */
     private static _toBytes(data: string|Uint8Array|ArrayBuffer): Uint8Array
     {

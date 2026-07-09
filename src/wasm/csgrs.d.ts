@@ -257,6 +257,14 @@ export class MeshJs {
   static polyhedron(points: any, faces: any, metadata: any): MeshJs;
   convexHull(): MeshJs;
   /**
+   * Import a **3MF** package as a merged Mesh (geometry only).
+   */
+  static from3MF(data: Uint8Array, metadata: any): MeshJs;
+  /**
+   * Import an **AMF** model (plain XML or zipped) as a merged Mesh.
+   */
+  static fromAMF(data: Uint8Array, metadata: any): MeshJs;
+  /**
    * Import a **DXF** drawing (closed polylines / circles → faces) as a Mesh.
    */
   static fromDXF(dxf_data: Uint8Array, metadata: any): MeshJs;
@@ -1158,6 +1166,8 @@ export interface InitOutput {
   readonly meshjs_filterPolygonsByMetadata: (a: number, b: any) => number;
   readonly meshjs_flatten: (a: number) => number;
   readonly meshjs_float: (a: number) => number;
+  readonly meshjs_from3MF: (a: number, b: number, c: any) => [number, number, number];
+  readonly meshjs_fromAMF: (a: number, b: number, c: any) => [number, number, number];
   readonly meshjs_fromDXF: (a: number, b: number, c: any) => [number, number, number];
   readonly meshjs_fromGLTF: (a: number, b: number, c: any) => [number, number, number];
   readonly meshjs_fromOBJ: (a: number, b: number, c: any) => [number, number, number];

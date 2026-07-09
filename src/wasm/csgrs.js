@@ -1094,6 +1094,36 @@ export class MeshJs {
         return MeshJs.__wrap(ret);
     }
     /**
+     * Import a **3MF** package as a merged Mesh (geometry only).
+     * @param {Uint8Array} data
+     * @param {any} metadata
+     * @returns {MeshJs}
+     */
+    static from3MF(data, metadata) {
+        const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.meshjs_from3MF(ptr0, len0, metadata);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return MeshJs.__wrap(ret[0]);
+    }
+    /**
+     * Import an **AMF** model (plain XML or zipped) as a merged Mesh.
+     * @param {Uint8Array} data
+     * @param {any} metadata
+     * @returns {MeshJs}
+     */
+    static fromAMF(data, metadata) {
+        const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.meshjs_fromAMF(ptr0, len0, metadata);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return MeshJs.__wrap(ret[0]);
+    }
+    /**
      * Import a **DXF** drawing (closed polylines / circles → faces) as a Mesh.
      * @param {Uint8Array} dxf_data
      * @param {any} metadata
