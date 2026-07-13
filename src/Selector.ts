@@ -45,7 +45,7 @@ const SELECTORS = {
         // Get subshapes that are parallel to target shape
         pattern: '{{shape}}|{{axis|plane}}',
         target: ['collection', 'mesh', 'curve'], // only these types can be the target of a side selector
-        shape: ['face', 'edge'],
+        shape: ['face', 'edge', 'curve', 'wire'],
         axis: MAIN_AXIS,
         plane: BASE_PLANE_NAME_TO_PLANE,
     },
@@ -54,6 +54,7 @@ const SELECTORS = {
         pattern: '{{shape}}<<->{{point|axis|plane}}',
         target: ['collection', 'mesh', 'curve'], // only these types can be the target of a side selector
         shape: SELECTOR_SHAPES,
+        point: isPointLike,
         axis: MAIN_AXIS,
         plane: BASE_PLANE_NAME_TO_PLANE,
     },
@@ -122,6 +123,19 @@ export class Selector
         this._parse(selectorString);
     }
 
+    /** Warn (once, to the console) when a selector produced no results.
+     *  Handles the possible result shapes: ShapeCollection, Array, or a single/nullish value. */
+    static warnIfEmpty(selectorString: string, result: any): void
+    {
+        const empty = (result instanceof ShapeCollection) ? result.length === 0
+                    : Array.isArray(result) ? result.length === 0
+                    : (result === null || result === undefined);
+        if (empty)
+        {
+            console.warn(`Selector "${selectorString}": no matching shapes found.`);
+        }
+    }
+
     /** Execute the selector on a target object */
     execute(target: ShapeCollection|Mesh|Curve): any
     {
@@ -168,8 +182,19 @@ export class Selector
             return this._facesFromTarget(target)
                 .filter(f => this._normalIsParallel(f.normal(), refNormal));
         }
-        // edge / wire
-        // TODO: edge and wire selection from meshes not yet available
+        if (shape === 'curve' || shape === 'wire')
+        {
+            // A (planar) curve is "parallel" when its plane normal is parallel to
+            // the reference axis/plane normal. Non-planar curves have no normal and
+            // are skipped.
+            return this._curvesFromTarget(target).filter(c =>
+            {
+                const n = c.normal();
+                return n ? this._normalIsParallel(n, refNormal) : false;
+            });
+        }
+        // edge
+        // TODO: edge selection from meshes not yet available
         return [];
     }
 
@@ -240,6 +265,15 @@ export class Selector
         return [];
     }
 
+    /** Get all curves (Curves) from a target.
+     *  A single Curve yields its spans (a non-compound curve yields itself). */
+    private _curvesFromTarget(target: ShapeCollection | Mesh | Curve): Array<Curve>
+    {
+        if (target instanceof Curve) return target.spans().toArray();
+        if (target instanceof ShapeCollection) return target.curves().toArray();
+        return [];
+    }
+
     /** Get all vertices (Points) from a target */
     private _verticesFromTarget(target: ShapeCollection | Mesh | Curve): Array<Point>
     {
@@ -271,9 +305,7 @@ export class Selector
                 return [];
             case 'curve':
             case 'wire':
-                if (target instanceof ShapeCollection) return target.curves().toArray();
-                if (target instanceof Curve) return [target];
-                return [];
+                return this._curvesFromTarget(target);
             case 'edge':
                 // TODO: edge extraction not yet available
                 return [];

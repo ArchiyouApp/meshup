@@ -57,6 +57,14 @@ export abstract class Shape
     abstract mirrorZ(z?: number): this;
     abstract copy(): this;
 
+    /** Copy for internal/throwaway use. Identical to copy() at the meshup level, but
+     *  the SmartShape mixin overrides it to skip automatic scene registration so
+     *  temporaries created inside kernel operations never pollute the smart scene. */
+    _copy(): this
+    {
+        return this.copy();
+    }
+
     abstract length(): number | undefined;
     abstract area(): number | undefined;
     abstract volume(): number | undefined;

@@ -38,6 +38,11 @@ export type StyleData = {
         cap?: 'butt' | 'round' | 'square';
         join?: 'bevel' | 'round' | 'miter';
     };
+    point?: {
+        size?: number; // marker diameter in screen pixels
+        color?: StyleColor;
+        shape?: 'circle' | 'square';
+    };
     material?: any; // TODO
 }
 
@@ -65,6 +70,7 @@ export class Style
             ...SHAPE_DEFAULT_STYLE,
             fill: { ...SHAPE_DEFAULT_STYLE.fill },
             stroke: { ...SHAPE_DEFAULT_STYLE.stroke },
+            point: { ...SHAPE_DEFAULT_STYLE.point },
         };
         if (init) this.merge(init);
     }
@@ -76,6 +82,7 @@ export class Style
         if (data.opacity !== undefined) this.opacity = data.opacity;
         if (data.fill !== undefined) this.fill = data.fill;
         if (data.stroke !== undefined) this.stroke = data.stroke;
+        if (data.point !== undefined) this.point = data.point;
         if (data.material !== undefined) this._style.material = data.material;
         return this;
     }
@@ -92,6 +99,7 @@ export class Style
         if (this._explicit.has('opacity')) d.opacity = this.opacity;
         if (this._explicit.has('fill')) d.fill = { ...this._style.fill };
         if (this._explicit.has('stroke')) d.stroke = { ...this._style.stroke };
+        if (this._explicit.has('point')) d.point = { ...this._style.point };
         if (this._explicit.has('material')) d.material = this._style.material;
         return d;
     }
@@ -289,6 +297,74 @@ export class Style
             throw new TypeError(`Style.strokeJoin must be 'bevel', 'round', or 'miter', got: "${v}"`);
         this._style.stroke!.join = v;
         this._explicit.add('stroke');
+    }
+
+    //// POINT ////
+
+    get point(): NonNullable<StyleData['point']> {
+        return this._style.point!;
+    }
+    set point(v: { size?: number; color?: ColorInput; shape?: 'circle' | 'square' })
+    {
+        if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new TypeError('Style.point must be an object');
+        const update: NonNullable<StyleData['point']> = {};
+        if (v.size !== undefined)
+        {
+            if (typeof v.size !== 'number' || v.size < 0) throw new RangeError(`Style.point.size must be a non-negative number, got: ${v.size}`);
+            update.size = v.size;
+        }
+        if (v.color !== undefined)
+        {
+            update.color = Style._resolveColor(v.color);
+        }
+        if (v.shape !== undefined)
+        {
+            if (!['circle', 'square'].includes(v.shape)) throw new TypeError(`Style.point.shape must be 'circle' or 'square', got: "${v.shape}"`);
+            update.shape = v.shape;
+        }
+        this._style.point = { ...this._style.point, ...update };
+        this._explicit.add('point');
+    }
+
+    get pointSize(): number {
+        return this._style.point!.size ?? SHAPE_DEFAULT_STYLE.point!.size!;
+    }
+    set pointSize(v: number)
+    {
+        if (typeof v !== 'number' || v < 0)
+            throw new RangeError(`Style.pointSize must be a non-negative number, got: ${v}`);
+        this._style.point!.size = v;
+        this._explicit.add('point');
+    }
+
+    /** Point marker color. Falls back to the shape's shared color when not set explicitly. */
+    get pointColor(): StyleColor {
+        return this._style.point!.color ?? this.color;
+    }
+    set pointColor(v: ColorInput)
+    {
+        this._style.point!.color = Style._resolveColor(v);
+        this._explicit.add('point');
+    }
+
+    /** Resolve the point marker color to an [r, g, b] triple (each 0–1) for GLTF. */
+    pointColorRgb(): [number, number, number] {
+        try
+        {
+            return new Color(this.pointColor).toRgb().map(v => v / 255) as [number, number, number];
+        }
+        catch { return [1, 0, 0]; }
+    }
+
+    get pointShape(): 'circle' | 'square' {
+        return this._style.point!.shape ?? SHAPE_DEFAULT_STYLE.point!.shape!;
+    }
+    set pointShape(v: 'circle' | 'square')
+    {
+        if (!['circle', 'square'].includes(v))
+            throw new TypeError(`Style.pointShape must be 'circle' or 'square', got: "${v}"`);
+        this._style.point!.shape = v;
+        this._explicit.add('point');
     }
 
     //// APPLY ////
@@ -522,6 +598,7 @@ export class Style
             opacity: this._style.opacity,
             fill: { ...this._style.fill },
             stroke: { ...this._style.stroke },
+            point: { ...this._style.point },
             material: this._style.material,
         };
     }

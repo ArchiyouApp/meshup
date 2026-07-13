@@ -159,6 +159,23 @@ describe('Mesh.cutoffBy()', () =>
 
         expect(result.inner().triangleCount()).toBe(trisBefore);
     });
+
+    it('keeps only the largest CONNECTED piece when a cut severs the mesh in two', () =>
+    {
+        // A long thin bar cut by a diagonal copy of itself: subtracting the diagonal block
+        // splits the bar into two disconnected chunks. cutoffBy must keep only the single
+        // largest chunk, not the whole (disconnected) boolean side.
+        const bar = Mesh.Box(20, 200, 10).moveX(100); // volume 40000
+        const diagonal = bar.copy().rotateZ(45).moveY(20);
+
+        const result = bar.copy().cutoffBy(diagonal);
+
+        // Exactly one connected island survives (the small severed fragment is dropped).
+        expect(result.separateIsolated().count()).toBe(1);
+        // The kept piece is the larger of the two chunks and smaller than the original bar.
+        expect(result.volume()!).toBeGreaterThan(20000);
+        expect(result.volume()!).toBeLessThan(40000);
+    });
 });
 
 describe('Mesh.cutoff()', () =>

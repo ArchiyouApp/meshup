@@ -54,6 +54,8 @@ export const SHAPE_DEFAULT_STYLE: StyleData = {
     opacity: 1.0,
     fill: { color: 'red', opacity: 1.0 },
     stroke: { color: 'red', opacity: 1.0, width: 1, dash: [], cap: 'butt', join: 'miter' },
+    point: { size: 5, shape: 'circle' }, // color omitted → inherits the shape's color
+
     material: null,
 };
 

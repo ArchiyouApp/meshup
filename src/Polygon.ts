@@ -610,6 +610,15 @@ export class Polygon extends Shape
      */
     split(other: Curve | Polygon, gap: number = 0): ShapeCollection<Polygon> | null
     {
+        return this._splitRaw(other, gap);
+    }
+
+    /** The actual split implementation. Kept separate from the public split() so that in-place
+     *  operations (cutoff/cutoffBy) can reuse the geometry without dispatching through split() —
+     *  subclasses (e.g. core's SmartMeshPolygon) decorate split() with scene side effects that
+     *  would otherwise pollute the scene with the intermediate pieces. */
+    private _splitRaw(other: Curve | Polygon, gap: number = 0): ShapeCollection<Polygon> | null
+    {
         if (!(other instanceof Curve) && !(other instanceof Polygon))
         {
             console.warn('Polygon.split(): expected a Curve or Polygon to split with. Returning null.');
@@ -735,6 +744,86 @@ export class Polygon extends Shape
         return new ShapeCollection<Polygon>(...pieces);
     }
 
+    /** From a set of split pieces, keep the largest (or smallest) by area, applying it in
+     *  place. Style stays on `this` (the Shape base), so only the geometry is swapped. */
+    private _keepPiece(pieces: Array<Polygon>, keepSmallest: boolean): this
+    {
+        const sorted = [...pieces].sort((a, b) => b.area() - a.area()); // descending by area
+        const picked = keepSmallest ? sorted[sorted.length - 1] : sorted[0];
+        this._polygon = picked.inner();
+        return this;
+    }
+
+    /**
+     * Cut this polygon by another Polygon or Curve and keep one of the resulting pieces.
+     * By default keeps the largest piece (by area); set `keepSmallest=true` to keep the
+     * smallest. This is a planar (2D) cut delegated to split(), so the cutter may be open or
+     * closed and is projected onto this polygon's plane (see split() for the full contract).
+     *
+     * Mutates in place and returns `this`. If the cutter does not split the polygon into at
+     * least two pieces, a warning is emitted and the polygon is left unchanged.
+     *
+     * @param other        Cutting Curve (open or closed) or Polygon.
+     * @param keepSmallest Keep the smallest piece instead of the largest.
+     */
+    cutoffBy(other: Curve | Polygon, keepSmallest = false): this
+    {
+        const pieces = this._splitRaw(other);
+        if (!pieces || pieces.count() < 2)
+        {
+            console.warn('Polygon.cutoffBy(): the cutter did not split the polygon — nothing cut off.');
+            return this;
+        }
+        return this._keepPiece(pieces.toArray(), keepSmallest);
+    }
+
+    /**
+     * Cut off this polygon orthogonally with an axis-aligned plane and keep one piece.
+     *
+     * The cut is the line where the world plane `{ <at> = coord }` meets this polygon's plane
+     * (its direction is polygonNormal × axisNormal). By default the largest piece (by area) is
+     * kept; set `smallest=true` to keep the smallest. This is a planar (2D) cut — polygons are
+     * flat, so it does not go through the solid boolean path used by Mesh.cutoff().
+     *
+     * Mutates in place and returns `this`. Returns unchanged (with a warning) when the plane is
+     * parallel to the polygon or does not actually split it.
+     *
+     * @param at        World axis of the cutting plane's normal ('x' | 'y' | 'z').
+     * @param coord     Position of the plane along `at` (default 0).
+     * @param smallest  Keep the smallest piece instead of the largest.
+     */
+    cutoff(at: Axis, coord: number = 0, smallest: boolean = false): this
+    {
+        if (!isAxis(at)) { throw new Error(`Polygon.cutoff(): Invalid axis '${at}'. Use 'x', 'y', or 'z'.`); }
+
+        // Direction of the cut line within the polygon plane. A ~zero cross product means the
+        // cutting plane is parallel to the polygon, so it cannot produce a cut.
+        const axisNormal = Vector.from(at);
+        const lineDir = this.normal().normalize().cross(axisNormal);
+        if (lineDir.length() < TOLERANCE)
+        {
+            console.warn(`Polygon.cutoff(): a plane with normal '${at}' is parallel to the polygon and cannot cut it — nothing cut off.`);
+            return this;
+        }
+        lineDir.normalize();
+
+        // Open cutting line at the requested coordinate, long enough to fully cross the polygon;
+        // split() projects it onto the polygon's plane and yields one piece per side.
+        const size = this.bbox().size();
+        const far = (Math.hypot(size.x, size.y, size.z) || 1) * 4;
+        const base = this.center().setComponent(at, coord);
+        const p1 = new Point(base.x - lineDir.x * far, base.y - lineDir.y * far, base.z - lineDir.z * far);
+        const p2 = new Point(base.x + lineDir.x * far, base.y + lineDir.y * far, base.z + lineDir.z * far);
+
+        const pieces = this._splitRaw(Curve.Line(p1, p2));
+        if (!pieces || pieces.count() < 2)
+        {
+            console.warn(`Polygon.cutoff(): plane '${at}=${coord}' does not split the polygon — nothing cut off.`);
+            return this;
+        }
+        return this._keepPiece(pieces.toArray(), smallest);
+    }
+
     //// 3D OPERATIONS ////
 
     /**
@@ -744,7 +833,8 @@ export class Polygon extends Shape
      */
     extrude(length: number, direction?: PointLike): Mesh
     {
-        const baseDirection = direction ? Vector.from(direction) : this.normal();
+        const normal = this.normal();
+        const baseDirection = direction ? Vector.from(direction) : normal;
         const dir = baseDirection.normalize().scale(length);
 
         const bottom: Vertex[] = this.vertices().toArray();
@@ -766,7 +856,16 @@ export class Polygon extends Shape
             faces.push([bottom[i], bottom[j], top[j], top[i]]);
         });
 
-        return Mesh.fromPolygons(faces);
+        // The winding above only faces outward when extruding along the polygon normal.
+        // When the direction opposes the normal, the whole prism comes out inverted (all
+        // faces point inward). Such a mesh still reports a positive volume, but boolean ops
+        // treat it as a hole — so `mesh.difference(invertedSolid)` keeps the cutter's interior
+        // instead of removing it (breaking cutoffBy/intersection). Reverse every face so the
+        // solid is consistently outward-facing regardless of extrusion direction.
+        const along = baseDirection.normalize().dot(normal.normalize());
+        const oriented = along < 0 ? faces.map(f => [...f].reverse()) : faces;
+
+        return Mesh.fromPolygons(oriented);
     }
 
     //// EXPORT ////

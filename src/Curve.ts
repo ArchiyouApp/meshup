@@ -36,6 +36,7 @@ import { Polygon } from './Polygon';
 
 import { rad } from "./utils";
 import { GLTFBuilder } from './GLTFBuilder';
+import { Selector } from './Selector';
 
 
 export class Curve extends Shape
@@ -950,6 +951,20 @@ export class Curve extends Shape
      */
     getOnPlane(tolerance: number = 1e-6): { normal: Vector, x: Vector, y: Vector } | null
     {
+        // A straight line is planar-ambiguous (it lies in infinitely many planes). The
+        // WASM getOnPlane() always defaults such a line to the XY plane, which is wrong
+        // when the line actually lies in another coordinate plane (e.g. XZ) — offset()
+        // then collapses it and intersect() finds no hits. Detect an axis-aligned
+        // coordinate plane from a constant coordinate and use that instead. This runs
+        // for both single (Nurbs) and compound representations of a straight line, since
+        // offset() returns a degree-1 CompoundCurve.
+        if (this.isStraight(tolerance))
+        {
+            const axisPlane = this._straightLineCoordPlane(tolerance);
+            if (axisPlane) return axisPlane;
+            // else: fully diagonal line — genuinely ambiguous, fall through to defaults
+        }
+
         if (this._curve instanceof NurbsCurve3DJs)
         {
             const result = this._curve.getOnPlane(tolerance);
@@ -986,17 +1001,7 @@ export class Curve extends Shape
 
                 if (normal)
                 {
-                    // Align x to the closest global axis not parallel to normal
-                    const candidates: Vector[] = [
-                        Vector.from(1,0,0), Vector.from(0,1,0), Vector.from(0,0,1)
-                    ];
-                    const xDir = candidates
-                        .filter(c => Math.abs(c.dot(normal!)) < 1 - tolerance)
-                        .sort((a, b) => Math.abs(a.dot(normal!)) - Math.abs(b.dot(normal!)))[0];
-
-                    const x = xDir.copy().subtract(normal.copy().scale(xDir.dot(normal))).normalize();
-                    const y = normal.copy().cross(x).normalize();
-                    return { normal, x, y };
+                    return this._frameFromNormal(normal, tolerance);
                 }
             }
 
@@ -1397,6 +1402,21 @@ export class Curve extends Shape
     direction(): Vector
     {
         return Vector.from(this.end()).subtract(Vector.from(this.start()));
+    }
+
+    //// SELECT ////
+
+    /** Select (sub)shapes from this Curve using a selector string (see Selector.ts).
+     *  Supported shapes for a Curve target: `vertex` (control points),
+     *  `curve`/`wire` (the curve itself or its spans).
+     *  Selectors are greedy: an underspecified selector returns every match.
+     *  A ShapeCollection result is collapsed to the single shape when there is
+     *  exactly one match (checkSingle), and an empty result warns. */
+    select(what: string)
+    {
+        const result = new Selector(what).execute(this);
+        Selector.warnIfEmpty(what, result);
+        return (result instanceof ShapeCollection) ? result.checkSingle() : result;
     }
 
     /** Corner vertices along this Curve, in order.
@@ -1840,6 +1860,45 @@ export class Curve extends Shape
         }
 
         return this;
+    }
+
+    /** Build an in-plane { normal, x, y } frame from a plane normal, aligning x to
+     *  the closest global axis not parallel to the normal (right-handed y = n × x). */
+    private _frameFromNormal(normal: Vector, tolerance: number = 1e-6): { normal: Vector, x: Vector, y: Vector }
+    {
+        const n = normal.copy().normalize();
+        const candidates: Vector[] = [ Vector.from(1,0,0), Vector.from(0,1,0), Vector.from(0,0,1) ];
+        const xDir = candidates
+            .filter(c => Math.abs(c.dot(n)) < 1 - tolerance)
+            .sort((a, b) => Math.abs(a.dot(n)) - Math.abs(b.dot(n)))[0];
+
+        const x = xDir.copy().subtract(n.copy().scale(xDir.dot(n))).normalize();
+        const y = n.copy().cross(x).normalize();
+        return { normal: n, x, y };
+    }
+
+    /** For a straight line lying on an axis-aligned coordinate plane (one coordinate
+     *  constant along its whole length), return that plane's frame. Straight lines are
+     *  planar-ambiguous, so this gives offset() a well-defined plane. When several
+     *  coordinates are constant (an axis-aligned line), the normal is chosen Z→Y→X.
+     *  Returns null for a fully diagonal line (no constant coordinate). */
+    private _straightLineCoordPlane(tolerance: number = 1e-6): { normal: Vector, x: Vector, y: Vector } | null
+    {
+        const s = this.start().toArray();
+        const e = this.end().toArray();
+
+        // A straight line's endpoints share a coordinate ⇒ the whole (collinear) line does.
+        const xConst = Math.abs((s[0] ?? 0) - (e[0] ?? 0)) <= tolerance;
+        const yConst = Math.abs((s[1] ?? 0) - (e[1] ?? 0)) <= tolerance;
+        const zConst = Math.abs((s[2] ?? 0) - (e[2] ?? 0)) <= tolerance;
+
+        // Prefer a Z normal (XY plane), then Y (XZ), then X (YZ) when ambiguous.
+        let normal: Vector | null = null;
+        if (zConst)      normal = Vector.from(0, 0, 1);
+        else if (yConst) normal = Vector.from(0, 1, 0);
+        else if (xConst) normal = Vector.from(1, 0, 0);
+
+        return normal ? this._frameFromNormal(normal, tolerance) : null;
     }
 
     private _getPlanarFrame(tolerance: number = 1e-6): { origin: Point; normal: Vector; x: Vector; y: Vector }
@@ -2298,28 +2357,69 @@ export class Curve extends Shape
     
     //// INTERACTION WITH OTHER CURVES ////
 
-    /** Get intersection points with other curve 
+    /** Get intersection points with other curve
      *   Empty array if no intersections, null if error (e.g. invalid curve type)
     */
     intersect(other:Curve):Array<Point>|null
     {
-        try 
+        try
         {
-            return ((this.isCompound())
-                ? (!other.isCompound())
-                    ? this.inner()?.intersect(other.inner() as NurbsCurve3DJs)
-                    : this.inner()?.intersectCompound(other.inner() as CompoundCurve3DJs)
-                : (!other.isCompound())
-                    ? this.inner()?.intersect(other.inner() as NurbsCurve3DJs)
-                    : this.inner()?.intersectCompound(other.inner() as CompoundCurve3DJs)
-            || [])
-            .map(p => Point.from(p).round()); // round to default Point tolerance to avoid most rounding errors
-        } 
+            // curvo's curve intersection operates in the XY plane (it ignores Z), so a
+            // planar curve that lives in another plane (XZ/YZ/arbitrary) would find no
+            // hits. Bring both curves into this curve's local XY frame, intersect there,
+            // then map the resulting points back to world coordinates.
+            if(this.isPlanar())
+            {
+                const frame = this._getPlanarFrame();
+                if(Math.abs(frame.normal.normalize().z) < 1 - 1e-6) // not parallel to the XY plane
+                {
+                    // Use _copy() (not copy()) for the temporaries: on a smart scene shape
+                    // copy() would register the working copy in the scene and _toLocalXY
+                    // would then leave it flattened onto the XY plane. Flatten onto z=0 too:
+                    // the alignByPoints transform leaves ~1e-14 residual z-noise and curvo's
+                    // intersection treats an out-of-plane curve as non-intersecting.
+                    const localThis = this._toLocalXY(frame, this._copy()).scale([1, 1, 0]);
+                    const localOther = this._toLocalXY(frame, other._copy()).scale([1, 1, 0]);
+                    const localPts = localThis._intersectRaw(localOther);
+                    return localPts
+                        ? localPts.map(p => this._pointFromLocalXY(p, frame).round())
+                        : null;
+                }
+            }
+            return this._intersectRaw(other);
+        }
         catch (e)
         {
             console.error('Curve::intersect(): Error:', e);
             return null;
         }
+    }
+
+    /** Raw WASM curve-curve intersection in world coordinates (XY plane only). */
+    private _intersectRaw(other:Curve):Array<Point>|null
+    {
+        return ((this.isCompound())
+            ? (!other.isCompound())
+                ? this.inner()?.intersect(other.inner() as NurbsCurve3DJs)
+                : this.inner()?.intersectCompound(other.inner() as CompoundCurve3DJs)
+            : (!other.isCompound())
+                ? this.inner()?.intersect(other.inner() as NurbsCurve3DJs)
+                : this.inner()?.intersectCompound(other.inner() as CompoundCurve3DJs)
+        || [])
+        .map(p => Point.from(p).round()); // round to default Point tolerance to avoid most rounding errors
+    }
+
+    /** Map a point expressed in a planar frame's local XY coordinates back to world. */
+    private _pointFromLocalXY(
+        localPoint: PointLike,
+        frame: { origin: Point; normal: Vector; x: Vector; y: Vector },
+    ): Point
+    {
+        const l = Point.from(localPoint).toArray();
+        return frame.origin.copy()
+            .move(frame.x.copy().scale(l[0]).toArray())
+            .move(frame.y.copy().scale(l[1]).toArray())
+            .move(frame.normal.copy().scale(l[2] ?? 0).toArray());
     }
 
     /** Connect endpoints to endpoints of another Curve by creating Line 
@@ -2460,10 +2560,149 @@ export class Curve extends Shape
     }
 
     /** Cut current Curve by other and keep the biggest part (inside other).
-     *  Set keepSmallest=true to keep the part outside other instead. */
+     *  Set keepSmallest=true to keep the smallest part instead.
+     *
+     *  - Open this Curve (e.g. a line): split at the intersection point(s) with other
+     *    and keep the biggest/smallest segment.
+     *  - Closed this Curve + closed other: region boolean (intersection/difference).
+     *  - Closed this Curve + open other (e.g. a line crossing it): split the closed
+     *    curve along the cutter into two regions and keep the biggest/smallest by area.
+     */
     cutoffBy(other: Curve, keepSmallest?: boolean): Curve|ShapeCollection<Curve>|null
     {
+        // Region boolean only makes sense for closed curves; an open curve is
+        // instead split at its intersection points (like a brep Edge/Wire cutoffBy).
+        if(!this.isClosed())
+        {
+            return this._cutoffOpen(other, keepSmallest);
+        }
+        if(!other.isClosed())
+        {
+            return this._cutoffClosedByLine(other, keepSmallest);
+        }
         return keepSmallest ? this.difference(other) : this._booleanOp(other, 'intersection')?.checkSingle() || null;
+    }
+
+    /** Split this closed Curve along an open cutter Curve into the two regions either
+     *  side of the cutter chord, and keep the biggest (default) or smallest by area.
+     *  Mutates and returns this; returns this unchanged when the cutter doesn't cross it. */
+    private _cutoffClosedByLine(other: Curve, keepSmallest?: boolean): Curve|null
+    {
+        const hits = this.intersect(other);
+        if(!hits || hits.length < 2)
+        {
+            console.warn('Curve::cutoffBy(): the cutter does not cross the closed curve (need 2 intersections) — no cut performed. Returning original Curve.');
+            return this;
+        }
+
+        const [d0, d1] = this.inner().knotsDomain();
+        const eps = (d1 - d0) * 1e-6;
+
+        // Params where the cutter crosses the boundary, de-duplicated and ordered.
+        const params: Array<number> = [];
+        for(const pt of hits)
+        {
+            const t = this.paramClosestToPoint(pt);
+            if(t === null) continue;
+            if(params.every(p => Math.abs(p - t) > eps)) params.push(t);
+        }
+        params.sort((a, b) => a - b);
+
+        if(params.length < 2)
+        {
+            console.warn('Curve::cutoffBy(): the cutter only grazes the closed curve — no cut performed. Returning original Curve.');
+            return this;
+        }
+        if(params.length > 2)
+        {
+            console.warn(`Curve::cutoffBy(): cutter crosses the closed curve ${params.length} times; using the first and last crossing.`);
+        }
+
+        const tA = params[0];
+        const tB = params[params.length - 1];
+
+        // The two boundary arcs between the crossings; each closed by the chord (close()).
+        const region1 = this._closedRegionFromArc(this.trim(tA, tB));
+        const region2 = this._closedRegionFromArc([...this.trim(tB, d1), ...this.trim(d0, tA)]);
+
+        if(!region1 || !region2)
+        {
+            console.warn('Curve::cutoffBy(): could not build the split regions — no cut performed. Returning original Curve.');
+            return this;
+        }
+
+        const a1 = region1.area() ?? 0;
+        const a2 = region2.area() ?? 0;
+        const bigger = (a1 >= a2) ? region1 : region2;
+        const smaller = (a1 >= a2) ? region2 : region1;
+
+        return this.update(keepSmallest ? smaller : bigger);
+    }
+
+    /** Combine boundary arc curves (in order) into a single closed region Curve by
+     *  concatenating their spans and closing end→start with the cutter chord. */
+    private _closedRegionFromArc(arcCurves: Array<Curve>): Curve|null
+    {
+        const spans: NurbsCurve3DJs[] = [];
+        for(const c of arcCurves)
+        {
+            const inner = c.inner();
+            if(inner instanceof CompoundCurve3DJs) spans.push(...inner.spans());
+            else spans.push(inner as NurbsCurve3DJs);
+        }
+        if(spans.length === 0) return null;
+        return Curve.fromCsgrs(new CompoundCurve3DJs(spans)).close();
+    }
+
+    /** Split this (open) Curve at its intersection point(s) with other and keep
+     *  the biggest (default) or smallest resulting segment. Mutates and returns this.
+     *  Returns this unchanged (with a warning) when the curves don't intersect. */
+    private _cutoffOpen(other: Curve, keepSmallest?: boolean): Curve|ShapeCollection<Curve>|null
+    {
+        const hits = this.intersect(other);
+        if(!hits || hits.length === 0)
+        {
+            console.warn('Curve::cutoffBy(): the curves do not intersect — no cut performed. Returning original Curve.');
+            return this;
+        }
+
+        const [d0, d1] = this.inner().knotsDomain();
+        const eps = (d1 - d0) * 1e-6;
+
+        // Map intersection points to curve parameters strictly inside the domain
+        const params = hits
+            .map(pt => this.paramClosestToPoint(pt))
+            .filter((t): t is number => t !== null && t > d0 + eps && t < d1 - eps)
+            .sort((a, b) => a - b);
+
+        if(params.length === 0)
+        {
+            console.warn('Curve::cutoffBy(): intersection only touches the Curve endpoints — no cut performed. Returning original Curve.');
+            return this;
+        }
+
+        // Build the segments between consecutive split parameters
+        const breaks = [d0, ...params, d1];
+        const segments: Array<{ curves: Array<Curve>, length: number }> = [];
+        for(let i = 0; i < breaks.length - 1; i++)
+        {
+            const curves = this.trim(breaks[i], breaks[i + 1]);
+            if(curves.length === 0) continue;
+            segments.push({ curves, length: curves.reduce((sum, c) => sum + c.length(), 0) });
+        }
+
+        if(segments.length === 0)
+        {
+            console.warn('Curve::cutoffBy(): split produced no segments — no cut performed. Returning original Curve.');
+            return this;
+        }
+
+        segments.sort((a, b) => b.length - a.length);
+        const winner = keepSmallest ? segments[segments.length - 1] : segments[0];
+
+        return (winner.curves.length === 1)
+            ? this.update(winner.curves[0])
+            : new ShapeCollection<Curve>(...winner.curves);
     }
 
     /** Get intersecting Curves with either closed Curves or Mesh */
@@ -2623,6 +2862,19 @@ export class Curve extends Shape
                 [e.x + d.x, e.y + d.y, e.z + d.z],
                 [s.x + d.x, s.y + d.y, s.z + d.z],
             ]);
+        }
+
+        // A closed, planar curve encloses a face: extrude it as a solid prism via
+        // Polygon.extrude(), which guarantees consistent outward-facing winding. The
+        // hand-rolled NURBS-wall + cap construction below builds the side walls (from the
+        // extruded surface tessellation) and the end caps independently, so their orientations
+        // can disagree — producing an inverted/mixed solid that measures a positive volume but
+        // fails as a boolean cutter (mesh.difference(it) keeps the cutter instead of removing
+        // it). Delegating keeps a single, correct orientation path.
+        if (this.isClosed() && this.isPlanar())
+        {
+            const face = this.toPolygon();
+            if (face) { return face.extrude(length, resolvedDirection as any); }
         }
 
         const surfaces: NurbsSurfaceJs[] = this.isCompound()

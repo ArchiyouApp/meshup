@@ -302,6 +302,82 @@ export class BentleyLineStyleExtension extends Extension
     }
 }
 
+// ─── AY_materials_point_style ─────────────────────────────────────────────────
+
+/** ExtensionProperty for AY_materials_point_style. Attached to a Material. */
+export class PointStyleProperty extends ExtensionProperty
+{
+    public static readonly EXTENSION_NAME = 'AY_materials_point_style';
+    public readonly extensionName = 'AY_materials_point_style';
+    public readonly propertyType = 'PointStyle';
+    public readonly parentTypes = [PropertyType.MATERIAL];
+
+    /** Marker diameter in screen pixels (≥ 1). */
+    public size = 5;
+
+    /** Marker shape rendered by the viewer. */
+    public shape: 'circle' | 'square' = 'circle';
+
+    protected init(): void {}
+    protected getDefaults() { return super.getDefaults(); }
+}
+
+/** Extension class for AY_materials_point_style. */
+export class PointStyleExtension extends Extension
+{
+    public static readonly EXTENSION_NAME = 'AY_materials_point_style';
+    public readonly extensionName = 'AY_materials_point_style';
+
+    createProperty(): PointStyleProperty
+    {
+        return new PointStyleProperty(this.document.getGraph());
+    }
+
+    read(context: ReaderContext): this
+    {
+        const json = context.jsonDoc.json as { materials?: any[] };
+        if (!json.materials) return this;
+
+        json.materials.forEach((matDef: any, matIdx: number) =>
+        {
+            const ext = matDef.extensions?.['AY_materials_point_style'];
+            if (!ext) return;
+            const material = context.materials[matIdx];
+            if (!material) return;
+            const prop = this.createProperty();
+            if (ext.size  !== undefined) prop.size  = ext.size;
+            if (ext.shape !== undefined) prop.shape = ext.shape;
+            material.setExtension('AY_materials_point_style', prop);
+        });
+
+        return this;
+    }
+
+    write(context: WriterContext): this
+    {
+        const json = context.jsonDoc.json as { materials?: any[] };
+        if (!json.materials) return this;
+
+        this.document.getRoot().listMaterials().forEach((material) =>
+        {
+            const prop = material.getExtension<PointStyleProperty>('AY_materials_point_style');
+            if (!prop) return;
+
+            const matIdx = context.materialIndexMap.get(material);
+            if (matIdx === undefined) return;
+
+            const matDef = json.materials![matIdx] as { extensions?: Record<string, unknown> };
+            matDef.extensions = matDef.extensions ?? {};
+            matDef.extensions['AY_materials_point_style'] = {
+                size: prop.size,
+                shape: prop.shape,
+            };
+        });
+
+        return this;
+    }
+}
+
 // ─── EXT_mesh_primitive_edge_visibility ───────────────────────────────────────
 
 /** ExtensionProperty for EXT_mesh_primitive_edge_visibility. Attached to a Primitive. */
@@ -410,6 +486,7 @@ export function createNodeIO(): NodeIO
     return new NodeIO().registerExtensions([
         BentleyLineStyleExtension,
         EdgeVisibilityExtension,
+        PointStyleExtension,
     ]);
 }
 
@@ -430,7 +507,13 @@ type PendingCurveExt = {
     style: Style;
 };
 
-type PendingExt = PendingMeshExt | PendingCurveExt;
+type PendingPointExt = {
+    type: 'point';
+    material: Material;
+    style: Style;
+};
+
+type PendingExt = PendingMeshExt | PendingCurveExt | PendingPointExt;
 
 // ─── GLTFBuilder ──────────────────────────────────────────────────────────────
 
@@ -489,7 +572,7 @@ export class GLTFBuilder
             const n = name ?? 'vertex';
             const { node, material } = this._vertexToGLTFNode(item, n);
             this.addSceneChild(node);
-            this.queueCurveExtData(material, item.style);
+            this.queuePointExtData(material, item.style);
         }
         else
         {
@@ -546,6 +629,13 @@ export class GLTFBuilder
         return this;
     }
 
+    /** Queue point extension data (AY_materials_point_style). */
+    queuePointExtData(material: Material, style: Style): this
+    {
+        this._pending.push({ type: 'point', material, style });
+        return this;
+    }
+
     /** True when no visible shapes have been added yet. */
     isEmpty(): boolean
     {
@@ -562,8 +652,9 @@ export class GLTFBuilder
     {
         for (const ext of this._pending)
         {
-            if (ext.type === 'mesh') this._applyMeshExtensions(ext);
-            else                     this._applyCurveExtensions(ext);
+            if (ext.type === 'mesh')       this._applyMeshExtensions(ext);
+            else if (ext.type === 'point') this._applyPointExtensions(ext);
+            else                           this._applyCurveExtensions(ext);
         }
         this._pending = [];
         return this;
@@ -640,7 +731,7 @@ export class GLTFBuilder
                 const vertex = shape as unknown as Vertex;
                 const { node: vertexNode, material } = this._vertexToGLTFNode(vertex, name, cascadedStyle);
                 gltfNode.addChild(vertexNode);
-                this.queueCurveExtData(material, cascadedStyle);
+                this.queuePointExtData(material, cascadedStyle);
             }
             else if (shape instanceof Curve || shape.type === 'Curve')
             {
@@ -908,8 +999,11 @@ export class GLTFBuilder
             .setArray(posF32)
             .setBuffer(gtBuf);
 
-        const matDef = (style ?? vertex.style).toGltfMaterial('vertex_material', true) as any;
-        const [r, g, b, a] = matDef.pbrMetallicRoughness.baseColorFactor;
+        const st = style ?? vertex.style;
+        const matDef = st.toGltfMaterial('vertex_material', true) as any;
+        const [, , , a] = matDef.pbrMetallicRoughness.baseColorFactor;
+        // Point marker color is independent: point.color if set, else the shape's shared color.
+        const [r, g, b] = st.pointColorRgb();
         const material = this._doc.createMaterial('vertex_material')
             .setBaseColorFactor([r, g, b, a])
             .setMetallicFactor(matDef.pbrMetallicRoughness.metallicFactor)
@@ -981,5 +1075,13 @@ export class GLTFBuilder
         lineStyleProp.width   = hasStrokeWidth ? Math.round(ext.style.strokeWidth!) : 1;
         lineStyleProp.pattern = hasStrokeDash  ? dashPatternToUint16(ext.style.strokeDash!) : 0xFFFF;
         ext.material.setExtension('BENTLEY_materials_line_style', lineStyleProp);
+    }
+
+    private _applyPointExtensions(ext: PendingPointExt): void
+    {
+        const pointStyleProp = this._doc.createExtension(PointStyleExtension).createProperty();
+        pointStyleProp.size  = Math.max(1, Math.round(ext.style.pointSize));
+        pointStyleProp.shape = ext.style.pointShape;
+        ext.material.setExtension('AY_materials_point_style', pointStyleProp);
     }
 }

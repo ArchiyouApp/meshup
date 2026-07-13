@@ -1032,77 +1032,161 @@ export class Mesh extends Shape
         return this.update(this.inner()?.intersection(other.inner() as MeshJs));
     }
 
+    /** General size estimate: the solid volume when it is meaningfully positive, otherwise the
+     *  surface area. A flat (2D) mesh has zero volume, so callers that rank meshes by size (e.g.
+     *  cutoff()/cutoffBy()) get area as the right discriminator there instead of tying at 0. */
+    size(): number
+    {
+        const v = this.volume();
+        return (v !== undefined && v > TOLERANCE) ? v : this.area();
+    }
+
+    /** A scene-free clone of this mesh (unlike copy(), never attaches to the scene graph). */
+    private _detachedClone(): Mesh
+    {
+        return Mesh.from(this.inner().clone());
+    }
+
+    /** From the two boolean sides of a cut (`a`, `b`), keep the single largest connected piece
+     *  by size() (smallest when `keepSmallest`), applying it in place.
+     *
+     *  A boolean side is not necessarily one connected piece: a cutter that slices across the
+     *  mesh can leave one side as several disconnected chunks (e.g. cutting a long bar with a
+     *  diagonal block). Ranking whole sides by total size would then keep those chunks together,
+     *  leaving a stray small fragment behind. So each side is first broken into its connected
+     *  components (separateIsolated), and the best *single* component is kept.
+     *
+     *  Determinism: components are ranked with a stable descending sort and `a`'s components are
+     *  listed before `b`'s, so on a tie the largest keeps `a` (e.g. cutoff() passes the
+     *  positive-normal side as `a`) and the smallest keeps `b`. Returns `this` unchanged with a
+     *  warning if the cut degenerated (either side is empty). */
+    private _keepBySize(a: Mesh, b: Mesh, keepSmallest: boolean, warning: string): this
+    {
+        if (a.inner().triangleCount() === 0 || b.inner().triangleCount() === 0)
+        {
+            console.warn(warning);
+            return this;
+        }
+        // Connected components of each side (a's first) — these are the true "pieces" of the cut.
+        const pieces = [a, b]
+            .flatMap(side => side.separateIsolated().toArray())
+            .filter(p => p.inner().triangleCount() > 0);
+        if (pieces.length === 0)
+        {
+            console.warn(warning);
+            return this;
+        }
+        pieces.sort((x, y) => y.size() - x.size()); // stable, descending by size
+        const picked = keepSmallest ? pieces[pieces.length - 1] : pieces[0];
+        return this.update(picked);
+    }
+
+    /** Build a large solid box filling one half-space of a plane (normal·x = offset), on the
+     *  `side` (+1 = normal side, -1 = opposite) of it. Sized to fully cover this mesh so that
+     *  subtracting it cleanly removes everything on that side. */
+    private _halfSpaceBox(normal: Vector, offset: number, side: number, size: number): Mesh
+    {
+        const n = normal.copy().normalize();
+        const box = Mesh.Cube(size); // centred at origin, spans -size/2..size/2
+        // Orient the box's local +z axis onto the plane normal, then shift it so one face lies
+        // on the plane and the box extends `size` along `side * n` — covering that half-space.
+        const q = Vector.from(0, 0, 1).rotationBetween(n.toArray() as any);
+        box.rotateQuaternion(q.w, q.x, q.y, q.z);
+        const half = (size / 2) * side;
+        box.translate(
+            n.x * offset + n.x * half,
+            n.y * offset + n.y * half,
+            n.z * offset + n.z * half,
+        );
+        return box;
+    }
+
+    /** Diagonal-plus-margin length large enough to build cutter boxes that fully span this mesh. */
+    private _coverSize(): number
+    {
+        const s = this.bbox().size();
+        return (Math.hypot(s.x, s.y, s.z) || 1) * 4 + 1;
+    }
+
     /**
      * Cut this mesh by `other` and keep one of the resulting pieces.
-     * By default keeps the largest piece; set `keepSmallest=true` to keep the smallest.
+     * By default keeps the largest piece (by size()); set `keepSmallest=true` to keep the
+     * smallest. Cutting is done with boolean ops rather than a split: a Mesh/Polygon cutter
+     * yields the outside piece (this − cutter) and the inside piece (this ∩ cutter); a PlaneJs
+     * cutter yields the two half-spaces via boolean subtraction of a solid half-space box.
      *
      * For Mesh and Polygon cutters, warns and returns `this` unchanged when `other`
      * does not intersect this mesh. PlaneJs cutters always proceed (planes are infinite).
      */
     cutoffBy(other: Mesh | Polygon | PlaneJs, keepSmallest = false): this
     {
-        // Touch detection only makes sense for finite cutters
-        if (!(other instanceof PlaneJs))
+        if (this.is2D())
         {
-            const otherMesh = other instanceof Polygon ? other.toMesh() : other;
-            if (!this.hits(otherMesh))
-            {
-                console.warn('Mesh.cutoffBy(): the cutter does not intersect this mesh — no cut performed.');
-                return this;
-            }
+            console.warn('Mesh.cutoffBy(): boolean cutting needs a solid (closed) mesh; this mesh is flat/2D. For flat shapes use Polygon.cutoffBy(). No cut performed.');
+            return this;
+        }
+        if (other instanceof PlaneJs)
+        {
+            const size = this._coverSize();
+            const normal = Vector.from(other.normal());
+            const offset = other.offset();
+            // Subtract the box on each side to obtain the two half-space pieces.
+            const keepNormalSide  = this._detachedClone().difference(this._halfSpaceBox(normal, offset, -1, size));
+            const keepOppositeSide = this._detachedClone().difference(this._halfSpaceBox(normal, offset, +1, size));
+            return this._keepBySize(
+                keepNormalSide, keepOppositeSide, keepSmallest,
+                'Mesh.cutoffBy(): the plane does not split this mesh — no cut performed.');
         }
 
-        const parts = this.split(other);
-
-        if (parts.count() < 2)
+        const cutter = other instanceof Polygon ? other.toMesh() : other;
+        if (!this.hits(cutter))
         {
-            console.warn('Mesh.cutoffBy(): split produced fewer than 2 pieces — no cut performed.');
+            console.warn('Mesh.cutoffBy(): the cutter does not intersect this mesh — no cut performed.');
             return this;
         }
 
-        const sized = parts.toArray().map(m => ({
-            mesh: m,
-            size: m.volume() ?? m.inner().triangleCount(),
-        }));
-        sized.sort((a, b) => a.size - b.size);
-
-        const picked = keepSmallest ? sized[0].mesh : sized[sized.length - 1].mesh;
-        return this.update(picked);
+        const outside = this._detachedClone().difference(cutter);   // part of this outside the cutter
+        const inside  = this._detachedClone().intersection(cutter);  // part of this inside the cutter
+        return this._keepBySize(
+            outside, inside, keepSmallest,
+            'Mesh.cutoffBy(): the cutter does not split this mesh — no cut performed.');
     }
 
-    /** Cut off Mesh by a plane defined by axisNormal and coordinate.
-     *  `box(10).cutoff('x', 5)` keeps the half where x > 5 (positive-normal side).
-     *  `box(10).cutoff('x', 5, true)` keeps the half where x < 5 (negative-normal side).
+    /** Cut off Mesh by an axis-aligned plane at `coord` and keep one piece.
+     *  Keeps the larger piece by default (by size()); the smaller piece when `smallest=true`.
+     *  For a symmetric cut the positive-normal side is kept by default. Uses boolean
+     *  subtraction of half-space boxes rather than a mesh split.
      */
     cutoff(at: Axis, coord: number = 0, smallest: boolean = false): this
     {
         if(!isAxis(at)){ throw new Error(`Mesh.cutoff(): Invalid axis '${at}'. Use 'x', 'y', or 'z'.`); }
 
-        const normals: Record<Axis, [number, number, number]> = {
-            x: [1, 0, 0],
-            y: [0, 1, 0],
-            z: [0, 0, 1],
-        };
-        const [nx, ny, nz] = normals[at];
-        const plane = PlaneJs.fromNormalComponents(nx, ny, nz, coord);
-        const parts = this.split(plane);
-
-        if (parts.count() === 0)
+        if (this.is2D())
         {
-            console.warn('Mesh.cutoff(): plane does not intersect this mesh — nothing kept.');
+            console.warn('Mesh.cutoff(): boolean cutting needs a solid (closed) mesh; this mesh is flat/2D. For flat shapes use Polygon.cutoff(). No cut performed.');
             return this;
         }
 
-        if (parts.count() === 1)
+        const bb = this.bbox();
+        const lo = bb.min()[at], hi = bb.max()[at];
+        if (coord <= lo || coord >= hi)
         {
-            console.warn('Mesh.cutoff(): plane does not split this mesh — nothing cut off.');
+            console.warn(`Mesh.cutoff(): plane '${at}=${coord}' does not split this mesh — nothing cut off.`);
             return this;
         }
 
-        const partsArr = parts.toArray().sort((a, b) => (b.volume() ?? b.area()) - (a.volume() ?? a.area()));
-        const picked = smallest ? partsArr[partsArr.length - 1] : partsArr[0];
+        // Half-space cutter boxes: enlarge the bbox so the boxes fully cover the mesh cross-section.
+        const big  = bb.enlarged(this._coverSize());
+        const bmin = big.min(), bmax = big.max();
+        const posBox = Mesh.BoxBetween(bmin.copy().setComponent(at, coord), bmax); // region at > coord
+        const negBox = Mesh.BoxBetween(bmin, bmax.copy().setComponent(at, coord)); // region at < coord
 
-        return this.update(picked!);
+        const posPiece = this._detachedClone().difference(negBox); // keep at > coord (positive side)
+        const negPiece = this._detachedClone().difference(posBox); // keep at < coord (negative side)
+
+        return this._keepBySize(
+            posPiece, negPiece, smallest,
+            `Mesh.cutoff(): plane '${at}=${coord}' does not split this mesh — nothing cut off.`);
     }
 
     /**
@@ -1343,9 +1427,15 @@ export class Mesh extends Shape
 
     //// SELECT ////
 
+    /** Select (sub)shapes with a selector string (see Selector.ts).
+     *  Selectors are greedy: an underspecified selector returns every match.
+     *  A ShapeCollection result is collapsed to the single shape when there is
+     *  exactly one match (checkSingle), and an empty result warns. */
     select(what:string)
     {
-        return new Selector(what).execute(this);
+        const result = new Selector(what).execute(this);
+        Selector.warnIfEmpty(what, result);
+        return (result instanceof ShapeCollection) ? result.checkSingle() : result;
     }
 
 

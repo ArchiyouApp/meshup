@@ -144,6 +144,42 @@ describe('Polygon.extrude()', () =>
         expect(delta.dot(normal)).toBeCloseTo(extrusionLength / 2, 6);
         expect(delta.copy().cross(normal).length()).toBeCloseTo(0, 6);
     });
+
+    // Regression: extruding *against* the polygon normal used to produce an inverted solid
+    // (all faces pointing inward). Such a mesh reports a positive volume but behaves like a
+    // hole in boolean ops, so subtracting it from a box kept the box unchanged (or grew it)
+    // instead of carving it out — which broke Mesh.cutoffBy()/intersection() downstream.
+    const carvesCleanly = (solid: Mesh): void =>
+    {
+        const bb = solid.bbox();
+        const box = Mesh.BoxBetween(
+            [bb.min().x - 10, bb.min().y - 10, bb.min().z - 10],
+            [bb.max().x + 10, bb.max().y + 10, bb.max().z + 10],
+        );
+        const boxVol = box.volume()!;
+        const solidVol = solid.volume()!;
+        const carved = box.copy().difference(solid).volume()!;
+        // A correctly-oriented cutter removes exactly its own volume from the enclosing box.
+        expect(carved).toBeCloseTo(boxVol - solidVol, -1);
+    };
+
+    it('produces an outward-oriented solid when extruding ALONG the normal (usable as a cutter)', () =>
+    {
+        carvesCleanly(new Polygon(SQUARE).extrude(2, [0, 0, 1]));
+    });
+
+    it('produces an outward-oriented solid when extruding AGAINST the normal (usable as a cutter)', () =>
+    {
+        // SQUARE normal is +z; extrude toward -z (opposite) — must still carve, not fill.
+        carvesCleanly(new Polygon(SQUARE).extrude(2, [0, 0, -1]));
+    });
+
+    it('a closed planar Curve extrudes into an outward-oriented solid (usable as a cutter)', () =>
+    {
+        const solid = Curve.Rect(4, 3).close().extrude(2, [0, 0, -1]) as Mesh;
+        expect(solid).instanceOf(Mesh);
+        carvesCleanly(solid);
+    });
 });
 
 describe('Polygon.planeBetween()', () =>
@@ -411,5 +447,71 @@ describe('Polygon.split()', () =>
     {
         const box = Curve.Rect(200, 100).toPolygon()!;
         expect(box.split(Curve.Line([0, -80, 0], [0, 80, 0]), -5)).toBeNull();
+    });
+});
+
+describe('Polygon.cutoff()', () =>
+{
+    // A 100 x 100 plane spanning 0..100 on both axes, cut orthogonally at x = 30.
+    const plane = (): Polygon => Polygon.planeBetween([0, 0, 0], [100, 100, 0]);
+
+    it('cuts off at x=30 and keeps the largest piece by default', () =>
+    {
+        const pl = plane();
+        expect(pl.area()).toBeCloseTo(10000, 0);
+        pl.cutoff('x', 30);
+        // Larger piece spans x 30..100 → 70 x 100 = 7000.
+        expect(pl.area()).toBeCloseTo(7000, 0);
+    });
+
+    it('keeps the smallest piece when smallest=true', () =>
+    {
+        const pl = plane();
+        pl.cutoff('x', 30, true);
+        // Smaller piece spans x 0..30 → 30 x 100 = 3000.
+        expect(pl.area()).toBeCloseTo(3000, 0);
+    });
+
+    it('cuts along y as well', () =>
+    {
+        const pl = plane();
+        pl.cutoff('y', 40); // largest piece is y 40..100 → 100 x 60 = 6000
+        expect(pl.area()).toBeCloseTo(6000, 0);
+    });
+
+    it('leaves the polygon unchanged for a plane parallel to it', () =>
+    {
+        const pl = plane(); // lies in the XY plane, so a z-plane is parallel
+        pl.cutoff('z', 10);
+        expect(pl.area()).toBeCloseTo(10000, 0);
+    });
+
+    it('throws for an invalid axis', () =>
+    {
+        expect(() => plane().cutoff('w' as any, 30)).toThrow();
+    });
+});
+
+describe('Polygon.cutoffBy()', () =>
+{
+    it('cuts off by a crossing line and keeps the largest piece', () =>
+    {
+        const pl = Polygon.planeBetween([0, 0, 0], [100, 100, 0]);
+        pl.cutoffBy(Curve.Line([30, -50, 0], [30, 150, 0]));
+        expect(pl.area()).toBeCloseTo(7000, 0);
+    });
+
+    it('keeps the smallest piece when keepSmallest=true', () =>
+    {
+        const pl = Polygon.planeBetween([0, 0, 0], [100, 100, 0]);
+        pl.cutoffBy(Curve.Line([30, -50, 0], [30, 150, 0]), true);
+        expect(pl.area()).toBeCloseTo(3000, 0);
+    });
+
+    it('leaves the polygon unchanged when the cutter misses it', () =>
+    {
+        const pl = Polygon.planeBetween([0, 0, 0], [100, 100, 0]);
+        pl.cutoffBy(Curve.Line([300, -50, 0], [300, 150, 0]));
+        expect(pl.area()).toBeCloseTo(10000, 0);
     });
 });

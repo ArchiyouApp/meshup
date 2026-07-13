@@ -164,10 +164,33 @@ describe('Bbox shape generation', () =>
     {
         const bbox = new Bbox([0, 0, 0], [10, 20, 30]);
         const edge = bbox.getSidesShapes('leftfront', 'edge').first() as Curve;
-        // +0 -0 problems
-        expect(edge.direction().normalize().toArray().map(c => (c === 0) ? 0 : c)).toEqual([0, 0, -1]); // TODO: force edges to be positive
-        expect(edge.end().toArray()).toEqual([0, 0, 0]); // -0
-        expect(edge.start().toArray()).toEqual([0, 0, 30]);
+        // Edges run along the free axis in the positive (min → max) direction.
+        expect(edge.direction().normalize().toArray().map(c => (c === 0) ? 0 : c)).toEqual([0, 0, 1]);
+        expect(edge.start().toArray()).toEqual([0, 0, 0]);
+        expect(edge.end().toArray()).toEqual([0, 0, 30]);
+    });
+
+    it('edge on a flat (XY) bbox selects an in-plane edge from a single side keyword', () =>
+    {
+        const bbox = new Bbox([0, 0, 0], [10, 20, 0]); // flat on XY (height 0)
+        // 'front' (min-Y) leaves X free → edge along X at y = 0, z = 0
+        const front = bbox.getSidesShapes('front', 'edge').first() as Curve;
+        expect(front.start().toArray()).toEqual([0, 0, 0]);
+        expect(front.end().toArray()).toEqual([10, 0, 0]);
+        // 'left' (min-X) leaves Y free → edge along Y at x = 0, z = 0
+        const left = bbox.getSidesShapes('left', 'edge').first() as Curve;
+        expect(left.start().toArray()).toEqual([0, 0, 0]);
+        expect(left.end().toArray()).toEqual([0, 20, 0]);
+    });
+
+    it('edge is greedy: returns all matching edges when underspecified', () =>
+    {
+        // Both in-plane axes pinned on a flat bbox → no free real axis → no edges
+        const flat = new Bbox([0, 0, 0], [10, 20, 0]);
+        expect(flat.getSidesShapes('leftfront', 'edge').length).toBe(0);
+        // One side keyword on a 3D box → 4 edges of that face
+        const box = new Bbox([0, 0, 0], [10, 20, 30]);
+        expect(box.getSidesShapes('top', 'edge').length).toBe(4);
     });
 
     it('vertex||frontleftbottom returns the front-left-bottom corner vertex', () =>
@@ -177,10 +200,12 @@ describe('Bbox shape generation', () =>
         expect(vertex.position().toArray().map(c => (c === 0) ? 0 : c)).toEqual([0, 0, 0]);
     });
 
-    it('throws if the number of sides does not match the type', () =>
+    it('vertex/face are greedy when underspecified', () =>
     {
         const bbox = new Bbox([0, 0, 0], [10, 20, 30]);
-        expect(() => bbox.getSidesShapes('top', 'vertex')).toThrow();
-        expect(() => bbox.getSidesShapes('topleft', 'face')).toThrow();
+        // 'top' pins Z only → all 4 corner vertices of the top face
+        expect(bbox.getSidesShapes('top', 'vertex').length).toBe(4);
+        // 'topleft' pins Z and X → both the top face and the left face
+        expect(bbox.getSidesShapes('topleft', 'face').length).toBe(2);
     });
 });

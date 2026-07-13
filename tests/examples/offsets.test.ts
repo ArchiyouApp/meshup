@@ -1,5 +1,5 @@
 import { beforeAll, describe, it, expect } from 'vitest';
-import { ShapeCollection, initAsync } from '../../src/index';
+import { ShapeCollection, Vector, initAsync } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { save } from '../../src/utils';
 
@@ -71,5 +71,44 @@ describe('Example: Offsets', async () =>
 
         expect(grown.bbox().width()).toBeGreaterThan(pl1.bbox().width());
         expect(shrunk.bbox().width()).toBeLessThan(pl1.bbox().width());
+    });
+
+    it('Can offset a single straight line that lies on a non-XY coordinate plane', () =>
+    {
+        const DIST = 10;
+
+        // A straight line is planar-ambiguous; when it lies on an axis-aligned
+        // coordinate plane (one coordinate constant) we detect that plane and offset in it.
+        const cases: Array<{ name: string, line: Curve, constAxis: 'x'|'y'|'z', constVal: number }> = [
+            { name: 'XY (z=0)', line: Curve.Line([0,0,0],[100,100,0]), constAxis: 'z', constVal: 0 },
+            { name: 'XZ (y=0)', line: Curve.Line([0,0,0],[100,0,100]), constAxis: 'y', constVal: 0 },
+            { name: 'YZ (x=0)', line: Curve.Line([0,0,0],[0,100,100]), constAxis: 'x', constVal: 0 },
+        ];
+
+        for (const { line, constAxis, constVal } of cases)
+        {
+            const offsetted = line.copy().offset(DIST);
+            expect(offsetted).toBeTruthy();
+
+            // Same length as the original (a parallel line)
+            expect(offsetted!.length()).toBeCloseTo(line.length(), 4);
+
+            // Result stays on the same coordinate plane (constant coordinate preserved)
+            for (const p of offsetted!.points())
+            {
+                expect(p[constAxis]).toBeCloseTo(constVal, 4);
+            }
+
+            // Perpendicular distance from the original line equals DIST
+            const a = line.start().toArray();
+            const b = line.end().toArray();
+            const dir = Vector.from(b[0]-a[0], b[1]-a[1], b[2]-a[2]).normalize();
+            for (const p of offsetted!.points())
+            {
+                const ap = Vector.from(p.x-a[0], p.y-a[1], p.z-a[2]);
+                const perp = dir.copy().cross(ap).length(); // |dir × ap| = perpendicular distance
+                expect(perp).toBeCloseTo(DIST, 4);
+            }
+        }
     });
 });

@@ -546,3 +546,82 @@ describe('Curve.union()', () =>
         }
     });
 });
+
+describe('Curve.cutoffBy()', () =>
+{
+    // Regression: cutting an open line by a crossing line used to route through the
+    // closed-curve region boolean and fail with "found odd number of intersections".
+    it('splits an open line at a crossing line and keeps the biggest part', () =>
+    {
+        const other = Curve.Line([50, -100, 0], [50, 100, 0]);
+        const ln = Curve.Line([0, 0, 0], [100, 100, 0]); // crosses at (50,50,0)
+        const res = other.cutoffBy(ln);
+        expect(res).toBeInstanceOf(Curve);
+        const c = res as Curve;
+        expect(c.length()).toBeCloseTo(150, 3);
+        expect(c.start().toArray()).toEqual([50, -100, 0]);
+        expect(c.end().toArray()).toEqual([50, 50, 0]);
+    });
+
+    it('keeps the smallest part when keepSmallest=true', () =>
+    {
+        const other = Curve.Line([50, -100, 0], [50, 100, 0]);
+        const ln = Curve.Line([0, 0, 0], [100, 100, 0]);
+        const res = other.cutoffBy(ln, true) as Curve;
+        expect(res.length()).toBeCloseTo(50, 3);
+    });
+
+    it('returns the original open curve unchanged when the curves do not intersect', () =>
+    {
+        const a = Curve.Line([0, 0, 0], [10, 0, 0]);
+        const b = Curve.Line([0, 10, 0], [10, 10, 0]);
+        const res = a.cutoffBy(b) as Curve;
+        expect(res.length()).toBeCloseTo(10, 3);
+    });
+
+    // Regression: a CLOSED curve cut by an OPEN line used to route through the region
+    // boolean and fail ("Curve must be closed"). It now splits the closed curve along
+    // the line into two regions and keeps the biggest / smallest by area. This example
+    // also lives in the XZ plane, exercising the off-XY intersection path.
+    it('splits a closed XZ rect by a crossing line, keeping the biggest region', () =>
+    {
+        const rect = Curve.RectBetween([0, 0, 0], [100, 0, 100]); // area 10000, XZ plane
+        const cutter = Curve.Line([-20, 0, -20], [120, 0, 120]).moveZ(10); // crosses at (0,0,10) & (90,0,100)
+        const res = rect.cutoffBy(cutter) as Curve;
+        expect(res).toBeInstanceOf(Curve);
+        expect(res.isClosed()).toBe(true);
+        expect(res.area()).toBeCloseTo(5950, 3);            // the larger of the two regions
+        expect(Math.abs(res.bbox()!.minY())).toBeLessThan(1e-6); // stays in the XZ plane
+    });
+
+    it('keeps the smallest region (triangle) when keepSmallest=true, and the two sum to the whole', () =>
+    {
+        const cutter = () => Curve.Line([-20, 0, -20], [120, 0, 120]).moveZ(10);
+        const big = Curve.RectBetween([0, 0, 0], [100, 0, 100]).cutoffBy(cutter()) as Curve;
+        const small = Curve.RectBetween([0, 0, 0], [100, 0, 100]).cutoffBy(cutter(), true) as Curve;
+        expect(small.area()).toBeCloseTo(4050, 3);
+        expect(big.area()! + small.area()!).toBeCloseTo(10000, 3);
+    });
+});
+
+describe('Curve.intersect() / cutoffBy() off the XY plane', () =>
+{
+    // Regression: curvo's curve intersection runs in the XY plane (ignoring Z), so a
+    // planar curve in another coordinate plane (here XZ) previously found no hits and
+    // cutoffBy() did nothing. intersect() now transforms into the curve's local XY
+    // frame, flattens residual out-of-plane noise, intersects, and maps back.
+    it('finds intersections and cuts an offset line lying in the XZ plane', () =>
+    {
+        const ln = Curve.Line([0, 0, 0], [100, 0, 100]).moveZ(200);
+        const cutter = Curve.Line([0, 0, 0], [150, 0, 50]).moveZ(240);
+        const off = ln.copy().offset(-10) as Curve;
+        const fullLen = off.length();
+
+        expect(off.intersect(cutter)!.length).toBeGreaterThan(0);
+
+        const res = off.cutoffBy(cutter) as Curve;
+        expect(res.length()).toBeLessThan(fullLen);       // an actual cut happened
+        expect(Math.abs(res.start().toArray()[1])).toBeLessThan(1e-6); // stays in XZ plane
+        expect(Math.abs(res.end().toArray()[1])).toBeLessThan(1e-6);
+    });
+});

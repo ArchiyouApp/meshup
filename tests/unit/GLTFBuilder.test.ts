@@ -1,6 +1,7 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
+import { Vertex } from '../../src/Vertex';
 import { SceneNode } from '../../src/SceneNode';
 import { computeEdgeVisibilityBitfield, GLTFBuilder } from '../../src/GLTFBuilder';
 
@@ -227,6 +228,73 @@ describe('computeEdgeVisibilityBitfield: sphere with 30° threshold', () =>
             if (val === 2) hardSlots++;
         }
         expect(hardSlots).toBe(0);
+    });
+});
+
+// ─── Point styling (AY_materials_point_style) ────────────────────────────────
+
+describe('GLTFBuilder: vertex point style extension', () =>
+{
+    it('vertex is emitted as a POINTS primitive (mode 0)', async () =>
+    {
+        const v = new Vertex([1, 2, 3]);
+        const glb = await new GLTFBuilder('z', 'test').add(v).applyExtensions().toGLB();
+        const json = extractGLTFJson(glb);
+        const allPrimitives = (json.meshes ?? []).flatMap((m: any) => m.primitives ?? []);
+        // GLTF POINTS mode === 0
+        expect(allPrimitives.some((p: any) => p.mode === 0)).toBe(true);
+    });
+
+    it('AY_materials_point_style is listed in extensionsUsed', async () =>
+    {
+        const v = new Vertex([0, 0, 0]);
+        v.style.pointSize = 10;
+        v.style.pointShape = 'circle';
+        const glb = await new GLTFBuilder('z', 'test').add(v).applyExtensions().toGLB();
+        const json = extractGLTFJson(glb);
+        expect(json.extensionsUsed).toContain('AY_materials_point_style');
+    });
+
+    it('the point material carries size + shape from the vertex style', async () =>
+    {
+        const v = new Vertex([0, 0, 0]);
+        v.style.pointSize = 10;
+        v.style.pointShape = 'circle';
+        const glb = await new GLTFBuilder('z', 'test').add(v).applyExtensions().toGLB();
+        const json = extractGLTFJson(glb);
+        const withExt = (json.materials ?? []).filter(
+            (m: any) => m.extensions?.['AY_materials_point_style'] !== undefined,
+        );
+        expect(withExt.length).toBeGreaterThan(0);
+        const ext = withExt[0].extensions['AY_materials_point_style'];
+        expect(ext.size).toBe(10);
+        expect(ext.shape).toBe('circle');
+    });
+
+    it('explicit pointColor drives the marker material color', async () =>
+    {
+        const v = new Vertex([0, 0, 0]);
+        v.style.pointColor = 'blue';
+        const glb = await new GLTFBuilder('z', 'test').add(v).applyExtensions().toGLB();
+        const json = extractGLTFJson(glb);
+        const mat = (json.materials ?? []).find(
+            (m: any) => m.extensions?.['AY_materials_point_style'] !== undefined,
+        );
+        const [r, g, b] = mat.pbrMetallicRoughness.baseColorFactor;
+        expect(r).toBeCloseTo(0); expect(g).toBeCloseTo(0); expect(b).toBeCloseTo(1);
+    });
+
+    it('point color falls back to the shape color when pointColor is unset', async () =>
+    {
+        const v = new Vertex([0, 0, 0]);
+        v.style.color = 'lime'; // #00ff00
+        const glb = await new GLTFBuilder('z', 'test').add(v).applyExtensions().toGLB();
+        const json = extractGLTFJson(glb);
+        const mat = (json.materials ?? []).find(
+            (m: any) => m.extensions?.['AY_materials_point_style'] !== undefined,
+        );
+        const [r, g, b] = mat.pbrMetallicRoughness.baseColorFactor;
+        expect(r).toBeCloseTo(0); expect(g).toBeCloseTo(1); expect(b).toBeCloseTo(0);
     });
 });
 

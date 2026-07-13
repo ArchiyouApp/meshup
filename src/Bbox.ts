@@ -342,48 +342,120 @@ export class Bbox
         return this.getPlane('front');
     }
 
-    /** Returns the face, edge or vertex at the given named side of the bbox 
-     *  
-     *   alignments can be any combination of: 
+    /** Returns the face(s), edge(s) or vertex/vertices at the given named side of the bbox.
+     *
+     *  Selectors are **greedy**: when the alignment underspecifies the requested shape,
+     *  every matching subshape is returned. Each side keyword pins one axis to its min/max
+     *  bound; the real (non-degenerate) axes that stay loose are either spanned by the
+     *  shape (edges span 1, faces span 2) or enumerated over both bounds.
+     *
+     *  @example
+     *    // rect(100,100) — flat XY bbox
+     *    bbox.getSidesShapes('left', 'vertex')   // 2 vertices (the two left corners)
+     *    bbox.getSidesShapes('front', 'edge')    // 1 edge (the front edge)
+     *    // 3D box
+     *    bbox.getSidesShapes('top', 'vertex')    // 4 vertices (top face corners)
+     *    bbox.getSidesShapes('top', 'edge')      // 4 edges (top face edges)
+     *    bbox.getSidesShapes('leftfront', 'vertex') // 2 vertices (the left-front edge ends)
+     *
+     *   alignments can be any combination of:
      *         top, bottom, front, back, left, right (case-insensitive, order doesn't matter)
-     *   
     */
     getSidesShapes(alignments: string, type: 'face'|'edge'|'vertex'): ShapeCollection
     {
         const s = alignments.toLowerCase();
         const sides = BBOX_SIDES.filter(k => s.includes(k));
 
+        // Faces are the bbox planes: one per named side, or every plane when unspecified.
         if (type === 'face')
         {
-            if (sides.length !== 1)
-                throw new Error(`Bbox.getSidesShapes(): 'face' requires exactly 1 side keyword, got: "${alignments}"`);
-            const plane = this.getPlane(sides[0]);
-            return new ShapeCollection<Polygon>(plane ? [plane] : []);
+            const planes = (sides.length === 0)
+                ? this.planes()
+                : sides.map(k => this.getPlane(k)).filter((p): p is Polygon => !!p);
+            return new ShapeCollection<Polygon>(planes);
         }
 
-        if (type === 'vertex')
+        const EPS = 1e-9;
+        const mins    = [this._min.x, this._min.y, this._min.z];
+        const maxs    = [this._max.x, this._max.y, this._max.z];
+        const extents = [this.width(), this.depth(), this.height()];
+
+        // Real axes have extent; degenerate axes (flat/thin bboxes) are always at their single value.
+        const realAxes = ([0, 1, 2] as Array<0|1|2>).filter(a => extents[a] > EPS);
+
+        // Each side keyword pins one axis to its min (false) or max (true) bound.
+        // On a flat XY bbox (Z degenerate) top/bottom alias to back/front (Y), matching corner().
+        const isXYPlane = this.height() <= EPS;
+        const AXIS_OF: Record<string, 0|1|2> = { left: 0, right: 0, front: 1, back: 1, bottom: 2, top: 2 };
+        const MAX_KEYS = new Set(['right', 'back', 'top']);
+        const pins = new Map<0|1|2, boolean>();
+        sides.forEach(k =>
         {
-            if (sides.length !== 3)
-                throw new Error(`Bbox.getSidesShapes(): 'vertex' requires 3 side keywords (one per axis), got: "${alignments}"`);
-            return new ShapeCollection<Vertex>([this.corner(sides.join('')).toVertex()]);
-        }
+            const axis = (isXYPlane && (k === 'top' || k === 'bottom')) ? 1 : AXIS_OF[k];
+            pins.set(axis, MAX_KEYS.has(k));
+        });
 
-        // type === 'edge': 2 side keywords, one axis is free
-        if (sides.length !== 2)
-            throw new Error(`Bbox.getSidesShapes(): 'edge' requires exactly 2 side keywords, got: "${alignments}"`);
+        // Freedom of the requested shape: how many real axes it spans (vertex 0, edge 1).
+        const freeDim = (type === 'edge') ? 1 : 0;
 
-        const inX = sides.some(k => k === 'left'  || k === 'right');
-        const inY = sides.some(k => k === 'front' || k === 'back');
+        // Loose real axes are those not pinned by a keyword: some become the shape's spanning
+        // (free) axes, the rest are enumerated over both bounds ("greedy" — select all).
+        const loose = realAxes.filter(a => !pins.has(a));
+        if (loose.length < freeDim) return new ShapeCollection([]); // can't form this shape here
 
-        // The free axis contributes the two edge endpoints
-        const freeEnds: [string, string] = !inX ? ['left', 'right']
-                                         : !inY ? ['front', 'back']
-                                         :        ['top', 'bottom'];
+        // Base coordinate with pinned axes set; loose/degenerate axes default to min.
+        const baseFor = (): [number, number, number] =>
+        {
+            const base: [number, number, number] = [mins[0], mins[1], mins[2]];
+            pins.forEach((isMax, a) => { base[a] = isMax ? maxs[a] : mins[a]; });
+            return base;
+        };
 
-        const p1 = this.corner(s + freeEnds[0]);
-        const p2 = this.corner(s + freeEnds[1]);
+        const results: Array<Vertex | Curve> = [];
 
-        return new ShapeCollection<Curve>([Curve.Line(p1, p2)]);
+        // For every choice of `freeDim` spanning axes out of the loose axes …
+        Bbox._combinations(loose, freeDim).forEach(freeAxes =>
+        {
+            const enumerated = loose.filter(a => !freeAxes.includes(a));
+            // … enumerate the remaining loose axes over {min, max}.
+            Bbox._boolCombos(enumerated.length).forEach(bits =>
+            {
+                const base = baseFor();
+                enumerated.forEach((a, i) => { base[a] = bits[i] ? maxs[a] : mins[a]; });
+
+                if (type === 'vertex')
+                {
+                    results.push(new Vertex(base));
+                }
+                else // edge: a line spanning its single free axis
+                {
+                    const free = freeAxes[0];
+                    const p1 = [...base] as [number, number, number];
+                    const p2 = [...base] as [number, number, number];
+                    p1[free] = mins[free];
+                    p2[free] = maxs[free];
+                    results.push(Curve.Line(p1, p2));
+                }
+            });
+        });
+
+        return new ShapeCollection(results);
+    }
+
+    /** All ways to pick `k` items from `arr`, preserving order (k=0 → [[]]). */
+    private static _combinations<T>(arr: Array<T>, k: number): Array<Array<T>>
+    {
+        if (k === 0) return [[]];
+        if (k > arr.length) return [];
+        return arr.flatMap((item, i) =>
+            Bbox._combinations(arr.slice(i + 1), k - 1).map(rest => [item, ...rest]));
+    }
+
+    /** All 2^n boolean tuples of length n (n=0 → [[]]). */
+    private static _boolCombos(n: number): Array<Array<boolean>>
+    {
+        return Array.from({ length: 1 << n }, (_, mask) =>
+            Array.from({ length: n }, (_, bit) => (mask & (1 << bit)) !== 0));
     }
 
 }

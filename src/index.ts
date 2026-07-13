@@ -80,6 +80,8 @@ export type { StyleData } from './Style';
 export {
   BentleyLineStyleProperty,
   BentleyLineStyleExtension,
+  PointStyleProperty,
+  PointStyleExtension,
   EdgeVisibilityProperty,
   EdgeVisibilityExtension,
   dashPatternToUint16,
