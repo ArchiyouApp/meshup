@@ -936,6 +936,15 @@ export class SketchJs {
   static supershape(a: number, b: number, m: number, n1: number, n2: number, n3: number, segments: number, metadata: any): SketchJs;
   renormalize(): SketchJs;
   boundingBox(): any;
+  /**
+   * Build a 2-D Sketch from **single-stroke line text** using a Hershey `.jhf`
+   * font. Each glyph stroke becomes an open `LineString` (ideal for CNC
+   * engraving / pen plotting). `offset_code` is the Unicode code point mapped
+   * to the font's first record (32 = ASCII space for the standard fonts).
+   *
+   * See `Sketch::from_hershey_str`.
+   */
+  static fromHershey(text: string, jhf: string, size: number, offset_code: number, metadata: any): SketchJs;
   intersection(other: SketchJs): SketchJs;
   static regularNGon(sides: number, radius: number, metadata: any): SketchJs;
   static airfoilNACA4(max_camber: number, camber_position: number, thickness: number, chord: number, samples: number, metadata: any): SketchJs;
@@ -975,6 +984,16 @@ export class SketchJs {
   xor(other: SketchJs): SketchJs;
   static ring(id: number, thickness: number, segments: number, metadata: any): SketchJs;
   static star(num_points: number, outer_radius: number, inner_radius: number, metadata: any): SketchJs;
+  /**
+   * Build a 2-D Sketch from **outline (filled) text** using a TrueType/OpenType
+   * font. Each glyph becomes closed `Polygon`(s) with holes for counters (the
+   * hole in `O`, `e`, `A`, …), plus open `LineString`s for any open contours.
+   * `scale` is the desired point size; glyphs are laid out with the font's own
+   * horizontal advance metrics. Extrude the result for solid 3-D text.
+   *
+   * See `Sketch::text`.
+   */
+  static text(text: string, font_data: Uint8Array, scale: number, metadata: any): SketchJs;
   static arrow(shaft_length: number, shaft_width: number, head_length: number, head_width: number, metadata: any): SketchJs;
   static heart(width: number, height: number, segments: number, metadata: any): SketchJs;
   /**
@@ -1351,6 +1370,7 @@ export interface InitOutput {
   readonly sketchjs_extrudeVectorComponents: (a: number, b: number, c: number, d: number) => number;
   readonly sketchjs_fromDXF: (a: number, b: number, c: any) => [number, number, number];
   readonly sketchjs_fromGeo: (a: number, b: number, c: any) => [number, number, number];
+  readonly sketchjs_fromHershey: (a: number, b: number, c: number, d: number, e: number, f: number, g: any) => number;
   readonly sketchjs_fromMesh: (a: number) => number;
   readonly sketchjs_fromSVG: (a: number, b: number, c: any) => [number, number, number];
   readonly sketchjs_heart: (a: number, b: number, c: number, d: any) => number;
@@ -1385,6 +1405,7 @@ export interface InitOutput {
   readonly sketchjs_sweep: (a: number, b: number, c: number) => number;
   readonly sketchjs_sweepComponents: (a: number, b: any) => number;
   readonly sketchjs_teardrop: (a: number, b: number, c: number, d: any) => number;
+  readonly sketchjs_text: (a: number, b: number, c: number, d: number, e: number, f: any) => number;
   readonly sketchjs_toArrays: (a: number) => any;
   readonly sketchjs_toMultiPolygon: (a: number) => [number, number];
   readonly sketchjs_toSVG: (a: number) => [number, number];

@@ -3,6 +3,7 @@ import { initAsync } from '../../src/index';
 import { Polygon } from '../../src/Polygon';
 import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
+import { ShapeCollection } from '../../src/ShapeCollection';
 import { Bbox } from '../../src/Bbox';
 import { OBbox } from '../../src/OBbox';
 import { Vector } from '../../src/Vector';
@@ -513,5 +514,71 @@ describe('Polygon.cutoffBy()', () =>
         const pl = Polygon.planeBetween([0, 0, 0], [100, 100, 0]);
         pl.cutoffBy(Curve.Line([300, -50, 0], [300, 150, 0]));
         expect(pl.area()).toBeCloseTo(10000, 0);
+    });
+});
+
+describe('Polygon.difference() / subtract()', () =>
+{
+    // 100 x 100 box on XY, corner at origin (0..100 in x and y).
+    const box = (): Polygon => Curve.Rect(100, 100, [50, 50, 0]).toPolygon()!;
+
+    it('notches a corner with a closed Curve cutter (stays one piece, area drops)', () =>
+    {
+        const pl = box();
+        expect(pl.area()).toBeCloseTo(10000, 0);
+        // 20 x 20 cutter straddling the top-right corner → removes a 10x10 bite.
+        const cutter = Curve.Rect(20, 20, [100, 100, 0]); // centred on the corner
+        const out = pl.difference(cutter);
+        expect(out).toBe(pl);                       // mutates in place, returns this
+        expect(pl.area()).toBeCloseTo(9900, 0);     // 10000 - 10x10
+    });
+
+    it('accepts a Polygon cutter', () =>
+    {
+        const pl = box();
+        const cutter = Curve.Rect(20, 20, [0, 0, 0]).toPolygon()!; // corner at origin
+        pl.difference(cutter);
+        expect(pl.area()).toBeCloseTo(9900, 0);
+    });
+
+    it('subtract(...) removes several cutters (both corners on one side)', () =>
+    {
+        const pl = box();
+        pl.subtract(
+            Curve.Rect(20, 20, [0, 100, 0]),   // top-left corner
+            Curve.Rect(20, 20, [100, 100, 0]), // top-right corner
+        );
+        expect(pl.area()).toBeCloseTo(9800, 0); // two 10x10 bites
+    });
+
+    it('subtract accepts a ShapeCollection of cutters', () =>
+    {
+        const pl = box();
+        const cutters = new ShapeCollection(
+            Curve.Rect(20, 20, [0, 0, 0]),
+            Curve.Rect(20, 20, [100, 0, 0]),
+        );
+        pl.subtract(cutters);
+        expect(pl.area()).toBeCloseTo(9800, 0);
+    });
+
+    it('leaves the polygon unchanged (with warning) when the cutter misses', () =>
+    {
+        const pl = box();
+        pl.difference(Curve.Rect(20, 20, [300, 300, 0]));
+        expect(pl.area()).toBeCloseTo(10000, 0);
+    });
+
+    it('warns and keeps the polygon when the cutter lies fully inside (use addHole)', () =>
+    {
+        const pl = box();
+        pl.difference(Curve.Rect(20, 20, [50, 50, 0])); // interior, no boundary contact
+        expect(pl.area()).toBeCloseTo(10000, 0);        // no boundary area removed
+    });
+
+    it('throws on a non-shape cutter', () =>
+    {
+        const pl = box();
+        expect(() => (pl as any).difference(42)).toThrow();
     });
 });

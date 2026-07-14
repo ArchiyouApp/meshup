@@ -68,6 +68,8 @@ export { Polygon } from './Polygon';
 export { Curve } from './Curve';
 export { ShapeCollection } from './ShapeCollection';
 export { Sketch } from './Sketch';
+export type { TextAlign, TextOutlineOptions, TextSolidOptions, TextStrokeOptions } from './Sketch';
+export { HERSHEY_FONTS, HERSHEY_OFFSET, DEFAULT_HERSHEY_FONT } from './fonts/hershey';
 export { Bbox } from './Bbox';
 export { OBbox } from './OBbox';
 export { SceneNode } from './SceneNode';

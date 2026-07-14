@@ -146,14 +146,21 @@ export abstract class Shape
      *    (unspecified axes default to the centre of that axis)
      *  - A PointLike [x%, y%, z%] where 0 = min-side and 1 = max-side
      *
+     *  `other` may be a Shape, a Point, or a raw PointLike; a point is treated as a
+     *  zero-size bbox at that location (as if it were a Vertex).
+     *
      *  @example
      *    box.align(shelf, 'bottom', 'top')  // sits box on top of shelf
      *    box.align(other, 'center', 'center') // centres box on other
+     *    box.align(curve.middle(), 'lefttop') // align to a bare point
      */
-    align(other: Shape, pivot: string | PointLike = 'center', alignment: string | PointLike = 'center'): this
+    align(other: Shape | Point | PointLike, pivot: string | PointLike = 'center', alignment: string | PointLike = 'center'): this
     {
         const selfBbox  = this.bbox();
-        const otherBbox = other.bbox();
+        // A Point / PointLike behaves like a Vertex: a zero-size bbox at that location.
+        const otherBbox = Shape.isShape(other)
+            ? other.bbox()
+            : (() => { const p = new Point(other as Point | PointLike); return new Bbox([p.x, p.y, p.z], [p.x, p.y, p.z]); })();
         if (!selfBbox || !otherBbox) return this;
 
         const fromPos = isPointLike(pivot)

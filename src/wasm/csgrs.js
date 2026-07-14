@@ -3742,6 +3742,28 @@ export class SketchJs {
         return ret;
     }
     /**
+     * Build a 2-D Sketch from **single-stroke line text** using a Hershey `.jhf`
+     * font. Each glyph stroke becomes an open `LineString` (ideal for CNC
+     * engraving / pen plotting). `offset_code` is the Unicode code point mapped
+     * to the font's first record (32 = ASCII space for the standard fonts).
+     *
+     * See `Sketch::from_hershey_str`.
+     * @param {string} text
+     * @param {string} jhf
+     * @param {number} size
+     * @param {number} offset_code
+     * @param {any} metadata
+     * @returns {SketchJs}
+     */
+    static fromHershey(text, jhf, size, offset_code, metadata) {
+        const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(jhf, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.sketchjs_fromHershey(ptr0, len0, ptr1, len1, size, offset_code, metadata);
+        return SketchJs.__wrap(ret);
+    }
+    /**
      * @param {SketchJs} other
      * @returns {SketchJs}
      */
@@ -4019,6 +4041,28 @@ export class SketchJs {
      */
     static star(num_points, outer_radius, inner_radius, metadata) {
         const ret = wasm.sketchjs_star(num_points, outer_radius, inner_radius, metadata);
+        return SketchJs.__wrap(ret);
+    }
+    /**
+     * Build a 2-D Sketch from **outline (filled) text** using a TrueType/OpenType
+     * font. Each glyph becomes closed `Polygon`(s) with holes for counters (the
+     * hole in `O`, `e`, `A`, …), plus open `LineString`s for any open contours.
+     * `scale` is the desired point size; glyphs are laid out with the font's own
+     * horizontal advance metrics. Extrude the result for solid 3-D text.
+     *
+     * See `Sketch::text`.
+     * @param {string} text
+     * @param {Uint8Array} font_data
+     * @param {number} scale
+     * @param {any} metadata
+     * @returns {SketchJs}
+     */
+    static text(text, font_data, scale, metadata) {
+        const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(font_data, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.sketchjs_text(ptr0, len0, ptr1, len1, scale, metadata);
         return SketchJs.__wrap(ret);
     }
     /**

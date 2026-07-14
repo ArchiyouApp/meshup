@@ -16,7 +16,7 @@ import { Bbox } from "./Bbox";
 import { Shape } from "./Shape";
 import { Style } from "./Style";
 import { VertexJs  } from "./wasm/csgrs";
-import { uuid } from "./utils";
+import { uuid, rad } from "./utils";
 
 export class Vertex extends Shape
 {
@@ -102,24 +102,57 @@ export class Vertex extends Shape
     return this;
   }
 
-  override rotate(_angleDeg: number, _axis?: Axis | PointLike, _pivot?: PointLike): this
+  override rotate(angleDeg: number, axis: Axis | PointLike = 'z'): this
   {
-    throw new Error('Vertex.rotate(): not yet implemented');
+    const a     = rad(angleDeg) / 2;
+    const axVec = Vector.from(axis).normalize();
+    const sin   = Math.sin(a);
+    return this.rotateQuaternion(Math.cos(a), axVec.x * sin, axVec.y * sin, axVec.z * sin);
   }
 
-  override rotateAround(_angleDeg: number, _axis: Axis | PointLike, _pivot?: PointLike): this
+  override rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot?: PointLike): this
   {
-    throw new Error('Vertex.rotateAround(): not yet implemented');
+    const p = pivot ? new Point(pivot) : new Point(0, 0, 0);
+    this.translate(-p.x, -p.y, -p.z);
+    this.rotate(angleDeg, axis);
+    this.translate(p.x, p.y, p.z);
+    return this;
   }
 
-  override rotateQuaternion(_w: number | { w: number; x: number; y: number; z: number }, _x?: number, _y?: number, _z?: number): this
+  override rotateQuaternion(wOrObj: number | { w: number; x: number; y: number; z: number }, x?: number, y?: number, z?: number): this
   {
-    throw new Error('Vertex.rotateQuaternion(): not yet implemented');
+    const w  = typeof wOrObj === 'object' ? wOrObj.w : wOrObj;
+    const xv = typeof wOrObj === 'object' ? wOrObj.x : (x ?? 0);
+    const yv = typeof wOrObj === 'object' ? wOrObj.y : (y ?? 0);
+    const zv = typeof wOrObj === 'object' ? wOrObj.z : (z ?? 0);
+
+    const newPos    = Vector.from(this.x, this.y, this.z).rotateQuaternion(w, xv, yv, zv);
+    const newNormal = this.normal().rotateQuaternion(w, xv, yv, zv);
+
+    this._vertex = new VertexJs(
+      new Point(newPos.x, newPos.y, newPos.z).toPoint3Js(),
+      newNormal.toVector3Js(),
+    );
+    return this;
   }
-  
-  override scale(_factor: number | PointLike, _origin?: PointLike): this
+
+  override scale(factor: number | PointLike, origin?: PointLike): this
   {
-    throw new Error('Vertex.scale(): not yet implemented');
+    const [sx, sy, sz] = (typeof factor === 'number')
+      ? [factor, factor, factor]
+      : [new Point(factor).x, new Point(factor).y, new Point(factor).z];
+
+    const o = origin ? new Point(origin) : new Point(0, 0, 0);
+
+    this._vertex = new VertexJs(
+      new Point(
+        o.x + (this.x - o.x) * sx,
+        o.y + (this.y - o.y) * sy,
+        o.z + (this.z - o.z) * sz,
+      ).toPoint3Js(),
+      this._vertex.normal(), // normals stay unit vectors under uniform-ish scale
+    );
+    return this;
   }
 
   override mirror(dir: Axis | PointLike, pos?: PointLike): this

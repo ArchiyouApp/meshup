@@ -744,6 +744,158 @@ export class Polygon extends Shape
         return new ShapeCollection<Polygon>(...pieces);
     }
 
+    /**
+     * Subtract a closed cutter — a closed Curve, a Polygon, or every shape in a
+     * ShapeCollection — from this polygon (2D boolean difference). The cut runs on this
+     * polygon's boundary curve (the same robust rust curve-boolean that split() uses) and
+     * is applied in place; returns `this`.
+     *
+     *  - A cutter that bites into the boundary leaves a notched polygon (one piece).
+     *  - A band-like cutter that crosses the whole polygon splits it; the largest piece is
+     *    kept (with a warning) — use split() when you want every piece.
+     *  - A cutter that lies fully inside the polygon is not a boundary op and removes no
+     *    area: use addHole() for an interior hole (a warning points this out).
+     *
+     * The cutter must be planar; it is projected onto this polygon's plane first, so a cutter
+     * drawn on a parallel/coincident plane still works. A missing/degenerate/failed cut leaves
+     * the polygon unchanged (with a warning). Interior holes on this polygon are dropped.
+     *
+     * @param other Closed Curve, Polygon, or ShapeCollection of them.
+     */
+    difference(other: Curve | Polygon | ShapeCollection<Curve | Polygon>): this
+    {
+        if (ShapeCollection.isShapeCollection(other))
+        {
+            (other as ShapeCollection<Curve | Polygon>).toArray()
+                .forEach(s => this.difference(s as Curve | Polygon));
+            return this;
+        }
+        if (!(other instanceof Curve) && !(other instanceof Polygon))
+        {
+            throw new Error('Polygon::difference(): supply a closed Curve, a Polygon, or a ShapeCollection of them.');
+        }
+
+        const before = this.area();
+        const pieces = this._differenceRaw(other);
+        if (!pieces) { return this; } // unchanged — a warning was already emitted
+
+        const total = pieces.reduce((s, p) => s + p.area(), 0);
+        if (pieces.length === 1 && Math.abs(total - before) <= Math.max(TOLERANCE, before * 1e-6))
+        {
+            console.warn('Polygon.difference(): the cutter removed no area — it misses the polygon or lies fully inside it. '
+                       + 'For an interior hole use addHole(). Returning unchanged.');
+            return this;
+        }
+        if (pieces.length > 1)
+        {
+            console.warn(`Polygon.difference(): the cutter split the polygon into ${pieces.length} pieces; keeping the largest. `
+                       + 'Use split() to keep every piece.');
+        }
+        return this._keepPiece(pieces, false);
+    }
+
+    /** Subtract one or more closed cutters (each a Curve, Polygon, or ShapeCollection) from
+     *  this polygon in place. Alias-style convenience over difference(); returns `this`. */
+    subtract(...others: Array<Curve | Polygon | ShapeCollection<Curve | Polygon>>): this
+    {
+        others.forEach(other => this.difference(other));
+        return this;
+    }
+
+    /** Boundary-curve difference for a single closed cutter. Returns the resulting polygon
+     *  piece(s), or null when the cutter is unusable / the boolean failed / produced nothing.
+     *  Mirrors split()'s closed-cutter branch but does not require the result to be ≥2 pieces. */
+    private _differenceRaw(other: Curve | Polygon): Array<Polygon> | null
+    {
+        if (this.hasHoles())
+        {
+            console.warn('Polygon.difference(): polygon has interior holes; only the outer boundary is subtracted and holes are dropped.');
+        }
+
+        // The cutter as a closed Curve. A Polygon cutter uses its closed boundary.
+        const spine = (other instanceof Polygon)
+            ? Curve.Polyline(other.vertices().toArray()).close()
+            : other;
+
+        if (!spine.isClosed())
+        {
+            console.warn('Polygon.difference(): the cutter must be a closed Curve or a Polygon. Returning unchanged.');
+            return null;
+        }
+        if (!spine.isPlanar())
+        {
+            console.warn('Polygon.difference(): the cutter is not planar; cannot subtract reliably. Returning unchanged.');
+            return null;
+        }
+        if (spine.selfIntersecting())
+        {
+            console.warn('Polygon.difference(): the cutter is self-intersecting; refusing to subtract to avoid degenerate shapes. Returning unchanged.');
+            return null;
+        }
+
+        // Project the cutter onto this polygon's plane so the boolean operands are coplanar
+        // (works on any plane, not just XY). Matches split()'s projection.
+        const normal = this.normal().normalize();
+        const planePt = this.center();
+        const project = (p: Point): Point =>
+        {
+            const d = p.toVector().subtract(planePt.toVector()).dot(normal.inner());
+            return new Point(p.x - normal.x * d, p.y - normal.y * d, p.z - normal.z * d);
+        };
+        const knifePts = spine.tessellate().map(project);
+        const knife = Curve.Polyline(knifePts).close();
+
+        // Reseam the boundary so its start/join vertex sits far from the cutter. The rust
+        // curve-boolean returns the *intersection* (wrong) when the cutter overlaps the closed
+        // boundary's seam vertex — a deterministic degeneracy at the curve's parameter join.
+        // Starting the boundary at the vertex farthest from the cutter centroid keeps the seam
+        // clear of the cut. (This polygon's boundary as a closed, planar Curve, as split() does.)
+        let bverts = this.vertices().toArray();
+        // vertices() repeats the first vertex at the end (the closed loop); drop it so the
+        // reseam rotation below doesn't leave a zero-length segment mid-boundary (which makes
+        // Curve.close() fail with "No connection found to create a compound curve").
+        if (bverts.length > 1)
+        {
+            const f = bverts[0], l = bverts[bverts.length - 1];
+            if (Math.abs(f.x - l.x) < TOLERANCE && Math.abs(f.y - l.y) < TOLERANCE && Math.abs(f.z - l.z) < TOLERANCE)
+            {
+                bverts = bverts.slice(0, -1);
+            }
+        }
+        const c = knifePts.reduce((a, p) => ({ x: a.x + p.x, y: a.y + p.y, z: a.z + p.z }), { x: 0, y: 0, z: 0 });
+        const n = knifePts.length || 1;
+        const cx = c.x / n, cy = c.y / n, cz = c.z / n;
+        let seam = 0, farDist = -1;
+        bverts.forEach((v, i) =>
+        {
+            const d = (v.x - cx) ** 2 + (v.y - cy) ** 2 + (v.z - cz) ** 2;
+            if (d > farDist) { farDist = d; seam = i; }
+        });
+        const reseamed = [...bverts.slice(seam), ...bverts.slice(0, seam)];
+        const boundary = Curve.Polyline(reseamed).close();
+
+        const diff = boundary.difference(knife);
+        if (diff === null)
+        {
+            console.warn('Polygon.difference(): boolean subtraction failed. Returning unchanged.');
+            return null;
+        }
+        const regionCurves = (diff instanceof Curve) ? [diff] : diff.toArray();
+        const pieces = regionCurves
+            .map(c => c.toPolygon())
+            .filter((p): p is Polygon => p !== undefined);
+
+        if (pieces.length === 0)
+        {
+            console.warn('Polygon.difference(): no valid polygon piece could be built from the subtraction result. Returning unchanged.');
+            return null;
+        }
+
+        // Preserve this polygon's styling on each piece.
+        pieces.forEach(p => p.style.merge(this.style.explicitData() as any));
+        return pieces;
+    }
+
     /** From a set of split pieces, keep the largest (or smallest) by area, applying it in
      *  place. Style stays on `this` (the Shape base), so only the geometry is swapped. */
     private _keepPiece(pieces: Array<Polygon>, keepSmallest: boolean): this

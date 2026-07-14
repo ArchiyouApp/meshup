@@ -1,6 +1,7 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync, ShapeCollection } from '../../src/index';
 import { Curve } from '../../src/Curve';
+import { Point } from '../../src/Point';
 import { Polygon } from '../../src/Polygon';
 import { Mesh } from '../../src/Mesh';
 import { save } from '../../src/utils';
@@ -124,6 +125,60 @@ describe('Curve.Polyline()', () =>
     it('throws when all points are coincident', () =>
     {
         expect(() => Curve.Polyline([[1, 1, 1], [1, 1, 1], [1, 1, 1]])).toThrow(/zero-length/i);
+    });
+});
+
+describe('Curve.segment()', () =>
+{
+    // A square polyline → 4 atomic segments (0..3)
+    const square = () => Curve.Polyline([[0,0,0], [10,0,0], [10,10,0], [0,10,0], [0,0,0]]);
+
+    it('returns a single segment as a plain Curve', () =>
+    {
+        const seg = square().segment(0);
+        expect(seg.isCompound()).toBe(false);
+        expect(seg.length()).toBeCloseTo(10);
+    });
+
+    it('combines a range of segments into one Curve', () =>
+    {
+        const seg = square().segment(0, 2); // first three edges
+        expect(seg.length()).toBeCloseTo(30);
+        expect(new Point(seg.start()).distance(new Point(0,0,0))).toBeCloseTo(0);
+        expect(new Point(seg.end()).distance(new Point(0,10,0))).toBeCloseTo(0);
+    });
+
+    it('supports negative indices from the end', () =>
+    {
+        const seg = square().segment(-1); // last edge
+        expect(seg.length()).toBeCloseTo(10);
+        expect(new Point(seg.start()).distance(new Point(0,10,0))).toBeCloseTo(0);
+        expect(new Point(seg.end()).distance(new Point(0,0,0))).toBeCloseTo(0);
+    });
+
+    it('wraps around the end of a closed curve when from > to', () =>
+    {
+        // last edge (0,10,0)->(0,0,0) + first edge (0,0,0)->(10,0,0)
+        const seg = square().segment(-1, 0);
+        expect(seg.length()).toBeCloseTo(20);
+        expect(new Point(seg.start()).distance(new Point(0,10,0))).toBeCloseTo(0);
+        expect(new Point(seg.end()).distance(new Point(10,0,0))).toBeCloseTo(0);
+    });
+
+    it('takes the whole closed curve for an ascending full range', () =>
+    {
+        expect(square().segment(0, 3).length()).toBeCloseTo(40);
+    });
+
+    it('throws when wrapping an open curve', () =>
+    {
+        const open = Curve.Polyline([[0,0,0], [10,0,0], [10,10,0], [0,10,0]]); // 3 edges, open
+        expect(() => open.segment(-1, 0)).toThrow(/open/i);
+    });
+
+    it('throws when the index range is out of bounds', () =>
+    {
+        expect(() => square().segment(0, 99)).toThrow(/out of bounds/i);
     });
 });
 

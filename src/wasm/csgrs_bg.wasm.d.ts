@@ -275,6 +275,7 @@ export const sketchjs_extrudeVector: (a: number, b: number) => number;
 export const sketchjs_extrudeVectorComponents: (a: number, b: number, c: number, d: number) => number;
 export const sketchjs_fromDXF: (a: number, b: number, c: any) => [number, number, number];
 export const sketchjs_fromGeo: (a: number, b: number, c: any) => [number, number, number];
+export const sketchjs_fromHershey: (a: number, b: number, c: number, d: number, e: number, f: number, g: any) => number;
 export const sketchjs_fromMesh: (a: number) => number;
 export const sketchjs_fromSVG: (a: number, b: number, c: any) => [number, number, number];
 export const sketchjs_heart: (a: number, b: number, c: number, d: any) => number;
@@ -309,6 +310,7 @@ export const sketchjs_supershape: (a: number, b: number, c: number, d: number, e
 export const sketchjs_sweep: (a: number, b: number, c: number) => number;
 export const sketchjs_sweepComponents: (a: number, b: any) => number;
 export const sketchjs_teardrop: (a: number, b: number, c: number, d: any) => number;
+export const sketchjs_text: (a: number, b: number, c: number, d: number, e: number, f: any) => number;
 export const sketchjs_toArrays: (a: number) => any;
 export const sketchjs_toMultiPolygon: (a: number) => [number, number];
 export const sketchjs_toSVG: (a: number) => [number, number];

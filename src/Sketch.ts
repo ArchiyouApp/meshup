@@ -83,6 +83,45 @@ import type { Axis, BasePlane, PointLike } from "./types";
 import { isBasePlane, isPointLike } from "./types";
 
 import { BASE_PLANE_NAME_TO_PLANE } from "./constants";
+import { HERSHEY_FONTS, HERSHEY_OFFSET, DEFAULT_HERSHEY_FONT } from "./fonts/hershey";
+
+
+//// TEXT TYPES ////
+
+/** Horizontal alignment of a text run relative to the origin. */
+export type TextAlign = 'left' | 'center' | 'right';
+
+/** Options for filled (outline) TrueType/OpenType text. */
+export interface TextOutlineOptions
+{
+    /** Raw TTF/OTF font bytes. Required — meshup ships no bundled outline font. */
+    font: Uint8Array | ArrayBuffer;
+    /** Point size (roughly cap height in mm). Default 20. */
+    size?: number;
+    /** Horizontal alignment relative to x=0. Default 'left'. */
+    align?: TextAlign;
+}
+
+/** Options for solid (extruded) outline text. */
+export interface TextSolidOptions extends TextOutlineOptions
+{
+    /** Extrusion depth along +Z. Default 2. */
+    depth?: number;
+}
+
+/** Options for single-stroke Hershey line text. */
+export interface TextStrokeOptions
+{
+    /** Bundled font name/alias (see {@link HERSHEY_FONTS}), raw `.jhf` text, or
+     *  raw `.jhf` bytes. Default `'sans'` (Hershey futural). */
+    font?: string | Uint8Array | ArrayBuffer;
+    /** Scale factor for glyphs. Default 5. */
+    size?: number;
+    /** Unicode code point mapped to the font's first record. Default 32 (space). */
+    offset?: number;
+    /** Horizontal alignment relative to x=0. Default 'left'. */
+    align?: TextAlign;
+}
 
 
 export class Sketch  
@@ -122,6 +161,144 @@ export class Sketch
     static fromDXF(data: string|Uint8Array|ArrayBuffer): ShapeCollection<Curve>
     {
         return Importer.fromDXF(data);
+    }
+
+    //// TEXT ////
+    /* Native text rendering. Two families:
+        - Outline text (textOutline/textSolid): glyph contours from a TTF/OTF font
+          become closed curves (with holes for counters) or an extruded solid.
+        - Stroke text (textStroke): single-stroke Hershey `.jhf` fonts become open
+          line curves, ideal for CNC engraving / pen plotting.
+       All results are on the XY plane (z=0), laid out left-to-right from the origin. */
+
+    /** Render `text` as filled glyph **outline curves** using a TrueType/OpenType
+     *  font. Returns closed curves for glyph bodies and their counters (holes),
+     *  plus open curves for any open contours. Pass the font bytes via `opts.font`.
+     *
+     *  For a solid, use {@link Sketch.textSolid}; the flat curves here do not carry
+     *  hole↔body nesting and are meant for 2-D drawings / display / export. */
+    static textOutline(text: string, opts: TextOutlineOptions): ShapeCollection<Curve>
+    {
+        if(typeof text !== 'string'){ throw new Error('Sketch.textOutline(): `text` must be a string.'); }
+        if(!opts?.font){ throw new Error('Sketch.textOutline(): `opts.font` (TTF/OTF bytes) is required.'); }
+
+        const bytes = opts.font instanceof Uint8Array ? opts.font : new Uint8Array(opts.font);
+        const size = opts.size ?? 20;
+
+        const SketchJsCls = getCsgrs().SketchJs as any;
+        let sk: any;
+        try
+        {
+            sk = SketchJsCls.text(text, bytes, size, null);
+            const curves = Curve.fromSketchJs(sk);
+            return Sketch._alignCurves(curves, opts.align);
+        }
+        catch(e)
+        {
+            throw new Error(`Sketch.textOutline(): text rendering failed: ${(e as Error)?.message ?? e}`);
+        }
+        finally { sk?.free?.(); }
+    }
+
+    /** Render `text` as a **solid extruded Mesh** from outline glyphs. Glyph
+     *  counters (the hole in O/e/A …) are preserved because extrusion happens in
+     *  the kernel before the geometry is flattened to curves. */
+    static textSolid(text: string, opts: TextSolidOptions): Mesh
+    {
+        if(typeof text !== 'string'){ throw new Error('Sketch.textSolid(): `text` must be a string.'); }
+        if(!opts?.font){ throw new Error('Sketch.textSolid(): `opts.font` (TTF/OTF bytes) is required.'); }
+
+        const bytes = opts.font instanceof Uint8Array ? opts.font : new Uint8Array(opts.font);
+        const size = opts.size ?? 20;
+        const depth = opts.depth ?? 2;
+
+        const SketchJsCls = getCsgrs().SketchJs as any;
+        let sk: any;
+        try
+        {
+            sk = SketchJsCls.text(text, bytes, size, null);
+            if(sk.isEmpty()){ throw new Error('no renderable glyphs (empty text or font missing glyphs).'); }
+            // Extrude in-kernel along +Z so counters stay holes.
+            const mesh = Mesh.from(sk.extrudeVector(Vector.from(0, 0, depth).inner()));
+            return Sketch._alignMesh(mesh, opts.align);
+        }
+        catch(e)
+        {
+            throw new Error(`Sketch.textSolid(): text rendering failed: ${(e as Error)?.message ?? e}`);
+        }
+        finally { sk?.free?.(); }
+    }
+
+    /** Render `text` as **single-stroke line curves** using a Hershey `.jhf` font
+     *  (open curves — perfect for CNC engraving, laser marking, pen plotting).
+     *  `opts.font` accepts a bundled name (`'sans'`, `'serif'`, `'script'`,
+     *  `'gothic'`, `'greek'`, …), raw `.jhf` text, or `.jhf` bytes. */
+    static textStroke(text: string, opts: TextStrokeOptions = {}): ShapeCollection<Curve>
+    {
+        if(typeof text !== 'string'){ throw new Error('Sketch.textStroke(): `text` must be a string.'); }
+
+        const jhf = Sketch._resolveHersheyFont(opts.font);
+        const size = opts.size ?? 5;
+        const offset = opts.offset ?? HERSHEY_OFFSET;
+
+        const SketchJsCls = getCsgrs().SketchJs as any;
+        let sk: any;
+        try
+        {
+            sk = SketchJsCls.fromHershey(text, jhf, size, offset, null);
+            const curves = Curve.fromSketchJs(sk);
+            return Sketch._alignCurves(curves, opts.align);
+        }
+        catch(e)
+        {
+            throw new Error(`Sketch.textStroke(): text rendering failed: ${(e as Error)?.message ?? e}`);
+        }
+        finally { sk?.free?.(); }
+    }
+
+    /** Resolve a Hershey font option to raw `.jhf` text. */
+    private static _resolveHersheyFont(font?: string|Uint8Array|ArrayBuffer): string
+    {
+        if(font == null)
+        {
+            return HERSHEY_FONTS[DEFAULT_HERSHEY_FONT];
+        }
+        if(typeof font === 'string')
+        {
+            // A bundled name/alias, otherwise treat the string as raw .jhf data.
+            const bundled = HERSHEY_FONTS[font.toLowerCase()];
+            if(bundled){ return bundled; }
+            if(font.includes('\n')){ return font; } // looks like raw .jhf content
+            throw new Error(`Sketch.textStroke(): unknown Hershey font '${font}'. Bundled: ${Object.keys(HERSHEY_FONTS).join(', ')}.`);
+        }
+        // Raw bytes of a .jhf file
+        const bytes = font instanceof Uint8Array ? font : new Uint8Array(font);
+        return new TextDecoder().decode(bytes);
+    }
+
+    /** Shift text curves horizontally for the requested alignment (default left). */
+    private static _alignCurves(curves: ShapeCollection<Curve>, align: TextAlign = 'left'): ShapeCollection<Curve>
+    {
+        const dx = Sketch._alignShiftX(curves.bbox(), align);
+        if(dx !== 0){ curves.translate(dx, 0, 0); }
+        return curves;
+    }
+
+    /** Shift a text mesh horizontally for the requested alignment (default left). */
+    private static _alignMesh(mesh: Mesh, align: TextAlign = 'left'): Mesh
+    {
+        const dx = Sketch._alignShiftX(mesh.bbox(), align);
+        if(dx !== 0){ mesh.translate(dx, 0, 0); }
+        return mesh;
+    }
+
+    /** Compute the x-shift that places `bbox` at the requested alignment about x=0. */
+    private static _alignShiftX(bbox: { minX(): number; width(): number } | undefined, align: TextAlign): number
+    {
+        if(!bbox || align === 'left'){ return 0; }
+        if(align === 'center'){ return -(bbox.minX() + bbox.width() / 2); }
+        if(align === 'right'){ return -(bbox.minX() + bbox.width()); }
+        return 0;
     }
 
     _setWorkingPlane(plane: BasePlane|PolygonJs): void

@@ -1055,7 +1055,9 @@ export class Curve extends Shape
         return this.inner().length();
     }
 
-    /** Area enclosed by this curve. Only valid for closed planar curves; warns and returns undefined otherwise */
+    /** Net area enclosed by this curve: the boundary area minus any interior holes
+     *  (e.g. from a boolean difference where the subtrahend lands fully inside).
+     *  Only valid for closed planar curves; warns and returns undefined otherwise. */
     area(): number | undefined
     {
         if (!this.isClosed())
@@ -1068,6 +1070,14 @@ export class Curve extends Shape
             console.warn('Curve.area(): curve is not planar — area is undefined.');
             return undefined;
         }
+        const holesArea = this._holes.reduce((sum, hole) => sum + (hole._boundaryArea() ?? 0), 0);
+        return Math.max(0, this._boundaryArea() - holesArea);
+    }
+
+    /** Unsigned area enclosed by this curve's boundary only, ignoring interior holes.
+     *  3D shoelace over the tessellated boundary; plane-agnostic. */
+    private _boundaryArea(): number
+    {
         const pts = this.tessellate();
         const n = pts.length;
         if (n < 3) return 0;
@@ -1477,6 +1487,75 @@ export class Curve extends Shape
     edges(): ShapeCollection<Curve>
     {
         return this.segments();
+    }
+
+    /** Copy a range of this Curve's atomic segments (see segments()) and combine them
+     *  into a single Curve.
+     *
+     *  Segments are taken in forward order from `fromIndex` to `toIndex` (both inclusive).
+     *  When `fromIndex > toIndex` the range wraps around the end of a *closed* curve
+     *  (its last segment joins back to its first), e.g. `segment(-1, 0)` on a closed rect
+     *  returns the last + first edge. Wrapping an open curve is an error.
+     *
+     *  @param fromIndex - first segment index (inclusive, 0-based). Negative indexes count from the end.
+     *  @param toIndex   - last segment index (inclusive). Defaults to fromIndex (single segment). Negative indexes count from the end.
+     *  @returns a single Curve — one span stays a plain Curve, multiple spans become a CompoundCurve.
+     */
+    segment(fromIndex: number, toIndex: number = fromIndex): Curve
+    {
+        // Build the atomic segments as FRESH, plain-meshup Curves (never Smart*, never
+        // scene-bound). Do NOT route through the public segments()/copy() — on a Smart
+        // subclass those are scene-decorated, which would both pollute the scene and,
+        // after Curve.Compound() consumes the pieces' kernel pointers, leave freed shapes
+        // in the scene (→ "null pointer passed to rust" on the next kernel call).
+        const segs = this._atomicSegmentsRaw();
+        const n = segs.length;
+        if (n === 0) { throw new Error('Curve::segment(): Curve has no segments.'); }
+
+        // Resolve negative indices relative to the end
+        const from = fromIndex < 0 ? n + fromIndex : fromIndex;
+        const to   = toIndex   < 0 ? n + toIndex   : toIndex;
+
+        if (from < 0 || from >= n || to < 0 || to >= n)
+        {
+            throw new Error(`Curve::segment(): index range [${fromIndex}, ${toIndex}] out of bounds — Curve has ${n} segment(s).`);
+        }
+
+        // Forward, inclusive. from > to wraps around the end of a closed curve.
+        let picked: Curve[];
+        if (from <= to)
+        {
+            picked = segs.slice(from, to + 1);
+        }
+        else if (this.isClosed())
+        {
+            picked = [...segs.slice(from), ...segs.slice(0, to + 1)];
+        }
+        else
+        {
+            throw new Error(`Curve::segment(): fromIndex (${fromIndex}) resolves after toIndex (${toIndex}) but the curve is open — cannot wrap around. Pass indices in ascending order.`);
+        }
+
+        return picked.length === 1 ? picked[0] : Curve.Compound(picked);
+    }
+
+    /** Atomic segments as fresh, plain-meshup Curves — same decomposition as segments()
+     *  but each piece is a brand-new kernel curve safe to consume (e.g. hand to
+     *  Curve.Compound). Bypasses any Smart* override so internal callers never touch the
+     *  scene or alias `this`'s kernel curve. */
+    private _atomicSegmentsRaw(): Curve[]
+    {
+        return this.spans().toArray().flatMap(span =>
+        {
+            const inner = span.inner() as NurbsCurve3DJs;
+            if (inner.degree() === 1)
+            {
+                const cps = span.controlPoints();
+                return cps.slice(0, -1).map((cp, i) => Curve.Line(cp, cps[i + 1]));
+            }
+            // Clone so combining/consuming the segment never frees this curve's span.
+            return [Curve.fromCsgrs(inner.clone())];
+        });
     }
 
     /** Store annotations on this curve — placeholder for old-API compat */
@@ -2247,6 +2326,17 @@ export class Curve extends Shape
         const planarFrame = this._getPlanarFrame();
         const localCurve = this._toLocalXY(planarFrame, this.copy());
 
+        // Collapse collinear degree-1 spans up front. extendTo()/connect()/cutoffBy()
+        // frequently leave a geometrically straight line represented as several
+        // collinear segments. Without merging, such a curve is still isCompound() and
+        // routes into the fallback branches below, where the geo offset (offsetGeo)
+        // throws "need at least 3 points to form a polygon" on the effectively-2-point
+        // line. Merging unwraps it to a single NurbsCurve that offsets cleanly via Curvo.
+        if (localCurve.isCompound())
+        {
+            localCurve.mergeColinearLines();
+        }
+
         // Sharp offsets of degree-1 compounds are already exact in polyline form,
         // and Curvo's compound offset can still fail on simple ortho loops like rectBetween().
         if (cornerType === 'sharp' && localCurve.isCompound() && localCurve.maxDegree() === 1)
@@ -2310,7 +2400,24 @@ export class Curve extends Shape
         if(isCW){ localCurve.reverse(); }
 
         const degreeOneCurve = localCurve.toDegree1();
-        const offsettedCurve = Curve.fromCsgrs(degreeOneCurve.inner()?.offsetGeo(distance));
+
+        // offsetGeo() is a WASM (rust) call that throws a bare string (not an Error)
+        // for degenerate input, e.g. "need at least 3 points to form a polygon" on a
+        // straight open line. Let that surface as a null result instead of an opaque
+        // throw that the runner cannot attach script context to (reported as "undefined").
+        let offsettedInner;
+        try
+        {
+            offsettedInner = degreeOneCurve.inner()?.offsetGeo(distance);
+        }
+        catch (e)
+        {
+            console.warn(`Curve::offsetFallback(): geo offset failed: "${e}". Returning null.`);
+            return null;
+        }
+        if(!offsettedInner){ return null; }
+
+        const offsettedCurve = Curve.fromCsgrs(offsettedInner);
         if(isCW){ offsettedCurve?.reverse(); }
 
         return this.update(this._fromLocalXY(offsettedCurve, planarFrame));
@@ -2321,11 +2428,20 @@ export class Curve extends Shape
      *  Returns an array of Curves (typically one for inside trim).
      *  Parameters are in the curve's knot domain (see knotsDomain()).
      */
-    trim(t0: number, t1: number): Array<Curve>
+    trim(t0: number, t1: number): Array<Curve>;
+    /** Trim this curve against another Curve — alias for cutoffBy(). */
+    trim(other: Curve, keepSmallest?: boolean): Curve | ShapeCollection<Curve> | null;
+    trim(t0OrOther: number | Curve, t1OrKeep?: number | boolean): Array<Curve> | Curve | ShapeCollection<Curve> | null
     {
+        // When given a Curve cutter, trim behaves as an alias for cutoffBy().
+        if (t0OrOther instanceof Curve)
+        {
+            return this.cutoffBy(t0OrOther, t1OrKeep as boolean | undefined);
+        }
+
         try
         {
-            const spans: Array<NurbsCurve3DJs> = this.inner()?.trimRange(t0, t1);
+            const spans: Array<NurbsCurve3DJs> = this.inner()?.trimRange(t0OrOther, t1OrKeep as number);
             return (spans || []).map(s => Curve.fromCsgrs(s));
         }
         catch (e)
@@ -2492,13 +2608,57 @@ export class Curve extends Shape
     {
         try
         {
-            const regions: BooleanRegionJs[] = (this.isCompound())
-                ? (!other.isCompound()
-                    ? (this.inner() as CompoundCurve3DJs).booleanCurve(other.inner() as NurbsCurve3DJs, operation)
-                    : (this.inner() as CompoundCurve3DJs).booleanCompoundCurve(other.inner() as CompoundCurve3DJs, operation))
-                : (!other.isCompound() // single Curve
-                    ? (this.inner() as NurbsCurve3DJs).booleanCurve(other.inner() as NurbsCurve3DJs, operation)
-                    : (this.inner() as NurbsCurve3DJs).booleanCompoundCurve(other.inner() as CompoundCurve3DJs, operation));
+            // The WASM boolean (curvo/csgrs) operates in the XY plane and ignores Z, so a
+            // planar curve that lives in another plane (XZ/YZ/arbitrary) would collapse onto
+            // a line and yield a degenerate (~0 area) result. Mirror intersect()/offset():
+            // run the boolean in this curve's local XY frame, then map the result curves
+            // (exterior + holes) back to world coordinates. Same escalating-jitter/geo
+            // robustness lives in the WASM layer regardless of frame.
+            if(this.isPlanar())
+            {
+                const frame = this._getPlanarFrame();
+                if(Math.abs(frame.normal.normalize().z) < 1 - 1e-6) // not already ~parallel to the XY plane
+                {
+                    // _copy() (not copy()) so a smart scene shape's working copy is not
+                    // registered in the scene; scale([1,1,0]) flattens the ~1e-14 residual
+                    // z-noise the alignByPoints transform leaves (curvo treats an
+                    // out-of-plane curve as non-overlapping).
+                    const localThis = this._toLocalXY(frame, this._copy()).scale([1, 1, 0]);
+                    const localOther = this._toLocalXY(frame, other._copy()).scale([1, 1, 0]);
+                    const localResult = localThis._booleanOpRaw(localOther, operation);
+                    if(!localResult) return null;
+                    const worldCurves = localResult.toArray().map(c => this._regionFromLocalXY(c, frame));
+                    return new ShapeCollection<Curve>(...worldCurves);
+                }
+            }
+            return this._booleanOpRaw(other, operation);
+        }
+        catch (e)
+        {
+            console.error(`Curve::${operation}(): Error:`, e);
+            return null;
+        }
+    }
+
+    /** Raw WASM curve-curve boolean in world coordinates (XY plane only).
+     *  @returns ShapeCollection<Curve> of result Curves (each with holes attached), or null on error. */
+    private _booleanOpRaw(other: Curve, operation: 'union'|'difference'|'intersection'): ShapeCollection<Curve> | null
+    {
+        try
+        {
+            // Always dispatch through the CompoundCurve3DJs boolean methods: the WASM's
+            // NurbsCurve3DJs.booleanCurve/booleanCompoundCurve (simple-curve "this") path
+            // swaps union<->difference (a subtract() on a plain rect/circle silently unions
+            // instead), while the CompoundCurve3DJs variants are correct. Promote a simple
+            // closed curve to a single-span CompoundCurve so every boolean takes the good
+            // path; `other` is passed as-is (compound-"this" against a simple other is fine).
+            const selfCompound = (this.isCompound())
+                ? (this.inner() as CompoundCurve3DJs)
+                : new CompoundCurve3DJs([this.inner() as NurbsCurve3DJs]);
+
+            const regions: BooleanRegionJs[] = (!other.isCompound())
+                ? selfCompound.booleanCurve(other.inner() as NurbsCurve3DJs, operation)
+                : selfCompound.booleanCompoundCurve(other.inner() as CompoundCurve3DJs, operation);
 
             const curves = (regions || []).map(region =>
             {
@@ -2512,11 +2672,21 @@ export class Curve extends Shape
         catch (e)
         {
             console.error(`Curve::${operation}(): Error:`, e);
-            // TODO: add some analysis of why it failed 
+            // TODO: add some analysis of why it failed
             // for example: don't touch, not closed etc
 
             return null;
         }
+    }
+
+    /** Map a boolean-result region curve from a planar frame's local XY back to world.
+     *  _fromLocalXY() only transforms the exterior boundary, so the holes (which the WASM
+     *  boolean produced in local XY) are re-transformed and re-attached explicitly. */
+    private _regionFromLocalXY(localRegion: Curve, frame: { origin: Point; normal: Vector; x: Vector; y: Vector }): Curve
+    {
+        const world = this._fromLocalXY(localRegion, frame);
+        world._holes = localRegion.holes().map(h => this._fromLocalXY(h, frame));
+        return world;
     }
 
     /** Boolean union of this (closed) Curve with another (closed) Curve.
