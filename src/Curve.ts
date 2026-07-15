@@ -2232,8 +2232,15 @@ export class Curve extends Shape
             if (!regions || regions.length === 0) { return null; }
             const curves = regions.map(rg =>
             {
-                const exterior = Curve.fromCsgrs(rg.exterior);
-                (rg.holes() as Array<Curve3DJs>).forEach(h => exterior.addHole(Curve.fromCsgrs(h)));
+                // Preserve this Curve's concrete class (e.g. a scene-bound SmartCurve
+                // subclass) rather than minting a plain Curve via fromCsgrs — otherwise a
+                // boolean that splits into several regions yields untracked plain Curves
+                // that never appear in the scene. `_copy()` clones as the same class
+                // without auto-registering (the caller/editor places the results); we
+                // then swap in the region's geometry. Mirrors replicate()/array().
+                const exterior = this._copy();
+                exterior.update(rg.exterior as Curve3DJs);
+                exterior._holes = (rg.holes() as Array<Curve3DJs>).map(h => Curve.fromCsgrs(h));
                 return exterior;
             });
             return new ShapeCollection<Curve>(...curves);
