@@ -1,7 +1,7 @@
 /**
  *  Curve.ts
  *
- *  Wrapper around the csgrs NurbsCurve3DJs or CompoundCurve3DJs (see meshup.rs)
+ *  Wrapper around the native hypercurve Curve3DJs (see wasm/curve_js.rs)
  *
  *  A NurbsCurve consists of:
  *
@@ -20,7 +20,7 @@
 
 import { ANGLE_COMPARE_TOLERANCE, TESSELATION_TOLERANCE, BASE_PLANE_NAME_TO_PLANE } from './constants';
 
-import { NurbsCurve3DJs, CompoundCurve3DJs, NurbsSurfaceJs, Vector3Js, BooleanRegionJs, VertexJs, Point3Js, PolygonJs, SketchJs } from "./wasm/csgrs";
+import { Vector3Js, VertexJs, Point3Js, PolygonJs, SketchJs, Curve3DJs } from "./wasm/meshup";
 
 import { ShapeCollection, getCsgrs, Mesh } from './index';
 import { Shape } from './Shape';
@@ -45,7 +45,8 @@ export class Curve extends Shape
     static readonly ZERO_LENGTH_TOLERANCE = 1e-7;
 
     // inherits: _id, _node, style, metadata from Shape
-    _curve: NurbsCurve3DJs|CompoundCurve3DJs|undefined = undefined;
+    /** The curve geometry — a native hypercurve-backed planar 3D curve. */
+    _curve: Curve3DJs|undefined = undefined;
 
     /** Interior hole curves (e.g. from boolean difference where one curve contains the other) */
     private _holes: Array<Curve> = [];
@@ -63,13 +64,13 @@ export class Curve extends Shape
     }
 
     /** Get internal curve with checking */
-    inner(): NurbsCurve3DJs|CompoundCurve3DJs
+    inner(): Curve3DJs
     {
         if (!this._curve)
         {
             throw new Error('Curve::inner(): Curve not initialized');
         }
-        
+
         return this._curve;
     }
 
@@ -80,14 +81,14 @@ export class Curve extends Shape
     }
 
     /** Update internal curve */
-    update(c:Curve|NurbsCurve3DJs|CompoundCurve3DJs): this
+    update(c:Curve|Curve3DJs): this
     {
         if(c instanceof Curve)
         {
             this._curve = c._curve;
             this._holes = c._holes.map(h => h.copy());
         }
-        else if(c instanceof NurbsCurve3DJs || c instanceof CompoundCurve3DJs)
+        else if(c instanceof Curve3DJs)
         {
             this._curve = c;
         }
@@ -188,12 +189,19 @@ export class Curve extends Shape
         We use factory methods for it's clean syntax
     */
 
-    static fromCsgrs(curve: NurbsCurve3DJs|CompoundCurve3DJs): Curve
+    /** Wrap a native hypercurve {@link Curve3DJs} as a meshup `Curve`. */
+    static fromCsgrs(curve: Curve3DJs): Curve
     {
         if(!curve) { throw new Error('Curve::fromCsgrs(): Invalid curve'); }
         const newCurve = new Curve();
         newCurve._curve = curve;
         return newCurve;
+    }
+
+    /** Alias of {@link fromCsgrs}: the internal representation is now `Curve3DJs`. */
+    static fromCurve3D(c: Curve3DJs): Curve
+    {
+        return Curve.fromCsgrs(c);
     }
 
     /** Convert a csgrs `SketchJs` (2-D geometry) into meshup `Curve`s.
@@ -280,10 +288,14 @@ export class Curve extends Shape
             throw new Error(`Curve.Polyline(): Cannot create a zero-length curve — the ${points.length} supplied point(s) are coincident (e.g. ${points[0]?.toString()}). Please supply at least two distinct points.`);
         }
 
+        // A polyline is closed when its last point returns to the first (e.g. rings
+        // from SketchJs / boolean results); otherwise it is an open path.
+        const closed = points.length > 2
+            && points[0].distance(points[points.length - 1]) < Curve.ZERO_LENGTH_TOLERANCE;
         return Curve.fromCsgrs(
-            getCsgrs()?.NurbsCurve3DJs?.makePolyline(
+            getCsgrs()?.Curve3DJs?.makePolyline(
                 points.map(p => p.toPoint3Js()),
-                true,
+                closed,
             )
         );
     }
@@ -303,8 +315,7 @@ export class Curve extends Shape
 
         return Curve.fromCsgrs(
             getCsgrs()
-                ?.NurbsCurve3DJs
-                    ?.makeInterpolated(
+                ?.Curve3DJs?.makeInterpolated(
                         controlPoints.map(p => new Point(p).toPoint3Js()),
                         3,
             )
@@ -320,8 +331,7 @@ export class Curve extends Shape
 
         return Curve.fromCsgrs(
                 getCsgrs()
-                    ?.NurbsCurve3DJs
-                    ?.makeCircle(
+                    ?.Curve3DJs?.makeCircle(
                         radius,
                         Point.from(center).toPoint3Js(),
                         Point.from(normal).toVector3Js()
@@ -510,69 +520,12 @@ export class Curve extends Shape
     /** Trim an arc A→(through B)→C from a full circle defined by center, radius, and normal.
      *  B is a guide point that determines which side of the circle the arc follows.
      */
-    private static _trimArcFromCircle(A: Point, B: Point, C: Point, center: Point, radius: number, normalUnit: Vector): Curve
+    private static _trimArcFromCircle(A: Point, B: Point, C: Point, _center: Point, _radius: number, _normalUnit: Vector): Curve
     {
+        // hypercurve builds a circular arc natively through three points (start,
+        // through, end); no circle-trim/parameter juggling needed.
         const csgrs = getCsgrs();
-        const makeFullCircle = (n: Vector): Curve =>
-            Curve.fromCsgrs(csgrs?.NurbsCurve3DJs?.makeCircle(radius, center.toPoint3Js(), n.toVector3Js()));
-
-        let circ = makeFullCircle(normalUnit);
-        let tA = circ.paramClosestToPoint(A);
-        let tB = circ.paramClosestToPoint(B);
-        let tC = circ.paramClosestToPoint(C);
-
-        if (tA === null || tB === null || tC === null)
-        {
-            throw new Error('Curve.Arc(): Could not resolve arc parameters on the circumscribed circle.');
-        }
-
-        let kd = (circ.inner() as NurbsCurve3DJs).knotsDomain();
-        let period = kd[1] - kd[0];
-
-        // Ensure A→B→C is the forward direction of the parameterisation.
-        const relB = ((tB - tA) % period + period) % period;
-        const relC = ((tC - tA) % period + period) % period;
-
-        if (relB > relC)
-        {
-            circ = makeFullCircle(normalUnit.scale(-1));
-            tA = circ.paramClosestToPoint(A);
-            tB = circ.paramClosestToPoint(B);
-            tC = circ.paramClosestToPoint(C);
-
-            if (tA === null || tB === null || tC === null)
-            {
-                throw new Error('Curve.Arc(): Could not resolve arc parameters after direction adjustment.');
-            }
-
-            kd     = (circ.inner() as NurbsCurve3DJs).knotsDomain();
-            period = kd[1] - kd[0];
-        }
-
-        const relCfinal = ((tC - tA) % period + period) % period;
-        const innerCircle = circ.inner() as NurbsCurve3DJs;
-        const t1raw = tA + relCfinal;
-
-        let segments: NurbsCurve3DJs[];
-        if (t1raw <= kd[1] + 1e-10)
-        {
-            segments = innerCircle.trimRange(tA, Math.min(t1raw, kd[1]));
-        }
-        else
-        {
-            const seg1 = innerCircle.trimRange(tA, kd[1]);
-            const seg2 = innerCircle.trimRange(kd[0], kd[0] + (t1raw - kd[1]));
-            segments = [...seg1, ...seg2];
-        }
-
-        if (!segments || segments.length === 0)
-        {
-            throw new Error('Curve.Arc(): Failed to trim the arc from the circumscribed circle.');
-        }
-
-        return segments.length === 1
-            ? Curve.fromCsgrs(segments[0])
-            : Curve.fromCsgrs(new CompoundCurve3DJs(segments));
+        return Curve.fromCsgrs(csgrs.Curve3DJs.makeArc(A.toPoint3Js(), B.toPoint3Js(), C.toPoint3Js()));
     }
 
     /** Create a closed rectangle centered at a given position on an optional base plane.
@@ -659,7 +612,7 @@ export class Curve extends Shape
     }
 
     /** Build a CompoundCurve from an ordered array of connecting Curves.
-     *  The underlying Curvo `try_new` validates connectivity and auto-inverts spans if needed.
+     *  Rebuilds a joined polyline through the concatenated control points.
      */
     static Compound(curves: Array<Curve>): Curve
     {
@@ -668,24 +621,20 @@ export class Curve extends Shape
             throw new Error('Curve.Compound(): Supply a non-empty array of Curves.');
         }
 
-        // Flatten: if a Curve is already compound, unwrap its spans
-        const spans: NurbsCurve3DJs[] = [];
+        // Concatenate the curves' control points into one polyline (native geometry
+        // is segment-based; a joined path is a polyline through all vertices).
+        const pts: Point[] = [];
         for(const c of curves)
         {
-            const inner = c.inner();
-            if(inner instanceof CompoundCurve3DJs)
+            for(const p of c.controlPoints())
             {
-                spans.push(...inner.spans());
-            }
-            else
-            {
-                spans.push(inner as NurbsCurve3DJs);
+                if(pts.length === 0 || pts[pts.length - 1].distance(p) > Curve.ZERO_LENGTH_TOLERANCE)
+                {
+                    pts.push(p);
+                }
             }
         }
-
-        // CompoundCurve3DJs constructor uses try_new: validates connectivity, auto-inverts
-        const compound = new CompoundCurve3DJs(spans);
-        return Curve.fromCsgrs(compound);
+        return Curve.Polyline(pts.map(p => [p.x, p.y, p.z] as [number, number, number]));
     }
 
 
@@ -695,91 +644,20 @@ export class Curve extends Shape
     node(): SceneNode | null { return this._node; }
     override readonly type = 'Curve' as const;
 
-    /** Classify this curve as 'line', 'arc', 'circle', 'rect', 'polyline', 'spline', or 'compound'. */
+    /** Classify this curve as 'Line'|'Arc'|'Circle'|'Rect'|'Polyline'|'Spline'.
+     *  Delegates to the native segment-based classification in {@link Curve3DJs}. */
     subtype(): 'Line'|'Arc'|'Circle'|'Rect'|'Polyline'|'Spline'|'Compound'
     {
-        const inner = this.inner();
-
-        if (inner instanceof NurbsCurve3DJs)
-        {
-            return this._classifyNurbs(inner);
-        }
-
-        // CompoundCurve3DJs: inspect spans
-        const compound = inner as CompoundCurve3DJs;
-        const spans = compound.spans();
-
-        if (spans.length === 0) return 'Compound';
-
-        const allDeg1 = spans.every(s => s.degree() === 1);
-        if (allDeg1)
-        {
-            // Rebuild control points from spans to check rect/polyline
-            if (this.isClosed() && this._isRect()) return 'Rect';
-            return 'Polyline';
-        }
-
-        const allRationalDeg2 = spans.every(s =>
-            s.degree() === 2 && Array.from(s.weights()).some(w => Math.abs(w - 1.0) > 1e-8)
-        );
-        if (allRationalDeg2)
-        {
-            return this.isClosed() ? 'Circle' : 'Arc';
-        }
-
-        return 'Compound';
+        return this.inner().subtype() as 'Line'|'Arc'|'Circle'|'Rect'|'Polyline'|'Spline';
     }
 
-    /** Classify a single NurbsCurve3DJs span. */
-    private _classifyNurbs(c: NurbsCurve3DJs): 'Line'|'Arc'|'Circle'|'Rect'|'Polyline'|'Spline'
-    {
-        const deg = c.degree();
-        const weights = Array.from(c.weights());
-        const isRational = weights.some(w => Math.abs(w - 1.0) > 1e-8);
-
-        if (deg === 1)
-        {
-            const nCps = c.controlPoints().length;
-            if (nCps <= 2) return 'Line';
-            if (this.isClosed() && this._isRect()) return 'Rect';
-            return 'Polyline';
-        }
-
-        if (deg === 2 && isRational)
-        {
-            return this.isClosed() ? 'Circle' : 'Arc';
-        }
-
-        return 'Spline';
-    }
-
-    /** Check if a closed degree-1 curve forms a rectangle (4 right-angle corners). */
-    private _isRect(): boolean
-    {
-        const pts = this.controlPoints();
-        // A closed rect polyline has 5 control points (last == first) giving 4 corners
-        const n = pts.length;
-        if (n < 4 || n > 5) return false;
-
-        const corners = (n === 5) ? pts.slice(0, 4) : pts;
-        if (corners.length !== 4) return false;
-
-        return corners.every((a, i) =>
-        {
-            const b = corners[(i + 1) % 4];
-            const c = corners[(i + 2) % 4];
-            const ab = Vector.from(b.x - a.x, b.y - a.y, b.z - a.z);
-            const bc = Vector.from(c.x - b.x, c.y - b.y, c.z - b.z);
-            return Math.abs(ab.dot(bc)) <= ANGLE_COMPARE_TOLERANCE;
-        });
-    }
-
+    /** A curve is "compound" when it has more than one native segment. */
     isCompound():boolean
     {
-        return this.inner() instanceof CompoundCurve3DJs;
+        return this.inner().segmentCount() > 1;
     }
 
-    /** Get control points of Curve */
+    /** Get control points (native segment vertices) of the Curve */
     controlPoints(): Array<Point>
     {
         return this.inner()
@@ -793,43 +671,25 @@ export class Curve extends Shape
         return this.controlPoints();
     }
 
-    /** Get knots of Curve */
-    knots()
+    /** Native curves are re-parameterised by arc length; there is no explicit knot
+     *  vector, so this returns the parameter domain endpoints `[0, 1]`. */
+    knots(): Array<number>
     {
-        if(!this.isCompound())
-        {
-            return (this.inner() as NurbsCurve3DJs).knots();
-        }
-        else
-        {
-            console.warn(`Curve::knots(): Curve is compound. Use specific span to get knots`);
-        }
+        return Array.from(this.inner().knotsDomain());
     }
 
-    knotsDomain():Array<number|number>|undefined
+    knotsDomain():Array<number>|undefined
     {
-        if(!this.isCompound())
-        {
-            return Array.from(this.inner()?.knotsDomain());
-        }
-        else
-        {
-            console.warn(`Curve::knots(): Curve is compound. Use specific span to get knots`);
-        }
+        return Array.from(this.inner().knotsDomain());
     }
 
-    weights()
+    /** Native segment geometry carries no per-control-point weights (arcs are exact,
+     *  not rational NURBS); returns an empty array. */
+    weights(): Array<number>
     {
-        if(!this.isCompound())
-        {
-            return Array.from((this.inner() as NurbsCurve3DJs)?.weights());
-        }
-        else
-        {
-            console.warn(`Curve::weights(): Curve is compound. Use specific span to get weights`);
-        }
+        return [];
     }
-    
+
     spans(): ShapeCollection<Curve>
     {
         if(!this.isCompound())
@@ -837,12 +697,9 @@ export class Curve extends Shape
             // If not compound, return self as single span for consistent API
             return new ShapeCollection<Curve>(this);
         }
-        else
-        {
-            return new ShapeCollection<Curve>(
-                (this.inner() as CompoundCurve3DJs).spans().map(span => Curve.fromCsgrs(span))
-            );
-        }
+        return new ShapeCollection<Curve>(
+            this.inner().spans().map(span => Curve.fromCsgrs(span))
+        );
     }
 
 
@@ -859,11 +716,6 @@ export class Curve extends Shape
 
     isPlanar(): boolean
     {
-        if (this._curve instanceof NurbsCurve3DJs)
-        {
-            return this._curve.isPlanar();
-        }
-        // For compound curves, check via getOnPlane
         return this.getOnPlane() !== null;
     }
 
@@ -965,66 +817,41 @@ export class Curve extends Shape
             // else: fully diagonal line — genuinely ambiguous, fall through to defaults
         }
 
-        if (this._curve instanceof NurbsCurve3DJs)
+        // Native curve: derive the plane normal from three non-collinear tessellated
+        // points, verify the whole curve is coplanar (rejecting a genuinely non-planar
+        // 3D path), then align the local axes to the closest global axes.
+        const pts = this.tessellate();
+        if (pts.length < 3) { return null; }
+        const ab = Vector.from(pts[1].x - pts[0].x, pts[1].y - pts[0].y, pts[1].z - pts[0].z);
+        let normal: Vector | null = null;
+        for (let i = 2; i < pts.length; i++)
         {
-            const result = this._curve.getOnPlane(tolerance);
+            const ac = Vector.from(pts[i].x - pts[0].x, pts[i].y - pts[0].y, pts[i].z - pts[0].z);
+            const candidate = ab.copy().cross(ac);
+            if (candidate.length() > tolerance) { normal = candidate.normalize(); break; }
+        }
+        if (!normal) { return null; }
 
-            if (!result || result.length === 0) return null;
-            return {
-                normal: Vector.from(result[0].x, result[0].y, result[0].z),
-                x: Vector.from(result[1].x, result[1].y, result[1].z),
-                y: Vector.from(result[2].x, result[2].y, result[2].z),
-            };
+        // A plane normal is sign-ambiguous (a plane has two opposite normals). For a
+        // *closed* curve, canonicalize a near-axis-aligned normal toward the positive
+        // cardinal axis so its normal() is stable regardless of vertex winding. Open
+        // curves keep their winding-derived normal (their orientation is meaningful,
+        // e.g. a sketch polyline on the 'front' plane whose normal is −Y).
+        if (this.isClosed())
+        {
+            const ax = Math.abs(normal.x), ay = Math.abs(normal.y), az = Math.abs(normal.z);
+            const dom = (ax >= ay && ax >= az) ? normal.x : (ay >= az ? normal.y : normal.z);
+            const nearCardinal = Math.max(ax, ay, az) > 1 - 1e-6;
+            if (nearCardinal && dom < 0) { normal = normal.scale(-1); }
         }
 
-        // For compound curves: derive plane from tessellated points via cross product
-        if (this._curve instanceof CompoundCurve3DJs)
+        const o = pts[0].toVector();
+        const planeTol = Math.max(tolerance, 1e-4);
+        for (const p of pts)
         {
-            const pts = this.points();
-
-            // Find three non-collinear points to form a stable cross product
-            if (pts.length >= 3)
-            {
-                const ab = Vector.from(pts[1].x - pts[0].x, pts[1].y - pts[0].y, pts[1].z - pts[0].z);
-
-                let normal: Vector | null = null;
-                for (let i = 2; i < pts.length; i++)
-                {
-                    const ac = Vector.from(pts[i].x - pts[0].x, pts[i].y - pts[0].y, pts[i].z - pts[0].z);
-                    const candidate = ab.copy().cross(ac);
-                    if (candidate.length() > tolerance)
-                    {
-                        normal = candidate.normalize();
-                        break;
-                    }
-                }
-
-                if (normal)
-                {
-                    return this._frameFromNormal(normal, tolerance);
-                }
-            }
-
-            // Fall back: try the first span's plane
-            const spans = this._curve.spans();
-            if (spans && spans.length > 0)
-            {
-                const firstResult = spans[0].getOnPlane(tolerance);
-                if (firstResult && firstResult.length >= 3)
-                {
-                    return {
-                        normal: Vector.from(firstResult[0].x, firstResult[0].y, firstResult[0].z),
-                        x: Vector.from(firstResult[1].x, firstResult[1].y, firstResult[1].z),
-                        y: Vector.from(firstResult[2].x, firstResult[2].y, firstResult[2].z),
-                    };
-                }
-            }
-
-            console.warn('Curve.getOnPlane(): CompoundCurve has fewer than 3 non-collinear points — cannot determine plane.');
-            return null;
+            if (Math.abs(p.toVector().subtract(o).dot(normal)) > planeTol) { return null; } // non-planar
         }
-
-        return null;
+        return this._frameFromNormal(normal, tolerance);
     }
 
     /** Get normal of planar Curve, returns null if not planar 
@@ -1042,16 +869,22 @@ export class Curve extends Shape
     normalOrientation(): Vector|null
     {
         if(!this.isPlanar()){ console.error(`Curve::normalOrientation(): Curve is not planar.`); return null; }
-        // A little old fashioned, but should work
-        const pnts = this.points();
-        if(pnts.length < 3){ console.warn(`Curve::normalOrientation(): Curve has less than 3 control points, normal orientation may be unreliable.`); }
-        const v1 = pnts[1].toVector().subtract(pnts[0].toVector());
-        const v2 = pnts[2].toVector().subtract(pnts[1].toVector());
-        return v1.cross(v2).normalize();
+        // Use well-separated tessellation points (control points can be < 3 for arcs/
+        // circles). Three spread-out points give a reliable winding-dependent normal.
+        const pnts = this.tessellate();
+        if(pnts.length < 3){ return this.normal(); }
+        const i1 = Math.floor(pnts.length / 3);
+        const i2 = Math.floor((2 * pnts.length) / 3);
+        const v1 = pnts[i1].toVector().subtract(pnts[0].toVector());
+        const v2 = pnts[i2].toVector().subtract(pnts[i1].toVector());
+        const c = v1.cross(v2);
+        return c.length() > 1e-9 ? c.normalize() : this.normal();
     }
 
     length(): number
     {
+        // hypercurve native engine: exact per-segment length (lines exact, arcs via
+        // radius·angle).
         return this.inner().length();
     }
 
@@ -1070,9 +903,24 @@ export class Curve extends Shape
             console.warn('Curve.area(): curve is not planar — area is undefined.');
             return undefined;
         }
+        // hypercurve native engine: exact planar area, minus any interior holes.
+        try
+        {
+            const holesArea = this._holes.reduce((sum, hole) =>
+            {
+                try { return sum + Math.abs(hole.inner().area()); }
+                catch { return sum + (hole._boundaryArea() ?? 0); }
+            }, 0);
+            return Math.max(0, Math.abs(this.inner().area()) - holesArea);
+        }
+        catch (e)
+        {
+            console.warn('Curve.area(): hypercurve area failed, using fallback:', e);
+        }
         const holesArea = this._holes.reduce((sum, hole) => sum + (hole._boundaryArea() ?? 0), 0);
         return Math.max(0, this._boundaryArea() - holesArea);
     }
+
 
     /** Unsigned area enclosed by this curve's boundary only, ignoring interior holes.
      *  3D shoelace over the tessellated boundary; plane-agnostic. */
@@ -1102,18 +950,16 @@ export class Curve extends Shape
         return undefined;
     }
 
-    /** Start point of the curve (at the start of the knot domain) */
+    /** Start point of the curve (arc-length parameter 0). */
     start(): Vertex
     {
-        const domain = this.inner().knotsDomain();
-        return new Vertex(new Point(this.inner().pointAtParam(domain[0])));
+        return new Vertex(new Point(this.inner().pointAt(0)));
     }
 
-    /** End point of the curve (at the end of the knot domain) */
+    /** End point of the curve (arc-length parameter 1). */
     end(): Vertex
     {
-        const domain = this.inner().knotsDomain();
-        return new Vertex(new Point(this.inner().pointAtParam(domain[1])));
+        return new Vertex(new Point(this.inner().pointAt(1)));
     }
 
     /** Point at the midpoint of the curve by arc length */
@@ -1124,49 +970,25 @@ export class Curve extends Shape
 
     degree(): number|null
     {
-        if(!this.isCompound())
-        {
-            return (this.inner() as NurbsCurve3DJs)?.degree();
-        }
-        else
-        {
-            console.warn(`Curve::degree(): Curve is compound. Use specific span to get degree or use maxDegree()`);
-            return null;
-        }
+        return this.inner().degree();
     }
 
-    /** Get maximum degree of the compound curve */
+    /** Get maximum degree over the native segments. */
     maxDegree(): number
     {
-        if(!this.isCompound())
-        {
-            return (this.inner() as NurbsCurve3DJs)?.degree();
-        }
-        else
-        {
-            return (this.inner() as CompoundCurve3DJs).spans().reduce((maxDeg, span) => Math.max(maxDeg, span.degree()), 0);
-        }
+        return this.inner().degree();
     }
 
-    /** If current Curve is a compound curve with mixed degrees 
-     *  Used to avoid offsetting mixed degree compounds */
+    /** Native curves are uniformly (arc-length) parameterised, so there are no
+     *  mixed per-span degrees to guard against. */
     compoundMixedDegrees(): boolean
     {
-        return this.isCompound() && (this.inner() as CompoundCurve3DJs).spans().some(s => s.degree() !== (this.inner() as CompoundCurve3DJs).spans()[0].degree());
+        return false;
     }
 
     paramAtLength(length: number): number|null
     {
-        if(!this.isCompound())
-        {
-            return (this.inner() as NurbsCurve3DJs)?.paramAtLength(length);
-        }
-        else
-        {
-            console.warn(`Curve::paramAtLength(): Curve is compound. Use specific span to get parameter at length`);
-            return null;
-        }
-            
+        return this.inner().paramAtLength(length);
     }
 
     paramClosestToPoint(point: PointLike): number|null
@@ -1191,7 +1013,7 @@ export class Curve extends Shape
     pointAtParam(p: number): Point
     {
         return new Point(
-            this.inner().pointAtParam(p));
+            this.inner().pointAt(p));
     }
 
     pointAtLength(length: number): Point|null
@@ -1350,8 +1172,10 @@ export class Curve extends Shape
      */
     bbox():undefined|Bbox
     {
-        const bboxCoords = this.inner()?.bbox();
-        return bboxCoords ? new Bbox(bboxCoords) : undefined;
+        const b = this.inner()?.bbox();
+        return (b && b.length >= 6)
+            ? new Bbox([b[0], b[1], b[2]], [b[3], b[4], b[5]])
+            : undefined;
     }
 
     /** Get oriented bounding box of this Curve using PCA */
@@ -1472,7 +1296,7 @@ export class Curve extends Shape
     {
         const segs: Curve[] = this.spans().toArray().flatMap(span =>
         {
-            const inner = span.inner() as NurbsCurve3DJs;
+            const inner = span.inner();
             if (inner.degree() === 1)
             {
                 const cps = span.controlPoints();
@@ -1547,7 +1371,7 @@ export class Curve extends Shape
     {
         return this.spans().toArray().flatMap(span =>
         {
-            const inner = span.inner() as NurbsCurve3DJs;
+            const inner = span.inner();
             if (inner.degree() === 1)
             {
                 const cps = span.controlPoints();
@@ -1578,8 +1402,7 @@ export class Curve extends Shape
      *  @param tol - tessellation normal tolerance
      *  @returns array of points representing the tessellated curve
      * 
-     *  NOTE: Currently only uses normal tolerance in Curvo AdaptiveTessellationOptions
-     *      see https://docs.rs/curvo/0.1.81/curvo/prelude/struct.AdaptiveTessellationOptions.html
+     *  NOTE: tessellation tolerance is the hypercurve chord error
      *      More control can be added in the future
      */
     tessellate(tol: number = TESSELATION_TOLERANCE): Array<Point>
@@ -1667,10 +1490,11 @@ export class Curve extends Shape
         if (typeof axis === 'string')
         {
             const a = rad(angleDeg);
-            this.update(this.inner().rotate(
-                axis === 'x' ? a : 0,
-                axis === 'y' ? a : 0,
-                axis === 'z' ? a : 0,
+            this.update(this.inner().rotateAxis(
+                a,
+                axis === 'x' ? 1 : 0,
+                axis === 'y' ? 1 : 0,
+                axis === 'z' ? 1 : 0,
             ));
         }
         else
@@ -1813,15 +1637,22 @@ export class Curve extends Shape
     override scale(factor: number | PointLike, origin?: PointLike): this
     {
         const [sx, sy, sz] = (typeof factor === 'number') ? [factor, factor, factor] : [Point.from(factor).x, Point.from(factor).y, Point.from(factor).z];
-        if (origin)
+        const o = origin ? Point.from(origin) : null;
+        // hypercurve only supports uniform (similarity) scaling of native geometry;
+        // for a per-axis scale, resample the boundary and rebuild as a polyline.
+        const uniform = Math.abs(sx - sy) < 1e-9 && Math.abs(sy - sz) < 1e-9;
+        if (o) { this.translate([-o.x, -o.y, -o.z]); }
+        if (uniform)
         {
-            const o = Point.from(origin);
-            this.translate([-o.x, -o.y, -o.z]);
-            this.update(this.inner().scale(sx, sy, sz));
-            this.translate([o.x, o.y, o.z]);
-            return this;
+            this.update(this.inner().scale(sx));
         }
-        return this.update(this.inner().scale(sx, sy, sz));
+        else
+        {
+            const pts = this.tessellate().map(p => [p.x * sx, p.y * sy, p.z * sz] as [number, number, number]);
+            this.update(Curve.Polyline(pts));
+        }
+        if (o) { this.translate([o.x, o.y, o.z]); }
+        return this;
     }
 
     /** Reverse the direction of this curve (swap start/end).
@@ -1853,23 +1684,11 @@ export class Curve extends Shape
             return new Point([p.x - dot2 * n.x, p.y - dot2 * n.y, p.z - dot2 * n.z]);
         };
 
-        // Reflect a single NURBS span and return a new NurbsCurve3DJs
-        const mirrorSpan = (span: NurbsCurve3DJs): NurbsCurve3DJs =>
-        {
-            const mirroredPoints = span.controlPoints().map(p => mirrorPoint(Point.from(p)).toPoint3Js());
-            return new NurbsCurve3DJs(span.degree(), mirroredPoints, span.weights(), span.knots());
-        };
-
-        if (!this.isCompound())
-        {
-            this.update(mirrorSpan(this.inner() as NurbsCurve3DJs));
-        }
-        else
-        {
-            const mirroredSpans = (this.inner() as CompoundCurve3DJs).spans().map(mirrorSpan);
-            this.update(new CompoundCurve3DJs(mirroredSpans));
-        }
-
+        // Reflect the tessellated boundary and rebuild as a polyline (native geometry
+        // is segment-based; a reflected curve is re-sampled rather than rebuilt span-wise).
+        const pts = this.tessellate().map(p => mirrorPoint(p));
+        this.update(Curve.Polyline(pts.map(p => [p.x, p.y, p.z] as [number, number, number])));
+        this._holes = this._holes.map(h => h.mirror(dir, pos));
         return this;
     }
 
@@ -1922,22 +1741,10 @@ export class Curve extends Shape
             return new Point(p.x - dot * n.x, p.y - dot * n.y, p.z - dot * n.z);
         };
 
-        const projectSpan = (span: NurbsCurve3DJs): NurbsCurve3DJs =>
-        {
-            const projectedPoints = span.controlPoints().map(p => projectPoint(Point.from(p)).toPoint3Js());
-            return new NurbsCurve3DJs(span.degree(), projectedPoints, span.weights(), span.knots());
-        };
-
-        if (!this.isCompound())
-        {
-            this.update(projectSpan(this.inner() as NurbsCurve3DJs));
-        }
-        else
-        {
-            const projectedSpans = (this.inner() as CompoundCurve3DJs).spans().map(projectSpan);
-            this.update(new CompoundCurve3DJs(projectedSpans));
-        }
-
+        // Project the tessellated boundary onto the plane and rebuild as a polyline.
+        const pts = this.tessellate().map(p => projectPoint(p));
+        this.update(Curve.Polyline(pts.map(p => [p.x, p.y, p.z] as [number, number, number])));
+        this._holes = this._holes.map(h => h.projectOnto(plane));
         return this;
     }
 
@@ -1980,152 +1787,78 @@ export class Curve extends Shape
         return normal ? this._frameFromNormal(normal, tolerance) : null;
     }
 
-    private _getPlanarFrame(tolerance: number = 1e-6): { origin: Point; normal: Vector; x: Vector; y: Vector }
+    /** Native segment geometry is already minimal; kept for API compatibility. */
+    mergeColinearLines(_colinearTol: number = 1e-3): this
     {
-        const plane = this.getOnPlane(tolerance);
-
-        if (!plane)
-        {
-            throw new Error('Curve::_getPlanarFrame(): Curve is not planar.');
-        }
-
-        return {
-            origin: Point.from(this.start()),
-            normal: plane.normal.copy().normalize(),
-            x: plane.x.copy().normalize(),
-            y: plane.y.copy().normalize(),
-        };
-    }
-
-    private _toLocalXY(
-        frame: { origin: Point; normal: Vector; x: Vector; y: Vector },
-        curve: Curve = this.copy(),
-    ): Curve
-    {
-        const localCurve = curve;
-        const sourcePoints: [PointLike, PointLike, PointLike] = [
-            frame.origin,
-            frame.origin.copy().move(frame.x.toArray()),
-            frame.origin.copy().move(frame.y.toArray()),
-        ];
-        const targetPoints: [PointLike, PointLike, PointLike] = [
-            [0, 0, 0],
-            [1, 0, 0],
-            [0, 1, 0],
-        ];
-
-        localCurve.alignByPoints(sourcePoints, targetPoints);
-        return localCurve;
-    }
-
-    private _fromLocalXY(
-        curve: Curve,
-        frame: { origin: Point; normal: Vector; x: Vector; y: Vector },
-    ): Curve
-    {
-        const worldCurve = curve.copy();
-        const sourcePoints: [PointLike, PointLike, PointLike] = [
-            [0, 0, 0],
-            [1, 0, 0],
-            [0, 1, 0],
-        ];
-        const targetPoints: [PointLike, PointLike, PointLike] = [
-            frame.origin,
-            frame.origin.copy().move(frame.x.toArray()),
-            frame.origin.copy().move(frame.y.toArray()),
-        ];
-
-        worldCurve.alignByPoints(sourcePoints, targetPoints);
-        return worldCurve;
-    }
-
-    /** Merge consecutive collinear line spans into single segments.
-     *  If only one span remains, unwraps to a single NurbsCurve. */
-    mergeColinearLines(colinearTol: number = 1e-3): this
-    {
-        if (!this.isCompound()) return this;
-
-        const merged = (this.inner() as CompoundCurve3DJs).mergeColinearLines(colinearTol);
-        this.update(merged);
-
-        // If compound has a single span left, unwrap to a plain NurbsCurve
-        if (this.isCompound())
-        {
-            const spans = (this.inner() as CompoundCurve3DJs).spans();
-            if (spans.length === 1)
-            {
-                this._curve = spans[0];
-            }
-        }
-
         return this;
     }
 
-
-     /** Close this curve by adding a line segment from end back to start.
-     *  If already closed, returns self unchanged.
-     *  The (inner) result is always a CompoundCurve.
-     */
+    /** Close this curve by adding a segment from end back to start.
+     *  If already closed, returns self unchanged. */
     close(): this
     {
         if (this.isClosed()) return this;
-
-        const startPt = this.start();
-        const endPt = this.end();
-        const closingLine = Curve.Line(endPt, startPt);
-
-        // Build spans array: existing span(s) + closing line
-        const spans: NurbsCurve3DJs[] = [];
-        const inner = this.inner();
-        if (inner instanceof CompoundCurve3DJs)
-        {
-            spans.push(...inner.spans());
-        }
-        else
-        {
-            spans.push(inner as NurbsCurve3DJs);
-        }
-        spans.push(closingLine.inner() as NurbsCurve3DJs);
-
-        this._curve = new CompoundCurve3DJs(spans);
+        const pts = this.controlPoints().map(p => [p.x, p.y, p.z] as [number, number, number]);
+        if (pts.length < 2) return this;
+        pts.push([pts[0][0], pts[0][1], pts[0][2]]); // close the ring
+        this.update(Curve.Polyline(pts));
         return this;
     }
 
-    /** Fillet sharp corner(s) of Curve. Optionally only at given point(s) */
+    /** Fillet (round) the sharp corners of a closed Curve with arcs of `radius`,
+     *  via hypercurve's exact vertex fillet. Corners where the radius does not fit
+     *  are left sharp. (The optional `at` corner filter is not yet supported — all
+     *  fitting corners are filleted.) */
     fillet(radius: number, at?: PointLike|Array<PointLike>): this|null
     {
-        const atPoints = (isPointLike(at)) 
-                        ? [new Point(at).toPoint3Js()] 
-                        : (Array.isArray(at)) 
-                            ? at.map(p => new Point(p).toPoint3Js()).filter(p => p) 
-                            : null;
-        if(!this.isCompound())
+        void at; // TODO: fillet only the corners nearest `at`
+        if (!this.isClosed())
         {
-            // Any fillet operation results in compound curve
-            const compoundCurve = (this.inner() as NurbsCurve3DJs).fillet(radius, atPoints);
-            this._curve = compoundCurve; // override inner curve
+            console.warn('Curve.fillet(): only closed curves can be filleted.');
             return this;
         }
-        return null;
+        try { return this.update(Curve.fromCsgrs(this.inner().fillet(radius))); }
+        catch (e) { console.warn('Curve.fillet():', e); return this; }
+    }
+
+    /** Chamfer (bevel) the sharp corners of a closed Curve, cutting back `setback`
+     *  along each edge. */
+    chamfer(setback: number): this
+    {
+        if (!this.isClosed())
+        {
+            console.warn('Curve.chamfer(): only closed curves can be chamfered.');
+            return this;
+        }
+        try { return this.update(Curve.fromCsgrs(this.inner().chamfer(setback))); }
+        catch (e) { console.warn('Curve.chamfer():', e); return this; }
     }
 
     filletAtParams(radius: number, at: Array<number>): this|null
     {
-        if(!this.isCompound())
-        {
-            // Any fillet operation results in compound curve
-            const compoundCurve = (this.inner() as NurbsCurve3DJs).filletAtParams(radius, new Float64Array(at));
-            this._curve = compoundCurve; // override inner curve
-            return this;
-        }
-        return null;
+        void at; // TODO: fillet only the corners at the given params; currently all corners
+        return this.fillet(radius);
     }
-    
 
+    /** Extend the curve by `length` at its start / end / both, along the endpoint
+     *  tangent(s). Rebuilds as a polyline through the extended vertices. */
     extend(length: number, side: 'start'|'end'|'both' = 'end'): this
     {
-        // Both NurbsCurve3DJs and CompoundCurve3DJs now return CompoundCurve3DJs
-        this.update(this.inner().extend(length, side));
+        const pts = this.controlPoints().map(p => [p.x, p.y, p.z] as [number, number, number]);
+        if (pts.length < 2) return this;
+        if (side === 'end' || side === 'both')
+        {
+            const t = this.inner().tangentAt(1);
+            const e = pts[pts.length - 1];
+            pts.push([e[0] + t.x * length, e[1] + t.y * length, e[2] + t.z * length]);
+        }
+        if (side === 'start' || side === 'both')
+        {
+            const t = this.inner().tangentAt(0);
+            const s = pts[0];
+            pts.unshift([s[0] - t.x * length, s[1] - t.y * length, s[2] - t.z * length]);
+        }
+        this.update(Curve.Polyline(pts));
         return this;
     }
 
@@ -2279,148 +2012,71 @@ export class Curve extends Shape
         return t > 0 ? t : null;
     }
 
-    /** Sign correction so that a positive offset distance always enlarges a curve
-     *  (bigger bbox / enclosed area) and a negative one always shrinks it, regardless
-     *  of the curve's winding direction or point order.
-     *  Curvo/geo-buf offset a fixed side relative to the curve's own point order, so a
-     *  curve wound/traversed the other way (e.g. after reverse()) would otherwise grow on
-     *  "negative" and shrink on "positive". For open curves there is no true winding, so we
-     *  use the signed area of the polygon formed by virtually closing start back to end —
-     *  this captures which side the curve bulges towards relative to its own chord.
-     *  Expects a curve already expressed in local XY (z ~ 0). */
-    private _offsetOrientationSign(localCurve: Curve): number
-    {
-        const pts = localCurve.tessellate();
-        let signedArea = 0;
-        for(let i = 0; i < pts.length; i++)
-        {
-            const a = pts[i];
-            const b = pts[(i + 1) % pts.length];
-            signedArea += (a.x * b.y - b.x * a.y);
-        }
-        return signedArea < 0 ? -1 : 1;
-    }
-
-    /** Offset a Curve a given amount (+ or -) and optionally provide corner type (default:sharp) */
+    /** Offset a Curve a given amount (+grows / −shrinks) with optional corner type. */
     offset(distance: number, cornerType:'sharp'|'round'|'smooth'='sharp'): Curve|null
     {
         if(!this.isPlanar()){ throw new Error(`Curve::offset(): Cannot offset a non-planar curve!`);}
+        void cornerType; // hypercurve offset uses miter/arc joins; corner style not selectable
 
-        // Fast path for circles: offsetting a circle just changes its radius 
-        // Curvo offsetting is quite slow 
+        // Fast path for circles: offsetting a circle just changes its radius.
         if(this.subtype() === 'Circle')
         {
             const center = this.center();
             const normal = this.normal() ?? undefined;
             const radius = center.distance(this.start());
             const newRadius = radius + distance;
-
-            if(newRadius <= 0)
-            {
-                return null;
-            }
-
+            if(newRadius <= 0) { return null; }
             return this.update(Curve.Circle(newRadius, center, normal));
         }
 
-        const planarFrame = this._getPlanarFrame();
-        const localCurve = this._toLocalXY(planarFrame, this.copy());
-
-        // Collapse collinear degree-1 spans up front. extendTo()/connect()/cutoffBy()
-        // frequently leave a geometrically straight line represented as several
-        // collinear segments. Without merging, such a curve is still isCompound() and
-        // routes into the fallback branches below, where the geo offset (offsetGeo)
-        // throws "need at least 3 points to form a polygon" on the effectively-2-point
-        // line. Merging unwraps it to a single NurbsCurve that offsets cleanly via Curvo.
-        if (localCurve.isCompound())
-        {
-            localCurve.mergeColinearLines();
-        }
-
-        // Sharp offsets of degree-1 compounds are already exact in polyline form,
-        // and Curvo's compound offset can still fail on simple ortho loops like rectBetween().
-        if (cornerType === 'sharp' && localCurve.isCompound() && localCurve.maxDegree() === 1)
-        {
-            const fallbackCurve = localCurve.offsetFallback(distance);
-            return fallbackCurve ? this.update(this._fromLocalXY(fallbackCurve, planarFrame)) : null;
-        }
-
-        // Curvo offsetting of Compound Curves with degree > 1 is not not robust
-        // Use fallback method with geo-buf crate which tesselates the curve to degree 1 before offsetting
-        if(localCurve.isCompound() && localCurve.maxDegree() > 1)
-        { 
-            console.warn(`Curve::offset(): You are offsetting a CompoundCurve with degree > 1. This is currently not robust, so we tesselated the Curve. This results is loss of quality!`);
-            const fallbackCurve = localCurve.offsetFallback(distance);
-            return fallbackCurve ? this.update(this._fromLocalXY(fallbackCurve, planarFrame)) : null;
-        }
-        
-        let offsettedCurve;
-        try 
-        {
-            if(localCurve.isCompound())
-            { 
-                // merge collinear lines to avoid Curvo's offset issues with consecutive lines
-                console.info(`Curve::offset(): Merging collinear lines before offsetting to improve Curvo's handling of consecutive line segments in CompoundCurves.`);
-                localCurve.mergeColinearLines();
-            }
-            const orientationSign = this._offsetOrientationSign(localCurve);
-            offsettedCurve = Curve.fromCsgrs(localCurve.inner().offset(distance * orientationSign, cornerType));
-        }
-        catch (e)
-        {
-            console.warn(`Curve::offset(): Primary offset failed: "${e}". Trying fallback offset method.`);
-            offsettedCurve = localCurve.offsetFallback(distance);
-        }
-
-        if(!offsettedCurve)
-        {
-            console.error(`Curve::offset(): Offset failed and fallback method also failed. Returning original curve.`);
-            return this;
-        }
-
-        return this.update(this._fromLocalXY(offsettedCurve, planarFrame));  
-    }
-
-    /** Fallback offset using the geo crate's OffsetCurve algorithm via a tessellated polyline.
-     *  Use when Curvo's NURBS offset fails or produces degenerate results.
-     *  Always tessellates to a degree-1 polyline first.
-     *  Curve must be planar.
-     */
-    offsetFallback(distance: number): Curve|null
-    {
-        if(!this.isPlanar()){ throw new Error(`Curve:offsetFallback(): Cannot offset a non-planar curve!`); }
-
-        const planarFrame = this._getPlanarFrame();
-        const localCurve = this._toLocalXY(planarFrame, this.copy());
-
-        // geo-buf's offsetGeo only produces valid results for CCW input: reverse CW curves
-        // before offsetting (with an unmodified, "positive grows" distance) and reverse the
-        // result back so the returned curve keeps the original winding direction.
-        const isCW = this._offsetOrientationSign(localCurve) < 0;
-        if(isCW){ localCurve.reverse(); }
-
-        const degreeOneCurve = localCurve.toDegree1();
-
-        // offsetGeo() is a WASM (rust) call that throws a bare string (not an Error)
-        // for degenerate input, e.g. "need at least 3 points to form a polygon" on a
-        // straight open line. Let that surface as a null result instead of an opaque
-        // throw that the runner cannot attach script context to (reported as "undefined").
-        let offsettedInner;
         try
         {
-            offsettedInner = degreeOneCurve.inner()?.offsetGeo(distance);
+            // meshup convention: +distance always grows, −distance always shrinks,
+            // regardless of winding. hypercurve offsets a fixed side, so pick the sign.
+            const sign = this._offsetGrowSign();
+            const off = this.inner().offset(distance * sign);
+            return this.update(Curve.fromCsgrs(off));
         }
         catch (e)
         {
-            console.warn(`Curve::offsetFallback(): geo offset failed: "${e}". Returning null.`);
+            console.warn(`Curve::offset(): offset failed: "${e}". Returning null.`);
             return null;
         }
-        if(!offsettedInner){ return null; }
+    }
 
-        const offsettedCurve = Curve.fromCsgrs(offsettedInner);
-        if(isCW){ offsettedCurve?.reverse(); }
+    /** Sign such that a positive `distance` grows a closed curve and negative shrinks
+     *  it (independent of winding). Probes a tiny +offset and compares enclosed area. */
+    private _offsetGrowSign(): number
+    {
+        // meshup convention: +distance always grows the curve, −distance shrinks it,
+        // regardless of winding. hypercurve offsets a fixed side, so probe which sign
+        // enlarges the shape and align to it. Closed curves compare enclosed area;
+        // open curves compare the bounding-box size (a fixed-side offset of an open
+        // path still moves it inward or outward of its own bbox).
+        try
+        {
+            if(this.isClosed())
+            {
+                const a0 = Math.abs(this.area() ?? 0);
+                const a1 = Math.abs(Curve.fromCsgrs(this.inner().offset(1e-3)).area() ?? 0);
+                return (a1 >= a0) ? 1 : -1;
+            }
+            const size = (c: Curve): number => {
+                const b = c.bbox();
+                return b ? (b.width() + b.depth() + b.height()) : 0;
+            };
+            const s0 = size(this);
+            const s1 = size(Curve.fromCsgrs(this.inner().offset(1e-3)));
+            return (s1 >= s0) ? 1 : -1;
+        }
+        catch { return 1; }
+    }
 
-        return this.update(this._fromLocalXY(offsettedCurve, planarFrame));
+    /** Fallback offset — the native hypercurve offset now handles all planar cases,
+     *  so this delegates to {@link offset}. */
+    offsetFallback(distance: number): Curve|null
+    {
+        return this.offset(distance);
     }
     
 
@@ -2441,8 +2097,7 @@ export class Curve extends Shape
 
         try
         {
-            const spans: Array<NurbsCurve3DJs> = this.inner()?.trimRange(t0OrOther, t1OrKeep as number);
-            return (spans || []).map(s => Curve.fromCsgrs(s));
+            return [this._trimByParam(t0OrOther, t1OrKeep as number)];
         }
         catch (e)
         {
@@ -2451,16 +2106,31 @@ export class Curve extends Shape
         }
     }
 
+    /** Sub-curve between arc-length parameters `t0` and `t1` (both in [0,1]),
+     *  sampled to a polyline. */
+    private _trimByParam(t0: number, t1: number): Curve
+    {
+        // Native segment-preserving trim: interior line/arc segments are kept
+        // whole, only the two boundary segments are split. No tessellation.
+        try
+        {
+            return Curve.fromCsgrs(this.inner().trim(t0, t1));
+        }
+        catch (e)
+        {
+            // Degenerate sub-range (e.g. zero-length window) — return a copy.
+            return this.copy();
+        }
+    }
+
     /** Split the curve at parameter t, returning [left, right]. 
      *  Parameter t must be within the curve's knot domain.
      */
     split(t: number): [Curve, Curve] | null
     {
-        try 
+        try
         {
-            const parts = this.inner()?.split(t);
-            if(!parts || parts.length < 2) return null;
-            return [Curve.fromCsgrs(parts[0]), Curve.fromCsgrs(parts[1])];
+            return [this._trimByParam(0, t), this._trimByParam(t, 1)];
         }
         catch (e)
         {
@@ -2480,29 +2150,11 @@ export class Curve extends Shape
     {
         try
         {
-            // curvo's curve intersection operates in the XY plane (it ignores Z), so a
-            // planar curve that lives in another plane (XZ/YZ/arbitrary) would find no
-            // hits. Bring both curves into this curve's local XY frame, intersect there,
-            // then map the resulting points back to world coordinates.
-            if(this.isPlanar())
-            {
-                const frame = this._getPlanarFrame();
-                if(Math.abs(frame.normal.normalize().z) < 1 - 1e-6) // not parallel to the XY plane
-                {
-                    // Use _copy() (not copy()) for the temporaries: on a smart scene shape
-                    // copy() would register the working copy in the scene and _toLocalXY
-                    // would then leave it flattened onto the XY plane. Flatten onto z=0 too:
-                    // the alignByPoints transform leaves ~1e-14 residual z-noise and curvo's
-                    // intersection treats an out-of-plane curve as non-intersecting.
-                    const localThis = this._toLocalXY(frame, this._copy()).scale([1, 1, 0]);
-                    const localOther = this._toLocalXY(frame, other._copy()).scale([1, 1, 0]);
-                    const localPts = localThis._intersectRaw(localOther);
-                    return localPts
-                        ? localPts.map(p => this._pointFromLocalXY(p, frame).round())
-                        : null;
-                }
-            }
-            return this._intersectRaw(other);
+            // hypercurve's native intersect projects `other` into this curve's plane via
+            // an exact similarity and returns the 3D hit points — no manual local-frame
+            // dance needed.
+            const hits = this.inner().intersect(other.inner());
+            return (hits || []).map(p => Point.from(p).round());
         }
         catch (e)
         {
@@ -2511,34 +2163,7 @@ export class Curve extends Shape
         }
     }
 
-    /** Raw WASM curve-curve intersection in world coordinates (XY plane only). */
-    private _intersectRaw(other:Curve):Array<Point>|null
-    {
-        return ((this.isCompound())
-            ? (!other.isCompound())
-                ? this.inner()?.intersect(other.inner() as NurbsCurve3DJs)
-                : this.inner()?.intersectCompound(other.inner() as CompoundCurve3DJs)
-            : (!other.isCompound())
-                ? this.inner()?.intersect(other.inner() as NurbsCurve3DJs)
-                : this.inner()?.intersectCompound(other.inner() as CompoundCurve3DJs)
-        || [])
-        .map(p => Point.from(p).round()); // round to default Point tolerance to avoid most rounding errors
-    }
-
-    /** Map a point expressed in a planar frame's local XY coordinates back to world. */
-    private _pointFromLocalXY(
-        localPoint: PointLike,
-        frame: { origin: Point; normal: Vector; x: Vector; y: Vector },
-    ): Point
-    {
-        const l = Point.from(localPoint).toArray();
-        return frame.origin.copy()
-            .move(frame.x.copy().scale(l[0]).toArray())
-            .move(frame.y.copy().scale(l[1]).toArray())
-            .move(frame.normal.copy().scale(l[2] ?? 0).toArray());
-    }
-
-    /** Connect endpoints to endpoints of another Curve by creating Line 
+    /** Connect endpoints to endpoints of another Curve by creating Line
      *      and if possible create a single continuous (closed) curve
      * 
      *  Setting the distance controls behaviour:
@@ -2604,89 +2229,29 @@ export class Curve extends Shape
      *  Dispatches to the correct WASM method based on curve types.
      *  @returns ShapeCollection<Curve> of result Curves (each with holes attached), or null on error.
      */
+    /** Perform a boolean operation against another Curve via hypercurve's exact
+     *  NATIVE region engine (arcs/lines preserved, no tessellation). Both curves are
+     *  closed regions; the other is mapped into this curve's plane by an exact
+     *  similarity. Returns result Curves (each with holes attached), or null. */
     private _booleanOp(other: Curve, operation: 'union'|'difference'|'intersection'): ShapeCollection<Curve> | null
     {
         try
         {
-            // The WASM boolean (curvo/csgrs) operates in the XY plane and ignores Z, so a
-            // planar curve that lives in another plane (XZ/YZ/arbitrary) would collapse onto
-            // a line and yield a degenerate (~0 area) result. Mirror intersect()/offset():
-            // run the boolean in this curve's local XY frame, then map the result curves
-            // (exterior + holes) back to world coordinates. Same escalating-jitter/geo
-            // robustness lives in the WASM layer regardless of frame.
-            if(this.isPlanar())
+            const regions = this.inner().boolean(other.inner(), operation) as Array<any>;
+            if (!regions || regions.length === 0) { return null; }
+            const curves = regions.map(rg =>
             {
-                const frame = this._getPlanarFrame();
-                if(Math.abs(frame.normal.normalize().z) < 1 - 1e-6) // not already ~parallel to the XY plane
-                {
-                    // _copy() (not copy()) so a smart scene shape's working copy is not
-                    // registered in the scene; scale([1,1,0]) flattens the ~1e-14 residual
-                    // z-noise the alignByPoints transform leaves (curvo treats an
-                    // out-of-plane curve as non-overlapping).
-                    const localThis = this._toLocalXY(frame, this._copy()).scale([1, 1, 0]);
-                    const localOther = this._toLocalXY(frame, other._copy()).scale([1, 1, 0]);
-                    const localResult = localThis._booleanOpRaw(localOther, operation);
-                    if(!localResult) return null;
-                    const worldCurves = localResult.toArray().map(c => this._regionFromLocalXY(c, frame));
-                    return new ShapeCollection<Curve>(...worldCurves);
-                }
-            }
-            return this._booleanOpRaw(other, operation);
-        }
-        catch (e)
-        {
-            console.error(`Curve::${operation}(): Error:`, e);
-            return null;
-        }
-    }
-
-    /** Raw WASM curve-curve boolean in world coordinates (XY plane only).
-     *  @returns ShapeCollection<Curve> of result Curves (each with holes attached), or null on error. */
-    private _booleanOpRaw(other: Curve, operation: 'union'|'difference'|'intersection'): ShapeCollection<Curve> | null
-    {
-        try
-        {
-            // Always dispatch through the CompoundCurve3DJs boolean methods: the WASM's
-            // NurbsCurve3DJs.booleanCurve/booleanCompoundCurve (simple-curve "this") path
-            // swaps union<->difference (a subtract() on a plain rect/circle silently unions
-            // instead), while the CompoundCurve3DJs variants are correct. Promote a simple
-            // closed curve to a single-span CompoundCurve so every boolean takes the good
-            // path; `other` is passed as-is (compound-"this" against a simple other is fine).
-            const selfCompound = (this.isCompound())
-                ? (this.inner() as CompoundCurve3DJs)
-                : new CompoundCurve3DJs([this.inner() as NurbsCurve3DJs]);
-
-            const regions: BooleanRegionJs[] = (!other.isCompound())
-                ? selfCompound.booleanCurve(other.inner() as NurbsCurve3DJs, operation)
-                : selfCompound.booleanCompoundCurve(other.inner() as CompoundCurve3DJs, operation);
-
-            const curves = (regions || []).map(region =>
-            {
-                const exterior = Curve.fromCsgrs(region.exterior);
-                // Attach hole curves to the exterior curve
-                (region.holes || []).forEach(hole => exterior.addHole(Curve.fromCsgrs(hole)));
+                const exterior = Curve.fromCsgrs(rg.exterior);
+                (rg.holes() as Array<Curve3DJs>).forEach(h => exterior.addHole(Curve.fromCsgrs(h)));
                 return exterior;
             });
             return new ShapeCollection<Curve>(...curves);
         }
         catch (e)
         {
-            console.error(`Curve::${operation}(): Error:`, e);
-            // TODO: add some analysis of why it failed
-            // for example: don't touch, not closed etc
-
+            console.warn(`Curve::${operation}(): hypercurve boolean failed:`, e);
             return null;
         }
-    }
-
-    /** Map a boolean-result region curve from a planar frame's local XY back to world.
-     *  _fromLocalXY() only transforms the exterior boundary, so the holes (which the WASM
-     *  boolean produced in local XY) are re-transformed and re-attached explicitly. */
-    private _regionFromLocalXY(localRegion: Curve, frame: { origin: Point; normal: Vector; x: Vector; y: Vector }): Curve
-    {
-        const world = this._fromLocalXY(localRegion, frame);
-        world._holes = localRegion.holes().map(h => this._fromLocalXY(h, frame));
-        return world;
     }
 
     /** Boolean union of this (closed) Curve with another (closed) Curve.
@@ -2813,15 +2378,16 @@ export class Curve extends Shape
      *  concatenating their spans and closing end→start with the cutter chord. */
     private _closedRegionFromArc(arcCurves: Array<Curve>): Curve|null
     {
-        const spans: NurbsCurve3DJs[] = [];
+        const pts: Point[] = [];
         for(const c of arcCurves)
         {
-            const inner = c.inner();
-            if(inner instanceof CompoundCurve3DJs) spans.push(...inner.spans());
-            else spans.push(inner as NurbsCurve3DJs);
+            for(const p of c.controlPoints())
+            {
+                if(pts.length === 0 || pts[pts.length - 1].distance(p) > Curve.ZERO_LENGTH_TOLERANCE) { pts.push(p); }
+            }
         }
-        if(spans.length === 0) return null;
-        return Curve.fromCsgrs(new CompoundCurve3DJs(spans)).close();
+        if(pts.length < 2) return null;
+        return Curve.Polyline(pts.map(p => [p.x, p.y, p.z] as [number, number, number])).close();
     }
 
     /** Split this (open) Curve at its intersection point(s) with other and keep
@@ -2985,9 +2551,8 @@ export class Curve extends Shape
             const meshInner = (mesh as any)._mesh;
             if(!meshInner){ throw new Error('Mesh has no inner WASM object'); }
 
-            const pts = (this.isCompound())
-                ? mesh.inner()?.intersectCompoundCurve(this.inner() as CompoundCurve3DJs, tolerance)
-                : mesh.inner()?.intersectCurve(this.inner() as NurbsCurve3DJs, tolerance);
+            // TODO: MeshJs.intersectCurve still expects the legacy curve type; wire a Curve3DJs path.
+            const pts = mesh.inner()?.intersectCurve(this.inner() as any, tolerance);
 
             return (pts || []).map((p: any) => Point.from(p));
         }
@@ -3047,26 +2612,23 @@ export class Curve extends Shape
             if (face) { return face.extrude(length, resolvedDirection as any); }
         }
 
-        const surfaces: NurbsSurfaceJs[] = this.isCompound()
-            ? (this._curve as CompoundCurve3DJs).extrude(dirVec)
-            : [(this._curve as NurbsCurve3DJs).extrude(dirVec)];
-
+        void dirVec;
+        // Open / curved curve: sweep its tessellated profile along `d`, stitching a
+        // quad per segment (hypercurve has no surfaces, so we build the mesh directly).
+        const profile = this.tessellate();
+        const mkVert = (x: number, y: number, z: number) =>
+            new VertexJs(new Point3Js(x, y, z), new Vector3Js(0, 0, 0));
         const polygons: PolygonJs[] = [];
-        for (const surf of surfaces)
+        for (let i = 0; i < profile.length - 1; i++)
         {
-            const { positions, normals, indices } = surf.toArrays() as
-                { positions: Float32Array; normals: Float32Array; indices: Uint32Array };
-
-            for (let i = 0; i < indices.length; i += 3)
-            {
-                const verts = [0, 1, 2].map(k => {
-                    const vi = indices[i + k] * 3;
-                    const pos = new Point3Js(positions[vi], positions[vi + 1], positions[vi + 2]);
-                    const nor = new Vector3Js(normals[vi], normals[vi + 1], normals[vi + 2]);
-                    return new VertexJs(pos, nor);
-                });
-                polygons.push(new PolygonJs(verts, {}));
-            }
+            const a = profile[i];
+            const b = profile[i + 1];
+            polygons.push(new PolygonJs([
+                mkVert(a.x, a.y, a.z),
+                mkVert(b.x, b.y, b.z),
+                mkVert(b.x + d.x, b.y + d.y, b.z + d.z),
+                mkVert(a.x + d.x, a.y + d.y, a.z + d.z),
+            ], {}));
         }
 
         // If closed and planar, add end caps so the result is a watertight solid
@@ -3115,7 +2677,7 @@ export class Curve extends Shape
     }
 
     /** Loft a ruled surface/solid through this curve and one or more other curves.
-     *  Delegates the surface math to the curvo/csgrs native `NurbsCurve3DJs.loft`.
+     *  Builds a ruled mesh by stitching the tessellated profiles.
      *
      *  - **Open profiles** → a lofted surface. Two straight open curves give a single flat
      *    `Polygon` (quad); any other open loft returns a triangulated surface `Mesh`.
@@ -3162,48 +2724,25 @@ export class Curve extends Shape
             ]);
         }
 
-        // Loft span-wise. spans() returns [self] for non-compound curves, so this handles
-        // both single and compound profiles uniformly. All profiles must share a span count.
-        const spanLists = profiles.map(p => p.spans());
-        const spanCount = spanLists[0].length;
-        if (!spanLists.every(sl => sl.length === spanCount))
+        // Ruled loft: resample every profile to the same number of points (by
+        // arc-length parameter) and stitch corresponding points between consecutive
+        // profiles into quads. hypercurve has no surfaces, so we build the mesh directly.
+        const N = 64;
+        const rings: Point[][] = profiles.map(p =>
         {
-            console.warn('Curve::loft(): profiles have differing span counts — cannot loft.');
-            return null;
-        }
-
-        const surfaces: NurbsSurfaceJs[] = [];
-        try
-        {
-            for (let j = 0; j < spanCount; j++)
-            {
-                // Clone: the native static loft takes ownership of and frees its inputs,
-                // so pass copies to keep the caller's curves (and cap geometry below) valid.
-                const group = spanLists.map(sl => (sl[j].inner() as NurbsCurve3DJs).clone());
-                surfaces.push(NurbsCurve3DJs.loft(group));
-            }
-        }
-        catch (e)
-        {
-            console.warn('Curve::loft(): native loft failed:', e);
-            return null;
-        }
-
+            const r: Point[] = [];
+            for (let i = 0; i <= N; i++) { r.push(new Point(p.inner().pointAt(i / N))); }
+            return r;
+        });
+        const mkVert = (pt: Point) => new VertexJs(new Point3Js(pt.x, pt.y, pt.z), new Vector3Js(0, 0, 0));
         const polygons: PolygonJs[] = [];
-        for (const surf of surfaces)
+        for (let k = 0; k < rings.length - 1; k++)
         {
-            const { positions, normals, indices } = surf.toArrays() as
-                { positions: Float32Array; normals: Float32Array; indices: Uint32Array };
-
-            for (let i = 0; i < indices.length; i += 3)
+            const A = rings[k];
+            const B = rings[k + 1];
+            for (let i = 0; i < N; i++)
             {
-                const verts = [0, 1, 2].map(k => {
-                    const vi = indices[i + k] * 3;
-                    const pos = new Point3Js(positions[vi], positions[vi + 1], positions[vi + 2]);
-                    const nor = new Vector3Js(normals[vi], normals[vi + 1], normals[vi + 2]);
-                    return new VertexJs(pos, nor);
-                });
-                polygons.push(new PolygonJs(verts, {}));
+                polygons.push(new PolygonJs([mkVert(A[i]), mkVert(A[i + 1]), mkVert(B[i + 1]), mkVert(B[i])], {}));
             }
         }
 
@@ -3416,7 +2955,7 @@ export class Curve extends Shape
 
         spans.forEach((spanRaw, si) =>
         {
-            const spanCurve = Curve.fromCsgrs(spanRaw);
+            const spanCurve = spanRaw;
             const cps = spanCurve.controlPoints();
             const curveType = spanCurve.subtype();
 
@@ -3447,7 +2986,7 @@ export class Curve extends Shape
                 }
                 case 'Spline':
                 {
-                    const deg = spanRaw.degree();
+                    const deg = spanRaw.degree() ?? 1;
                     const weights = Array.from(spanRaw.weights());
                     const bezierSegs = _bsplineToBezierSegments(
                         spanRaw.controlPoints(), Array.from(spanRaw.knots()), weights, deg);
@@ -3529,46 +3068,12 @@ export class Curve extends Shape
         return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}">${element}</svg>`;
     }
 
-    /** Collect all individual NurbsCurve3DJs spans from this curve (compound or single).
-     *  Closed degree-2 rational curves (full circles) are split at the midpoint
-     *  so that each resulting arc is open and can map to an SVG `A` command. */
-    private _getSvgSpans(): NurbsCurve3DJs[]
+    /** Collect the individual native spans (arcs/lines) of this curve for SVG export.
+     *  Native geometry already stores each arc/line as a separate open segment, so a
+     *  circle comes back as two open arcs — no closed-span splitting needed. */
+    private _getSvgSpans(): Curve[]
     {
-        const inner = this.inner();
-        let rawSpans: NurbsCurve3DJs[];
-        if (inner instanceof CompoundCurve3DJs)
-        {
-            rawSpans = inner.spans();
-        }
-        else
-        {
-            rawSpans = [inner as NurbsCurve3DJs];
-        }
-
-        // Split any geometrically-closed rational degree-2 span (full circle) into two open arcs
-        return rawSpans.flatMap(span =>
-        {
-            if (span.degree() === 2
-                && Array.from(span.weights()).some(w => Math.abs(w - 1.0) > 1e-8))
-            {
-                // Check geometric closure: start ≈ end
-                const cps = span.controlPoints();
-                const first = cps[0];
-                const last = cps[cps.length - 1];
-                const dist = Math.sqrt(
-                    (first.x - last.x) ** 2 + (first.y - last.y) ** 2 + (first.z - last.z) ** 2
-                );
-
-                if (dist < 1e-6)
-                {
-                    // Closed circle/arc: split at midpoint so each half is an open arc
-                    const [lo, hi] = Array.from(span.knotsDomain());
-                    const mid = (lo + hi) / 2;
-                    return span.split(mid);
-                }
-            }
-            return [span];
-        });
+        return this.spans().toArray();
     }
 }
 
@@ -3718,14 +3223,14 @@ function _boehmInsert(
  *  Uses the circumcircle of three sampled points to determine the radius,
  *  and the cross product to determine the sweep direction. */
 function _appendArcSvg(
-    span: NurbsCurve3DJs,
+    span: Curve,
     to2D: (p: { x: number; y: number; z: number }) => [number, number],
     fmt: (n: number) => number,
     pathParts: string[]
 ): void
 {
     const cps = span.controlPoints();
-    const [domain0, domain1] = Array.from(span.knotsDomain());
+    const [domain0, domain1] = Array.from(span.knotsDomain() ?? [0, 1]);
     const midParam = (domain0 + domain1) / 2;
     const startPt3 = cps[0];
     const midPt3 = span.pointAtParam(midParam);

@@ -1,5 +1,19 @@
-# Workspace configuration: Needed for rust-analyzer to find Cargo.toml of csgrs
+# Workspace configuration: Needed for rust-analyzer to find Cargo.toml of the meshup Rust crate
 [workspace]
 members = [
-    "./devlibs/csgrs",
+    "./rust",
+    "./rust/geo-buf",
 ]
+exclude = [
+    "./rust/hypercurve",
+    "./rust/hyperreal",
+]
+resolver = "2"
+
+# The ArchiyouApp hypercurve fork (fillet/chamfer) needs hyperreal 0.13.1, which is
+# not yet published — it lives on timschmidt/hyperreal main. Patch every crates.io
+# hyperreal reference (hypercurve/hypersolve/hyperlimit) to the local 0.13.1 checkout.
+# TODO: drop this patch once hyperreal 0.13.1 (and a hypercurve release with fillet)
+# are published.
+[patch.crates-io]
+hyperreal = { path = "rust/hyperreal" }

@@ -22,7 +22,7 @@ import { rad, deg } from './utils';
 import { Style } from './Style';
 import { GLTFBuilder } from './GLTFBuilder';
 
-import { MeshJs, PolygonJs, PlaneJs, Vector3Js, NurbsCurve3DJs, CompoundCurve3DJs } from './wasm/csgrs';
+import { MeshJs, PolygonJs, PlaneJs, Vector3Js, NurbsCurve3DJs, CompoundCurve3DJs } from './wasm/meshup';
 import { Polygon } from './Polygon';
 import { ShapeCollection } from './ShapeCollection';
 import { Vertex } from './Vertex';
@@ -1309,9 +1309,8 @@ export class Mesh extends Shape
 
         try 
         {
-            const pts = (curve.isCompound())
-                ? this.inner()?.intersectCompoundCurve(curve.inner() as CompoundCurve3DJs, tolerance)
-                : this.inner()?.intersectCurve(curve.inner() as NurbsCurve3DJs, tolerance);
+            // TODO: MeshJs.intersectCurve is still curvo-typed; wire a Curve3DJs path.
+            const pts = this.inner()?.intersectCurve(curve.inner() as any, tolerance);
 
             return (pts || []).map(p => Point.from(p));
         }

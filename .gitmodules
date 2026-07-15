@@ -1,3 +1,6 @@
-[submodule "devlibs/csgrs"]
-	path = devlibs/csgrs
-	url = https://github.com/ArchiyouApp/csgrs.git
+[submodule "rust/hypercurve"]
+	path = rust/hypercurve
+	url = https://github.com/ArchiyouApp/hypercurve.git
+[submodule "rust/hyperreal"]
+	path = rust/hyperreal
+	url = https://github.com/timschmidt/hyperreal.git

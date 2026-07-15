@@ -20,7 +20,7 @@ import { Shape } from './Shape';
 import { Point } from './Point';
 import { Bbox } from './Bbox';
 
-import { MeshJs } from './wasm/csgrs';
+import { MeshJs } from './wasm/meshup';
 import { GLTFBuilder } from './GLTFBuilder';
 
 import { TOLERANCE } from './constants';
@@ -1333,6 +1333,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         
         const dirVec = Vector.from(direction).normalize();
         const bbox = this.bbox();
+        if(!bbox){ throw new Error(`ShapeCollection::row(): Cannot determine bounding box of an empty collection.`); }
         const offsetSize = new Vector(bbox.width(), bbox.depth(), bbox.height())
                                     .scale(dirVec)
                                     .length();

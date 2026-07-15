@@ -11,7 +11,7 @@
  *
 */
 
-import { Vector3Js  } from "./wasm/csgrs";
+import { Vector3Js  } from "./wasm/meshup";
 
 import type { PointLike, Axis } from "./types";
 import { isAxis, isPointLike } from "./types";

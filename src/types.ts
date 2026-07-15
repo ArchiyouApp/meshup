@@ -8,12 +8,13 @@ import {
   Vector3Js,
   VertexJs, 
   Matrix4Js,
-  MeshJs, 
+  MeshJs,
   NurbsCurve3DJs,
-  SketchJs, 
+  Curve3DJs,
+  SketchJs,
   PlaneJs, 
   PolygonJs, 
-} from './wasm/csgrs.js';
+} from './wasm/meshup.js';
 
 
 /** Main CsgrsModule (manually types) 
@@ -30,6 +31,7 @@ export type CsgrsModule =
   PolygonJs: typeof PolygonJs;
   VertexJs: typeof VertexJs;
   NurbsCurve3DJs: typeof NurbsCurve3DJs;
+  Curve3DJs: typeof Curve3DJs;
   // TODO: more
 };
 

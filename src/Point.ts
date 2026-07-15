@@ -18,7 +18,7 @@ import { rad } from './utils';
 import { POINT_TOLERANCE  } from './constants'; 
 
 // CSGRS WASM LAYER
-import { Point3Js, Vector3Js, VertexJs  } from "./wasm/csgrs";
+import { Point3Js, Vector3Js, VertexJs  } from "./wasm/meshup";
 
 export class Point
 {

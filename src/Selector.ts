@@ -266,10 +266,11 @@ export class Selector
     }
 
     /** Get all curves (Curves) from a target.
-     *  A single Curve yields its spans (a non-compound curve yields itself). */
+     *  A single Curve yields itself as one whole curve (native geometry stores a
+     *  circle/rect as several segments, but they form one logical curve). */
     private _curvesFromTarget(target: ShapeCollection | Mesh | Curve): Array<Curve>
     {
-        if (target instanceof Curve) return target.spans().toArray();
+        if (target instanceof Curve) return [target];
         if (target instanceof ShapeCollection) return target.curves().toArray();
         return [];
     }

@@ -18,7 +18,7 @@ import { Mesh } from './Mesh';
 import { Curve } from './Curve';
 import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
-import { PolygonJs, VertexJs } from './wasm/csgrs';
+import { PolygonJs, VertexJs } from './wasm/meshup';
 import { Style } from './Style';
 import { uuid } from './utils';
 

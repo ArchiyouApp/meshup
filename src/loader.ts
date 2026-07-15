@@ -1,7 +1,7 @@
-import { WASM_BASE64 } from './csgrs-js-binary';
+import { WASM_BASE64 } from './meshup-js-binary';
 // Import the init function and types from the generated crate
 // We use a namespace import to get all the exported types automatically
-import init, * as WasmExports from './wasm/csgrs.js';
+import init, * as WasmExports from './wasm/meshup.js';
 
 // Re-export the types so your library users can use them
 export type WasmModule = typeof WasmExports;

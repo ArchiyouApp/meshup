@@ -26,7 +26,7 @@
  */
 
 import { getCsgrs, ShapeCollection, Curve, Mesh } from './index';
-import type { SketchJs } from './wasm/csgrs';
+import type { SketchJs } from './wasm/meshup';
 
 export type ImportFormat =
     | 'svg' | 'geojson' | 'dxf'                         // 2D

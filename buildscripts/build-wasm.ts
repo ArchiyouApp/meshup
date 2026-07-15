@@ -2,8 +2,8 @@
  *  build-wasm.ts
  *  Builds the Rust WASM module and inlines it as a Base64 string into a TypeScript file.
  *  Requirements:
- *      - Please make sure you have csgrs Rust git submodule in lib/csgrs folder. 
- * 
+ *      - The in-tree meshup Rust crate lives in ./rust/.
+ *
  */
 
 import fs from 'node:fs';
@@ -11,10 +11,10 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 
 const ROOT_DIR = path.resolve(path.dirname('.')); // from root dir
-const RUST_DIR = path.join(ROOT_DIR, 'devlibs/csgrs'); // from root dir
-const OUTPUT_TS_PATH = path.join(ROOT_DIR, 'src', 'csgrs-js-binary.ts');
+const RUST_DIR = path.join(ROOT_DIR, 'rust'); // in-tree meshup Rust crate
+const OUTPUT_TS_PATH = path.join(ROOT_DIR, 'src', 'meshup-js-binary.ts');
 const WASM_DIR = path.join(ROOT_DIR, './src/wasm');
-const WASM_FILE_NAME = 'csgrs_bg.wasm'; // Adjust based on your crate name
+const WASM_FILE_NAME = 'meshup_bg.wasm'; // matches the crate name `meshup`
 
 console.log(`**** 🦀 Building Rust to WASM ****
     In root dir: "${ROOT_DIR}"

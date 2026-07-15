@@ -1,7 +1,7 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Vector } from '../../src/Vector';
-import { Vector3Js } from '../../src/wasm/csgrs';
+import { Vector3Js } from '../../src/wasm/meshup';
 
 beforeAll(async () =>
 {

@@ -1,4 +1,4 @@
-import { Point3Js, PlaneJs } from './wasm/csgrs.js';
+import { Point3Js, PlaneJs } from './wasm/meshup.js';
 
 import { Point } from './Point';
 import { Vertex } from './Vertex';

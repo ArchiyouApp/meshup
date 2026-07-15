@@ -28,7 +28,7 @@
  * 
  */
 
-import { Point3Js } from './wasm/csgrs.js';
+import { Point3Js } from './wasm/meshup.js';
 
 import { Point } from './Point';
 import { Vector } from './Vector';

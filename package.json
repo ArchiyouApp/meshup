@@ -34,7 +34,7 @@
     "test:unit:curve": "vitest run tests/unit/Curve.test.ts",
     "test:unit:loft": "vitest run tests/unit/loft.test.ts",
     "build:wasm": "tsx buildscripts/build-wasm.ts",
-    "rust:check": "cd ./devlibs/csgrs && cargo check --features wasm --no-deps --target wasm32-unknown-unknown",
+    "rust:check": "cd ./rust && cargo check --features wasm --no-deps --target wasm32-unknown-unknown",
     "build": "tsup",
     "test": "vitest",
     "test:run": "vitest run",

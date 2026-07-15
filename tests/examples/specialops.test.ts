@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { initAsync, ShapeCollection } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { Polygon } from '../../src/Polygon';
-import { PlaneJs } from '../../src/wasm/csgrs';
+import { PlaneJs } from '../../src/wasm/meshup';
 import { save } from '../../src/utils';
 
 const SAVE_FOLDER = './tests/outputs/specialops/';

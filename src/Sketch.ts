@@ -70,7 +70,7 @@
  * 
  */
 
-import { PolygonJs, SketchJs, VertexJs, Vector3Js } from "./wasm/csgrs";
+import { PolygonJs, SketchJs, VertexJs, Vector3Js } from "./wasm/meshup";
 
 import { Vector } from "./Vector";
 import { Point } from "./Point";

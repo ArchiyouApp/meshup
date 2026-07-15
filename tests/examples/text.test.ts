@@ -4,7 +4,7 @@ import { initAsync, Sketch, Curve, Mesh, ShapeCollection, HERSHEY_FONTS } from '
 import { save } from '../../src/utils';
 
 const OUTPUT_DIR = './tests/outputs/text/';
-const ttf = () => new Uint8Array(readFileSync('./devlibs/csgrs/asar.ttf'));
+const ttf = () => new Uint8Array(readFileSync('./rust/asar.ttf'));
 
 beforeAll(async () =>
 {

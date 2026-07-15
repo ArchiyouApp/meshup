@@ -15,7 +15,7 @@ import { Vector } from "./Vector";
 import { Bbox } from "./Bbox";
 import { Shape } from "./Shape";
 import { Style } from "./Style";
-import { VertexJs  } from "./wasm/csgrs";
+import { VertexJs  } from "./wasm/meshup";
 import { uuid, rad } from "./utils";
 
 export class Vertex extends Shape
