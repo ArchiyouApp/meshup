@@ -254,4 +254,27 @@ describe('Curve3DJs fillet/chamfer', () =>
         // 400 minus 4 right-triangles of legs 4 => 4 * (0.5*4*4) = 32
         expect(a).toBeCloseTo(368, 0);
     });
+    it('fillet rounds an OPEN polyline\'s interior corner (endpoints preserved)', () =>
+    {
+        // A right-angle open path: only the single interior corner rounds; the two
+        // free endpoints stay put. hypercurve's vertex fillet would reject a general
+        // f64 corner (RadiusMismatch) — the from_bulge path handles it.
+        const pl = wasm.Curve3DJs.makePolyline([P(0,0,0),P(100,0,0),P(100,100,0)], false);
+        const f = pl.fillet(10);
+        expect(f.closed()).toBe(false);
+        expect(f.hasArcs()).toBe(true);                          // corner became an arc
+        expect(f.segmentCount()).toBe(3);                        // line + arc + line
+        // line(90) + quarter arc(π·10/2) + line(90)
+        expect(f.length()).toBeCloseTo(180 + Math.PI * 5, 3);
+        const cps = f.controlPoints();
+        expect([cps[0].x, cps[0].y, cps[0].z]).toEqual([0, 0, 0]);         // start endpoint kept
+    });
+    it('chamfer bevels an OPEN polyline\'s interior corner only', () =>
+    {
+        const pl = wasm.Curve3DJs.makePolyline([P(0,0,0),P(100,0,0),P(100,100,0)], false);
+        const c = pl.chamfer(10);
+        expect(c.closed()).toBe(false);
+        expect(c.hasArcs()).toBe(false);
+        expect(c.segmentCount()).toBe(3);                        // line + bevel + line
+    });
 });

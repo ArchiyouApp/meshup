@@ -898,6 +898,113 @@ fn subsegment(seg: &Segment2, u0: f64, u1: f64) -> Result<Segment2, String>
     }
 }
 
+/// Fillet every interior line–line corner of a segment chain by `radius`.
+///
+/// Each rounding arc is built with [`Segment2::from_bulge`] (two tangent points +
+/// a bulge) rather than hypercurve's `fillet_vertex_by_points`, which requires an
+/// exactly-equidistant arc center — impossible to supply from f64 for a general
+/// corner (it rejects with `RadiusMismatch`). `from_bulge` derives a consistent
+/// arc from the two tangent points, so any corner rounds robustly. Corners that
+/// involve an arc, are nearly straight, or where the radius does not fit are left
+/// sharp. Works for closed contours (every vertex, wrapping) and open curve
+/// strings (interior vertices only — the two free endpoints are not corners).
+pub fn fillet_segments(segs: &[Segment2], radius: f64, closed: bool) -> Result<Vec<Segment2>, String>
+{
+    if !(radius.is_finite() && radius > 0.0) || segs.len() < 2
+    {
+        return Ok(segs.to_vec());
+    }
+    let n = segs.len();
+    let sl = |p: &Point2| -> (f64, f64) {
+        (p.x().to_f64_lossy().unwrap_or(0.0), p.y().to_f64_lossy().unwrap_or(0.0))
+    };
+    let norm = |a: (f64, f64)| -> (f64, f64) {
+        let m = (a.0 * a.0 + a.1 * a.1).sqrt();
+        if m > 1e-12 { (a.0 / m, a.1 / m) } else { (0.0, 0.0) }
+    };
+    let dist = |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+
+    // The rounding of one vertex: tangent point on the previous segment, tangent
+    // point on the next segment, and the connecting arc's bulge (tan of a quarter
+    // of the signed turn angle).
+    struct Corner
+    {
+        tp: (f64, f64),
+        tn: (f64, f64),
+        bulge: f64,
+    }
+    let corner_at = |vi: usize| -> Option<Corner> {
+        if !closed && (vi == 0 || vi >= n)
+        {
+            return None; // open endpoints are not corners
+        }
+        let prev = if closed { (vi + n - 1) % n } else { vi - 1 };
+        let cur = vi % n;
+        let (ps, cs) = (&segs[prev], &segs[cur]);
+        if !matches!(ps, Segment2::Line(_)) || !matches!(cs, Segment2::Line(_))
+        {
+            return None; // only line–line corners
+        }
+        let v = sl(cs.start());
+        let p = sl(ps.start());
+        let q = sl(cs.end());
+        let u = norm((p.0 - v.0, p.1 - v.1)); // toward previous vertex
+        let w = norm((q.0 - v.0, q.1 - v.1)); // toward next vertex
+        let half = (u.0 * w.0 + u.1 * w.1).clamp(-1.0, 1.0).acos() / 2.0; // half interior angle
+        if half < 1.0e-3 || half > std::f64::consts::FRAC_PI_2 - 1.0e-6
+        {
+            return None; // straight / degenerate
+        }
+        let d = radius / half.tan(); // setback along each edge
+        if d > dist(p, v) - 1e-9 || d > dist(v, q) - 1e-9
+        {
+            return None; // radius does not fit
+        }
+        let tp = (v.0 + u.0 * d, v.1 + u.1 * d);
+        let tn = (v.0 + w.0 * d, v.1 + w.1 * d);
+        // Signed turn from the incoming travel direction (−u) to the outgoing (w).
+        let cross = u.0 * w.1 - u.1 * w.0;
+        let dotp = u.0 * w.0 + u.1 * w.1;
+        let sweep = (-cross).atan2(-dotp);
+        Some(Corner { tp, tn, bulge: (sweep / 4.0).tan() })
+    };
+
+    let mk_line = |a: (f64, f64), b: (f64, f64)| -> Result<Option<Segment2>, String> {
+        if dist(a, b) < 1e-9
+        {
+            return Ok(None); // corner consumed the whole edge — drop the degenerate line
+        }
+        Ok(Some(Segment2::Line(
+            LineSeg2::try_new(point(a.0, a.1)?, point(b.0, b.1)?)
+                .map_err(|e| format!("hcurve: fillet line failed ({e:?})"))?,
+        )))
+    };
+    let mk_arc = |c: &Corner| -> Result<Segment2, String> {
+        Segment2::from_bulge(point(c.tp.0, c.tp.1)?, point(c.tn.0, c.tn.1)?, real(c.bulge)?)
+            .map_err(|e| format!("hcurve: fillet arc failed ({e:?})"))
+    };
+
+    // Rebuild the chain: the arc for vertex `i` precedes segment `i`; segment `i`
+    // starts at that vertex's `tn` and ends at the next vertex's `tp` when filleted.
+    let mut out: Vec<Segment2> = Vec::new();
+    for i in 0..n
+    {
+        let ci = corner_at(i);
+        if let Some(c) = &ci
+        {
+            out.push(mk_arc(c)?);
+        }
+        let start = ci.as_ref().map(|c| c.tn).unwrap_or_else(|| sl(segs[i].start()));
+        let next_vi = if closed { (i + 1) % n } else { i + 1 };
+        let end = corner_at(next_vi).map(|c| c.tp).unwrap_or_else(|| sl(segs[i].end()));
+        if let Some(line) = mk_line(start, end)?
+        {
+            out.push(line);
+        }
+    }
+    Ok(out)
+}
+
 /// Extract the native sub-curve spanning normalized arc-length fractions
 /// `[t0, t1]` of a segment chain, preserving line/arc geometry exactly:
 /// interior segments are kept whole, only the two boundary segments are split.

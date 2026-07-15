@@ -10,7 +10,7 @@ use crate::float_types::Real;
 use crate::hcurve;
 use crate::wasm::point_js::Point3Js;
 use crate::wasm::vector_js::Vector3Js;
-use hypercurve::{BooleanOp, Contour2, CurveString2, Point2, Segment2, Similarity2};
+use hypercurve::{BooleanOp, Contour2, CurvePolicy, CurveString2, Point2, Segment2, Similarity2};
 use nalgebra::{Point3, Vector3};
 use wasm_bindgen::prelude::*;
 
@@ -675,27 +675,47 @@ impl Curve3DJs
     }
 
     /// Fillet (round) every interior corner with an arc of the given `radius`.
-    /// Corners where the radius does not fit are left sharp. Closed curves only.
+    /// Corners where the radius does not fit are left sharp. Works on both closed
+    /// contours (every vertex) and open curve strings (interior vertices only —
+    /// the two free endpoints are not corners).
     #[wasm_bindgen(js_name = fillet)]
     pub fn fillet(&self, radius: f64) -> Result<Curve3DJs, JsValue>
     {
-        let ct = self
-            .native_closed_contour()
-            .ok_or_else(|| JsValue::from_str("Curve3DJs::fillet(): only closed curves can be filleted"))?;
-        let filleted = corner_op(&ct, radius, CornerOp::Fillet).map_err(err)?;
-        Ok(Curve3DJs::from_closed(self.frame.clone(), filleted))
+        match &self.geom
+        {
+            Geom::Closed(ct) =>
+            {
+                let segs = hcurve::fillet_segments(ct.segments(), radius, true).map_err(err)?;
+                let c = Contour2::try_new(segs).map_err(|e| err(format!("Curve3DJs::fillet: {e:?}")))?;
+                Ok(Curve3DJs::from_closed(self.frame.clone(), c))
+            }
+            Geom::Open(cs) =>
+            {
+                let segs = hcurve::fillet_segments(cs.segments(), radius, false).map_err(err)?;
+                let c = CurveString2::try_new(segs).map_err(|e| err(format!("Curve3DJs::fillet: {e:?}")))?;
+                Ok(Curve3DJs::from_open(self.frame.clone(), c))
+            }
+        }
     }
 
     /// Chamfer (bevel) every interior corner, cutting back `setback` along each edge.
-    /// Closed curves only.
+    /// Works on both closed contours and open curve strings (interior vertices only).
     #[wasm_bindgen(js_name = chamfer)]
     pub fn chamfer(&self, setback: f64) -> Result<Curve3DJs, JsValue>
     {
-        let ct = self
-            .native_closed_contour()
-            .ok_or_else(|| JsValue::from_str("Curve3DJs::chamfer(): only closed curves can be chamfered"))?;
-        let chamfered = corner_op(&ct, setback, CornerOp::Chamfer).map_err(err)?;
-        Ok(Curve3DJs::from_closed(self.frame.clone(), chamfered))
+        match &self.geom
+        {
+            Geom::Closed(ct) =>
+            {
+                let chamfered = chamfer_op(ct, setback).map_err(err)?;
+                Ok(Curve3DJs::from_closed(self.frame.clone(), chamfered))
+            }
+            Geom::Open(cs) =>
+            {
+                let chamfered = chamfer_op(cs, setback).map_err(err)?;
+                Ok(Curve3DJs::from_open(self.frame.clone(), chamfered))
+            }
+        }
     }
 
     /// Deep copy.
@@ -939,46 +959,80 @@ fn err(e: String) -> JsValue
     JsValue::from_str(&e)
 }
 
-#[derive(Clone, Copy)]
-enum CornerOp
+/// A contour/curve-string that supports hypercurve's exact per-vertex chamfer.
+/// Abstracts over the closed ([`Contour2`]) and open ([`CurveString2`]) cases,
+/// which share the geometry but differ in vertex range (open curves have two free
+/// endpoints that are not corners) and result type.
+trait CornerTarget: Clone
 {
-    Fillet,
-    Chamfer,
+    fn corner_segments(&self) -> &[Segment2];
+    /// Closed targets treat every vertex as a corner and wrap the previous
+    /// segment; open targets only chamfer interior vertices (`1..segments`) and
+    /// never wrap.
+    fn is_closed_corner_target() -> bool;
+    fn chamfer_corner(&self, vi: usize, tp: &Point2, tn: &Point2, pol: &CurvePolicy) -> Option<Self>;
 }
 
-/// Fillet or chamfer every interior line–line corner of a closed contour by
-/// `amount` (fillet radius / chamfer setback). Corners where it does not fit, or
-/// that involve an arc, are left unchanged. Uses hypercurve's exact vertex
-/// fillet/chamfer, computing the tangent points (and arc center for fillets) here.
-fn corner_op(ct: &Contour2, amount: f64, op: CornerOp) -> Result<Contour2, String>
+impl CornerTarget for Contour2
+{
+    fn corner_segments(&self) -> &[Segment2] { self.segments() }
+    fn is_closed_corner_target() -> bool { true }
+    fn chamfer_corner(&self, vi: usize, tp: &Point2, tn: &Point2, pol: &CurvePolicy) -> Option<Self>
+    {
+        self.chamfer_vertex_by_points(vi, tp, tn, pol).ok().and_then(|r| r.into_contour())
+    }
+}
+
+impl CornerTarget for CurveString2
+{
+    fn corner_segments(&self) -> &[Segment2] { self.segments() }
+    fn is_closed_corner_target() -> bool { false }
+    fn chamfer_corner(&self, vi: usize, tp: &Point2, tn: &Point2, pol: &CurvePolicy) -> Option<Self>
+    {
+        self.chamfer_vertex_by_points(vi, tp, tn, pol).ok().and_then(|r| r.into_curve_string())
+    }
+}
+
+/// Chamfer (bevel) every interior line–line corner of a contour/curve-string by
+/// `amount` (setback along each edge). Corners where it does not fit, or that
+/// involve an arc, are left unchanged. Uses hypercurve's exact vertex chamfer,
+/// computing the tangent points here. Works for closed contours (every vertex) and
+/// open curve strings (interior vertices only — the two free endpoints are not
+/// corners). (Fillets use [`hcurve::fillet_segments`] instead — a `from_bulge` arc
+/// avoids the exactly-equidistant-center that hypercurve's vertex fillet demands.)
+fn chamfer_op<T: CornerTarget>(target: &T, amount: f64) -> Result<T, String>
 {
     if !(amount.is_finite() && amount > 0.0)
     {
-        return Ok(ct.clone());
+        return Ok(target.clone());
     }
     let pol = hcurve::boolean_policy();
-    let mut contour = ct.clone();
-    let n = contour.segments().len();
+    let mut cur = target.clone();
+    let n = cur.corner_segments().len();
+    let closed = T::is_closed_corner_target();
 
     let norm = |v: (f64, f64)| -> (f64, f64) {
         let m = (v.0 * v.0 + v.1 * v.1).sqrt();
         if m > 1e-12 { (v.0 / m, v.1 / m) } else { (0.0, 0.0) }
     };
     let dot = |a: (f64, f64), b: (f64, f64)| a.0 * b.0 + a.1 * b.1;
-    let cross = |a: (f64, f64), b: (f64, f64)| a.0 * b.1 - a.1 * b.0;
     let dist = |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
     let l = |p: &Point2| seg_local(p);
 
-    // Process vertices high -> low so filleting one does not shift lower indices.
-    for vi in (0..n).rev()
+    // Vertex vi is the junction of segment `vi-1` and segment `vi`. Closed: every
+    // vertex `0..n` (vertex 0 wraps to the last segment). Open: interior vertices
+    // `1..n` only (endpoints are not corners). Process high -> low so chamfering one
+    // corner does not shift lower, unprocessed indices.
+    let first = if closed { 0 } else { 1 };
+    for vi in (first..n).rev()
     {
-        let segs = contour.segments();
+        let segs = cur.corner_segments();
         let m = segs.len();
         if vi >= m
         {
             continue;
         }
-        let prev_seg = &segs[(vi + m - 1) % m];
+        let prev_seg = &segs[if closed { (vi + m - 1) % m } else { vi - 1 }];
         let cur_seg = &segs[vi];
         if !matches!(prev_seg, Segment2::Line(_)) || !matches!(cur_seg, Segment2::Line(_))
         {
@@ -990,58 +1044,25 @@ fn corner_op(ct: &Contour2, amount: f64, op: CornerOp) -> Result<Contour2, Strin
 
         let u = norm((p.0 - v.0, p.1 - v.1)); // toward previous vertex
         let w = norm((q.0 - v.0, q.1 - v.1)); // toward next vertex
-        let ang = dot(u, w).clamp(-1.0, 1.0).acos(); // interior angle at V
-        let half = ang / 2.0;
+        let half = dot(u, w).clamp(-1.0, 1.0).acos() / 2.0; // half interior angle
         if half < 1.0e-3 || half > std::f64::consts::FRAC_PI_2 - 1.0e-6
         {
             continue; // straight / degenerate
         }
 
-        let pt = |x: f64, y: f64| -> Result<Point2, String> { hcurve::point(x, y) };
-
-        match op
+        let d = amount;
+        if d > dist(p, v) - 1e-9 || d > dist(v, q) - 1e-9
         {
-            CornerOp::Chamfer =>
-            {
-                let d = amount;
-                if d > dist(p, v) - 1e-9 || d > dist(v, q) - 1e-9
-                {
-                    continue;
-                }
-                let tp = pt(v.0 + u.0 * d, v.1 + u.1 * d)?;
-                let tn = pt(v.0 + w.0 * d, v.1 + w.1 * d)?;
-                if let Ok(res) = contour.chamfer_vertex_by_points(vi, &tp, &tn, &pol)
-                {
-                    if let Some(c) = res.into_contour()
-                    {
-                        contour = c;
-                    }
-                }
-            }
-            CornerOp::Fillet =>
-            {
-                let d = amount / half.tan(); // setback along each edge for the radius
-                if d > dist(p, v) - 1e-9 || d > dist(v, q) - 1e-9
-                {
-                    continue;
-                }
-                let tp = pt(v.0 + u.0 * d, v.1 + u.1 * d)?;
-                let tn = pt(v.0 + w.0 * d, v.1 + w.1 * d)?;
-                let bis = norm((u.0 + w.0, u.1 + w.1));
-                let cdist = amount / half.sin();
-                let center = pt(v.0 + bis.0 * cdist, v.1 + bis.1 * cdist)?;
-                let clockwise = cross(u, w) > 0.0;
-                if let Ok(res) = contour.fillet_vertex_by_points(vi, &tp, &tn, &center, clockwise, &pol)
-                {
-                    if let Some(c) = res.into_contour()
-                    {
-                        contour = c;
-                    }
-                }
-            }
+            continue;
+        }
+        let tp = hcurve::point(v.0 + u.0 * d, v.1 + u.1 * d)?;
+        let tn = hcurve::point(v.0 + w.0 * d, v.1 + w.1 * d)?;
+        if let Some(c) = cur.chamfer_corner(vi, &tp, &tn, &pol)
+        {
+            cur = c;
         }
     }
-    Ok(contour)
+    Ok(cur)
 }
 
 fn parse_op(op: &str) -> Result<BooleanOp, JsValue>

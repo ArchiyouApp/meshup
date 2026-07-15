@@ -1805,31 +1805,22 @@ export class Curve extends Shape
         return this;
     }
 
-    /** Fillet (round) the sharp corners of a closed Curve with arcs of `radius`,
-     *  via hypercurve's exact vertex fillet. Corners where the radius does not fit
-     *  are left sharp. (The optional `at` corner filter is not yet supported — all
-     *  fitting corners are filleted.) */
+    /** Fillet (round) the sharp corners of a Curve with arcs of `radius`, via
+     *  hypercurve's exact vertex fillet. Works on both closed curves (every corner)
+     *  and open curves (interior corners only — the two free endpoints are not
+     *  corners). Corners where the radius does not fit are left sharp. (The optional
+     *  `at` corner filter is not yet supported — all fitting corners are filleted.) */
     fillet(radius: number, at?: PointLike|Array<PointLike>): this|null
     {
         void at; // TODO: fillet only the corners nearest `at`
-        if (!this.isClosed())
-        {
-            console.warn('Curve.fillet(): only closed curves can be filleted.');
-            return this;
-        }
         try { return this.update(Curve.fromCsgrs(this.inner().fillet(radius))); }
         catch (e) { console.warn('Curve.fillet():', e); return this; }
     }
 
-    /** Chamfer (bevel) the sharp corners of a closed Curve, cutting back `setback`
-     *  along each edge. */
+    /** Chamfer (bevel) the sharp corners of a Curve, cutting back `setback` along
+     *  each edge. Works on both closed and open curves (interior corners only). */
     chamfer(setback: number): this
     {
-        if (!this.isClosed())
-        {
-            console.warn('Curve.chamfer(): only closed curves can be chamfered.');
-            return this;
-        }
         try { return this.update(Curve.fromCsgrs(this.inner().chamfer(setback))); }
         catch (e) { console.warn('Curve.chamfer():', e); return this; }
     }

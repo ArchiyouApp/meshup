@@ -1225,7 +1225,9 @@ export class Curve3DJs {
     }
     /**
      * Fillet (round) every interior corner with an arc of the given `radius`.
-     * Corners where the radius does not fit are left sharp. Closed curves only.
+     * Corners where the radius does not fit are left sharp. Works on both closed
+     * contours (every vertex) and open curve strings (interior vertices only —
+     * the two free endpoints are not corners).
      * @param {number} radius
      * @returns {Curve3DJs}
      */
@@ -1288,7 +1290,7 @@ export class Curve3DJs {
     }
     /**
      * Chamfer (bevel) every interior corner, cutting back `setback` along each edge.
-     * Closed curves only.
+     * Works on both closed contours and open curve strings (interior vertices only).
      * @param {number} setback
      * @returns {Curve3DJs}
      */
