@@ -25,9 +25,20 @@ import { Shape } from './Shape';
 
 import { Style } from './Style';
 import type { StyleData } from './Style';
-import type { Axis, ShapeType, SceneNodeGraphNode, BasePlane } from './types';
+import type { Axis, ShapeType, SceneNodeGraphNode, SceneNodeData, BasePlane } from './types';
 import { ShapeCollection } from './ShapeCollection';
 import { GLTFBuilder } from './GLTFBuilder';
+
+/** Plain-object serialisation of a SceneNode subtree, keeping live shape references so a
+ *  component's scene can be recreated under a different modeler (host RunnerComponentImporter). */
+export interface ComponentGraphNode
+{
+    _entity: 'SceneNodeData';
+    name: string;
+    shape: Shape | null;
+    style: Partial<StyleData>;
+    children: ComponentGraphNode[];
+}
 
 
 /** Minimal interface that any shape stored in a SceneNode must satisfy. */
@@ -54,6 +65,7 @@ export class SceneNode<S extends SceneNodeShape = Shape>
     private _shape: S | null = null; // Shape held directly in this container (not in child containers)
     private _children: SceneNode<S>[] = []; // Child containers (sub-groups / layers)
     private _parent: SceneNode<S> | null = null; // Back-reference to the parent container; null if this is the root
+    private _activeLayer: SceneNode<S> | null = null; // Tracked on the root: where new shapes are added
 
     constructor(name = 'container')
     {
@@ -356,6 +368,33 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         });
     }
 
+    //// ACTIVE LAYER (tracked on the root) ////
+
+    /** The layer new shapes are added to (scene decorators / copy() resolve this via
+     *  `node.root().activeLayer()`). Set by the host modeler. */
+    activeLayer(): SceneNode<S> | null
+    {
+        return this._activeLayer;
+    }
+
+    /** Set the active layer (call on the root). Returns `this`. */
+    setActiveLayer(node: SceneNode<S> | null): this
+    {
+        this._activeLayer = node;
+        return this;
+    }
+
+    /** Find or create a direct child layer named `name` under this node, WITHOUT changing
+     *  the active layer. Used by @sceneLayer(name) for iso/elevation/section projections. */
+    ensureLayer(name: string): SceneNode<S>
+    {
+        const existing = this._children.find(c => c.name === name);
+        if (existing) return existing;
+        const layer = this._createChild(name);
+        this.addChild(layer);
+        return layer;
+    }
+
     //// STYLE ////
 
     /** Set the fill/stroke color of this container's own style. */
@@ -438,6 +477,116 @@ export class SceneNode<S extends SceneNodeShape = Shape>
             style: this.style.explicitData(),
             children: this._children.map(c => c.toGraph()),
         };
+    }
+
+    //// IDENTITY & SERIALISATION (host scenegraph / viewer) ////
+
+    /** Recursively remove descendant nodes that hold no shape and have no shape-bearing
+     *  children (purely structural empty containers, e.g. pre-allocated group slots). The
+     *  root itself is never removed. Returns `this`. */
+    pruneEmptyNodes(): this
+    {
+        for (const child of [...this._children])
+        {
+            child.pruneEmptyNodes();
+            if (!child.hasShape() && child.children().length === 0)
+            {
+                this.removeChild(child);
+            }
+        }
+        return this;
+    }
+
+    /** Display names for a node's direct children, applying the sibling `[idx]` suffix rule
+     *  ('Mesh', 'Mesh[0]', 'Mesh[1]', …). Single source of truth so toData() and path()
+     *  cannot drift. Aligned with the input order. */
+    static _siblingDisplayNames(children: ReadonlyArray<SceneNode<any>>): string[]
+    {
+        const nameCounts: Record<string, number> = {};
+        for (const c of children) nameCounts[c.name] = (nameCounts[c.name] ?? 0) + 1;
+        const seen: Record<string, number> = {};
+        return children.map((c) =>
+        {
+            if (nameCounts[c.name] > 1)
+            {
+                const idx = seen[c.name] = (seen[c.name] ?? 0) + 1;
+                return `${c.name}[${idx - 1}]`;
+            }
+            return c.name;
+        });
+    }
+
+    /** Canonical scene path of this node, e.g. `"Scene/walls/Box%5B0%5D"`. Identity used for
+     *  selection/interaction across re-runs (shape UUIDs regenerate each run). The root is
+     *  always emitted as 'Scene'; each segment uses the sibling-suffix rule and is
+     *  URI-encoded (mirrors the viewer's path builder). */
+    path(): string
+    {
+        const chain: SceneNode<S>[] = [];
+        let n: SceneNode<S> | null = this;
+        while (n) { chain.unshift(n); n = n.parent(); }
+
+        let path = encodeURIComponent('Scene');
+        for (let i = 1; i < chain.length; i++)
+        {
+            const parent = chain[i - 1];
+            const siblings = parent.children();
+            const names = SceneNode._siblingDisplayNames(siblings);
+            const idx = siblings.indexOf(chain[i]);
+            path += `/${encodeURIComponent(names[idx] ?? chain[i].name)}`;
+        }
+        return path;
+    }
+
+    /** Serialise this subtree into the plain-data SceneNodeData used by the host's
+     *  execution-result state and GLB extras. When `renameRoot` is true the top-level node
+     *  is emitted as 'Scene'. Style is serialised via explicitData() and augmented with
+     *  leaf-shape visibility so `shape.hide()` survives the worker boundary. */
+    toData(renameRoot: boolean = false): SceneNodeData
+    {
+        const rawChildren = this._children;
+        const names = SceneNode._siblingDisplayNames(rawChildren);
+
+        const children = rawChildren.map((c, i) =>
+        {
+            const data = c.toData(false);
+            data.name = names[i];
+            return data;
+        });
+
+        const shape = this._shape;
+        const style = this.style.explicitData() as Partial<StyleData>;
+        if (style.visible === undefined && (shape as any)?.style?.visible === false)
+        {
+            style.visible = false;
+        }
+
+        return {
+            name: renameRoot ? 'Scene' : this.name,
+            shape: (shape as any)?.id?.() ?? null,
+            style,
+            children,
+        };
+    }
+
+    /** Export this subtree as a plain ComponentGraphNode tree so it can be reconstructed in
+     *  a different scope (host RunnerComponentImporter). Node names are prefixed with the
+     *  component label to keep merged scenes free of name collisions. */
+    toComponentGraph(component: string, parent: ComponentGraphNode | null = null): ComponentGraphNode
+    {
+        const curNode: ComponentGraphNode = {
+            _entity: 'SceneNodeData',
+            name: parent ? `${component}_${this.name}` : component,
+            shape: (this._shape as unknown as Shape | null) ?? null,
+            style: this.style.explicitData(),
+            children: [],
+        };
+
+        this._children.forEach(child => child.toComponentGraph(component, curNode));
+
+        if (parent) parent.children.push(curNode);
+
+        return curNode;
     }
 
     //// GLTF EXPORT ////

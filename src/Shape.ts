@@ -31,6 +31,19 @@ export abstract class Shape
     style: Style = new Style();
     metadata: Record<string, any> = {};
 
+    /** Opaque back-reference to the host modeler (set by the app when a shape is adopted
+     *  into a scene). meshup only carries and propagates it — it NEVER calls into it; the
+     *  host uses it to reach app modules (annotator/materials/…) from any shape. */
+    _modeler: any = null;
+    /** Assigned material name (see the host's materials module). Set via `.material('wood')`. */
+    _material?: string;
+    /** True when this shape's name was inherited from a copy() source; the host auto-namer
+     *  may then rename it after the variable it is assigned to. */
+    _nameInherited?: boolean;
+    /** Sticky flag set by `tmp()`: while true, scene decorators and copy() do no scene
+     *  bookkeeping for this shape and mark any shape derived from it `tmp()` too. */
+    _suppressScene?: boolean;
+
     constructor()
     {
         this._id = uuid();
@@ -55,14 +68,36 @@ export abstract class Shape
     abstract mirrorX(x?: number): this;
     abstract mirrorY(y?: number): this;
     abstract mirrorZ(z?: number): this;
-    abstract copy(): this;
 
-    /** Copy for internal/throwaway use. Identical to copy() at the meshup level, but
-     *  the SmartShape mixin overrides it to skip automatic scene registration so
-     *  temporaries created inside kernel operations never pollute the smart scene. */
-    _copy(): this
+    /** Pure kernel clone — never touches the scene graph. Implemented by each subclass.
+     *  Use this for throwaway/internal copies inside kernel operations. */
+    abstract _copy(): this;
+
+    /** Public copy. Clones via `_copy()`, then — unless this shape is `tmp()` — adds the
+     *  clone to the active layer (the scene's tracked active layer, else this shape's own
+     *  parent node). The clone inherits the opaque `_modeler` and is flagged
+     *  `_nameInherited` so the host auto-namer can rename it after its variable. */
+    copy(): this
     {
-        return this.copy();
+        const c = this._copy();
+        c._modeler = this._modeler;
+        c._nameInherited = true;
+        c._material = this._material;
+
+        if (this._suppressScene)
+        {
+            c._suppressScene = true;
+            return c;
+        }
+
+        const node = this._node;
+        if (node)
+        {
+            const root = node.root() as any;
+            const layer: SceneNode | null = (root?.activeLayer?.() ?? node.parent()) ?? null;
+            if (layer) layer.addShape(c as any);
+        }
+        return c;
     }
 
     abstract length(): number | undefined;
@@ -82,6 +117,47 @@ export abstract class Shape
         return this._node;
     }
 
+    //// SCENE MEMBERSHIP ////
+
+    /** Remove this shape from the scene (detaches its SceneNode). Returns `this`. */
+    removeFromScene(): this
+    {
+        this._node?.detach();
+        this._node = null;
+        return this;
+    }
+
+    /** Mark this shape as temporary: detach it from the scene AND set a sticky
+     *  `_suppressScene` flag so that every subsequent scene op (copy/extrude/split/…) on it
+     *  is a no-op and every shape derived from it is `tmp()` too. Ideal for building helper
+     *  geometry inside advanced methods. `addToScene()` (host) clears the flag. Returns `this`. */
+    tmp(): this
+    {
+        this._suppressScene = true;
+        return this.removeFromScene();
+    }
+
+    //// CLASSIFICATION ////
+
+    /** True for curve-like shapes: mesh Curve (brep Edge/Wire once wired). */
+    isCurve(): boolean
+    {
+        const t = this.type as string;
+        return t === 'Curve' || t === 'Edge' || t === 'Wire';
+    }
+
+    /** True for solid-like shapes: mesh Mesh (brep Shell/Solid once wired). */
+    isSolid(): boolean
+    {
+        const t = this.type as string;
+        return t === 'Mesh' || t === 'Shell' || t === 'Solid';
+    }
+
+    get shapeKind(): 'closed' | 'linear'
+    {
+        return this.isCurve() ? 'linear' : 'closed';
+    }
+
     /** Get or set a name for this shape (stored in metadata).
      *  - Called with a string: sets the name and returns this (chainable).
      *  - Called with no arguments: returns the current name or undefined.
@@ -93,6 +169,10 @@ export abstract class Shape
         if (n !== undefined)
         {
             this.metadata.name = n;
+            // Keep the scene node label in sync so the scenegraph/viewer show the name.
+            if (this._node) this._node.name = n;
+            // An explicit / auto-assigned name is authoritative: clear the inherited flag.
+            this._nameInherited = false;
             return this;
         }
         return this.metadata.name as string | undefined;

@@ -20,6 +20,7 @@ import { OBbox } from './OBbox';
 import { Vector } from './Vector'
 import { rad, deg } from './utils';
 import { Style } from './Style';
+import { sceneReplace, sceneAdd, sceneLayer, sceneCarry, sceneReplaceOrKeep, replaceInScene } from './sceneDecorators';
 import { GLTFBuilder } from './GLTFBuilder';
 
 import { MeshJs, PolygonJs, PlaneJs, Vector3Js, NurbsCurve3DJs, CompoundCurve3DJs } from './wasm/meshup';
@@ -162,7 +163,15 @@ export class Mesh extends Shape
         }
     }
 
+    /** A Mesh is already a mesh — returns itself (parity with Curve/Polygon toMesh(), and
+     *  used by the GLTF export which calls toMesh() on every scene shape). */
+    toMesh(): this
+    {
+        return this;
+    }
+
     /** Get polygons (faces) of the Mesh as a ShapeCollection of wrapped Polygon instances */
+    @sceneCarry
     polygons(): ShapeCollection<Polygon>
     {
         return new ShapeCollection<Polygon>(
@@ -171,6 +180,7 @@ export class Mesh extends Shape
     }
 
     /** Get faces of the Mesh as a ShapeCollection of Polygons (alias of polygons()) */
+    @sceneCarry
     faces(): ShapeCollection<Polygon>
     {
         return this.polygons();
@@ -540,27 +550,17 @@ export class Mesh extends Shape
      *  NOTE: We use copy here instead of clone
      *  conventionally cloning is used for operations involving references to previous data
     */
-    override copy(): this
+    override _copy(): this
     {
         const c = this?.inner()?.clone();
         if (!c) return new Mesh() as this;
-        
+
         const m = Mesh.from(c);
 
         m.style.merge(this.style.explicitData() as any); // copy only explicit style properties so layer colors can cascade
         m.metadata = { ...this.metadata }; // copy metadata
 
-        // if original shape is tied to scene: add copy too, as sibling
-        // TODO: keep this structural and put in Shape
-        if (this.node())
-        {
-            const parent = this.node()?.parent() || this.node(); 
-            if (parent)
-            {
-                parent.addShape(m); // TODO: name with 'copy'
-            };
-        }
-
+        // Scene registration is handled by Shape.copy() — _copy() is the pure clone.
         return m as this;
     }
 
@@ -962,6 +962,7 @@ export class Mesh extends Shape
     }
 
     /** Return new Mesh that is convex hull of current Mesh  */
+    @sceneReplace
     hull(): undefined|Mesh
     {
         const ch = this.inner()?.convexHull();
@@ -1000,12 +1001,27 @@ export class Mesh extends Shape
         return this.union(other);
     }
 
-    /** Subtract a Mesh — or every Mesh in a ShapeCollection — from the current */
-    difference(other:Mesh|ShapeCollection<Mesh>): this
+    /** Subtract a Mesh — or every Mesh in a ShapeCollection — from the current.
+     *
+     *  Auto-separates: when the cut passes through and splits the solid into genuinely-separate
+     *  parts, the original is replaced in the scene by one Mesh per part and a ShapeCollection is
+     *  returned. A cut that only hollows out the solid (an internal cavity) is cavity-aware and
+     *  kept as a single Mesh. See {@link separateIsolated}. */
+    @sceneReplaceOrKeep
+    difference(other:Mesh|ShapeCollection<Mesh>): this | ShapeCollection<Mesh>
+    {
+        this._differenceRaw(other);
+        const parts = this._separateSolids();
+        return parts.length > 1 ? parts : this;
+    }
+
+    /** Raw in-place boolean difference. Used internally (cutoff/split/difference-collection)
+     *  where a single Mesh result is required. */
+    private _differenceRaw(other:Mesh|ShapeCollection<Mesh>): this
     {
         if(ShapeCollection.isShapeCollection(other))
         {
-            other.meshes().toArray().forEach(mesh => this.difference(mesh));
+            other.meshes().toArray().forEach(mesh => this._differenceRaw(mesh));
             return this;
         }
         if(!other || !(other instanceof Mesh))
@@ -1015,11 +1031,15 @@ export class Mesh extends Shape
         return this.update(this.inner()?.difference(other.inner() as MeshJs));
     }
 
-    /** Subtract one or more Meshes (or ShapeCollections) from the current */
-    subtract(...others: (Mesh|ShapeCollection<Mesh>)[]): this
+    /** Subtract one or more Meshes (or ShapeCollections) from the current. Like difference(),
+     *  a cut that splits the solid into genuinely-separate parts auto-separates into one Mesh per
+     *  part (returned as a ShapeCollection); an internal cavity is kept as a single Mesh. */
+    @sceneReplaceOrKeep
+    subtract(...others: (Mesh|ShapeCollection<Mesh>)[]): this | ShapeCollection<Mesh>
     {
-        others.forEach(other => this.difference(other));
-        return this;
+        others.forEach(other => this._differenceRaw(other));
+        const parts = this._separateSolids();
+        return parts.length > 1 ? parts : this;
     }
 
     /** Keep only intersection of the current Mesh with another */
@@ -1069,7 +1089,7 @@ export class Mesh extends Shape
         }
         // Connected components of each side (a's first) — these are the true "pieces" of the cut.
         const pieces = [a, b]
-            .flatMap(side => side.separateIsolated().toArray())
+            .flatMap(side => side._isolatedParts().toArray())
             .filter(p => p.inner().triangleCount() > 0);
         if (pieces.length === 0)
         {
@@ -1131,8 +1151,8 @@ export class Mesh extends Shape
             const normal = Vector.from(other.normal());
             const offset = other.offset();
             // Subtract the box on each side to obtain the two half-space pieces.
-            const keepNormalSide  = this._detachedClone().difference(this._halfSpaceBox(normal, offset, -1, size));
-            const keepOppositeSide = this._detachedClone().difference(this._halfSpaceBox(normal, offset, +1, size));
+            const keepNormalSide  = this._detachedClone()._differenceRaw(this._halfSpaceBox(normal, offset, -1, size));
+            const keepOppositeSide = this._detachedClone()._differenceRaw(this._halfSpaceBox(normal, offset, +1, size));
             return this._keepBySize(
                 keepNormalSide, keepOppositeSide, keepSmallest,
                 'Mesh.cutoffBy(): the plane does not split this mesh — no cut performed.');
@@ -1145,7 +1165,7 @@ export class Mesh extends Shape
             return this;
         }
 
-        const outside = this._detachedClone().difference(cutter);   // part of this outside the cutter
+        const outside = this._detachedClone()._differenceRaw(cutter);   // part of this outside the cutter
         const inside  = this._detachedClone().intersection(cutter);  // part of this inside the cutter
         return this._keepBySize(
             outside, inside, keepSmallest,
@@ -1181,8 +1201,8 @@ export class Mesh extends Shape
         const posBox = Mesh.BoxBetween(bmin.copy().setComponent(at, coord), bmax); // region at > coord
         const negBox = Mesh.BoxBetween(bmin, bmax.copy().setComponent(at, coord)); // region at < coord
 
-        const posPiece = this._detachedClone().difference(negBox); // keep at > coord (positive side)
-        const negPiece = this._detachedClone().difference(posBox); // keep at < coord (negative side)
+        const posPiece = this._detachedClone()._differenceRaw(negBox); // keep at > coord (positive side)
+        const negPiece = this._detachedClone()._differenceRaw(posBox); // keep at < coord (negative side)
 
         return this._keepBySize(
             posPiece, negPiece, smallest,
@@ -1190,12 +1210,99 @@ export class Mesh extends Shape
     }
 
     /**
-     * Detect geometrically isolated "islands" in this Mesh and return each as its own Mesh.
-     * Useful after a subtract boolean that splits the mesh into disconnected parts.
-     * Returns a ShapeCollection<Mesh> with one entry per isolated component.
-     * If the mesh is fully connected, returns a collection containing only this mesh.
+     * Separate this Mesh into its genuinely-separate solid parts (e.g. after a subtract whose
+     * cut passes through and splits the solid). Returns a ShapeCollection<Mesh> with one entry
+     * per part; a solid that is still one piece returns a collection containing only this mesh.
+     *
+     * Cavity-aware: connectivity is by shared surface vertices, so a solid with a fully-internal
+     * cavity (a blind hole / void) has a disconnected inner shell — but that shell is spatially
+     * contained within the outer shell, so it is recognised as a cavity and kept together with
+     * its solid rather than split off. Only non-nested components are returned as separate parts.
+     *
+     * Scene: when this mesh is in the scene and it does split into several parts, the original is
+     * replaced by the parts on its layer; a still-single solid is left in place.
      */
     separateIsolated(): ShapeCollection<Mesh>
+    {
+        const parts = this._separateSolids();
+        const items = parts.toArray();
+
+        // One piece is this mesh itself → keep in place.
+        if (items.length === 1 && items[0] === this) return parts;
+
+        // Genuinely split: replace this mesh in the scene with the separate parts (grouped).
+        if (this._node && !this._suppressScene)
+        {
+            replaceInScene(this, parts);
+        }
+        return parts;
+    }
+
+    /** Cavity-aware separation (geometry only, no scene): groups the raw vertex-connected
+     *  components by spatial containment so that a component wholly inside another (a cavity) is
+     *  merged back into its solid. Returns [this] when everything belongs to one solid, else one
+     *  Mesh per genuinely-separate solid (each carrying its own cavities). */
+    private _separateSolids(): ShapeCollection<Mesh>
+    {
+        const raw = this._isolatedParts().toArray();
+        if (raw.length <= 1) return new ShapeCollection<Mesh>([this]);
+
+        const bboxes = raw.map(m => m.bbox());
+        const bboxVol = (b: any): number => b ? b.width() * b.depth() * b.height() : Infinity;
+        const contains = (outer: any, inner: any): boolean =>
+            !!outer && !!inner
+            && outer.min().x - TOLERANCE <= inner.min().x && inner.max().x <= outer.max().x + TOLERANCE
+            && outer.min().y - TOLERANCE <= inner.min().y && inner.max().y <= outer.max().y + TOLERANCE
+            && outer.min().z - TOLERANCE <= inner.min().z && inner.max().z <= outer.max().z + TOLERANCE;
+
+        // For each component, its owner = the SMALLEST other component strictly containing it (a
+        // cavity's owner is its solid); -1 when top-level (a genuine separate part).
+        const ownerOf = (i: number): number =>
+        {
+            let best = -1, bestVol = Infinity;
+            for (let j = 0; j < raw.length; j++)
+            {
+                if (i === j) continue;
+                const vi = bboxVol(bboxes[i]), vj = bboxVol(bboxes[j]);
+                if (vj > vi && contains(bboxes[j], bboxes[i]) && vj < bestVol) { best = j; bestVol = vj; }
+            }
+            return best;
+        };
+        const topOf = (i: number): number =>
+        {
+            let t = i, guard = 0;
+            while (ownerOf(t) !== -1 && guard++ < raw.length) t = ownerOf(t);
+            return t;
+        };
+
+        // Bucket every component under its top-level solid.
+        const byTop = new Map<number, Mesh[]>();
+        raw.forEach((m, i) =>
+        {
+            const t = topOf(i);
+            if (!byTop.has(t)) byTop.set(t, []);
+            byTop.get(t)!.push(m);
+        });
+
+        if (byTop.size <= 1) return new ShapeCollection<Mesh>([this]); // all one solid (with cavities)
+
+        const meshes = [...byTop.values()].map(group =>
+        {
+            if (group.length === 1) return group[0]; // a plain part, no cavities
+            // A part plus its cavities → recombine their polygons into one mesh.
+            const polys = group.flatMap(m => m.inner().polygons());
+            const mm = Mesh.from(getCsgrs().MeshJs.fromPolygons(polys, {}));
+            mm.style.merge(this.style.explicitData() as any);
+            mm.metadata = { ...this.metadata };
+            return mm;
+        });
+        return new ShapeCollection<Mesh>(meshes);
+    }
+
+    /** Geometry-only isolation (no scene bookkeeping): returns a collection with [this] when
+     *  the mesh is fully connected, or one new Mesh per isolated component (style/metadata
+     *  copied) when it is disconnected. Used by difference()/subtract() and split(). */
+    private _isolatedParts(): ShapeCollection<Mesh>
     {
         const rawPolys = this.inner().polygons();
         const n = rawPolys.length;
@@ -1236,8 +1343,12 @@ export class Mesh extends Shape
         if (groups.size === 1) return new ShapeCollection<Mesh>([this]);
 
         const meshes = [...groups.values()].map(polys =>
-            Mesh.from(getCsgrs().MeshJs.fromPolygons(polys, {}))
-        );
+        {
+            const m = Mesh.from(getCsgrs().MeshJs.fromPolygons(polys, {}));
+            m.style.merge(this.style.explicitData() as any); // pieces inherit the source style
+            m.metadata = { ...this.metadata };
+            return m;
+        });
         return new ShapeCollection<Mesh>(meshes);
     }
 
@@ -1252,18 +1363,19 @@ export class Mesh extends Shape
      * splits this is typically up to two entries (front/positive side first, back/negative
      * side second). Empty results are omitted.
      */
+    @sceneReplace
     split(other: Mesh | Polygon | PlaneJs): ShapeCollection<Mesh>
     {
         if (other instanceof Mesh)
         {
-            const remainder = this.copy().difference(other);
+            const remainder = this._copy()._differenceRaw(other);
             if (remainder.inner().triangleCount() === 0)
             {
                 return new ShapeCollection<Mesh>();
             }
 
             const parts = remainder
-                .separateIsolated()
+                ._isolatedParts()
                 .toArray()
                 .filter(mesh => mesh.inner().triangleCount() > 0);
 
@@ -1353,7 +1465,8 @@ export class Mesh extends Shape
                 meshes.add(mesh);
             }
         });
-        
+
+        ShapeCollection._nameRow(meshes, this.name() as string | undefined);
         return meshes;
     }
 
@@ -1387,6 +1500,7 @@ export class Mesh extends Shape
                 }
             }
         }
+        ShapeCollection._nameGrid(meshes, this.name() as string | undefined, cx, cy, cz);
         return meshes;
     }
 
@@ -1421,6 +1535,7 @@ export class Mesh extends Shape
                 }
             }
         }
+        ShapeCollection._nameGrid(meshes, this.name() as string | undefined, nx, ny, nz);
         return meshes;
     }
 
@@ -1430,6 +1545,7 @@ export class Mesh extends Shape
      *  Selectors are greedy: an underspecified selector returns every match.
      *  A ShapeCollection result is collapsed to the single shape when there is
      *  exactly one match (checkSingle), and an empty result warns. */
+    @sceneAdd
     select(what:string)
     {
         const result = new Selector(what).execute(this);
@@ -1622,7 +1738,7 @@ export class Mesh extends Shape
 
         try
         {
-            const overlappingMesh = this.copy().intersection(other);
+            const overlappingMesh = this._copy().intersection(other);
             const overlappingVolume = overlappingMesh.volume();
             return (overlappingVolume != null && overlappingVolume > 0)
                 ? overlappingVolume / thisVolume
@@ -1757,6 +1873,7 @@ export class Mesh extends Shape
      * @param planeOrigin A point on the plane `[x, y, z]`.
      * @param planeNormal The plane normal `[x, y, z]`.
      */
+    @sceneReplace
     projectToPlane(
         planeOrigin: [number, number, number],
         planeNormal: [number, number, number],
@@ -1885,6 +2002,7 @@ export class Mesh extends Shape
      *  @param axis  Optional axis keyword ('x' | 'y' | 'z'). Selects polygons whose
      *               normal is parallel to that axis.  Defaults to 'z' (bottom face).
      */
+    @sceneReplace
     flatten(axis: Axis = 'z'): Mesh
     {
         const axisVec = axis === 'x' ? Vector.from(1, 0, 0)
@@ -1933,6 +2051,7 @@ export class Mesh extends Shape
      *   - `'silhouette'`: subset of `'visible'` forming the outer contour
      *     (silhouette + open-mesh boundary edges) as classified by the Rust HLR
      */
+    @sceneLayer('iso')
     isometry(
         cam:PointLike = [-1,-1,1],
         hiddenLines:boolean=false,
@@ -2160,6 +2279,7 @@ export class Mesh extends Shape
      *  @returns ShapeCollection with groups 'visible', 'silhouette' (outer
      *    contour, subset of 'visible'), and 'hidden' (only if requested).
      */
+    @sceneLayer('elevation')
     elevation(
         from: PointLike | BasePlane = 'front',
         hiddenLines: boolean = false,
@@ -2205,6 +2325,7 @@ export class Mesh extends Shape
      *           non-trivial Z component. Vertical sections (normal in XY
      *           plane) currently produce a degenerate cut profile.
      */
+    @sceneLayer('section')
     section(
         pivot: PointLike,
         normal: PointLike | BasePlane = [0, 0, 1],

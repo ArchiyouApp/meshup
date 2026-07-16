@@ -19,6 +19,8 @@ import { Curve } from './Curve';
 import { Shape } from './Shape';
 import { Point } from './Point';
 import { Bbox } from './Bbox';
+import type { SceneNode } from './SceneNode';
+import { colSceneAdd, colSceneLayer, colSceneReplace } from './sceneDecorators';
 
 import { MeshJs } from './wasm/meshup';
 import { GLTFBuilder } from './GLTFBuilder';
@@ -49,6 +51,22 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     _groups = new Map<string, ShapeCollection<S>>();
     private _fakeArrayLength = 0;
     private _fakeGroupKeys = new Set<string>();
+
+    //// SCENE BACKING ////
+    // Set by the host modeler (Modeler.collection()) to make this collection scene-backed:
+    // its shapes (and groups) live under a dedicated layer node. Transient collections
+    // (internal op results) keep these null and stay flat.
+    _modeler: any = null;
+    _layer: SceneNode<any> | null = null;
+    _name = 'collection';
+    /** Annotations linked to this collection (for the host annotator / DXF export). */
+    annotations: Array<any> = [];
+
+    //// IDENTITY ////
+
+    isShape(): boolean { return false; }
+    isShapeClass(): boolean { return true; }
+    isShapeCollection(): boolean { return true; }
 
     constructor(...args: Array<CollectableShape | Array<any> | ShapeCollection<any>>)
     {
@@ -109,6 +127,31 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return new ShapeCollection<S>(...new Array(count).fill(null).map((_, i) => generator(i)));
     }
 
+    /** Name every shape in a 1-D row `${name}1`, `${name}2`, … (no-op without a source name).
+     *  Used by Mesh/Curve row(). */
+    static _nameRow(col: ShapeCollection<any>, name?: string): void
+    {
+        if (!name) return;
+        let i = 0;
+        col.toArray().forEach(s => (s as any).name?.(`${name}${++i}`));
+    }
+
+    /** Name every shape in a 3-D grid/array `${name}{x}{y}` (or `${name}{x}{y}{z}` when
+     *  nz > 1), assuming x-outer / y-mid / z-inner iteration order. Used by Mesh/Curve
+     *  grid() and array(). */
+    static _nameGrid(col: ShapeCollection<any>, name: string | undefined, _nx: number, ny: number, nz: number): void
+    {
+        if (!name) return;
+        col.toArray().forEach((s, flat) =>
+        {
+            const zi = flat % nz;
+            const yi = Math.floor(flat / nz) % ny;
+            const xi = Math.floor(flat / (nz * ny));
+            const suffix = nz > 1 ? `${xi + 1}${yi + 1}${zi + 1}` : `${xi + 1}${yi + 1}`;
+            (s as any).name?.(`${name}${suffix}`);
+        });
+    }
+
     //// COLLECTION MANAGEMENT ////
 
     update(shapes: Array<S> | ShapeCollection<S>): void
@@ -119,6 +162,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     add(...shapes: Array<S | ShapeCollection<any> | Array<any>>): this
     {
+        const before = this._shapes.length;
         shapes.forEach(shapeArg =>
         {
             if (Shape.isShape(shapeArg))
@@ -145,6 +189,12 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         });
 
         this._setFakeArrayKeys();
+
+        // Scene-backed collections re-parent newly added shapes into their layer node.
+        if (this._layer)
+        {
+            this._shapes.slice(before).forEach(s => this._layer!.addShape(s as any));
+        }
         return this;
     }
 
@@ -161,6 +211,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         if (!this._groups.has(groupName)) this._groups.set(groupName, new ShapeCollection<S>());
         this._groups.get(groupName)?.add(shapes);
         this._setFakeGroupKeys(); // group added after this.add()'s key refresh — sync now
+
+        // Scene-backed: move this group's shapes into a named sub-layer under the layer node.
+        if (this._layer)
+        {
+            const groupCol = this._groups.get(groupName);
+            if (groupCol) this._layer.addLayer(groupName, groupCol as any);
+        }
         return this;
     }
 
@@ -242,7 +299,28 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     //// ACCESSORS ////
 
     get(index: number): S | undefined { return this._shapes[index]; }
-    at(index: number): S | undefined { return this.get(index); }
+
+    /** Access a shape by index, or a range of shapes when `end` is given.
+     *  - `at(i)`      → the shape at `i` (or undefined if out of range).
+     *  - `at(i, end)` → a ShapeCollection of shapes from `i` to `end` INCLUSIVE.
+     *  Negative indices count from the end (`at(-1)` = last), and a reversed range
+     *  (`at(5, 2)`) is normalised to `at(2, 5)`. */
+    at(index: number): S | undefined;
+    at(index: number, end: number): ShapeCollection<S>;
+    at(index: number, end?: number): S | undefined | ShapeCollection<S>
+    {
+        const n = this._shapes.length;
+        const norm = (i: number) => (i < 0 ? n + i : i);
+
+        if (end === undefined) { return this._shapes[norm(index)]; }
+
+        let a = norm(index);
+        let b = norm(end);
+        if (a > b) { [a, b] = [b, a]; }
+        a = Math.max(0, a);
+        b = Math.min(n - 1, b);
+        return new ShapeCollection<S>(...this._shapes.slice(a, b + 1));
+    }
 
     first(): S
     {
@@ -282,6 +360,50 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     map<T>(callback: (shape: S, index: number, array: S[]) => T): T[]
     {
         return this._shapes.map(callback);
+    }
+
+    reduce<T>(callback: (acc: T, shape: S, index: number, array: S[]) => T, initial: T): T
+    {
+        return this._shapes.reduce(callback, initial);
+    }
+
+    find(callback: (shape: S, index: number, array: S[]) => boolean): S | undefined
+    {
+        return this._shapes.find(callback);
+    }
+
+    every(callback: (shape: S, index: number, array: S[]) => boolean): boolean
+    {
+        return this._shapes.every(callback);
+    }
+
+    some(callback: (shape: S, index: number, array: S[]) => boolean): boolean
+    {
+        return this._shapes.some(callback);
+    }
+
+    isEmpty(): boolean { return this._shapes.length === 0; }
+
+    /** All shapes as a plain array (shallow copy). */
+    all(): Array<S> { return [...this._shapes]; }
+    children(): Array<S> { return [...this._shapes]; }
+    getShapes(): Array<S> { return [...this._shapes]; }
+
+    is2D(): boolean { return this._shapes.every(s => (s as any).is2D?.()); }
+    is3D(): boolean { return this._shapes.some(s => !(s as any).is2D?.()); }
+
+    /** Iterate over named groups. If no groups exist, yields one "main" group containing all
+     *  shapes. Callback receives (groupName, collection, index). */
+    forEachGroup(fn: (groupName: string, col: ShapeCollection<S>, index: number) => void): this
+    {
+        if (this._groups.size === 0)
+        {
+            fn('main', this, 0);
+            return this;
+        }
+        let i = 0;
+        this._groups.forEach((groupCol, groupName) => fn(groupName, groupCol, i++));
+        return this;
     }
 
     has(shape: S): boolean { return this._shapes.includes(shape); }
@@ -479,6 +601,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return this;
     }
 
+    /** Mirror every shape across the plane x = `x` (default 0). */
+    mirrorX(x?: number): this { this._shapes.forEach(s => (s as any).mirrorX?.(x)); return this; }
+    /** Mirror every shape across the plane y = `y` (default 0). */
+    mirrorY(y?: number): this { this._shapes.forEach(s => (s as any).mirrorY?.(y)); return this; }
+    /** Mirror every shape across the plane z = `z` (default 0). */
+    mirrorZ(z?: number): this { this._shapes.forEach(s => (s as any).mirrorZ?.(z)); return this; }
+
     offset(distance: number, cornerType: 'sharp' | 'round' | 'smooth' = 'sharp'): ShapeCollection<Curve>
     {
         console.warn('ShapeCollection::offset(): Only Curve shapes are offset! Non-curve shapes will be ignored. TODO');
@@ -506,6 +635,22 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     alpha(a: number): this { return this.opacity(a); }
 
+    /** Separate every Mesh in this collection into its geometrically isolated parts, returning
+     *  a flat collection (non-mesh shapes and already-connected meshes pass through unchanged).
+     *  Mesh.subtract()/difference() already auto-separate, so this is mainly for chaining and
+     *  for collections assembled by other means. Geometry only — no scene bookkeeping. */
+    separateIsolated(): ShapeCollection<any>
+    {
+        const out = new ShapeCollection<any>();
+        this._shapes.forEach(s =>
+        {
+            const parts = (s instanceof Mesh) ? (s as any)._isolatedParts?.() : null;
+            if (parts && parts.length) out.add(parts);
+            else out.add(s as any);
+        });
+        return out;
+    }
+
     /** Set dashed line */
     dashed(dash: number[] = [2, 2]): this
     {
@@ -517,6 +662,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     hide(): this
     {
         this._shapes.forEach(shape => shape.hide());
+        this._layer?.hide();
         return this;
     }
 
@@ -525,6 +671,59 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     {
         const shapes = this._shapes as any[];
         shapes.forEach(shape => shape.show?.());
+        this._layer?.visible(true);
+        return this;
+    }
+
+    //// SCENE MANAGEMENT ////
+
+    /** Name this collection. For scene-backed collections this also names the layer node.
+     *  No argument returns the current name. Auto-named after the assigned variable while
+     *  still holding the default 'collection' (see the host Runner auto-namer). */
+    name(value?: string): this | string
+    {
+        if (value === undefined) return this._name;
+        this._name = value;
+        if (this._layer) this._layer.name = value;
+        return this;
+    }
+
+    /** Navigate to a scene node within this collection's layer. No argument → the layer
+     *  root; dot-separated path → traverses descendants level by level. */
+    node(searchStr?: string): SceneNode<any> | null
+    {
+        if (!this._layer) return null;
+        if (!searchStr) return this._layer;
+
+        let current: SceneNode<any> | undefined = this._layer;
+        for (const part of searchStr.split('.'))
+        {
+            current = current.find(part);
+            if (!current) return null;
+        }
+        return current ?? null;
+    }
+
+    /** Remove this collection's shapes (and layer node) from the scene. */
+    removeFromScene(): this
+    {
+        const sceneShapes = this._shapes.filter(shape => Boolean((shape as any)?._node));
+        if (!this._layer && sceneShapes.length === 0)
+        {
+            console.warn(`${this.constructor.name}.removeFromScene(): collection is not in the scene`);
+            return this;
+        }
+        sceneShapes.forEach(shape => (shape as any).removeFromScene?.());
+        if (this._layer) { this._layer.detach(); this._layer = null; }
+        return this;
+    }
+
+    /** Mark this collection as temporary: every member shape becomes `tmp()` (sticky
+     *  scene-suppression) and the layer node is detached. Returns `this`. */
+    tmp(): this
+    {
+        this._shapes.forEach(shape => (shape as any).tmp?.());
+        if (this._layer) { this._layer.detach(); this._layer = null; }
         return this;
     }
 
@@ -647,7 +846,17 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *    - Meshes yield the boolean-intersection volume Mesh (mesh∩mesh)
      *  When `other` is a collection, each of this collection's shapes is intersected with
      *  each of its shapes. Returns an empty ShapeCollection when there are no intersections. */
+    /** Intersect every shape with `other`, aggregating results. Replaces in place: the
+     *  collection's original shapes are removed from the scene and only the intersection
+     *  results remain (added to the active layer). */
+    @colSceneReplace
     intersections(other: Curve | Mesh | ShapeCollection<any>): ShapeCollection<any>
+    {
+        return this._intersectionsRaw(other);
+    }
+
+    /** Pure intersection geometry — never touches the scene. Used internally (intersection()). */
+    private _intersectionsRaw(other: Curve | Mesh | ShapeCollection<any>): ShapeCollection<any>
     {
         const others = ShapeCollection.isShapeCollection(other) ? (other as ShapeCollection<any>).toArray() : [other];
         const result = new ShapeCollection<any>();
@@ -666,8 +875,19 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  if none. See intersections() for how the collection is intersected with `other`. */
     intersection(other: Curve | Mesh | ShapeCollection<any>): Curve | Mesh | null
     {
-        const all = this.intersections(other);
+        const all = this._intersectionsRaw(other);
         return all.length ? all.first() as Curve | Mesh : null;
+    }
+
+    /** Extrude every shape in the collection, forwarding to each shape's own extrude() —
+     *  which (when scene-attached) replaces the source with the extruded result on the active
+     *  layer. Returns the results as a new collection. */
+    extrude(amount?: number, direction?: PointLike): ShapeCollection<any>
+    {
+        const results = this._shapes
+            .map(s => (s as any).extrude?.(amount, direction))
+            .filter((r: any) => r != null);
+        return new ShapeCollection<any>(...results);
     }
 
     /** Intersect a single shape with a single other shape, dispatched by kernel type.
@@ -707,7 +927,12 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             ? shapes
             : shapes.filter(shape => shape.style?.visible !== false);
 
-        return projectedShapes.filter((shape): shape is Mesh => shape instanceof Mesh);
+        // Return DETACHED copies (no scene node): the projection internally calls decorated
+        // Mesh ops (isometry/section/merge) on these, which must not touch the scene graph.
+        // This replaces the old SmartShapeCollection._toMeshCollection() "plain-ify" trick.
+        return projectedShapes
+            .filter((shape): shape is Mesh => shape instanceof Mesh)
+            .map(shape => shape._copy() as Mesh);
     }
 
     private static _makeProjectionOptions(
@@ -842,7 +1067,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
                 const face = Mesh.fromPoints([p00, p10, p11, p01])
                     .translate(faceShift[0], faceShift[1], faceShift[2]);
-                const occluders = new ShapeCollection<Mesh>(merged.copy() as Mesh);
+                const occluders = new ShapeCollection<Mesh>(merged._copy() as Mesh);
                 const projected = face._projectEdges(options, occluders);
                 ShapeCollection._appendProjectionGroups(iso, projected);
             });
@@ -858,7 +1083,20 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     //// ISOMETRY ////
 
+    /** Isometric projection of the collection, added to the active scene layer. */
+    @colSceneAdd
     isometry(
+        cam: PointLike = [-1, -1, 1],
+        hiddenLines: boolean = false,
+        includeHiddenShapes: boolean = false,
+        samples: number = 16,
+        featureAngle: number = 10,
+    ): ShapeCollection<any>
+    {
+        return this._isometryRaw(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
+    }
+
+    private _isometryRaw(
         cam: PointLike = [-1, -1, 1],
         hiddenLines: boolean = false,
         includeHiddenShapes: boolean = false,
@@ -895,6 +1133,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     }
         
 
+    /** Isometric projection of the collection, added to a dedicated 'iso' scene layer. */
+    @colSceneLayer('iso')
     iso(
         cam: PointLike = [-1, -1, 1],
         hiddenLines: boolean = false,
@@ -903,7 +1143,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         featureAngle: number=10,
     ): ShapeCollection<any>
     {
-        return this.isometry(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
+        return this._isometryRaw(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
     }
 
     isoTest(
@@ -938,9 +1178,10 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     }
 
     /** Orthographic elevation projection of every Mesh in this collection,
-     *  using the merged-solid pass plus contact-face add-back.
-     *  See {@link Mesh.elevation} for parameter semantics.
+     *  using the merged-solid pass plus contact-face add-back. Added to a dedicated
+     *  'elevation' scene layer. See {@link Mesh.elevation} for parameter semantics.
      */
+    @colSceneLayer('elevation')
     elevation(
         from: PointLike | BasePlane = 'front',
         hiddenLines: boolean = false,
@@ -1163,7 +1404,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
                     if (new Point(curStart).distance(new Point(otherStart)) <= tolerance)
                     {
-                        newChains[i]?.unshift(...otherChain.map(c => c.copy().reverse()).reverse());
+                        newChains[i]?.unshift(...otherChain.map(c => c._copy().reverse()).reverse());
                     }
                     else if (new Point(curStart).distance(new Point(otherEnd)) <= tolerance)
                     {
@@ -1175,7 +1416,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
                     }
                     else if (new Point(curEnd).distance(new Point(otherEnd)) <= tolerance)
                     {
-                        newChains[i]?.push(...otherChain.map(c => c.copy().reverse()).reverse());
+                        newChains[i]?.push(...otherChain.map(c => c._copy().reverse()).reverse());
                     }
                     else
                     {

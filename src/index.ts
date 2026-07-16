@@ -73,7 +73,8 @@ export { HERSHEY_FONTS, HERSHEY_OFFSET, DEFAULT_HERSHEY_FONT } from './fonts/her
 export { Bbox } from './Bbox';
 export { OBbox } from './OBbox';
 export { SceneNode } from './SceneNode';
-export type { SceneNodeShape } from './SceneNode';
+export type { SceneNodeShape, ComponentGraphNode } from './SceneNode';
+export type { SceneNodeGraphNode, SceneNodeData } from './types';
 export { GLTFBuilder } from './GLTFBuilder';
 export { Importer } from './Importer';
 export type { ImportFormat, ImportOptions } from './Importer';

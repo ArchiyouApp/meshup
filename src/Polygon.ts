@@ -21,6 +21,7 @@ import { OBbox } from './OBbox';
 import { PolygonJs, VertexJs } from './wasm/meshup';
 import { Style } from './Style';
 import { uuid } from './utils';
+import { sceneReplace, sceneUpdate, sceneCarry } from './sceneDecorators';
 
 export class Polygon extends Shape
 {
@@ -306,7 +307,7 @@ export class Polygon extends Shape
     override mirrorY(y?: number): this { return this.mirror('y', y ?? 0); }
     override mirrorZ(z?: number): this { return this.mirror('z', z ?? 0); }
 
-    override copy(): this
+    override _copy(): this
     {
         const vertList = this.vertices().toArray();
         const verts = vertList.map(v => v.inner());
@@ -315,15 +316,7 @@ export class Polygon extends Shape
         p.style.merge(this.style.explicitData() as any);
         p.metadata = { ...this.metadata };
 
-        if (this.node())
-        {
-            const parent = this.node()?.parent() || this.node();
-            if (parent)
-            {
-                parent.addShape(p);
-            }
-        }
-
+        // Scene registration is handled by Shape.copy() — _copy() is the pure clone.
         return p as this;
     }
 
@@ -475,6 +468,7 @@ export class Polygon extends Shape
      * @param distance    Offset distance; positive grows the polygon, negative shrinks it.
      * @param cornerType  How to treat convex corners (passed through to Curve.offset).
      */
+    @sceneUpdate
     offset(distance: number, cornerType: 'sharp' | 'round' | 'smooth' = 'sharp'): this | null
     {
         // TODO: offset interior holes too (inward, with negated distance)
@@ -608,6 +602,7 @@ export class Polygon extends Shape
      *               width centred on the cut.
      * @returns ShapeCollection<Polygon> of the resulting pieces, or null if no split happened.
      */
+    @sceneReplace
     split(other: Curve | Polygon, gap: number = 0): ShapeCollection<Polygon> | null
     {
         return this._splitRaw(other, gap);
@@ -701,7 +696,7 @@ export class Polygon extends Shape
 
             const pieceOf = (region: Curve): Array<Curve> =>
             {
-                const r = boundary.copy().intersection(region);
+                const r = boundary._copy().intersection(region);
                 if (r === null) { return []; }
                 return (r instanceof Curve) ? [r] : r.toArray();
             };
@@ -762,6 +757,7 @@ export class Polygon extends Shape
      *
      * @param other Closed Curve, Polygon, or ShapeCollection of them.
      */
+    @sceneUpdate
     difference(other: Curve | Polygon | ShapeCollection<Curve | Polygon>): this
     {
         if (ShapeCollection.isShapeCollection(other))
@@ -796,6 +792,7 @@ export class Polygon extends Shape
 
     /** Subtract one or more closed cutters (each a Curve, Polygon, or ShapeCollection) from
      *  this polygon in place. Alias-style convenience over difference(); returns `this`. */
+    @sceneUpdate
     subtract(...others: Array<Curve | Polygon | ShapeCollection<Curve | Polygon>>): this
     {
         others.forEach(other => this.difference(other));
@@ -918,6 +915,7 @@ export class Polygon extends Shape
      * @param other        Cutting Curve (open or closed) or Polygon.
      * @param keepSmallest Keep the smallest piece instead of the largest.
      */
+    @sceneUpdate
     cutoffBy(other: Curve | Polygon, keepSmallest = false): this
     {
         const pieces = this._splitRaw(other);
@@ -944,6 +942,7 @@ export class Polygon extends Shape
      * @param coord     Position of the plane along `at` (default 0).
      * @param smallest  Keep the smallest piece instead of the largest.
      */
+    @sceneUpdate
     cutoff(at: Axis, coord: number = 0, smallest: boolean = false): this
     {
         if (!isAxis(at)) { throw new Error(`Polygon.cutoff(): Invalid axis '${at}'. Use 'x', 'y', or 'z'.`); }
@@ -983,6 +982,7 @@ export class Polygon extends Shape
      * @param length     Distance to extrude.
      * @param direction  Direction vector (default: polygon normal).
      */
+    @sceneReplace
     extrude(length: number, direction?: PointLike): Mesh
     {
         const normal = this.normal();
@@ -1023,6 +1023,7 @@ export class Polygon extends Shape
     //// EXPORT ////
 
     /** Polygon is basically Mesh with one polygon */
+    @sceneCarry
     toMesh(): Mesh
     {
         return Mesh.fromPolygons([this.vertices().toArray()]);

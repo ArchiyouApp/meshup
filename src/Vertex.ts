@@ -183,7 +183,7 @@ export class Vertex extends Shape
   override mirrorY(y?: number): this { return this.mirror('y', [0, y ?? 0, 0]); }
   override mirrorZ(z?: number): this { return this.mirror('z', [0, 0, z ?? 0]); }
 
-  override copy(): this
+  override _copy(): this
   {
     const v = new Vertex([this.x, this.y, this.z], this.normal().toArray());
     v.style.merge(this.style.toData());

@@ -25,6 +25,7 @@ import { Vector3Js, VertexJs, Point3Js, PolygonJs, SketchJs, Curve3DJs } from ".
 import { ShapeCollection, getCsgrs, Mesh } from './index';
 import { Shape } from './Shape';
 import type { SceneNode } from './SceneNode';
+import { sceneReplace, sceneAdd, sceneUpdate, sceneCarry, sceneReplaceOrKeep } from './sceneDecorators';
 import type { CsgrsModule, PointLike, Axis, BasePlane } from './types';
 import { isPointLike, isBasePlane } from './types'
 import { Point } from './Point';
@@ -114,24 +115,14 @@ export class Curve extends Shape
         return this;
     }
 
-    override copy(): this
+    override _copy(): this
     {
         const newCurve = new Curve();
         newCurve._curve = this._curve?.clone();
-        newCurve._holes = this._holes.map(h => h.copy());
+        newCurve._holes = this._holes.map(h => h._copy());
         newCurve.style.merge(this.style.explicitData() as any);
 
-        // if original shape is tied to scene: add copy too, as sibling
-        // TODO: keep this structural and put in Shape
-        if (this.node())
-        {
-            const parent = this.node()?.parent() || this.node(); 
-            if (parent)
-            {
-                parent.addShape(newCurve); // TODO: name with 'copy'
-            };
-        }
-
+        // Scene registration is handled by Shape.copy() — _copy() is the pure clone.
         return newCurve as this;
     }
 
@@ -181,6 +172,7 @@ export class Curve extends Shape
                 }
             }
         }
+        ShapeCollection._nameGrid(curves, this.name() as string | undefined, nx, ny, nz);
         return curves;
     }
 
@@ -951,12 +943,14 @@ export class Curve extends Shape
     }
 
     /** Start point of the curve (arc-length parameter 0). */
+    @sceneCarry
     start(): Vertex
     {
         return new Vertex(new Point(this.inner().pointAt(0)));
     }
 
     /** End point of the curve (arc-length parameter 1). */
+    @sceneCarry
     end(): Vertex
     {
         return new Vertex(new Point(this.inner().pointAt(1)));
@@ -1246,6 +1240,7 @@ export class Curve extends Shape
      *  Selectors are greedy: an underspecified selector returns every match.
      *  A ShapeCollection result is collapsed to the single shape when there is
      *  exactly one match (checkSingle), and an empty result warns. */
+    @sceneAdd
     select(what: string)
     {
         const result = new Selector(what).execute(this);
@@ -1258,6 +1253,7 @@ export class Curve extends Shape
      *  - polylines and rects yield every corner (segment junction) vertex
      *  Coincident consecutive points (including the wrap for closed curves) are
      *  collapsed, so a closed rect returns its 4 distinct corners. */
+    @sceneCarry
     vertices(): ShapeCollection<Vertex>
     {
         const EPS = 1e-6;
@@ -1292,6 +1288,7 @@ export class Curve extends Shape
      *  - degree-1 spans (polylines) are split into individual line segments (N CPs → N-1 edges)
      *  - higher-degree spans (arcs, splines) are returned as-is, one per span
      */
+    @sceneCarry
     segments(): ShapeCollection<Curve>
     {
         const segs: Curve[] = this.spans().toArray().flatMap(span =>
@@ -1308,6 +1305,7 @@ export class Curve extends Shape
     }
 
     /** For BREP compatibility: alias for segments() */
+    @sceneCarry
     edges(): ShapeCollection<Curve>
     {
         return this.segments();
@@ -1325,6 +1323,7 @@ export class Curve extends Shape
      *  @param toIndex   - last segment index (inclusive). Defaults to fromIndex (single segment). Negative indexes count from the end.
      *  @returns a single Curve — one span stays a plain Curve, multiple spans become a CompoundCurve.
      */
+    @sceneAdd
     segment(fromIndex: number, toIndex: number = fromIndex): Curve
     {
         // Build the atomic segments as FRESH, plain-meshup Curves (never Smart*, never
@@ -1885,6 +1884,7 @@ export class Curve extends Shape
             }
         }
 
+        ShapeCollection._nameGrid(curves, this.name() as string | undefined, cx, cy, cz);
         return curves
     }
 
@@ -1918,6 +1918,7 @@ export class Curve extends Shape
             }
         });
 
+        ShapeCollection._nameRow(curves, this.name() as string | undefined);
         return curves;
     }
 
@@ -2004,6 +2005,7 @@ export class Curve extends Shape
     }
 
     /** Offset a Curve a given amount (+grows / −shrinks) with optional corner type. */
+    @sceneUpdate
     offset(distance: number, cornerType:'sharp'|'round'|'smooth'='sharp'): Curve|null
     {
         if(!this.isPlanar()){ throw new Error(`Curve::offset(): Cannot offset a non-planar curve!`);}
@@ -2018,6 +2020,32 @@ export class Curve extends Shape
             const newRadius = radius + distance;
             if(newRadius <= 0) { return null; }
             return this.update(Curve.Circle(newRadius, center, normal));
+        }
+
+        // Single straight open line: offsetting is a perpendicular translate within the line's
+        // plane, but the native offset picks its side from the curve's internal winding — which
+        // flips non-deterministically. Choose the side deterministically instead: the in-plane
+        // perpendicular (normal × direction), oriented so its leading component is positive —
+        // i.e. toward +X; if the line is parallel to X, toward +Y; otherwise +Z. So a positive
+        // `distance` always offsets a line the same way, independent of its start→end direction.
+        if(!this.isClosed() && this.isStraight())
+        {
+            const t = this.direction().normalize();
+            const n = this.normal();
+            if(n && n.length() > 1e-6)
+            {
+                const d = n.copy().cross(t); // perpendicular to the line, in its plane
+                if(d.length() > 1e-6)
+                {
+                    d.normalize();
+                    const EPS = 1e-9;
+                    const lead = Math.abs(d.x) > EPS ? d.x : (Math.abs(d.y) > EPS ? d.y : d.z);
+                    if(lead < 0) { d.scale(-1); }
+                    const off = d.scale(distance);
+                    return this.translate(off.x, off.y, off.z);
+                }
+            }
+            // else: fall through to the native offset below.
         }
 
         try
@@ -2257,6 +2285,7 @@ export class Curve extends Shape
      *  Returns the exterior outlines of the resulting regions,
      *  or null on error.
      */
+    @sceneReplaceOrKeep
     union(other: Curve): Curve|ShapeCollection<Curve>|null
     {
         const bool = this._booleanOp(other, 'union')?.checkSingle() || null;
@@ -2274,7 +2303,17 @@ export class Curve extends Shape
      *  Returns the exterior outlines of the resulting regions,
      *  or null on error.
      */
+    @sceneReplaceOrKeep
     difference(other: Curve): Curve|ShapeCollection<Curve>|null
+    {
+        return this._differenceRaw(other);
+    }
+
+    /** Pure boolean difference geometry — no scene bookkeeping. Mutates in place and returns
+     *  `this` for a single result, returns a new ShapeCollection when it splits into several
+     *  pieces, or null on failure. Used internally (cutoffBy) so scene management doesn't fire
+     *  mid-operation. */
+    private _differenceRaw(other: Curve): Curve|ShapeCollection<Curve>|null
     {
         const bool = this._booleanOp(other, 'difference')?.checkSingle() || null;
         if(bool instanceof Curve){ return this.update(bool);}
@@ -2286,7 +2325,7 @@ export class Curve extends Shape
         else { console.warn('Curve::difference(): Boolean operation failed. Returning null.'); return null; }
     }
 
-    // Alias for difference
+    // Alias for difference (scene management runs via the decorated difference()).
     subtract(other: Curve): Curve|ShapeCollection<Curve>|null
     {
         return this.difference(other);
@@ -2301,6 +2340,7 @@ export class Curve extends Shape
      *  - Closed this Curve + open other (e.g. a line crossing it): split the closed
      *    curve along the cutter into two regions and keep the biggest/smallest by area.
      */
+    @sceneReplaceOrKeep
     cutoffBy(other: Curve, keepSmallest?: boolean): Curve|ShapeCollection<Curve>|null
     {
         // Region boolean only makes sense for closed curves; an open curve is
@@ -2313,7 +2353,8 @@ export class Curve extends Shape
         {
             return this._cutoffClosedByLine(other, keepSmallest);
         }
-        return keepSmallest ? this.difference(other) : this._booleanOp(other, 'intersection')?.checkSingle() || null;
+        // Use the raw difference so its scene decorator doesn't fire inside cutoffBy.
+        return keepSmallest ? this._differenceRaw(other) : this._booleanOp(other, 'intersection')?.checkSingle() || null;
     }
 
     /** Split this closed Curve along an open cutter Curve into the two regions either
@@ -2572,6 +2613,7 @@ export class Curve extends Shape
      * 
      *  NOTE: bring this into the Rust/WASM layer?
      */
+    @sceneReplace
     extrude(length: number, direction?: PointLike): Mesh | Polygon | null
     {
         if (!this._curve) { return null; }
@@ -2606,7 +2648,7 @@ export class Curve extends Shape
         // it). Delegating keeps a single, correct orientation path.
         if (this.isClosed() && this.isPlanar())
         {
-            const face = this.toPolygon();
+            const face = this._toPolygonRaw();
             if (face) { return face.extrude(length, resolvedDirection as any); }
         }
 
@@ -2687,6 +2729,7 @@ export class Curve extends Shape
      *  @param solid   When all profiles are closed, cap the ends into a watertight solid (default true).
      *  @returns A new Mesh or Polygon, or null on invalid input.
      */
+    @sceneReplace
     loft(others: Curve | Curve[], solid: boolean = true): Mesh | Polygon | null
     {
         if (!this._curve) { return null; }
@@ -2788,7 +2831,16 @@ export class Curve extends Shape
     //// TRANSFORMATION TO OTHER TYPES ////
 
     /** Convert this curve to a Polygon via tessellation (including hole rings if present). */
+    @sceneReplace
     toPolygon(tolerance: number = TESSELATION_TOLERANCE): Polygon | undefined
+    {
+        return this._toPolygonRaw(tolerance);
+    }
+
+    /** Pure tessellation to a Polygon — never touches the scene. Used internally (extrude,
+     *  toFace, toMesh) so the decorated public toPolygon() can't corrupt the scene when
+     *  called during another op. */
+    private _toPolygonRaw(tolerance: number = TESSELATION_TOLERANCE): Polygon | undefined
     {
         this.close(); // ensure the curve is closed before tessellation
         const points = this.tessellate(tolerance);
@@ -2816,14 +2868,16 @@ export class Curve extends Shape
     }
 
     /** Alias for toPolygon() */
+    @sceneReplace
     toFace(tolerance: number = TESSELATION_TOLERANCE): Polygon | undefined
     {
-        return this.toPolygon(tolerance);
+        return this._toPolygonRaw(tolerance);
     }
 
+    @sceneReplace
     toMesh(tolerance: number = TESSELATION_TOLERANCE): Mesh | undefined
     {
-        const poly = this.toPolygon(tolerance);
+        const poly = this._toPolygonRaw(tolerance);
         if (!poly)
         {
             return undefined;

@@ -130,6 +130,16 @@ export interface SceneNodeGraphNode
   children: SceneNodeGraphNode[]
 }
 
+/** Serialised SceneNode subtree used by the host's execution-result state and GLB extras.
+ *  Identity rules mirror the viewer's path-map builder (see SceneNode.toData/path). */
+export interface SceneNodeData
+{
+  name: string
+  shape?: string | null // uuid of the held shape; null/undefined for layer/group containers
+  style: Partial<StyleData>
+  children: SceneNodeData[]
+}
+
 /** Some style or visibility data that can not be converted into format directly
  *  For example: in GLTF export we want tag nodes as hidden
  */
