@@ -1786,10 +1786,49 @@ export class Curve extends Shape
         return normal ? this._frameFromNormal(normal, tolerance) : null;
     }
 
-    /** Native segment geometry is already minimal; kept for API compatibility. */
-    mergeColinearLines(_colinearTol: number = 1e-3): this
+    /** Collapse runs of consecutive collinear line segments into single lines: interior
+     *  vertices whose incoming and outgoing directions match are redundant, so they are
+     *  dropped and the curve is rebuilt through the vertices that remain. This is what keeps
+     *  `extend()`/`toDegree1()` from leaving a curve split at a vertex that is not a corner.
+     *
+     *  Only pure degree-1 curves are rebuilt: on a curve carrying arcs/splines the control
+     *  points are NURBS control points rather than on-curve vertices, so a polyline rebuild
+     *  through them would corrupt the geometry. Such curves are returned unchanged.
+     *
+     *  @param colinearTol - |sin(angle)| between adjacent directions below which they count
+     *                       as collinear (default 1e-3 ≈ 0.06°).
+     */
+    mergeColinearLines(colinearTol: number = 1e-3): this
     {
-        return this;
+        if (this.spans().toArray().some(s => (s.inner()?.degree() ?? 1) > 1)) { return this; }
+
+        const pts = this.controlPoints();
+        if (!pts || pts.length < 3) { return this; }
+
+        /** Unit direction from `from` to `to`, or null when they coincide. */
+        const dirOf = (from: Point, to: Point): Vector|null =>
+        {
+            const v = to.toVector().subtract(from);
+            return (v.length() > Curve.ZERO_LENGTH_TOLERANCE) ? v.normalize() : null;
+        };
+
+        // First and last vertices are always endpoints, never merge candidates. On a closed
+        // curve they are the seam, which is left alone.
+        const kept: Array<Point> = [pts[0]];
+        for (let i = 1; i < pts.length - 1; i++)
+        {
+            const inDir = dirOf(kept[kept.length - 1], pts[i]);
+            const outDir = dirOf(pts[i], pts[i + 1]);
+            if (!inDir || !outDir) { continue; } // duplicate vertex: drop it
+            // Parallel AND same-facing: an anti-parallel pair is a spike doubling back on
+            // itself, whose vertex is a real corner.
+            const parallel = inDir.copy().cross(outDir).length() <= colinearTol;
+            if (!(parallel && inDir.dot(outDir) > 0)) { kept.push(pts[i]); }
+        }
+        kept.push(pts[pts.length - 1]);
+
+        if (kept.length === pts.length) { return this; } // nothing was redundant
+        return this.update(Curve.Polyline(kept));
     }
 
     /** Close this curve by adding a segment from end back to start.
@@ -1848,7 +1887,9 @@ export class Curve extends Shape
             const s = pts[0];
             pts.unshift([s[0] - t.x * length, s[1] - t.y * length, s[2] - t.z * length]);
         }
-        this.update(Curve.Polyline(pts));
+        // An extension runs along the endpoint tangent, so on a straight end segment the old
+        // endpoint stops being a corner: merge it away rather than leave an extra segment.
+        this.update(Curve.Polyline(pts).mergeColinearLines());
         return this;
     }
 
@@ -2137,8 +2178,10 @@ export class Curve extends Shape
         }
         catch (e)
         {
-            // Degenerate sub-range (e.g. zero-length window) — return a copy.
-            return this.copy();
+            // Degenerate sub-range (e.g. zero-length window) — return a copy. `_copy()`, not
+            // `copy()`: this is a pure sub-curve accessor, so it must not touch the scene —
+            // the success path above returns a fresh, unattached curve too.
+            return this._copy();
         }
     }
 
@@ -2190,6 +2233,7 @@ export class Curve extends Shape
      *  - maxGap < distance(other) - can't connect
      *  - maxGap >= distance(other) - connect closest endpoints
      */
+    @sceneUpdate
     connect(other:Curve, maxGap?: number):this
     {
         if(!(other instanceof Curve)){ throw new Error(`Curve::connect(): Expected a Curve. Got: ${other}`); }

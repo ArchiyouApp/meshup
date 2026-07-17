@@ -45,6 +45,8 @@ export interface ComponentGraphNode
 export interface SceneNodeShape {
     type: ShapeType | string
     subtype(): string | null
+    /** The shape's own name, when set. A node adopting the shape takes it (see getName). */
+    name?(): string | undefined
     _node: SceneNode<any> | null
     style: Style
     is2D(): boolean
@@ -98,9 +100,17 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         return new SceneNode<S>(name);
     }
 
-    /** Find a label based on shape */
+    /** Label for the node adopting `s`: the shape's own name when it has one, else a
+     *  type/subtype label ('Mesh:Box').
+     *
+     *  Taking the shape's name matters for shapes named while DETACHED: `Shape.name()` can
+     *  only sync the node label when the shape already has a node, so a shape named before it
+     *  enters the scene (`template.copy().name('stud0')`, then added via a collection) would
+     *  otherwise show up in the scenegraph as 'Mesh:Box'. */
     static getName<S extends SceneNodeShape>(s: S): string
     {
+        const own = s.name?.();
+        if (own) return own;
         const sub = s.subtype();
         return sub ? `${s.type}:${sub}` : s.type;
     }

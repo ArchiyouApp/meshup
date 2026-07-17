@@ -14,6 +14,7 @@
 
 import { Style } from './Style';
 import { SceneNode } from './SceneNode';
+import { activeLayerOf } from './sceneDecorators';
 import { Bbox } from './Bbox';
 
 import type { PointLike, Axis } from './types';
@@ -43,6 +44,12 @@ export abstract class Shape
     /** Sticky flag set by `tmp()`: while true, scene decorators and copy() do no scene
      *  bookkeeping for this shape and mark any shape derived from it `tmp()` too. */
     _suppressScene?: boolean;
+    /** The scene root this shape belongs to, kept even while the shape is detached (`_node`
+     *  null). Sub-shape accessors (segments/start/vertices/…) hand back fresh, unattached
+     *  shapes; carrying the root is what lets a later scene op on such a shape still resolve
+     *  the active layer. Cleared by removeFromScene() — a shape taken out of the scene must
+     *  not find its way back in. */
+    _scene: SceneNode | null = null;
 
     constructor()
     {
@@ -74,13 +81,20 @@ export abstract class Shape
     abstract _copy(): this;
 
     /** Public copy. Clones via `_copy()`, then — unless this shape is `tmp()` — adds the
-     *  clone to the active layer (the scene's tracked active layer, else this shape's own
-     *  parent node). The clone inherits the opaque `_modeler` and is flagged
-     *  `_nameInherited` so the host auto-namer can rename it after its variable. */
+     *  clone to the active layer. `copy()` means "give me a new shape", and new shapes render:
+     *  the clone is attached whenever a layer is reachable, which includes copying a DETACHED
+     *  but scene-derived shape (`curve.segments().first().copy()`) via the carried `_scene`.
+     *  The clone inherits the opaque `_modeler` and is flagged `_nameInherited` so the host
+     *  auto-namer can rename it after its variable.
+     *
+     *  Inside kernel operations use `_copy()` instead — it is the pure clone and never touches
+     *  the scene. Do NOT reach for `tmp()` there: `_suppressScene` is sticky and propagates to
+     *  every derived shape, so a tmp'd internal copy would suppress the real result too. */
     copy(): this
     {
         const c = this._copy();
         c._modeler = this._modeler;
+        c._scene = this._node?.root() ?? this._scene;
         c._nameInherited = true;
         c._material = this._material;
 
@@ -90,13 +104,8 @@ export abstract class Shape
             return c;
         }
 
-        const node = this._node;
-        if (node)
-        {
-            const root = node.root() as any;
-            const layer: SceneNode | null = (root?.activeLayer?.() ?? node.parent()) ?? null;
-            if (layer) layer.addShape(c as any);
-        }
+        const layer = activeLayerOf(this);
+        if (layer) (layer as SceneNode).addShape(c as any);
         return c;
     }
 
@@ -124,6 +133,7 @@ export abstract class Shape
     {
         this._node?.detach();
         this._node = null;
+        this._scene = null;
         return this;
     }
 

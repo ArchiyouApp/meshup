@@ -399,9 +399,79 @@ describe('Curve.extend()', async () =>
         expect(line1.distance(line2)).toBeCloseTo(0, 5);
 
         // visual check
-        await save(OUTPUT_DIR + 'test.curve.extendTo.gltf', 
+        await save(OUTPUT_DIR + 'test.curve.extendTo.gltf',
             await new ShapeCollection<Curve>(line1, line2).toGLTF()
         );
+    });
+
+    // An extension runs along the endpoint tangent, so the old endpoint stops being a corner
+    // and must not survive as an extra segment. Length-only assertions miss this.
+    it('consolidates the extension into the end segment instead of adding one', () =>
+    {
+        const c = Curve.Polyline([[0,0,0],[100,0,100],[200,0,0]]);
+        expect(c.segments().length).toBe(2);
+
+        c.extend(100);
+        expect(c.segments().length).toBe(2);
+
+        c.extendTo(Curve.Line([-100,0,0],[-100,0,-400]));
+        expect(c.segments().length).toBe(2);
+    });
+
+    it('extends by exactly the given length without moving the other end', () =>
+    {
+        const c = Curve.Polyline([[0,0,0],[100,0,100],[200,0,0]]);
+        const lenBefore = c.length() as number;
+        const startBefore = c.controlPoints()[0];
+
+        c.extend(100, 'end');
+
+        expect((c.length() as number) - lenBefore).toBeCloseTo(100, 6);
+        expect(startBefore.distance(c.controlPoints()[0])).toBeCloseTo(0, 6);
+
+        c.extend(50, 'both');
+        expect((c.length() as number) - lenBefore).toBeCloseTo(200, 6);
+        expect(c.segments().length).toBe(2);
+    });
+});
+
+describe('Curve.mergeColinearLines()', () =>
+{
+    it('collapses a straight polyline split at non-corners into one line', () =>
+    {
+        const c = Curve.Polyline([[0,0,0],[50,0,0],[100,0,0]]);
+        expect(c.segments().length).toBe(2);
+
+        c.mergeColinearLines();
+
+        expect(c.segments().length).toBe(1);
+        expect(c.length()).toBeCloseTo(100, 6);
+    });
+
+    it('keeps real corners', () =>
+    {
+        const c = Curve.Polyline([[0,0,0],[100,0,100],[200,0,0]]);
+        c.mergeColinearLines();
+        expect(c.segments().length).toBe(2);
+    });
+
+    it('keeps a spike that doubles back (anti-parallel is a corner, not collinear)', () =>
+    {
+        const c = Curve.Polyline([[0,0,0],[100,0,0],[50,0,0]]);
+        c.mergeColinearLines();
+        expect(c.segments().length).toBe(2);
+    });
+
+    it('leaves an arc-bearing curve untouched (its CPs are not on-curve vertices)', () =>
+    {
+        const arc = Curve.Arc([0,0,0],[50,0,50],[100,0,0]);
+        const lenBefore = arc.length() as number;
+        const degBefore = arc.maxDegree();
+
+        arc.mergeColinearLines();
+
+        expect(arc.maxDegree()).toBe(degBefore);
+        expect(arc.length()).toBeCloseTo(lenBefore, 6);
     });
 });
 

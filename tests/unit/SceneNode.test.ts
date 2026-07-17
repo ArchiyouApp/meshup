@@ -69,6 +69,27 @@ describe('SceneNode shape management', () =>
         expect(c.shapes()).toHaveLength(1);
     });
 
+    // Shape.name() can only sync the node label when the shape already has a node, so a shape
+    // named while detached (a copy of a template kept out of the scene, added later via a
+    // collection) has to have its name picked up here — or it shows as 'Mesh:Box'.
+    it('a node adopting a named shape takes the shape name', () =>
+    {
+        const c = new SceneNode('c');
+        const m = Mesh.Cube(5).name('stud0');
+        expect(m._node).toBeNull();     // named while detached
+
+        c.addShape(m);
+
+        expect(c.children()[0].name).toBe('stud0');
+    });
+
+    it('a node adopting an unnamed shape falls back to the type label', () =>
+    {
+        const c = new SceneNode('c');
+        c.addShape(Mesh.Cube(5));
+        expect(c.children()[0].name).toBe('Mesh:Box');
+    });
+
     it('removeShape removes the shape', () =>
     {
         const c = new SceneNode('c');

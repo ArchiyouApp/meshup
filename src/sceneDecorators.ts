@@ -7,6 +7,12 @@
  *    - When the shape is tied to a scene it mutates the scene (add / replace / layer).
  *    - When it is NOT (standalone meshup, or a shape marked `tmp()`) it is a pure no-op.
  *
+ *  A shape can also be scene-derived but detached: `@sceneCarry` accessors (segments/start/…)
+ *  return fresh, unattached shapes carrying the source's scene root in `_scene`. Those still
+ *  resolve an active layer (see activeLayerOf), which is what lets `segments().first().copy()`
+ *  and a later `@sceneUpdate` land in the scene. `removeFromScene()` clears `_scene`, so a
+ *  shape taken out stays out.
+ *
  *  The plain kernel result is ALWAYS returned unchanged — decorators never wrap the result.
  *  This is what lets the modeler work with meshup shapes directly: `extrude()` still returns
  *  a `Mesh`, `split()` still returns a `ShapeCollection<Mesh>`, etc.
@@ -14,7 +20,7 @@
  *    @sceneReplace   add result(s) to the active layer; detach self   (extrude, split, hull…)
  *    @sceneAdd       add result(s) to the active layer; keep self     (select, segment)
  *    @sceneLayer(n)  add result(s) to a named layer 'n' under root    (iso, elevation, section)
- *    @sceneUpdate    in-place mutator (returns this); re-attach self   (offset, cutoff, difference)
+ *    @sceneUpdate    in-place mutator (returns this); re-attach self   (offset, cutoff, connect)
  *
  *  Scene bookkeeping only ever touches meshup's own SceneNode graph — it never calls into
  *  `_modeler` (that opaque reference is only carried/propagated so the host app can find the
@@ -26,15 +32,29 @@ import type { SceneNode } from './SceneNode'
 // Kept loose: these decorators run on any shape/collection carrying the scene fields.
 type Any = any
 
+/** The scene root a shape belongs to: its own node's root while attached, else the root it
+ *  carries from the shape it was derived from. Null when the shape has no scene at all
+ *  (standalone meshup, or a shape that was explicitly removed from the scene). */
+function sceneRootOf(self: Any): SceneNode | null
+{
+    return ((self?._node as SceneNode | null)?.root() ?? self?._scene) ?? null
+}
+
 /** The layer new results should be added to: the scene's tracked active layer, else the
  *  source shape's own parent node (sibling semantics — preserves standalone-meshup behavior,
- *  where no active layer is ever set). Null when the source is not in a scene. */
-function activeLayerOf(self: Any): SceneNode | null
+ *  where no active layer is ever set). Null when the source is not in a scene.
+ *  Also used by `Shape.copy()`, so a copy lands in the same layer a decorated result would. */
+export function activeLayerOf(self: Any): SceneNode | null
 {
     const node = self?._node as SceneNode | null
-    if (!node) return null
-    const root = node.root() as Any
-    return (root?.activeLayer?.() ?? node.parent()) ?? null
+    if (node)
+    {
+        const root = node.root() as Any
+        return (root?.activeLayer?.() ?? node.parent()) ?? null
+    }
+    // Detached but scene-derived: no parent node to fall back on, but the carried root still
+    // tracks the active layer.
+    return ((self?._scene as Any)?.activeLayer?.()) ?? null
 }
 
 /** Normalise a method result (single shape | array | ShapeCollection | null) to a flat
@@ -50,15 +70,17 @@ function toShapes(result: Any): Any[]
     return [result]
 }
 
-/** Carry the opaque `_modeler` reference and the sticky `_suppressScene` flag from the
- *  source onto every result shape (transitive temp-ness: ops on a `tmp()` shape yield
- *  `tmp()` results). */
+/** Carry the opaque `_modeler` reference, the source's scene root and the sticky
+ *  `_suppressScene` flag from the source onto every result shape (transitive temp-ness: ops
+ *  on a `tmp()` shape yield `tmp()` results). */
 function propagate(self: Any, result: Any): void
 {
+    const scene = sceneRootOf(self)
     toShapes(result).forEach(s =>
     {
         if (s == null || typeof s !== 'object') return
         if (s._modeler == null) s._modeler = self?._modeler ?? null
+        if (s._scene == null) s._scene = scene
         if (self?._suppressScene) s._suppressScene = true
     })
 }
@@ -206,8 +228,8 @@ function colSceneRoot(self: Any): SceneNode | null
 {
     const fromLayer = self?._layer?.root?.() ?? null
     if (fromLayer) return fromLayer
-    const shaped = self?._shapes?.find((s: Any) => s?._node)
-    return (shaped?._node?.root?.() ?? null) as SceneNode | null
+    const shaped = self?._shapes?.find((s: Any) => sceneRootOf(s))
+    return sceneRootOf(shaped)
 }
 
 function colModeler(self: Any): Any
@@ -289,8 +311,6 @@ export const sceneUpdate: Decorator = (_t, _k, desc) =>
         const result = fn.apply(this, args)
         if (!this._suppressScene && !this._node)
         {
-            // Without a node the active layer is unreachable from meshup alone; this only
-            // matters for shapes never added to a scene, which stay out anyway.
             addTo(activeLayerOf(this), this)
         }
         return result
