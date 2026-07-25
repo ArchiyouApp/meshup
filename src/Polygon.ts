@@ -605,14 +605,14 @@ export class Polygon extends Shape
     @sceneReplace
     split(other: Curve | Polygon, gap: number = 0): ShapeCollection<Polygon> | null
     {
-        return this._splitRaw(other, gap);
+        return this._split(other, gap);
     }
 
     /** The actual split implementation. Kept separate from the public split() so that in-place
      *  operations (cutoff/cutoffBy) can reuse the geometry without dispatching through split() —
      *  subclasses (e.g. core's SmartMeshPolygon) decorate split() with scene side effects that
      *  would otherwise pollute the scene with the intermediate pieces. */
-    private _splitRaw(other: Curve | Polygon, gap: number = 0): ShapeCollection<Polygon> | null
+    private _split(other: Curve | Polygon, gap: number = 0): ShapeCollection<Polygon> | null
     {
         if (!(other instanceof Curve) && !(other instanceof Polygon))
         {
@@ -772,7 +772,7 @@ export class Polygon extends Shape
         }
 
         const before = this.area();
-        const pieces = this._differenceRaw(other);
+        const pieces = this._difference(other);
         if (!pieces) { return this; } // unchanged — a warning was already emitted
 
         const total = pieces.reduce((s, p) => s + p.area(), 0);
@@ -801,8 +801,10 @@ export class Polygon extends Shape
 
     /** Boundary-curve difference for a single closed cutter. Returns the resulting polygon
      *  piece(s), or null when the cutter is unusable / the boolean failed / produced nothing.
-     *  Mirrors split()'s closed-cutter branch but does not require the result to be ≥2 pieces. */
-    private _differenceRaw(other: Curve | Polygon): Array<Polygon> | null
+     *  Mirrors split()'s closed-cutter branch but does not require the result to be ≥2 pieces.
+     *  Internal: skips scene management (no @scene* decorators fire) so it's safe to compose
+     *  inside other ops. */
+    private _difference(other: Curve | Polygon): Array<Polygon> | null
     {
         if (this.hasHoles())
         {
@@ -918,7 +920,7 @@ export class Polygon extends Shape
     @sceneUpdate
     cutoffBy(other: Curve | Polygon, keepSmallest = false): this
     {
-        const pieces = this._splitRaw(other);
+        const pieces = this._split(other);
         if (!pieces || pieces.count() < 2)
         {
             console.warn('Polygon.cutoffBy(): the cutter did not split the polygon — nothing cut off.');
@@ -966,7 +968,7 @@ export class Polygon extends Shape
         const p1 = new Point(base.x - lineDir.x * far, base.y - lineDir.y * far, base.z - lineDir.z * far);
         const p2 = new Point(base.x + lineDir.x * far, base.y + lineDir.y * far, base.z + lineDir.z * far);
 
-        const pieces = this._splitRaw(Curve.Line(p1, p2));
+        const pieces = this._split(Curve.Line(p1, p2));
         if (!pieces || pieces.count() < 2)
         {
             console.warn(`Polygon.cutoff(): plane '${at}=${coord}' does not split the polygon — nothing cut off.`);

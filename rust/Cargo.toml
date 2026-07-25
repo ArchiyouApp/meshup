@@ -142,6 +142,7 @@ stl-io = [
 svg-io = [
   "svg",
   "nom", # Parsing of things not covered by the `svg` crate
+  "hypercurve/svg", # hypercurve's curve-aware SVG path import (svg_io)
 ]
 dxf-io = [
   "dxf",

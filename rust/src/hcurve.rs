@@ -17,9 +17,10 @@
 
 use hypercurve::{
     ArcArcIntersection, BezierFlatteningOptions, BezierSubcurve2, BooleanOp, Classification,
-    CircularArc2, Contour2, CurvePolicy, CurveString2, FillRule, FiniteProjectionOptions,
-    LineArcIntersection, LineLineIntersection, LineSeg2, Point2, RationalBSplineCurve2, Real,
-    Region2, RegionView2, Segment2, SegmentIntersection, Similarity2, Tolerance,
+    CircularArc2, Contour2, CurvePath2, CurvePolicy, CurveString2, EllipseMap2, FillRule,
+    FiniteProjectionOptions, LineArcIntersection, LineLineIntersection, LineSeg2, Point2,
+    RationalBSplineCurve2, Real, Region2, RegionView2, Segment2, SegmentIntersection, Similarity2,
+    Tolerance, elliptical_arc_path,
 };
 
 /// Default chord error used when sampling exact arcs/curves to f64 polylines.
@@ -309,6 +310,125 @@ pub fn circle(cx: f64, cy: f64, r: f64) -> Result<Contour2, String>
     let bottom = Segment2::from_bulge(left, right, bulge)
         .map_err(|e| format!("hcurve: circle bottom arc failed ({e:?})"))?;
     Contour2::try_new(vec![top, bottom]).map_err(|e| format!("hcurve: circle contour failed ({e:?})"))
+}
+
+/// Build an exact **full ellipse** as a closed [`CurvePath2`] of rational
+/// quadratic conic spans. Semi-axes `rx` (major direction) and `ry` (minor
+/// direction), rotated `rotation` radians about `(cx, cy)`.
+///
+/// The ellipse is the affine image of a circle; this is the f64 boundary where
+/// the rotation enters trigonometry once (see [`elliptical_arc`]).
+pub fn ellipse(rx: f64, ry: f64, rotation: f64, cx: f64, cy: f64) -> Result<CurvePath2, String>
+{
+    elliptical_arc(rx, ry, rotation, cx, cy, 0.0, std::f64::consts::TAU)
+}
+
+/// Build an exact **elliptical arc** as a [`CurvePath2`] from `start_angle` to
+/// `end_angle` (radians, in the pre-rotation circle parameter). A full turn
+/// (`end - start == 2π`) closes the path. Semi-axes `rx`/`ry`, rotated `rotation`
+/// radians about `(cx, cy)`.
+pub fn elliptical_arc(
+    rx: f64,
+    ry: f64,
+    rotation: f64,
+    cx: f64,
+    cy: f64,
+    start_angle: f64,
+    end_angle: f64,
+) -> Result<CurvePath2, String>
+{
+    if !(rx.is_finite() && ry.is_finite() && rx > 0.0 && ry > 0.0)
+    {
+        return Err(format!("hcurve: invalid ellipse semi-axes {rx}x{ry}"));
+    }
+    // M = R(rotation) · diag(rx, ry), row-major [m00, m01, m10, m11]:
+    //   û = (cos, sin), v̂ = (-sin, cos); columns rx·û and ry·v̂.
+    let (c, s) = (rotation.cos(), rotation.sin());
+    let map: EllipseMap2 = [
+        real(rx * c)?,
+        real(-ry * s)?,
+        real(rx * s)?,
+        real(ry * c)?,
+    ];
+    let center = point(cx, cy)?;
+    let samples = ellipse_samples(start_angle, end_angle)?;
+    elliptical_arc_path(&center, &map, &samples)
+        .map_err(|e| format!("hcurve: ellipse construction failed ({e:?})"))
+}
+
+/// Ordered unit-circle sample directions `(cos φ, sin φ)` splitting
+/// `[start, end]` into spans of at most 90° so every conic weight stays positive.
+fn ellipse_samples(start: f64, end: f64) -> Result<Vec<(Real, Real)>, String>
+{
+    if !(start.is_finite() && end.is_finite())
+    {
+        return Err(format!("hcurve: invalid ellipse sweep {start}..{end}"));
+    }
+    let sweep = end - start;
+    if sweep.abs() < 1.0e-12
+    {
+        return Err("hcurve: degenerate ellipse sweep".to_string());
+    }
+    let span_count = (sweep.abs() / std::f64::consts::FRAC_PI_2).ceil().max(1.0) as usize;
+    let step = sweep / span_count as f64;
+    (0..=span_count)
+        .map(|i| unit_direction(start + step * i as f64))
+        .collect()
+}
+
+/// Exact `(cos φ, sin φ)` for one sample angle. Near-cardinal angles snap to the
+/// exact axis points `(±1, 0)` / `(0, ±1)` so axis-aligned ellipses stay exact
+/// and full-turn paths close on an identical `Real` pair.
+fn unit_direction(angle: f64) -> Result<(Real, Real), String>
+{
+    const EPS: f64 = 1.0e-12;
+    let (c, s) = (angle.cos(), angle.sin());
+    let snap = |v: f64| -> Option<i8> {
+        [-1i8, 0, 1].into_iter().find(|t| (v - *t as f64).abs() < EPS)
+    };
+    if let (Some(ci), Some(si)) = (snap(c), snap(s))
+    {
+        // A genuine cardinal direction has exactly one non-zero unit component.
+        if ci.abs() + si.abs() == 1
+        {
+            return Ok((real(ci as f64)?, real(si as f64)?));
+        }
+    }
+    Ok((real(c)?, real(s)?))
+}
+
+/// Tessellate an exact [`CurvePath2`] (e.g. an ellipse) to an f64 polyline by
+/// sampling each rational conic span; adjacent spans share an endpoint, which is
+/// de-duplicated. Sample density scales with `chord_error`.
+pub fn tessellate_path(path: &CurvePath2, chord_error: f64) -> Result<Vec<[f64; 2]>, String>
+{
+    let per_span = path_span_samples(chord_error);
+    let mut out: Vec<[f64; 2]> = Vec::new();
+    for curve in path.curves()
+    {
+        let span_pts: Vec<[f64; 2]> = (0..=per_span)
+            .map(|i| i as f64 / per_span as f64)
+            .map(|t| -> Result<[f64; 2], String> {
+                let pt = curve
+                    .point_at(&real(t)?)
+                    .map_err(|e| format!("hcurve: path point failed ({e:?})"))?;
+                point_to_f64(&pt).ok_or_else(|| "hcurve: path point not finite".to_string())
+            })
+            .collect::<Result<_, _>>()?;
+        append_dedup(&mut out, &span_pts);
+    }
+    Ok(out)
+}
+
+/// Per-span sample count for [`tessellate_path`], from the chord tolerance.
+fn path_span_samples(chord_error: f64) -> usize
+{
+    if !(chord_error.is_finite() && chord_error > 0.0)
+    {
+        return 32;
+    }
+    // ~90° conic spans: samples grow as 1/sqrt(chord). Clamp for sane meshes.
+    ((0.5 / chord_error.sqrt()).ceil() as usize).clamp(8, 128)
 }
 
 /// Build a planar similarity transform from f64 affine entries
@@ -1095,6 +1215,49 @@ mod tests
     {
         let r = real(1.5).unwrap();
         assert_eq!(r.to_f64_lossy(), Some(1.5));
+    }
+
+    #[test]
+    fn full_ellipse_is_closed_with_four_conic_spans()
+    {
+        let e = ellipse(3.0, 1.5, 0.0, 0.0, 0.0).unwrap();
+        assert_eq!(e.curves().len(), 4);
+        assert_eq!(e.start(), e.end());
+    }
+
+    #[test]
+    fn ellipse_tessellation_spans_the_semi_axes()
+    {
+        let e = ellipse(3.0, 1.5, 0.0, 0.0, 0.0).unwrap();
+        let pts = tessellate_path(&e, DEFAULT_CHORD_ERROR).unwrap();
+        let max_x = pts.iter().map(|p| p[0]).fold(f64::MIN, f64::max);
+        let max_y = pts.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
+        assert!((max_x - 3.0).abs() < 1e-9, "max_x = {max_x}");
+        assert!((max_y - 1.5).abs() < 1e-9, "max_y = {max_y}");
+    }
+
+    #[test]
+    fn rotated_ellipse_swaps_extents()
+    {
+        // 90° rotation swaps the x/y extents (major axis now vertical).
+        let e = ellipse(3.0, 1.5, std::f64::consts::FRAC_PI_2, 0.0, 0.0).unwrap();
+        let pts = tessellate_path(&e, DEFAULT_CHORD_ERROR).unwrap();
+        let max_x = pts.iter().map(|p| p[0]).fold(f64::MIN, f64::max);
+        let max_y = pts.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
+        assert!((max_x - 1.5).abs() < 1e-9, "max_x = {max_x}");
+        assert!((max_y - 3.0).abs() < 1e-9, "max_y = {max_y}");
+    }
+
+    #[test]
+    fn elliptical_arc_quarter_is_open()
+    {
+        let a = elliptical_arc(3.0, 1.5, 0.0, 0.0, 0.0, 0.0, std::f64::consts::FRAC_PI_2).unwrap();
+        assert_eq!(a.curves().len(), 1);
+        assert_ne!(a.start(), a.end());
+        let pts = tessellate_path(&a, DEFAULT_CHORD_ERROR).unwrap();
+        // Starts at the +x vertex (3,0), ends at the +y vertex (0,1.5).
+        assert!((pts.first().unwrap()[0] - 3.0).abs() < 1e-9);
+        assert!((pts.last().unwrap()[1] - 1.5).abs() < 1e-9);
     }
 
     #[test]

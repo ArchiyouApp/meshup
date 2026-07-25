@@ -3,7 +3,7 @@
  *
  * Phase 0A: SVG + GeoJSON import through the already-compiled WASM.
  */
-import { beforeAll, describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect, vi } from 'vitest';
 import { Importer, Sketch, Curve, Mesh, ShapeCollection, getCsgrs, initAsync } from '../../src/index';
 
 beforeAll(async () =>
@@ -125,6 +125,52 @@ describe('Importer: SVG', () =>
     {
         expect(() => Importer.fromSVG('')).toThrow(/non-empty SVG/);
     });
+
+    // Regression: the old polyline parser threw Unimplemented("elliptical arc by")
+    // on this real-world sample (poi.svg). hypercurve imports its circular arcs.
+    it('imports a path with circular arcs (poi.svg) as a closed curve with native arcs', () =>
+    {
+        const poi = `<svg viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'>
+          <path d="M65,20a15,15,0,1,1,15,15h-60a15,15,0,1,1,15-15v60a15,15,0,1,1-15-15h60a15,15,0,1,1-15,15z" fill="none"/>
+        </svg>`;
+        const curves = Importer.fromSVG(poi).toArray();
+        expect(curves.length).toBe(1);
+        expect(curves[0].isClosed()).toBe(true);
+        // The arcs are preserved as native circular-arc segments (not a flat polyline).
+        expect((curves[0].inner() as any).hasArcs()).toBe(true);
+    });
+
+    it('imports a path with cubic Béziers (flattened to line segments)', () =>
+    {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg"><path d="M10,10 C 20,20 40,20 50,10 L 50,40 Z"/></svg>`;
+        const curves = Importer.fromSVG(svg).toArray();
+        expect(curves.length).toBe(1);
+        expect(curves[0].isClosed()).toBe(true);
+        // A flattened cubic yields several segments (not just the 2 lines).
+        expect((curves[0].inner() as any).segmentCount()).toBeGreaterThan(3);
+    });
+
+    it('imports a circle element as a native closed curve', () =>
+    {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="20"/></svg>`;
+        const curves = Importer.fromSVG(svg).toArray();
+        expect(curves.length).toBe(1);
+        expect(curves[0].isClosed()).toBe(true);
+    });
+
+    it('skips an unsupported elliptical arc and warns (partial import)', () =>
+    {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try
+        {
+            // rx != ry → elliptical → hypercurve reports unsupported → skipped.
+            const svg = `<svg xmlns="http://www.w3.org/2000/svg"><path d="M10,10 A 30,15 0 0 1 60,10"/></svg>`;
+            const col = Importer.fromSVG(svg);
+            expect(col.toArray().length).toBe(0);
+            expect(warn).toHaveBeenCalledWith(expect.stringMatching(/unsupported commands|elliptical/i));
+        }
+        finally { warn.mockRestore(); }
+    });
 });
 
 describe('Importer: GeoJSON', () =>
@@ -151,6 +197,33 @@ describe('Importer: GeoJSON', () =>
     {
         const curves = Importer.fromGeoJSON(JSON.stringify(GEOJSON_POLY_HOLE)).toArray();
         expect(curves.length).toBe(2);
+    });
+
+    it('attaches feature properties to each produced curve metadata', () =>
+    {
+        const fc = {
+            type: 'FeatureCollection',
+            features: [
+                { type: 'Feature', properties: { name: 'Main St', highway: 'residential' },
+                  geometry: { type: 'LineString', coordinates: [[0, 0], [50, 50]] } },
+                { type: 'Feature', properties: { name: 'Plot A', height: 12 },
+                  geometry: { type: 'Polygon', coordinates: [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]] } },
+            ],
+        };
+        const curves = Importer.fromGeoJSON(fc).toArray();
+        expect(curves.length).toBe(2);
+        const street = curves.find(c => !c.isClosed())!;
+        const plot = curves.find(c => c.isClosed())!;
+        expect(street.metadata.name).toBe('Main St');
+        expect(street.metadata.highway).toBe('residential');
+        expect(plot.metadata.name).toBe('Plot A');
+        expect(plot.metadata.height).toBe(12);
+    });
+
+    it('leaves metadata empty for bare geometry without properties', () =>
+    {
+        const curves = Importer.fromGeoJSON(GEOJSON_POLY_HOLE).toArray();
+        expect(curves.every(c => Object.keys(c.metadata).length === 0)).toBe(true);
     });
 });
 

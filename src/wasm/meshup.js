@@ -321,6 +321,10 @@ const SketchJsFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_sketchjs_free(ptr >>> 0, 1));
 
+const SvgImportJsFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_svgimportjs_free(ptr >>> 0, 1));
+
 const Vector3JsFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_vector3js_free(ptr >>> 0, 1));
@@ -1038,6 +1042,26 @@ export class Curve3DJs {
         return v1;
     }
     /**
+     * Construct a full **ellipse** (closed) with semi-axes `radius_x`/`radius_y`,
+     * its major axis rotated `rotation` radians in-plane, centred at `center`, in
+     * the plane whose normal is `normal`. Backed by exact rational conic spans.
+     * @param {number} radius_x
+     * @param {number} radius_y
+     * @param {number} rotation
+     * @param {Point3Js} center
+     * @param {Vector3Js} normal
+     * @returns {Curve3DJs}
+     */
+    static makeEllipse(radius_x, radius_y, rotation, center, normal) {
+        _assertClass(center, Point3Js);
+        _assertClass(normal, Vector3Js);
+        const ret = wasm.curve3djs_makeEllipse(radius_x, radius_y, rotation, center.__wbg_ptr, normal.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return Curve3DJs.__wrap(ret[0]);
+    }
+    /**
      * Construct a polyline (open or closed) through 3D control points.
      * @param {Point3Js[]} points
      * @param {boolean} closed
@@ -1110,6 +1134,29 @@ export class Curve3DJs {
     rotateQuaternion(w, x, y, z) {
         const ret = wasm.curve3djs_rotateQuaternion(this.__wbg_ptr, w, x, y, z);
         return Curve3DJs.__wrap(ret);
+    }
+    /**
+     * Construct an **elliptical arc** from `start_angle` to `end_angle` (radians,
+     * in the pre-rotation circle parameter). A full turn yields a closed ellipse.
+     * Semi-axes `radius_x`/`radius_y`, rotated `rotation` radians in-plane, centred
+     * at `center`, in the plane whose normal is `normal`.
+     * @param {number} radius_x
+     * @param {number} radius_y
+     * @param {number} rotation
+     * @param {number} start_angle
+     * @param {number} end_angle
+     * @param {Point3Js} center
+     * @param {Vector3Js} normal
+     * @returns {Curve3DJs}
+     */
+    static makeEllipticalArc(radius_x, radius_y, rotation, start_angle, end_angle, center, normal) {
+        _assertClass(center, Point3Js);
+        _assertClass(normal, Vector3Js);
+        const ret = wasm.curve3djs_makeEllipticalArc(radius_x, radius_y, rotation, start_angle, end_angle, center.__wbg_ptr, normal.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return Curve3DJs.__wrap(ret[0]);
     }
     /**
      * Tessellate each native segment separately, returning a JS array of flat 3D
@@ -4931,6 +4978,51 @@ export class SketchJs {
 }
 if (Symbol.dispose) SketchJs.prototype[Symbol.dispose] = SketchJs.prototype.free;
 
+/**
+ * The result of importing an SVG document into native curves: the `Curve3DJs`
+ * list plus any non-fatal warnings (unsupported/skipped elements).
+ */
+export class SvgImportJs {
+    static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(SvgImportJs.prototype);
+        obj.__wbg_ptr = ptr;
+        SvgImportJsFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        SvgImportJsFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_svgimportjs_free(ptr, 0);
+    }
+    /**
+     * Move the imported curves out (call once). Leaves the result empty.
+     * @returns {Curve3DJs[]}
+     */
+    takeCurves() {
+        const ret = wasm.svgimportjs_takeCurves(this.__wbg_ptr);
+        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * Non-fatal warnings gathered during import (skipped elements/commands).
+     * @returns {string[]}
+     */
+    get warnings() {
+        const ret = wasm.svgimportjs_warnings(this.__wbg_ptr);
+        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+}
+if (Symbol.dispose) SvgImportJs.prototype[Symbol.dispose] = SvgImportJs.prototype.free;
+
 export class Vector3Js {
     static __wrap(ptr) {
         ptr = ptr >>> 0;
@@ -5379,6 +5471,24 @@ export function hcTessellatePolyline(coords, closed, chord_error) {
     var v2 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
     return v2;
+}
+
+/**
+ * Import an SVG document into native planar curves. Lines and circular arcs are
+ * kept exact; Béziers are flattened to line segments; unsupported path commands
+ * (elliptical/rotated arcs, …) are skipped and surfaced via `warnings`.
+ * Coordinates are SVG-space (y-down) at z = 0.
+ * @param {string} doc
+ * @returns {SvgImportJs}
+ */
+export function importSvgCurves(doc) {
+    const ptr0 = passStringToWasm0(doc, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.importSvgCurves(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return SvgImportJs.__wrap(ret[0]);
 }
 
 export function init_panic_hook() {

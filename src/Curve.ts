@@ -329,8 +329,57 @@ export class Curve extends Shape
                         Point.from(normal).toVector3Js()
                     )
                 );
-        
+
     }
+
+    /** Build a full ellipse (closed) with semi-axes `radiusX` (major direction)
+     *  and `radiusY` (minor direction), its major axis rotated `rotation` degrees
+     *  in-plane, centred at `center`, in the plane whose normal is `normal`.
+     *  Backed by exact rational conic spans (not a sampled polyline). */
+    static Ellipse(radiusX:number = 50, radiusY:number = 25, center:PointLike = [0,0,0], rotation:number = 0, normal:PointLike = [0,0,1]): Curve
+    {
+        if(typeof radiusX !== 'number' || typeof radiusY !== 'number' || typeof rotation !== 'number' || !isPointLike(center) || !isPointLike(normal))
+        {
+            throw new Error('Curve.Ellipse(): Invalid arguments. Supply numbers for radiusX, radiusY and rotation (degrees), and PointLike for center and normal.');
+        }
+
+        return Curve.fromCsgrs(
+                getCsgrs()
+                    ?.Curve3DJs?.makeEllipse(
+                        radiusX,
+                        radiusY,
+                        rad(rotation),
+                        Point.from(center).toPoint3Js(),
+                        Point.from(normal).toVector3Js()
+                    )
+                );
+    }
+
+    /** Build an elliptical arc (a portion of an ellipse) from `startAngle` to
+     *  `endAngle` (degrees, in the pre-rotation ellipse parameter). A full 360°
+     *  sweep yields a closed ellipse. Semi-axes `radiusX`/`radiusY`, major axis
+     *  rotated `rotation` degrees in-plane, centred at `center`. */
+    static EllipticalArc(radiusX:number = 50, radiusY:number = 25, startAngle:number = 0, endAngle:number = 360, center:PointLike = [0,0,0], rotation:number = 0, normal:PointLike = [0,0,1]): Curve
+    {
+        if(typeof radiusX !== 'number' || typeof radiusY !== 'number' || typeof startAngle !== 'number' || typeof endAngle !== 'number' || !isPointLike(center) || !isPointLike(normal))
+        {
+            throw new Error('Curve.EllipticalArc(): Invalid arguments. Supply numbers for radii and angles (degrees), and PointLike for center and normal.');
+        }
+
+        return Curve.fromCsgrs(
+                getCsgrs()
+                    ?.Curve3DJs?.makeEllipticalArc(
+                        radiusX,
+                        radiusY,
+                        rad(rotation),
+                        rad(startAngle),
+                        rad(endAngle),
+                        Point.from(center).toPoint3Js(),
+                        Point.from(normal).toVector3Js()
+                    )
+                );
+    }
+
     /** Build an arc (a portion of a circle).
      *
      *  Two methods are available:
@@ -636,11 +685,11 @@ export class Curve extends Shape
     node(): SceneNode | null { return this._node; }
     override readonly type = 'Curve' as const;
 
-    /** Classify this curve as 'Line'|'Arc'|'Circle'|'Rect'|'Polyline'|'Spline'.
+    /** Classify this curve as 'Line'|'Arc'|'Circle'|'Rect'|'Polyline'|'Spline'|'Ellipse'.
      *  Delegates to the native segment-based classification in {@link Curve3DJs}. */
-    subtype(): 'Line'|'Arc'|'Circle'|'Rect'|'Polyline'|'Spline'|'Compound'
+    subtype(): 'Line'|'Arc'|'Circle'|'Rect'|'Polyline'|'Spline'|'Ellipse'|'Compound'
     {
-        return this.inner().subtype() as 'Line'|'Arc'|'Circle'|'Rect'|'Polyline'|'Spline';
+        return this.inner().subtype() as 'Line'|'Arc'|'Circle'|'Rect'|'Polyline'|'Spline'|'Ellipse';
     }
 
     /** A curve is "compound" when it has more than one native segment. */
@@ -1331,7 +1380,7 @@ export class Curve extends Shape
         // subclass those are scene-decorated, which would both pollute the scene and,
         // after Curve.Compound() consumes the pieces' kernel pointers, leave freed shapes
         // in the scene (→ "null pointer passed to rust" on the next kernel call).
-        const segs = this._atomicSegmentsRaw();
+        const segs = this._atomicSegments();
         const n = segs.length;
         if (n === 0) { throw new Error('Curve::segment(): Curve has no segments.'); }
 
@@ -1366,7 +1415,7 @@ export class Curve extends Shape
      *  but each piece is a brand-new kernel curve safe to consume (e.g. hand to
      *  Curve.Compound). Bypasses any Smart* override so internal callers never touch the
      *  scene or alias `this`'s kernel curve. */
-    private _atomicSegmentsRaw(): Curve[]
+    private _atomicSegments(): Curve[]
     {
         return this.spans().toArray().flatMap(span =>
         {
@@ -2350,14 +2399,14 @@ export class Curve extends Shape
     @sceneReplaceOrKeep
     difference(other: Curve): Curve|ShapeCollection<Curve>|null
     {
-        return this._differenceRaw(other);
+        return this._difference(other);
     }
 
     /** Pure boolean difference geometry — no scene bookkeeping. Mutates in place and returns
      *  `this` for a single result, returns a new ShapeCollection when it splits into several
      *  pieces, or null on failure. Used internally (cutoffBy) so scene management doesn't fire
      *  mid-operation. */
-    private _differenceRaw(other: Curve): Curve|ShapeCollection<Curve>|null
+    private _difference(other: Curve): Curve|ShapeCollection<Curve>|null
     {
         const bool = this._booleanOp(other, 'difference')?.checkSingle() || null;
         if(bool instanceof Curve){ return this.update(bool);}
@@ -2398,7 +2447,7 @@ export class Curve extends Shape
             return this._cutoffClosedByLine(other, keepSmallest);
         }
         // Use the raw difference so its scene decorator doesn't fire inside cutoffBy.
-        return keepSmallest ? this._differenceRaw(other) : this._booleanOp(other, 'intersection')?.checkSingle() || null;
+        return keepSmallest ? this._difference(other) : this._booleanOp(other, 'intersection')?.checkSingle() || null;
     }
 
     /** Split this closed Curve along an open cutter Curve into the two regions either
@@ -2692,7 +2741,7 @@ export class Curve extends Shape
         // it). Delegating keeps a single, correct orientation path.
         if (this.isClosed() && this.isPlanar())
         {
-            const face = this._toPolygonRaw();
+            const face = this._toPolygon();
             if (face) { return face.extrude(length, resolvedDirection as any); }
         }
 
@@ -2878,13 +2927,13 @@ export class Curve extends Shape
     @sceneReplace
     toPolygon(tolerance: number = TESSELATION_TOLERANCE): Polygon | undefined
     {
-        return this._toPolygonRaw(tolerance);
+        return this._toPolygon(tolerance);
     }
 
     /** Pure tessellation to a Polygon — never touches the scene. Used internally (extrude,
      *  toFace, toMesh) so the decorated public toPolygon() can't corrupt the scene when
      *  called during another op. */
-    private _toPolygonRaw(tolerance: number = TESSELATION_TOLERANCE): Polygon | undefined
+    private _toPolygon(tolerance: number = TESSELATION_TOLERANCE): Polygon | undefined
     {
         this.close(); // ensure the curve is closed before tessellation
         const points = this.tessellate(tolerance);
@@ -2915,13 +2964,13 @@ export class Curve extends Shape
     @sceneReplace
     toFace(tolerance: number = TESSELATION_TOLERANCE): Polygon | undefined
     {
-        return this._toPolygonRaw(tolerance);
+        return this._toPolygon(tolerance);
     }
 
     @sceneReplace
     toMesh(tolerance: number = TESSELATION_TOLERANCE): Mesh | undefined
     {
-        const poly = this._toPolygonRaw(tolerance);
+        const poly = this._toPolygon(tolerance);
         if (!poly)
         {
             return undefined;

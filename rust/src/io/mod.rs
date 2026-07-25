@@ -1,6 +1,9 @@
 #[cfg(feature = "svg-io")]
 pub mod svg;
 
+#[cfg(feature = "svg-io")]
+pub mod svg_curves;
+
 #[cfg(feature = "stl-io")]
 mod stl;
 

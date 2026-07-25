@@ -17,7 +17,7 @@
  *  This is what lets the modeler work with meshup shapes directly: `extrude()` still returns
  *  a `Mesh`, `split()` still returns a `ShapeCollection<Mesh>`, etc.
  *
- *    @sceneReplace   add result(s) to the active layer; detach self   (extrude, split, hull…)
+ *    @sceneReplace   add result(s) to self's own layer; detach self   (extrude, split, hull…)
  *    @sceneAdd       add result(s) to the active layer; keep self     (select, segment)
  *    @sceneLayer(n)  add result(s) to a named layer 'n' under root    (iso, elevation, section)
  *    @sceneUpdate    in-place mutator (returns this); re-attach self   (offset, cutoff, connect)
@@ -54,6 +54,23 @@ export function activeLayerOf(self: Any): SceneNode | null
     }
     // Detached but scene-derived: no parent node to fall back on, but the carried root still
     // tracks the active layer.
+    return ((self?._scene as Any)?.activeLayer?.()) ?? null
+}
+
+/** The layer a REPLACE / mutation result should land on: the operand shape's OWN layer (its
+ *  node's parent), so results stay where the source shape already was rather than jumping to
+ *  the (possibly different) active layer. This is what makes `layer('a'); s = …; layer('b');
+ *  s.subtract(cutter)` keep the pieces on 'a'. Falls back to the active layer only when self is
+ *  detached-but-scene-derived (no parent node to inherit), and to null when self is not in a
+ *  scene at all (standalone meshup). Used by replaceInScene() — NOT by copy()/@sceneAdd, which
+ *  keep active-layer semantics via activeLayerOf. */
+function replaceLayerOf(self: Any): SceneNode | null
+{
+    const node = self?._node as SceneNode | null
+    if (node)
+    {
+        return (node.parent() ?? (node.root() as Any)?.activeLayer?.()) ?? null
+    }
     return ((self?._scene as Any)?.activeLayer?.()) ?? null
 }
 
@@ -115,13 +132,15 @@ export const sceneCarry: Decorator = (_t, _k, desc) =>
 let _groupSeq = 0
 
 /** Replace `self` in the scene with `result`, then detach `self`.
- *  A multi-shape ShapeCollection result is grouped under a fresh sub-layer of the active layer
+ *  Results land on self's OWN layer (see replaceLayerOf) so a replace/mutation stays where the
+ *  source shape was, not on a later-selected active layer.
+ *  A multi-shape ShapeCollection result is grouped under a fresh sub-layer of that layer
  *  (so it stays navigable in the scene graph and the host auto-namer can name the whole group,
  *  e.g. `parts = mesh.subtract(...)` → a 'parts' layer holding the pieces). A single shape (or
  *  single-item collection) is added flat, as before. */
 export function replaceInScene(self: Any, result: Any): void
 {
-    const active = activeLayerOf(self)
+    const active = replaceLayerOf(self)
     if (active && result?.isShapeCollection?.() && result.toArray().length > 1)
     {
         const name = (result._name && result._name !== 'collection') ? result._name : `group${++_groupSeq}`
@@ -237,6 +256,18 @@ function colModeler(self: Any): Any
     return self?._modeler ?? self?._shapes?.find((s: Any) => s?._modeler)?._modeler ?? null
 }
 
+/** The layer the collection's shapes currently live on: its own layer node when scene-backed,
+ *  else the parent layer of its first scene-attached shape. Used by @colSceneReplace so results
+ *  replace in place on the source shapes' layer rather than moving to the active layer. */
+function colSourceLayer(self: Any): SceneNode | null
+{
+    if (self?._layer) return self._layer as SceneNode
+    const parent = self?._shapes
+        ?.map((s: Any) => s?._node?.parent?.())
+        ?.find((p: Any) => p)
+    return (parent as SceneNode) ?? null
+}
+
 function addColResults(layer: SceneNode | null, result: Any, modeler: Any): void
 {
     if (!layer) return
@@ -288,12 +319,15 @@ export const colSceneReplace: Decorator = (_t, _k, desc) =>
     {
         const root = colSceneRoot(this)
         const modeler = colModeler(this)
+        // Capture the layer the source shapes live on BEFORE detaching them, so the results
+        // stay on that layer rather than moving to the (possibly different) active layer.
+        const sourceLayer = colSourceLayer(this)
         const result = fn.apply(this, args)
         if (root)
         {
             this._shapes?.forEach((s: Any) => s?._node?.detach?.())
             if (this._layer) { this._layer.detach(); this._layer = null }
-            addColResults(root.activeLayer(), result, modeler)
+            addColResults(sourceLayer ?? root.activeLayer(), result, modeler)
         }
         return result
     }

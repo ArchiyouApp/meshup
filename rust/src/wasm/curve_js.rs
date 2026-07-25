@@ -6,11 +6,15 @@
 //! This is being built **alongside** the curvo-backed `NurbsCurve3DJs` while the
 //! TypeScript `Curve` layer is migrated method-by-method.
 
+use std::cell::OnceCell;
+
 use crate::float_types::Real;
 use crate::hcurve;
 use crate::wasm::point_js::Point3Js;
 use crate::wasm::vector_js::Vector3Js;
-use hypercurve::{BooleanOp, Contour2, CurvePolicy, CurveString2, Point2, Segment2, Similarity2};
+use hypercurve::{
+    BooleanOp, Contour2, CurvePath2, CurvePolicy, CurveString2, Point2, Segment2, Similarity2,
+};
 use nalgebra::{Point3, Vector3};
 use wasm_bindgen::prelude::*;
 
@@ -162,6 +166,52 @@ enum Geom
 {
     Open(CurveString2),
     Closed(Contour2),
+    /// An exact mixed-family path (e.g. an ellipse of rational conic spans) that
+    /// `CurveString2`/`Contour2` cannot hold. Kept exact for tessellation, length,
+    /// area, reverse, and similarity; segment-level operations use a lazily-built
+    /// line approximation ([`PathGeom::segments`]).
+    Path(PathGeom),
+}
+
+/// An exact [`CurvePath2`] plus a lazily-materialised line-segment approximation
+/// for the segment-oriented `Curve3DJs` operations.
+#[derive(Clone)]
+struct PathGeom
+{
+    path: CurvePath2,
+    closed: bool,
+    lines: OnceCell<Vec<Segment2>>,
+}
+
+impl PathGeom
+{
+    fn new(path: CurvePath2, closed: bool) -> Self
+    {
+        Self { path, closed, lines: OnceCell::new() }
+    }
+
+    /// A fine line approximation of the exact path, built once and cached. Used by
+    /// segment-level operations (`trim`, `spans`, `degree`, `controlPoints`, …)
+    /// that have no exact mixed-family equivalent.
+    fn segments(&self) -> &[Segment2]
+    {
+        self.lines
+            .get_or_init(|| line_segments_of_path(&self.path, self.closed).unwrap_or_default())
+    }
+}
+
+/// Tessellate an exact path and rebuild it as line `Segment2`s (open or closed).
+fn line_segments_of_path(path: &CurvePath2, closed: bool) -> Result<Vec<Segment2>, String>
+{
+    let pts = hcurve::tessellate_path(path, DEFAULT_CHORD)?;
+    if closed
+    {
+        Ok(hcurve::closed_contour(&pts)?.segments().to_vec())
+    }
+    else
+    {
+        Ok(hcurve::open_polyline(&pts)?.segments().to_vec())
+    }
 }
 
 /// A planar 3D curve: a frame plus its local 2D hypercurve geometry.
@@ -187,6 +237,7 @@ impl Curve3DJs
         {
             Geom::Open(cs) => hcurve::tessellate_open(cs, chord),
             Geom::Closed(ct) => hcurve::tessellate_closed(ct, chord),
+            Geom::Path(pg) => hcurve::tessellate_path(&pg.path, chord),
         }
     }
 
@@ -202,14 +253,53 @@ impl Curve3DJs
         Self { frame, geom: Geom::Open(cs), world_pts: None }
     }
 
-    /// The native segment list.
+    /// Build a curve from a frame and an exact mixed-family path (e.g. an ellipse).
+    fn from_path(frame: Frame, path: CurvePath2, closed: bool) -> Self
+    {
+        Self { frame, geom: Geom::Path(PathGeom::new(path, closed)), world_pts: None }
+    }
+
+    /// The native segment list. For an exact [`Geom::Path`], the lazily-built line
+    /// approximation.
     fn segments(&self) -> &[hypercurve::Segment2]
     {
         match &self.geom
         {
             Geom::Open(cs) => cs.segments(),
             Geom::Closed(ct) => ct.segments(),
+            Geom::Path(pg) => pg.segments(),
         }
+    }
+
+    /// A line-based `Geom` (identity for line/arc geometry; a fine tessellation for
+    /// an exact conic [`Geom::Path`]). Lets segment/contour-only operations reuse
+    /// the existing `Open`/`Closed` code paths.
+    fn as_line_geom(&self) -> Result<Geom, String>
+    {
+        match &self.geom
+        {
+            Geom::Open(cs) => Ok(Geom::Open(cs.clone())),
+            Geom::Closed(ct) => Ok(Geom::Closed(ct.clone())),
+            Geom::Path(pg) =>
+            {
+                let pts = hcurve::tessellate_path(&pg.path, DEFAULT_CHORD)?;
+                if pg.closed
+                {
+                    Ok(Geom::Closed(hcurve::closed_contour(&pts)?))
+                }
+                else
+                {
+                    Ok(Geom::Open(hcurve::open_polyline(&pts)?))
+                }
+            }
+        }
+    }
+
+    /// A clone of this curve with its geometry lowered to lines (see
+    /// [`Self::as_line_geom`]).
+    fn to_line_curve(&self) -> Result<Curve3DJs, JsValue>
+    {
+        Ok(Curve3DJs { frame: self.frame.clone(), geom: self.as_line_geom().map_err(err)?, world_pts: None })
     }
 
     /// 3D tessellation (local points lifted into world via the frame). A
@@ -323,11 +413,55 @@ impl Curve3DJs
         Ok(Curve3DJs::from_closed(frame, ct))
     }
 
+    /// Construct a full **ellipse** (closed) with semi-axes `radius_x`/`radius_y`,
+    /// its major axis rotated `rotation` radians in-plane, centred at `center`, in
+    /// the plane whose normal is `normal`. Backed by exact rational conic spans.
+    #[wasm_bindgen(js_name = makeEllipse)]
+    pub fn make_ellipse(
+        radius_x: f64,
+        radius_y: f64,
+        rotation: f64,
+        center: &Point3Js,
+        normal: &Vector3Js,
+    ) -> Result<Curve3DJs, JsValue>
+    {
+        let frame = Frame::from_center_normal(center.inner, normal.inner);
+        let path = hcurve::ellipse(radius_x, radius_y, rotation, 0.0, 0.0).map_err(err)?;
+        Ok(Curve3DJs::from_path(frame, path, true))
+    }
+
+    /// Construct an **elliptical arc** from `start_angle` to `end_angle` (radians,
+    /// in the pre-rotation circle parameter). A full turn yields a closed ellipse.
+    /// Semi-axes `radius_x`/`radius_y`, rotated `rotation` radians in-plane, centred
+    /// at `center`, in the plane whose normal is `normal`.
+    #[wasm_bindgen(js_name = makeEllipticalArc)]
+    pub fn make_elliptical_arc(
+        radius_x: f64,
+        radius_y: f64,
+        rotation: f64,
+        start_angle: f64,
+        end_angle: f64,
+        center: &Point3Js,
+        normal: &Vector3Js,
+    ) -> Result<Curve3DJs, JsValue>
+    {
+        let frame = Frame::from_center_normal(center.inner, normal.inner);
+        let closed = (end_angle - start_angle).abs() >= std::f64::consts::TAU - 1.0e-9;
+        let path = hcurve::elliptical_arc(radius_x, radius_y, rotation, 0.0, 0.0, start_angle, end_angle)
+            .map_err(err)?;
+        Ok(Curve3DJs::from_path(frame, path, closed))
+    }
+
     /// Whether the curve is closed.
     #[wasm_bindgen(js_name = closed)]
     pub fn closed(&self) -> bool
     {
-        matches!(self.geom, Geom::Closed(_))
+        match &self.geom
+        {
+            Geom::Closed(_) => true,
+            Geom::Path(pg) => pg.closed,
+            Geom::Open(_) => false,
+        }
     }
 
     /// Tessellate to 3D points.
@@ -359,6 +493,13 @@ impl Curve3DJs
         {
             Geom::Open(cs) => hcurve::length_open(cs, chord).map_err(err),
             Geom::Closed(ct) => hcurve::length_closed(ct, chord).map_err(err),
+            Geom::Path(pg) =>
+            {
+                // Sum the exact-conic tessellation; the frame is orthonormal, so
+                // local distances equal world distances.
+                let pts = hcurve::tessellate_path(&pg.path, chord).map_err(err)?;
+                Ok(pts.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum())
+            }
         }
     }
 
@@ -369,7 +510,16 @@ impl Curve3DJs
         match &self.geom
         {
             Geom::Closed(ct) => hcurve::signed_area(ct).map_err(err),
-            Geom::Open(_) => Err(JsValue::from_str("Curve3DJs::area(): curve is not closed")),
+            Geom::Path(pg) if pg.closed =>
+            {
+                let pts = hcurve::tessellate_path(&pg.path, DEFAULT_CHORD).map_err(err)?;
+                let ct = hcurve::closed_contour(&pts).map_err(err)?;
+                hcurve::signed_area(&ct).map_err(err)
+            }
+            Geom::Open(_) | Geom::Path(_) =>
+            {
+                Err(JsValue::from_str("Curve3DJs::area(): curve is not closed"))
+            }
         }
     }
 
@@ -392,6 +542,20 @@ impl Curve3DJs
         {
             Geom::Open(cs) => hcurve::offset_open(cs, distance, chord).map_err(err)?,
             Geom::Closed(ct) => hcurve::offset_closed(ct, distance, chord).map_err(err)?,
+            Geom::Path(pg) =>
+            {
+                let pts = hcurve::tessellate_path(&pg.path, chord).map_err(err)?;
+                if pg.closed
+                {
+                    let ct = hcurve::closed_contour(&pts).map_err(err)?;
+                    hcurve::offset_closed(&ct, distance, chord).map_err(err)?
+                }
+                else
+                {
+                    let cs = hcurve::open_polyline(&pts).map_err(err)?;
+                    hcurve::offset_open(&cs, distance, chord).map_err(err)?
+                }
+            }
         };
         // Rebuild geometry from the offset polyline in local coords.
         let geom = if self.closed()
@@ -479,6 +643,12 @@ impl Curve3DJs
     #[wasm_bindgen(js_name = reverse)]
     pub fn reverse(&self) -> Result<Curve3DJs, JsValue>
     {
+        // Exact reversal for a mixed-family path.
+        if let Geom::Path(pg) = &self.geom
+        {
+            let rev = pg.path.reversed().map_err(|e| err(format!("reverse: {e:?}")))?;
+            return Ok(Curve3DJs::from_path(self.frame.clone(), rev, pg.closed));
+        }
         let segs: Vec<Segment2> = self.segments().iter().rev().map(|s| s.reversed()).collect();
         let geom = match &self.geom
         {
@@ -488,6 +658,7 @@ impl Curve3DJs
             Geom::Closed(_) => Geom::Closed(
                 Contour2::try_new(segs).map_err(|e| err(format!("reverse: {e:?}")))?,
             ),
+            Geom::Path(_) => unreachable!("Path handled above"),
         };
         Ok(Curve3DJs { frame: self.frame.clone(), geom, world_pts: None })
     }
@@ -581,7 +752,7 @@ impl Curve3DJs
                 Point3Js::new(w.x as f64, w.y as f64, w.z as f64)
             })
             .collect();
-        if matches!(self.geom, Geom::Open(_))
+        if !self.closed()
         {
             if let Some(last) = segs.last()
             {
@@ -597,6 +768,11 @@ impl Curve3DJs
     #[wasm_bindgen(js_name = subtype)]
     pub fn subtype(&self) -> String
     {
+        // Exact conic paths are ellipses/elliptical arcs by construction.
+        if matches!(self.geom, Geom::Path(_))
+        {
+            return "Ellipse".to_string();
+        }
         let segs = self.segments();
         let closed = matches!(self.geom, Geom::Closed(_));
         let n = segs.len();
@@ -695,6 +871,8 @@ impl Curve3DJs
                 let c = CurveString2::try_new(segs).map_err(|e| err(format!("Curve3DJs::fillet: {e:?}")))?;
                 Ok(Curve3DJs::from_open(self.frame.clone(), c))
             }
+            // Fillet the line approximation of an exact conic path.
+            Geom::Path(_) => self.to_line_curve()?.fillet(radius),
         }
     }
 
@@ -715,6 +893,8 @@ impl Curve3DJs
                 let chamfered = chamfer_op(cs, setback).map_err(err)?;
                 Ok(Curve3DJs::from_open(self.frame.clone(), chamfered))
             }
+            // Chamfer the line approximation of an exact conic path.
+            Geom::Path(_) => self.to_line_curve()?.chamfer(setback),
         }
     }
 
@@ -729,11 +909,7 @@ impl Curve3DJs
     #[wasm_bindgen(js_name = hasArcs)]
     pub fn has_arcs(&self) -> bool
     {
-        let segs = match &self.geom
-        {
-            Geom::Open(cs) => cs.segments(),
-            Geom::Closed(ct) => ct.segments(),
-        };
+        let segs = self.segments();
         segs.iter().any(|s| matches!(s, hypercurve::Segment2::Arc(_)))
     }
 
@@ -745,10 +921,27 @@ impl Curve3DJs
     pub fn segment_tessellations(&self, tol: Option<f64>) -> Result<JsValue, JsValue>
     {
         let chord = tol.unwrap_or(DEFAULT_CHORD);
+        // An exact conic path has no native line/arc segments; return its exact
+        // tessellation as a single span.
+        if let Geom::Path(pg) = &self.geom
+        {
+            let out = js_sys::Array::new();
+            let pts2d = hcurve::tessellate_path(&pg.path, chord).map_err(err)?;
+            let flat: Vec<f64> = pts2d
+                .iter()
+                .flat_map(|xy| {
+                    let w = self.frame.to_world(*xy);
+                    [w.x as f64, w.y as f64, w.z as f64]
+                })
+                .collect();
+            out.push(&js_sys::Float64Array::from(flat.as_slice()).into());
+            return Ok(out.into());
+        }
         let segs: Vec<hypercurve::Segment2> = match &self.geom
         {
             Geom::Open(cs) => cs.segments().to_vec(),
             Geom::Closed(ct) => ct.segments().to_vec(),
+            Geom::Path(_) => unreachable!("handled above"),
         };
         let out = js_sys::Array::new();
         for seg in &segs
@@ -797,6 +990,14 @@ impl Curve3DJs
         {
             Geom::Open(cs) => Geom::Open(hcurve::transform_open(cs, &sim).map_err(err)?),
             Geom::Closed(ct) => Geom::Closed(hcurve::transform_contour(ct, &sim).map_err(err)?),
+            Geom::Path(pg) =>
+            {
+                let path = pg
+                    .path
+                    .transform_similarity(&sim)
+                    .map_err(|e| err(format!("Curve3DJs::scale: {e:?}")))?;
+                Geom::Path(PathGeom::new(path, pg.closed))
+            }
         };
         let mut frame = self.frame.clone();
         frame.origin = Point3::new(frame.origin.x * s as Real, frame.origin.y * s as Real, frame.origin.z * s as Real);
@@ -924,7 +1125,13 @@ impl Curve3DJs
         match &self.geom
         {
             Geom::Closed(ct) => Some(ct.clone()),
-            Geom::Open(_) => None,
+            Geom::Path(pg) if pg.closed =>
+            {
+                // A fine line contour of the closed ellipse for native boolean ops.
+                let pts = hcurve::tessellate_path(&pg.path, DEFAULT_CHORD).ok()?;
+                hcurve::closed_contour(&pts).ok()
+            }
+            Geom::Open(_) | Geom::Path(_) => None,
         }
     }
 
@@ -947,6 +1154,11 @@ impl Curve3DJs
             Geom::Closed(ct) =>
             {
                 let pts = hcurve::tessellate_closed(ct, chord)?;
+                hcurve::open_polyline(&pts)
+            }
+            Geom::Path(pg) =>
+            {
+                let pts = hcurve::tessellate_path(&pg.path, chord)?;
                 hcurve::open_polyline(&pts)
             }
         }
@@ -1075,4 +1287,59 @@ fn parse_op(op: &str) -> Result<BooleanOp, JsValue>
         "xor" => Ok(BooleanOp::Xor),
         other => Err(JsValue::from_str(&format!("Curve3DJs: unknown boolean op '{other}'"))),
     }
+}
+
+//// SVG IMPORT ////
+
+/// The result of importing an SVG document into native curves: the `Curve3DJs`
+/// list plus any non-fatal warnings (unsupported/skipped elements).
+#[cfg(feature = "svg-io")]
+#[wasm_bindgen]
+pub struct SvgImportJs
+{
+    curves: Vec<Curve3DJs>,
+    warnings: Vec<String>,
+}
+
+#[cfg(feature = "svg-io")]
+#[wasm_bindgen]
+impl SvgImportJs
+{
+    /// Move the imported curves out (call once). Leaves the result empty.
+    #[wasm_bindgen(js_name = takeCurves)]
+    pub fn take_curves(&mut self) -> Vec<Curve3DJs>
+    {
+        std::mem::take(&mut self.curves)
+    }
+
+    /// Non-fatal warnings gathered during import (skipped elements/commands).
+    #[wasm_bindgen(getter)]
+    pub fn warnings(&self) -> Vec<String>
+    {
+        self.warnings.clone()
+    }
+}
+
+/// Import an SVG document into native planar curves. Lines and circular arcs are
+/// kept exact; Béziers are flattened to line segments; unsupported path commands
+/// (elliptical/rotated arcs, …) are skipped and surfaced via `warnings`.
+/// Coordinates are SVG-space (y-down) at z = 0.
+#[cfg(feature = "svg-io")]
+#[wasm_bindgen(js_name = importSvgCurves)]
+pub fn import_svg_curves(doc: &str) -> Result<SvgImportJs, JsValue>
+{
+    use crate::io::svg_curves::{ImportedCurve, import_svg_curves as import_doc};
+
+    let (imported, warnings) = import_doc(doc).map_err(|e| err(format!("SVG import failed: {e:?}")))?;
+    // All imported geometry lives in the XY plane (z = 0), SVG coords.
+    let frame = Frame::from_center_normal(Point3::origin(), Vector3::z());
+    let curves = imported
+        .into_iter()
+        .map(|c| match c
+        {
+            ImportedCurve::Open(cs) => Curve3DJs::from_open(frame.clone(), cs),
+            ImportedCurve::Closed(ct) => Curve3DJs::from_closed(frame.clone(), ct),
+        })
+        .collect();
+    Ok(SvgImportJs { curves, warnings })
 }

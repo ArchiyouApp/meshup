@@ -798,17 +798,51 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return new ShapeCollection<any>(...flat as any[]);
     }
 
+    /** Subtract `other` from every Mesh in this collection, updating the collection IN PLACE.
+     *  When a cut splits a member into genuinely-separate solids, that member is replaced by its
+     *  pieces (both in `_shapes` and, when scene-attached, on the member's OWN layer — flat, not
+     *  under a fresh group sub-layer). This is why we drive the internal, scene-skipping kernel
+     *  ops (`_difference` + `_separateSolids`) directly instead of the scene-managing
+     *  `Mesh.subtract`: the latter discards the split pieces from the collection and parks them in
+     *  a stray group node. */
     subtract(other: Mesh | ShapeCollection<Mesh>): this
     {
         const otherMeshes = ShapeCollection.isShapeCollection(other)
-            ? other.meshes()
-            : (other instanceof Mesh ? [other] : []);
+            ? (other as ShapeCollection<any>).meshes()
+            : (other instanceof Mesh ? new ShapeCollection<Mesh>(other) : new ShapeCollection<Mesh>());
         if (!otherMeshes.length) { console.warn('ShapeCollection::subtract(): No valid meshes. Returning original.'); return this; }
-        this.forEach(shape =>
+
+        const next: Array<CollectableShape> = [];
+        this._shapes.forEach(shape =>
         {
-            if (!(shape instanceof Mesh)) return;
-            (otherMeshes as any[]).forEach(otherMesh => (shape as Mesh).subtract(otherMesh));
+            if (!(shape instanceof Mesh)) { next.push(shape); return; }
+            // Internal in-place difference (no scene-decorator side effects), then separate solids.
+            (shape as any)._difference(otherMeshes);
+            const parts = ((shape as any)._separateSolids() as ShapeCollection<Mesh>).toArray();
+            if (parts.length > 1)
+            {
+                // The cut split this member: replace it with its pieces on its own layer, flat.
+                const node = (shape as any)._node;
+                const layer = node?.parent?.() ?? null;
+                const scene = (shape as any)._scene ?? node?.root?.() ?? null;
+                node?.detach?.();
+                (shape as any)._node = null;
+                parts.forEach(p =>
+                {
+                    if ((p as any)._modeler == null) (p as any)._modeler = (shape as any)._modeler ?? null;
+                    if ((p as any)._scene == null) (p as any)._scene = scene;
+                    layer?.addShape?.(p as any);
+                });
+                next.push(...(parts as Array<CollectableShape>));
+            }
+            else
+            {
+                // Single solid (possibly with cavities): mutated in place, stays where it was.
+                next.push(shape);
+            }
         });
+        this._shapes = next as Array<S>;
+        this._setFakeArrayKeys();
         return this;
     }
 
@@ -848,15 +882,15 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  each of its shapes. Returns an empty ShapeCollection when there are no intersections. */
     /** Intersect every shape with `other`, aggregating results. Replaces in place: the
      *  collection's original shapes are removed from the scene and only the intersection
-     *  results remain (added to the active layer). */
+     *  results remain (added to the source shapes' own layer, not the active layer). */
     @colSceneReplace
     intersections(other: Curve | Mesh | ShapeCollection<any>): ShapeCollection<any>
     {
-        return this._intersectionsRaw(other);
+        return this._intersections(other);
     }
 
     /** Pure intersection geometry — never touches the scene. Used internally (intersection()). */
-    private _intersectionsRaw(other: Curve | Mesh | ShapeCollection<any>): ShapeCollection<any>
+    private _intersections(other: Curve | Mesh | ShapeCollection<any>): ShapeCollection<any>
     {
         const others = ShapeCollection.isShapeCollection(other) ? (other as ShapeCollection<any>).toArray() : [other];
         const result = new ShapeCollection<any>();
@@ -875,7 +909,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  if none. See intersections() for how the collection is intersected with `other`. */
     intersection(other: Curve | Mesh | ShapeCollection<any>): Curve | Mesh | null
     {
-        const all = this._intersectionsRaw(other);
+        const all = this._intersections(other);
         return all.length ? all.first() as Curve | Mesh : null;
     }
 
@@ -1093,10 +1127,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         featureAngle: number = 10,
     ): ShapeCollection<any>
     {
-        return this._isometryRaw(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
+        return this._isometry(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
     }
 
-    private _isometryRaw(
+    /** Internal isometric projection — skips scene management (no @scene* decorators fire), so
+     *  it's safe to call from other ops. The public isometry() wraps this with @colSceneAdd to
+     *  add the projection to the scene. */
+    private _isometry(
         cam: PointLike = [-1, -1, 1],
         hiddenLines: boolean = false,
         includeHiddenShapes: boolean = false,
@@ -1143,7 +1180,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         featureAngle: number=10,
     ): ShapeCollection<any>
     {
-        return this._isometryRaw(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
+        return this._isometry(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
     }
 
     isoTest(

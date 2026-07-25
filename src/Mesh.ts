@@ -1010,18 +1010,20 @@ export class Mesh extends Shape
     @sceneReplaceOrKeep
     difference(other:Mesh|ShapeCollection<Mesh>): this | ShapeCollection<Mesh>
     {
-        this._differenceRaw(other);
+        this._difference(other);
         const parts = this._separateSolids();
         return parts.length > 1 ? parts : this;
     }
 
-    /** Raw in-place boolean difference. Used internally (cutoff/split/difference-collection)
-     *  where a single Mesh result is required. */
-    private _differenceRaw(other:Mesh|ShapeCollection<Mesh>): this
+    /** Internal in-place boolean difference — skips scene management (no @scene* decorators
+     *  fire), so it's safe to compose inside other ops without leaking intermediate geometry
+     *  into the scene. Used by cutoff/split/difference-collection where a single Mesh result is
+     *  required; the public difference()/subtract() wrap this and handle scene bookkeeping. */
+    private _difference(other:Mesh|ShapeCollection<Mesh>): this
     {
         if(ShapeCollection.isShapeCollection(other))
         {
-            other.meshes().toArray().forEach(mesh => this._differenceRaw(mesh));
+            other.meshes().toArray().forEach(mesh => this._difference(mesh));
             return this;
         }
         if(!other || !(other instanceof Mesh))
@@ -1037,7 +1039,7 @@ export class Mesh extends Shape
     @sceneReplaceOrKeep
     subtract(...others: (Mesh|ShapeCollection<Mesh>)[]): this | ShapeCollection<Mesh>
     {
-        others.forEach(other => this._differenceRaw(other));
+        others.forEach(other => this._difference(other));
         const parts = this._separateSolids();
         return parts.length > 1 ? parts : this;
     }
@@ -1151,8 +1153,8 @@ export class Mesh extends Shape
             const normal = Vector.from(other.normal());
             const offset = other.offset();
             // Subtract the box on each side to obtain the two half-space pieces.
-            const keepNormalSide  = this._detachedClone()._differenceRaw(this._halfSpaceBox(normal, offset, -1, size));
-            const keepOppositeSide = this._detachedClone()._differenceRaw(this._halfSpaceBox(normal, offset, +1, size));
+            const keepNormalSide  = this._detachedClone()._difference(this._halfSpaceBox(normal, offset, -1, size));
+            const keepOppositeSide = this._detachedClone()._difference(this._halfSpaceBox(normal, offset, +1, size));
             return this._keepBySize(
                 keepNormalSide, keepOppositeSide, keepSmallest,
                 'Mesh.cutoffBy(): the plane does not split this mesh — no cut performed.');
@@ -1165,7 +1167,7 @@ export class Mesh extends Shape
             return this;
         }
 
-        const outside = this._detachedClone()._differenceRaw(cutter);   // part of this outside the cutter
+        const outside = this._detachedClone()._difference(cutter);   // part of this outside the cutter
         const inside  = this._detachedClone().intersection(cutter);  // part of this inside the cutter
         return this._keepBySize(
             outside, inside, keepSmallest,
@@ -1201,8 +1203,8 @@ export class Mesh extends Shape
         const posBox = Mesh.BoxBetween(bmin.copy().setComponent(at, coord), bmax); // region at > coord
         const negBox = Mesh.BoxBetween(bmin, bmax.copy().setComponent(at, coord)); // region at < coord
 
-        const posPiece = this._detachedClone()._differenceRaw(negBox); // keep at > coord (positive side)
-        const negPiece = this._detachedClone()._differenceRaw(posBox); // keep at < coord (negative side)
+        const posPiece = this._detachedClone()._difference(negBox); // keep at > coord (positive side)
+        const negPiece = this._detachedClone()._difference(posBox); // keep at < coord (negative side)
 
         return this._keepBySize(
             posPiece, negPiece, smallest,
@@ -1368,7 +1370,7 @@ export class Mesh extends Shape
     {
         if (other instanceof Mesh)
         {
-            const remainder = this._copy()._differenceRaw(other);
+            const remainder = this._copy()._difference(other);
             if (remainder.inner().triangleCount() === 0)
             {
                 return new ShapeCollection<Mesh>();

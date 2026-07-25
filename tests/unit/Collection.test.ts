@@ -3,6 +3,7 @@ import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
 import { ShapeCollection as Collection } from '../../src/ShapeCollection';
+import { SceneNode } from '../../src/SceneNode';
 import { Point } from '../../src/Point';
 
 let cube1: Mesh;
@@ -246,5 +247,73 @@ describe('Collection.intersections() / intersection()', () =>
         const far = Mesh.Cube(10).move(1000, 0, 0);
         expect(col.intersections(far).length).toBe(0);
         expect(col.intersection(far)).toBeNull();
+    });
+
+    it('replaces in place on the source shapes\' layer, not the active layer', () =>
+    {
+        // Reproduces the two-layer script: sources on 'bxs', cutter on the active 'cut' layer.
+        const root = new SceneNode('root');
+        const a = Mesh.Cube(40);
+        const b = Mesh.Cube(40).move(15, 10, 5);
+        const bxsLayer = root.addLayer('bxs', new Collection<Mesh>(a, b));
+
+        const cutter = Mesh.Cube(40).move(5, 5, 5);
+        const cutLayer = root.addLayer('cut', cutter);
+        root.setActiveLayer(cutLayer);
+
+        const col = new Collection<Mesh>(a, b);
+        const hits = col.intersections(cutter);
+
+        expect(hits.length).toBe(2);
+        // Results land on the source layer 'bxs' (originals detached), not the active 'cut' layer.
+        expect(bxsLayer.shapes().toArray()).toEqual(hits.toArray());
+        // The cut layer keeps only its cutter — no intersection results leaked onto it.
+        expect(cutLayer.shapes().toArray()).toEqual([cutter]);
+    });
+});
+
+describe('Collection.subtract() scene layer behaviour', () =>
+{
+    it('a splitting subtract keeps the pieces on the source layer, not the active layer', () =>
+    {
+        // Source box on 'bxs'; a full-height slab cutter on the active 'cut' layer that slices
+        // the box into two separate solids (exercising Mesh.subtract's split → replace path).
+        const root = new SceneNode('root');
+        const a = Mesh.Box(40, 10, 10);              // spans x -20..20
+        const bxsLayer = root.addLayer('bxs', a);
+
+        const cutter = Mesh.Box(4, 40, 40);          // middle slab → splits a in two
+        const cutLayer = root.addLayer('cut', cutter);
+        root.setActiveLayer(cutLayer);
+
+        const col = new Collection<Mesh>(a);
+        col.subtract(cutter);
+
+        // Collection is updated IN PLACE: the split member is replaced by its two pieces.
+        expect(col.toArray().length).toBe(2);
+        expect(col.toArray().every(s => s instanceof Mesh)).toBe(true);
+        // Both pieces land on the source layer 'bxs', flat (not parked under a stray group).
+        expect(bxsLayer.shapes().toArray()).toEqual(col.toArray());
+        expect(bxsLayer.children().every(c => c.hasShape())).toBe(true);
+        // The cut layer keeps only its cutter — no split pieces leaked onto it.
+        expect(cutLayer.shapes().toArray()).toEqual([cutter]);
+    });
+
+    it('a non-splitting subtract mutates members in place and keeps them on their layer', () =>
+    {
+        const root = new SceneNode('root');
+        const a = Mesh.Box(40, 10, 10);
+        const bxsLayer = root.addLayer('bxs', a);
+
+        const cutter = Mesh.Box(6, 6, 6);            // small bite → stays a single solid
+        const cutLayer = root.addLayer('cut', cutter);
+        root.setActiveLayer(cutLayer);
+
+        const col = new Collection<Mesh>(a);
+        col.subtract(cutter);
+
+        expect(col.toArray()).toEqual([a]);          // same member object, mutated in place
+        expect(bxsLayer.shapes().toArray()).toEqual([a]);
+        expect(cutLayer.shapes().toArray()).toEqual([cutter]);
     });
 });

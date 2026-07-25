@@ -9,6 +9,24 @@ beforeAll(async () =>
     await initAsync();
 });
 
+// ─── Large flat scenes (traversal must not recurse per node) ────────────────────
+
+describe('SceneNode large flat scene', () =>
+{
+    // Regression: _traverse() used to recurse once per node (and spread arrays each
+    // step), so a flat scene of a few thousand shapes — e.g. a big GeoJSON $import —
+    // overflowed the stack with "Maximum call stack size exceeded". This count is
+    // well beyond the default call-stack depth, so the old recursive form would throw.
+    it('traverses 20000 flat children without a stack overflow', () =>
+    {
+        const root = new SceneNode('big');
+        for (let i = 0; i < 20000; i++) root.addChild(new SceneNode(`n${i}`));
+
+        expect(() => root.descendants()).not.toThrow();
+        expect(root.descendants()).toHaveLength(20000);
+    });
+});
+
 // ─── Construction ─────────────────────────────────────────────────────────────
 
 describe('SceneNode construction', () =>

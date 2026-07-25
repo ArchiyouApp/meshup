@@ -732,15 +732,20 @@ export class SceneNode<S extends SceneNodeShape = Shape>
 
     //// INTERNAL HELPERS ////
 
-    /** BFS traversal that includes `this` as the first element. */
+    /** BFS traversal that includes `this` as the first element.
+     *  Iterative (index-cursor) on purpose: the previous recursive form recursed
+     *  once per node AND spread the queue/acc each step (O(n²) + O(depth) stack),
+     *  so a flat scene of a few thousand shapes — e.g. a big GeoJSON $import —
+     *  overflowed the Web Worker stack ("Maximum call stack size exceeded"). This
+     *  is O(n), constant stack, and preserves the same BFS ordering. */
     protected _traverse(): SceneNode<S>[]
     {
-        const bfs = (queue: SceneNode<S>[], acc: SceneNode<S>[]): SceneNode<S>[] =>
+        const acc: SceneNode<S>[] = [this];
+        for (let i = 0; i < acc.length; i++)
         {
-            if (queue.length === 0) return acc;
-            const [cur, ...rest] = queue;
-            return bfs([...rest, ...cur._children], [...acc, cur]);
-        };
-        return bfs([this], []);
+            const children = acc[i]._children;
+            for (let c = 0; c < children.length; c++) acc.push(children[c]);
+        }
+        return acc;
     }
 }

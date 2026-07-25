@@ -82,9 +82,11 @@ export class Importer
     //// SVG ////
 
     /** Import an SVG document into a `ShapeCollection<Curve>` (XY plane, z=0).
-     *  NOTE: the current Rust SVG parser supports a subset of elements
-     *  (paths/rects); unsupported elements are silently skipped. Y is flipped
-     *  to math orientation (y-up) by the parser. */
+     *  Parses via hypercurve: `<path>` lines and circular arcs stay exact, Béziers
+     *  are flattened to line segments, and `<circle>/<ellipse>/<rect>/<polygon>/
+     *  <polyline>/<line>` become native curves. Unsupported path commands
+     *  (elliptical/rotated arcs, …) are skipped and reported via console warnings.
+     *  Coordinates are kept in SVG space (y-down); no y-flip. */
     static fromSVG(svg: string, _opts: ImportOptions = {}): ShapeCollection<Curve>
     {
         if(typeof svg !== 'string' || svg.trim().length === 0)
@@ -92,18 +94,25 @@ export class Importer
             throw new Error('Importer.fromSVG(): expected a non-empty SVG string.');
         }
 
-        const SketchJsCls = getCsgrs().SketchJs;
-        let sketch: SketchJs | undefined;
+        let result: any;
         try
         {
-            sketch = SketchJsCls.fromSVG(svg, null);
-            return Curve.fromSketchJs(sketch);
+            result = (getCsgrs() as any).importSvgCurves(svg);
         }
         catch(e)
         {
             throw new Error(`Importer.fromSVG(): SVG import failed: ${(e as Error)?.message ?? e}`);
         }
-        finally { (sketch as any)?.free?.(); }
+
+        (result.warnings ?? []).forEach((w: string) => console.warn(`Importer.fromSVG(): ${w}`));
+
+        const out = new ShapeCollection<Curve>();
+        const curve3ds = result.takeCurves();
+        for(const c of curve3ds)
+        {
+            out.add(Curve.fromCurve3D(c));
+        }
+        return out;
     }
 
     //// GeoJSON ////
@@ -129,18 +138,25 @@ export class Importer
         const SketchJsCls = getCsgrs().SketchJs;
         const out = new ShapeCollection<Curve>();
 
-        Importer._geometriesOf(parsed).forEach((geom) =>
+        Importer._featuresOf(parsed).forEach(({ geometry, properties }) =>
         {
-            const native = Importer._geometryToGeoNative(geom);
+            const native = Importer._geometryToGeoNative(geometry);
             if(!native) { return; } // unsupported / empty geometry — skip
 
             let sketch: SketchJs | undefined;
             try
             {
                 sketch = SketchJsCls.fromGeo(JSON.stringify(native), null);
-                Curve.fromSketchJs(sketch).forEach((c) => out.add(c));
+                const hasProps = properties && typeof properties === 'object' && Object.keys(properties).length > 0;
+                Curve.fromSketchJs(sketch).forEach((c) =>
+                {
+                    // Attach the feature's properties to each produced curve so scripts can
+                    // read them off shape.metadata (e.g. building height, street name).
+                    if(hasProps) { c.metadata = { ...properties }; }
+                    out.add(c);
+                });
             }
-            catch(e){ console.warn(`Importer.fromGeoJSON(): skipped a ${geom?.type} geometry:`, (e as Error)?.message); }
+            catch(e){ console.warn(`Importer.fromGeoJSON(): skipped a ${geometry?.type} geometry:`, (e as Error)?.message); }
             finally { (sketch as any)?.free?.(); }
         });
 
@@ -236,15 +252,28 @@ export class Importer
 
     //// GeoJSON → geo-types native serde helpers (interim) ////
 
-    /** Flatten a GeoJSON container to its constituent geometries. */
-    private static _geometriesOf(gj: any): any[]
+    /** Flatten a GeoJSON container to (geometry, properties) pairs, carrying each
+     *  feature's `properties` alongside its geometry so they can be attached to the
+     *  resulting Curve's `metadata`. A Feature whose geometry is a GeometryCollection
+     *  shares its properties across all sub-geometries. */
+    private static _featuresOf(gj: any): Array<{ geometry: any; properties: Record<string, any> }>
     {
+        const within = (geom: any, props: Record<string, any>): Array<{ geometry: any; properties: Record<string, any> }> =>
+        {
+            if(!geom) return [];
+            if(geom.type === 'GeometryCollection')
+            {
+                return (geom.geometries ?? []).map((g: any) => ({ geometry: g, properties: props }));
+            }
+            return [{ geometry: geom, properties: props }];
+        };
+
         switch(gj?.type)
         {
-            case 'FeatureCollection': return (gj.features ?? []).flatMap((f: any) => (f?.geometry ? [f.geometry] : []));
-            case 'Feature':           return gj.geometry ? [gj.geometry] : [];
-            case 'GeometryCollection':return gj.geometries ?? [];
-            default:                  return gj?.type ? [gj] : []; // bare geometry
+            case 'FeatureCollection': return (gj.features ?? []).flatMap((f: any) => within(f?.geometry, f?.properties ?? {}));
+            case 'Feature':           return within(gj.geometry, gj.properties ?? {});
+            case 'GeometryCollection':return (gj.geometries ?? []).map((g: any) => ({ geometry: g, properties: {} }));
+            default:                  return gj?.type ? [{ geometry: gj, properties: {} }] : []; // bare geometry
         }
     }
 

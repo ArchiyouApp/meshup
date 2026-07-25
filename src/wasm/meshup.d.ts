@@ -227,6 +227,12 @@ export class Curve3DJs {
    */
   knotsDomain(): Float64Array;
   /**
+   * Construct a full **ellipse** (closed) with semi-axes `radius_x`/`radius_y`,
+   * its major axis rotated `rotation` radians in-plane, centred at `center`, in
+   * the plane whose normal is `normal`. Backed by exact rational conic spans.
+   */
+  static makeEllipse(radius_x: number, radius_y: number, rotation: number, center: Point3Js, normal: Vector3Js): Curve3DJs;
+  /**
    * Construct a polyline (open or closed) through 3D control points.
    */
   static makePolyline(points: Point3Js[], closed: boolean): Curve3DJs;
@@ -252,6 +258,13 @@ export class Curve3DJs {
    * Rotate the curve by a unit quaternion `(w, x, y, z)` about the origin.
    */
   rotateQuaternion(w: number, x: number, y: number, z: number): Curve3DJs;
+  /**
+   * Construct an **elliptical arc** from `start_angle` to `end_angle` (radians,
+   * in the pre-rotation circle parameter). A full turn yields a closed ellipse.
+   * Semi-axes `radius_x`/`radius_y`, rotated `rotation` radians in-plane, centred
+   * at `center`, in the plane whose normal is `normal`.
+   */
+  static makeEllipticalArc(radius_x: number, radius_y: number, rotation: number, start_angle: number, end_angle: number, center: Point3Js, normal: Vector3Js): Curve3DJs;
   /**
    * Tessellate each native segment separately, returning a JS array of flat 3D
    * point arrays (`Array<Float64Array>`, `[x,y,z,...]` per segment). Lets the TS
@@ -1175,6 +1188,20 @@ export class SketchJs {
   static trapezoid(top_width: number, bottom_width: number, height: number, top_offset: number, metadata: any): SketchJs;
 }
 
+export class SvgImportJs {
+  private constructor();
+  free(): void;
+  [Symbol.dispose](): void;
+  /**
+   * Move the imported curves out (call once). Leaves the result empty.
+   */
+  takeCurves(): Curve3DJs[];
+  /**
+   * Non-fatal warnings gathered during import (skipped elements/commands).
+   */
+  readonly warnings: string[];
+}
+
 export class Vector3Js {
   free(): void;
   [Symbol.dispose](): void;
@@ -1263,6 +1290,14 @@ export function hcSignedArea(coords: Float64Array): number;
  */
 export function hcTessellatePolyline(coords: Float64Array, closed: boolean, chord_error: number): Float64Array;
 
+/**
+ * Import an SVG document into native planar curves. Lines and circular arcs are
+ * kept exact; Béziers are flattened to line segments; unsupported path commands
+ * (elliptical/rotated arcs, …) are skipped and surfaced via `warnings`.
+ * Coordinates are SVG-space (y-down) at z = 0.
+ */
+export function importSvgCurves(doc: string): SvgImportJs;
+
 export function init_panic_hook(): void;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -1286,6 +1321,7 @@ export interface InitOutput {
   readonly __wbg_sdfsamplejs_free: (a: number, b: number) => void;
   readonly __wbg_sectionelevationresultjs_free: (a: number, b: number) => void;
   readonly __wbg_sketchjs_free: (a: number, b: number) => void;
+  readonly __wbg_svgimportjs_free: (a: number, b: number) => void;
   readonly __wbg_vertexjs_free: (a: number, b: number) => void;
   readonly booleanregion3djs_exterior: (a: number) => number;
   readonly booleanregion3djs_holeCount: (a: number) => number;
@@ -1350,6 +1386,8 @@ export interface InitOutput {
   readonly curve3djs_length: (a: number, b: number, c: number) => [number, number, number];
   readonly curve3djs_makeArc: (a: number, b: number, c: number) => [number, number, number];
   readonly curve3djs_makeCircle: (a: number, b: number, c: number) => [number, number, number];
+  readonly curve3djs_makeEllipse: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+  readonly curve3djs_makeEllipticalArc: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
   readonly curve3djs_makeInterpolated: (a: number, b: number, c: number) => [number, number, number];
   readonly curve3djs_makeLine: (a: number, b: number) => [number, number, number];
   readonly curve3djs_makePolyline: (a: number, b: number, c: number) => [number, number, number];
@@ -1380,6 +1418,7 @@ export interface InitOutput {
   readonly hcOffset: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
   readonly hcSignedArea: (a: number, b: number) => [number, number, number];
   readonly hcTessellatePolyline: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+  readonly importSvgCurves: (a: number, b: number) => [number, number, number];
   readonly matrix4js_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
   readonly matrix4js_toArray: (a: number) => [number, number];
   readonly meshjs_adaptiveRefine: (a: number, b: number, c: number, d: number) => number;
@@ -1638,6 +1677,8 @@ export interface InitOutput {
   readonly sketchjs_trapezoid: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly sketchjs_union: (a: number, b: number) => number;
   readonly sketchjs_xor: (a: number, b: number) => number;
+  readonly svgimportjs_takeCurves: (a: number) => [number, number];
+  readonly svgimportjs_warnings: (a: number) => [number, number];
   readonly vector3js_abs: (a: number) => number;
   readonly vector3js_add: (a: number, b: number) => number;
   readonly vector3js_angle: (a: number, b: number) => number;
