@@ -395,7 +395,8 @@ export class SceneNode<S extends SceneNodeShape = Shape>
     }
 
     /** Find or create a direct child layer named `name` under this node, WITHOUT changing
-     *  the active layer. Used by @sceneLayer(name) for iso/elevation/section projections. */
+     *  the active layer. Used by @sceneLayer(name) to nest iso/elevation/section projections
+     *  as a group inside the active layer. */
     ensureLayer(name: string): SceneNode<S>
     {
         const existing = this._children.find(c => c.name === name);

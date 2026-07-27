@@ -3,7 +3,7 @@
 //! The legacy [`svg`](super::svg) importer builds only polylines and errors on
 //! every curve command. This module instead routes each SVG `<path>`'s data
 //! through hypercurve's curve-aware importer
-//! ([`import_svg_path_data_with_report`]), so **lines and circular arcs stay
+//! ([`parse_svg_path_data`]), so **lines and circular arcs stay
 //! exact**. meshup's [`Segment2`] has no Bézier variant, so cubic/quadratic
 //! Béziers are flattened to line segments here. Unsupported path commands
 //! (elliptical or rotated arcs, …) are skipped and reported as warnings.
@@ -16,8 +16,7 @@
 
 use crate::hcurve;
 use hypercurve::{
-    Contour2, CurveGeometry2, CurveString2, LineSeg2, Point2, Segment2,
-    import_svg_path_data_with_report,
+    Contour2, CurveGeometry2, CurveString2, LineSeg2, Point2, Segment2, parse_svg_path_data,
 };
 
 use super::IoError;
@@ -48,9 +47,7 @@ pub fn import_svg_curves(doc: &str) -> Result<(Vec<ImportedCurve>, Vec<String>),
 
             Event::Tag(tag::Path, Empty, attrs) => {
                 if let Some(d) = attrs.get("d") {
-                    if let Some(c) = import_path(d, &mut warnings) {
-                        curves.push(c);
-                    }
+                    curves.extend(import_path(d, &mut warnings));
                 }
             },
 
@@ -124,20 +121,30 @@ pub fn import_svg_curves(doc: &str) -> Result<(Vec<ImportedCurve>, Vec<String>),
     Ok((curves, warnings))
 }
 
-/// Parse one `<path>`'s `d` data via hypercurve into a native curve.
-fn import_path(d: &str, warnings: &mut Vec<String>) -> Option<ImportedCurve> {
-    let result = import_svg_path_data_with_report(d, 0, 0, None);
-    let curve_path = match result.into_curve_path() {
-        Some(cp) => cp,
-        None => {
+/// Parse one `<path>`'s `d` data via hypercurve into native curves (one per subpath).
+fn import_path(d: &str, warnings: &mut Vec<String>) -> Vec<ImportedCurve> {
+    let subpaths = match parse_svg_path_data(d) {
+        Ok(subpaths) => subpaths,
+        Err(_) => {
             warnings.push(format!(
                 "skipped an SVG <path> with unsupported commands (e.g. elliptical/rotated arc): '{}'",
                 truncate(d)
             ));
-            return None;
+            return Vec::new();
         },
     };
 
+    subpaths
+        .into_iter()
+        .filter_map(|subpath| import_curve_path(subpath.into_path(), warnings))
+        .collect()
+}
+
+/// Convert one hypercurve subpath into a native curve, flattening Béziers.
+fn import_curve_path(
+    curve_path: hypercurve::CurvePath2,
+    warnings: &mut Vec<String>,
+) -> Option<ImportedCurve> {
     let mut segs: Vec<Segment2> = Vec::new();
     for curve in curve_path.curves() {
         match curve.geometry() {

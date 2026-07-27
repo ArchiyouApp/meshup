@@ -866,6 +866,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
 
 [[package]]
+name = "cavalier_contours"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31cab9e73a5a3533d3d6fb36818e8735dd033e080fa70a63d90846c8183708c9"
+dependencies = [
+ "num-traits 0.2.19",
+ "static_aabb2d_index",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.49"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -917,6 +927,33 @@ checksum = "977db54e5eec96279bea3032dcf41d3844e90d62e5cfeded48f8d53b1a755d7a"
 dependencies = [
  "num-bigint 0.3.3",
  "num-traits 0.2.19",
+]
+
+[[package]]
+name = "ciborium"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42e69ffd6f0917f5c029256a24d0161db17cea3997d185db0d35926308770f0e"
+dependencies = [
+ "ciborium-io",
+ "ciborium-ll",
+ "serde",
+]
+
+[[package]]
+name = "ciborium-io"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05afea1e0a06c9be33d539b876f1ce3692f4afea2cb41f740e7743225ed1c757"
+
+[[package]]
+name = "ciborium-ll"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57663b653d948a338bfb3eeba9bb2fd5fcfaecb9e199e87e1eda4d9e8b240fd9"
+dependencies = [
+ "ciborium-io",
+ "half",
 ]
 
 [[package]]
@@ -1099,15 +1136,15 @@ dependencies = [
  "anyhow",
  "argmin",
  "gauss-quad",
- "geo 0.31.0",
+ "geo",
  "hashbrown 0.15.5",
  "itertools 0.14.0",
- "nalgebra",
+ "nalgebra 0.34.1",
  "num-traits 0.2.19",
  "ordered-float",
  "rand 0.9.2",
  "robust",
- "simba",
+ "simba 0.9.1",
  "spade",
 ]
 
@@ -1525,7 +1562,7 @@ version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bcc0df122fbe0e18a274358b3212f1a7271df8c280ba030af6ec90364d469e69"
 dependencies = [
- "nalgebra",
+ "nalgebra 0.34.1",
 ]
 
 [[package]]
@@ -1566,7 +1603,7 @@ dependencies = [
  "float_next_after",
  "geo-types",
  "geographiclib-rs",
- "i_overlay",
+ "i_overlay 4.0.7",
  "log",
  "num-traits 0.2.19",
  "robust",
@@ -1576,30 +1613,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "geo"
-version = "0.32.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f3901269ec6d4f6068d3f09e5f02f995bd076398dcd1dfec407cd230b02d11b"
-dependencies = [
- "earcutr 0.4.3",
- "float_next_after",
- "geo-types",
- "geographiclib-rs",
- "i_overlay",
- "log",
- "num-traits 0.2.19",
- "rand 0.8.5",
- "robust",
- "rstar 0.12.2",
- "sif-itree",
- "spade",
-]
-
-[[package]]
 name = "geo-buf"
 version = "0.1.0"
 dependencies = [
- "geo 0.31.0",
+ "geo",
  "geo-types",
 ]
 
@@ -1766,6 +1783,24 @@ dependencies = [
  "rand 0.9.2",
  "serde_core",
 ]
+
+[[package]]
+name = "glam"
+version = "0.31.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "556f6b2ea90b8d15a74e0e7bb41671c9bdf38cd9f78c284d750b9ce58a2b5be7"
+
+[[package]]
+name = "glam"
+version = "0.32.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f70749695b063ecbf6b62949ccccde2e733ec3ecbbd71d467dca4e5c6c97cca0"
+
+[[package]]
+name = "glam"
+version = "0.33.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f22fb22f065b308be0d8724e3706c7fa3fc2a6c7d6899df4cad7860e7a75436"
 
 [[package]]
 name = "gltf"
@@ -1939,20 +1974,24 @@ dependencies = [
 name = "hypercurve"
 version = "0.3.0"
 dependencies = [
- "geo 0.32.0",
+ "cavalier_contours",
+ "curvo",
+ "geo",
  "hyperlimit",
  "hyperreal",
  "hypersolve",
  "hypertri",
+ "i_overlay 7.0.2",
+ "nalgebra 0.35.0",
  "num",
  "proptest",
+ "svg",
+ "svgtypes",
 ]
 
 [[package]]
 name = "hyperlattice"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b65eff926d97a7fafc3985d1faba167e0e67b7870f90af494fa1269ac64d45a9"
 dependencies = [
  "hyperreal",
 ]
@@ -1960,8 +1999,6 @@ dependencies = [
 [[package]]
 name = "hyperlimit"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fdb6de18515d37cdb973dffe5e6ba994b7fd27bfcbef3d4d1b23780946f5bef"
 dependencies = [
  "hyperlattice",
  "hyperreal",
@@ -1971,18 +2008,20 @@ dependencies = [
 name = "hyperreal"
 version = "0.13.1"
 dependencies = [
+ "ciborium",
  "num",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
 name = "hypersolve"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "856dd8b8ab0e75bb2619ab0f1fb35c66586c14cdd5f6c592fc16e3a1cc32fa41"
 dependencies = [
  "hyperlattice",
  "hyperlimit",
  "hyperreal",
+ "num",
 ]
 
 [[package]]
@@ -2005,10 +2044,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "i_float"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "519b2780a1187eeed09145e5d168863c87f0d704abe84084206ebd897f99c6dc"
+dependencies = [
+ "libm",
+]
+
+[[package]]
 name = "i_key_sort"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9190f86706ca38ac8add223b2aed8b1330002b5cdbbce28fb58b10914d38fc27"
+
+[[package]]
+name = "i_key_sort"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d73d122b937fca067feb0ad74f62388920272b27c356d4df2d0cfdd59e044cf0"
 
 [[package]]
 name = "i_overlay"
@@ -2016,11 +2070,23 @@ version = "4.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413183068e6e0289e18d7d0a1f661b81546e6918d5453a44570b9ab30cbed1b3"
 dependencies = [
- "i_float",
- "i_key_sort",
- "i_shape",
- "i_tree",
+ "i_float 1.15.0",
+ "i_key_sort 0.6.0",
+ "i_shape 1.14.0",
+ "i_tree 0.16.0",
  "rayon",
+]
+
+[[package]]
+name = "i_overlay"
+version = "7.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf284de04038af713dad8b4a88d2bc97f1c8c0a87fc1f43e28e3b965d0136d9e"
+dependencies = [
+ "i_float 3.0.0",
+ "i_key_sort 0.10.3",
+ "i_shape 3.0.0",
+ "i_tree 0.19.0",
 ]
 
 [[package]]
@@ -2029,7 +2095,16 @@ version = "1.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ea154b742f7d43dae2897fcd5ead86bc7b5eefcedd305a7ebf9f69d44d61082"
 dependencies = [
- "i_float",
+ "i_float 1.15.0",
+]
+
+[[package]]
+name = "i_shape"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90b2ee7bae072887c579a2f2fd2a7fa1c29cceecfae1998ef940061c5570afff"
+dependencies = [
+ "i_float 3.0.0",
 ]
 
 [[package]]
@@ -2037,6 +2112,12 @@ name = "i_tree"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35e6d558e6d4c7b82bc51d9c771e7a927862a161a7d87bf2b0541450e0e20915"
+
+[[package]]
+name = "i_tree"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e9d4a992a9fe83130f41ceacceac3bb116a4355dfc9c8d6ecea4f1e4b4c6caf"
 
 [[package]]
 name = "iana-time-zone"
@@ -2226,6 +2307,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kurbo"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b60dfc32f652b926df6192e55525b16d186c69d47876c3ead4da5cc9f8450e2"
+dependencies = [
+ "arrayvec",
+ "euclid",
+ "polycool",
+ "smallvec",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2342,7 +2435,7 @@ dependencies = [
  "earcutr 0.5.0",
  "either",
  "fast-surface-nets",
- "geo 0.31.0",
+ "geo",
  "geo-buf",
  "getrandom 0.3.4",
  "gltf",
@@ -2351,7 +2444,7 @@ dependencies = [
  "hypercurve",
  "image",
  "js-sys",
- "nalgebra",
+ "nalgebra 0.34.1",
  "nom 7.1.3",
  "parry3d",
  "parry3d-f64",
@@ -2430,7 +2523,27 @@ dependencies = [
  "num-rational",
  "num-traits 0.2.19",
  "serde",
- "simba",
+ "simba 0.9.1",
+ "typenum",
+]
+
+[[package]]
+name = "nalgebra"
+version = "0.35.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adc43a60c217b0c6ff46e47f26911015ad8d2e5a8be1af668c67e370d99a4346"
+dependencies = [
+ "approx",
+ "glam 0.30.9",
+ "glam 0.31.1",
+ "glam 0.32.1",
+ "glam 0.33.2",
+ "matrixmultiply",
+ "nalgebra-macros",
+ "num-complex",
+ "num-rational",
+ "num-traits 0.2.19",
+ "simba 0.10.0",
  "typenum",
 ]
 
@@ -2574,6 +2687,7 @@ checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
 dependencies = [
  "num-integer",
  "num-traits 0.2.19",
+ "serde",
 ]
 
 [[package]]
@@ -2626,6 +2740,7 @@ dependencies = [
  "num-bigint 0.4.6",
  "num-integer",
  "num-traits 0.2.19",
+ "serde",
 ]
 
 [[package]]
@@ -2743,13 +2858,13 @@ dependencies = [
  "foldhash 0.2.0",
  "hashbrown 0.16.1",
  "log",
- "nalgebra",
+ "nalgebra 0.34.1",
  "num-derive",
  "num-traits 0.2.19",
  "ordered-float",
  "rayon",
  "rstar 0.12.2",
- "simba",
+ "simba 0.9.1",
  "slab",
  "smallvec",
  "spade",
@@ -2772,13 +2887,13 @@ dependencies = [
  "foldhash 0.2.0",
  "hashbrown 0.16.1",
  "log",
- "nalgebra",
+ "nalgebra 0.34.1",
  "num-derive",
  "num-traits 0.2.19",
  "ordered-float",
  "rayon",
  "rstar 0.12.2",
- "simba",
+ "simba 0.9.1",
  "slab",
  "smallvec",
  "spade",
@@ -2851,6 +2966,15 @@ dependencies = [
  "fdeflate",
  "flate2",
  "miniz_oxide",
+]
+
+[[package]]
+name = "polycool"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50596ddc09eb5ad5f75cacd40209568e66df71baf86e1499a0e99c4cff12a5a6"
+dependencies = [
+ "arrayvec",
 ]
 
 [[package]]
@@ -3077,7 +3201,7 @@ dependencies = [
  "bitflags 2.10.0",
  "downcast-rs",
  "log",
- "nalgebra",
+ "nalgebra 0.34.1",
  "num-derive",
  "num-traits 0.2.19",
  "ordered-float",
@@ -3085,10 +3209,10 @@ dependencies = [
  "profiling",
  "rayon",
  "rustc-hash",
- "simba",
+ "simba 0.9.1",
  "static_assertions",
  "thiserror 2.0.17",
- "wide",
+ "wide 0.7.33",
 ]
 
 [[package]]
@@ -3103,7 +3227,7 @@ dependencies = [
  "bitflags 2.10.0",
  "downcast-rs",
  "log",
- "nalgebra",
+ "nalgebra 0.34.1",
  "num-derive",
  "num-traits 0.2.19",
  "ordered-float",
@@ -3111,7 +3235,7 @@ dependencies = [
  "profiling",
  "rayon",
  "rustc-hash",
- "simba",
+ "simba 0.9.1",
  "static_assertions",
  "thiserror 2.0.17",
 ]
@@ -3363,16 +3487,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "ryu"
-version = "1.0.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
-
-[[package]]
 name = "safe_arch"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96b02de82ddbe1b636e6170c21be622223aea188ef2e139be0a5b219ec215323"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
+name = "safe_arch"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a52ec151f024d703f9fd65abb7cbe81e7cdb39f18917a3a37e3014470dc7c59"
 dependencies = [
  "bytemuck",
 ]
@@ -3441,15 +3568,15 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.145"
+version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "402a6f66d8c709116cf22f558eab210f5a50187f702eb4d7e5ef38d9a7f1c79c"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
  "itoa",
  "memchr",
- "ryu",
  "serde",
  "serde_core",
+ "zmij",
 ]
 
 [[package]]
@@ -3468,12 +3595,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
-name = "sif-itree"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7f45b8998ced5134fb1d75732c77842a3e888f19c1ff98481822e8fbfbf930b"
-
-[[package]]
 name = "simba"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3483,7 +3604,19 @@ dependencies = [
  "num-complex",
  "num-traits 0.2.19",
  "paste",
- "wide",
+ "wide 0.7.33",
+]
+
+[[package]]
+name = "simba"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f45c644a9f3a386f9288625d9f0c1e999e1acf07a37df35d0516c7f199d9cb2"
+dependencies = [
+ "approx",
+ "num-complex",
+ "num-traits 0.2.19",
+ "wide 1.5.0",
 ]
 
 [[package]]
@@ -3500,6 +3633,12 @@ checksum = "95890f873bec569a0362c235787f3aca6e1e887302ba4840839bcc6459c42da6"
 dependencies = [
  "quote",
 ]
+
+[[package]]
+name = "siphasher"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "slab"
@@ -3577,6 +3716,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "static_aabb2d_index"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1204bd3057a2225dc60d157bd921aaeaa4d318527bd32af4678cad39e5279849"
+dependencies = [
+ "num-traits 0.2.19",
+]
+
+[[package]]
 name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3603,6 +3751,16 @@ name = "svg_fmt"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0193cc4331cfd2f3d2011ef287590868599a2f33c3e69bc22c1a3d3acf9e02fb"
+
+[[package]]
+name = "svgtypes"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "695b5790b3131dafa99b3bbfd25a216edb3d216dad9ca208d4657bfb8f2abc3d"
+dependencies = [
+ "kurbo",
+ "siphasher",
+]
 
 [[package]]
 name = "syn"
@@ -4081,7 +4239,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ce5da8ecb62bcd8ec8b7ea19f69a51275e91299be594ea5cc6ef7819e16cd03"
 dependencies = [
  "bytemuck",
- "safe_arch",
+ "safe_arch 0.7.4",
+]
+
+[[package]]
+name = "wide"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dfdfe6a32973f2d1b268b8895845a8a96cac2f0191e72c27cc929036060dbf89"
+dependencies = [
+ "bytemuck",
+ "safe_arch 1.1.0",
 ]
 
 [[package]]
@@ -4302,6 +4470,12 @@ dependencies = [
  "thiserror 2.0.17",
  "zopfli",
 ]
+
+[[package]]
+name = "zmij"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[package]]
 name = "zopfli"

@@ -74,3 +74,124 @@ describe('material PBR + texture reaches the GLB', () =>
         expect(counts).toEqual([12, 24]);
     });
 });
+
+/** A max-extent `sides` texture: repeat:false, big enough to contain a normal part. */
+const bigSides = {
+    image: 's.png', realWidth: 500, realHeight: 889, repeat: false,
+    data: `data:image/png;base64,${RED_PNG}`,
+};
+
+/** Build a materialized box and return its GLTF document. */
+function build(box: any, material: any)
+{
+    box.style.material = material;
+    return (new GLTFBuilder().add(box).applyExtensions() as any)._doc;
+}
+
+describe('non-repeating, randomly aligned sides UVs', () =>
+{
+    const spec = (extra: any = {}) => ({
+        name: 'douglas', modelUnitMM: 1,
+        textures: { sides: bigSides }, ...extra,
+    });
+
+    /** The TEXCOORD_0 array of the first primitive. */
+    const uvs = (doc: any) =>
+        doc.getRoot().listMeshes()[0].listPrimitives()[0].getAttribute('TEXCOORD_0').getArray();
+
+    it('clamps when the part fits inside one tile', () =>
+    {
+        // 100×100×400 mm fits inside the 500×889 mm tile.
+        const doc = build(Mesh.Box(100, 400, 100), spec());
+        const info = doc.getRoot().listMeshes()[0].listPrimitives()[0]
+            .getMaterial().getBaseColorTextureInfo();
+        expect(info.getWrapS()).toBe(33071); // CLAMP_TO_EDGE — no repeat needed
+    });
+
+    it('falls back to REPEAT when the part overruns its tile', () =>
+    {
+        // A 4 m beam is longer than the 889 mm tile; clamping would smear the edge
+        // pixel down the whole length, so it must tile instead.
+        const doc = build(Mesh.Box(100, 4000, 100), spec());
+        const info = doc.getRoot().listMeshes()[0].listPrimitives()[0]
+            .getMaterial().getBaseColorTextureInfo();
+        expect(info.getWrapS()).toBe(10497); // REPEAT
+    });
+
+    it('keeps UVs inside 0..1 for a part that fits', () =>
+    {
+        const uv = uvs(build(Mesh.Box(100, 400, 100), spec()));
+        for (const v of uv)
+        {
+            expect(v).toBeGreaterThanOrEqual(0);
+            expect(v).toBeLessThanOrEqual(1);
+        }
+    });
+
+    it('is deterministic — the same shape twice gives identical UVs', () =>
+    {
+        const a = uvs(build(Mesh.Box(100, 400, 100), spec()));
+        const b = uvs(build(Mesh.Box(100, 400, 100), spec()));
+        expect(Array.from(a)).toEqual(Array.from(b));
+    });
+
+    it('gives two identical parts at different positions a different crop', () =>
+    {
+        const a = uvs(build(Mesh.Box(100, 400, 100), spec()));
+        const moved = Mesh.Box(100, 400, 100);
+        moved.move(1000, 0, 0);
+        const b = uvs(build(moved, spec()));
+        // same size → same span, but a different random offset
+        expect(Array.from(a)).not.toEqual(Array.from(b));
+    });
+});
+
+describe('material edge outline', () =>
+{
+    const edge = { color: '#000000', opacity: 0.8, width: 1 };
+
+    it('creates a black 80% edge material from the render spec alone', () =>
+    {
+        const doc = build(Mesh.Box(100, 100, 100), { name: 'steel', edge });
+        const mat = doc.getRoot().listMaterials().find((m: any) => m.getName() === 'material_edge');
+        expect(mat).toBeTruthy();
+        const [r, g, b, a] = mat.getBaseColorFactor();
+        expect([r, g, b]).toEqual([0, 0, 0]);
+        expect(a).toBeCloseTo(0.8, 6);
+        expect(mat.getAlphaMode()).toBe('BLEND');
+    });
+
+    it('honours a custom edge color and opacity', () =>
+    {
+        const doc = build(Mesh.Box(100, 100, 100),
+            { name: 'steel', edge: { color: '#ff0000', opacity: 0.5, width: 2 } });
+        const mat = doc.getRoot().listMaterials().find((m: any) => m.getName() === 'material_edge');
+        const [r, , , a] = mat.getBaseColorFactor();
+        expect(r).toBeCloseTo(1, 6);
+        expect(a).toBeCloseTo(0.5, 6);
+        expect(mat.getExtension('BENTLEY_materials_line_style').width).toBe(2);
+    });
+
+    it('lets an explicit user stroke win over the material outline', () =>
+    {
+        const box = Mesh.Box(100, 100, 100);
+        box.style.stroke = { color: '#00ff00' };
+        box.style.strokeWidth = 3;
+        const doc = build(box, { name: 'steel', edge });
+
+        // the stroke path names its material 'edge_material', not 'material_edge'
+        const names = doc.getRoot().listMaterials().map((m: any) => m.getName());
+        expect(names).toContain('edge_material');
+        expect(names).not.toContain('material_edge');
+    });
+
+    it('leaves an unmaterialized shape on the default stroke outline', () =>
+    {
+        // strokeWidth is 1 by default, so every mesh already gets an edge material —
+        // applying a material changes its colour/opacity, it does not switch edges on.
+        const doc = (new GLTFBuilder().add(Mesh.Box(100, 100, 100)).applyExtensions() as any)._doc;
+        const names = doc.getRoot().listMaterials().map((m: any) => m.getName());
+        expect(names).toContain('edge_material');
+        expect(names).not.toContain('material_edge');
+    });
+});

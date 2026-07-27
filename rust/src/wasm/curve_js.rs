@@ -1191,7 +1191,9 @@ impl CornerTarget for Contour2
     fn is_closed_corner_target() -> bool { true }
     fn chamfer_corner(&self, vi: usize, tp: &Point2, tn: &Point2, pol: &CurvePolicy) -> Option<Self>
     {
-        self.chamfer_vertex_by_points(vi, tp, tn, pol).ok().and_then(|r| r.into_contour())
+        self.chamfer_vertex_by_points(vi, tp, tn, pol)
+            .ok()
+            .and_then(|r| hcurve::decided(r).ok())
     }
 }
 
@@ -1201,7 +1203,9 @@ impl CornerTarget for CurveString2
     fn is_closed_corner_target() -> bool { false }
     fn chamfer_corner(&self, vi: usize, tp: &Point2, tn: &Point2, pol: &CurvePolicy) -> Option<Self>
     {
-        self.chamfer_vertex_by_points(vi, tp, tn, pol).ok().and_then(|r| r.into_curve_string())
+        self.chamfer_vertex_by_points(vi, tp, tn, pol)
+            .ok()
+            .and_then(|r| hcurve::decided(r).ok())
     }
 }
 

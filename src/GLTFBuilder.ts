@@ -35,6 +35,7 @@ import
     type WriterContext,
 } from '@gltf-transform/core';
 import { Style } from './Style';
+import { Color } from './Color';
 
 import { GLTFJsonDocumentToString, remapAxis } from './utils';
 
@@ -64,6 +65,38 @@ import type { SceneNode } from './SceneNode';
 import type { Axis, SceneNodeExport } from './types';
 
 // ─── Utility: dash array → 16-bit repeating bitmask ──────────────────────────
+
+/** FNV-1a string hash → 32-bit unsigned, used to seed per-shape texture randomisation. */
+function hashSeed(s: string): number
+{
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++)
+    {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+    }
+    return h >>> 0;
+}
+
+/** mulberry32 PRNG — small, seedable, good enough for texture offsets. */
+function mulberry32(seed: number): () => number
+{
+    let a = seed >>> 0;
+    return () =>
+    {
+        a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+/** Parse a CSS color string to normalized 0..1 RGB, falling back to black. */
+function rgbOf(color: string): [number, number, number]
+{
+    try { return new Color(color).toRgb().map(v => v / 255) as [number, number, number]; }
+    catch { return [0, 0, 0]; }
+}
 
 /**
  * Convert a strokeDash array (e.g. [5, 5]) to a 16-bit repeating bitmask.
@@ -814,11 +847,13 @@ export class GLTFBuilder
         }
 
         // Textured. Split faces into `section` (the two end faces, normal ∥ the longest
-        // OBB axis) and `sides` (the rest). `section` fits its texture once at real-world
-        // scale, randomly offset, non-repeating; `sides` tiles at real-world scale.
+        // OBB axis) and `sides` (the rest). Both are fitted at real-world scale with a
+        // per-shape random offset so identical parts don't look cloned.
         const modelUnitMM: number = (spec && spec.modelUnitMM) || 1;
-        const { sectionUV, sidesUV, sectionIdx, sidesIdx } =
-            this._planarUVsForMaterial(posF32, normF32, idxCopy, count, modelUnitMM, sectionTex, sidesTex);
+        // Seed on name + size, so the crop is stable across re-exports but differs between parts.
+        const seed = hashSeed(`${name}|${c.x.toFixed(3)},${c.y.toFixed(3)},${c.z.toFixed(3)}|${count}`);
+        const { sectionUV, sidesUV, sectionIdx, sidesIdx, sectionFits, sidesFits } =
+            this._planarUVsForMaterial(posF32, normF32, idxCopy, count, modelUnitMM, sectionTex, sidesTex, seed);
 
         // Independent UV accessors so each role uses its own mapping.
         const sidesUVAcc = this._doc.createAccessor().setType(Accessor.Type.VEC2).setArray(sidesUV as any).setBuffer(gtBuf);
@@ -834,16 +869,22 @@ export class GLTFBuilder
                 .setIndices(ia).setMode(Primitive.Mode.TRIANGLES).setMaterial(material);
         };
 
+        // Wrap mode is a per-shape decision: clamp only when the part actually fits inside
+        // one tile, otherwise the clamped edge pixel smears along the overrun.
+        const CLAMP = 33071, REPEAT = 10497;
+        const sidesWrap = (sidesTex?.repeat === false && sidesFits) ? CLAMP : REPEAT;
+        const sectionWrap = sectionFits ? CLAMP : REPEAT;
+
         const built: Array<{ prim: Primitive; idx: Uint32Array }> = [];
         if (sidesIdx.length)
         {
-            const prim = buildPrim(sidesIdx, sidesUVAcc, makeMaterial('mesh_sides', sidesTex?.data, 10497 /* REPEAT */));
+            const prim = buildPrim(sidesIdx, sidesUVAcc, makeMaterial('mesh_sides', sidesTex?.data, sidesWrap));
             gltfMesh.addPrimitive(prim);
             built.push({ prim, idx: new Uint32Array(sidesIdx) });
         }
         if (sectionIdx.length)
         {
-            const prim = buildPrim(sectionIdx, sectionUVAcc, makeMaterial('mesh_section', sectionTex?.data ?? sidesTex?.data, 33071 /* CLAMP_TO_EDGE */));
+            const prim = buildPrim(sectionIdx, sectionUVAcc, makeMaterial('mesh_section', sectionTex?.data ?? sidesTex?.data, sectionWrap));
             gltfMesh.addPrimitive(prim);
             built.push({ prim, idx: new Uint32Array(sectionIdx) });
         }
@@ -876,18 +917,33 @@ export class GLTFBuilder
      * compute per-role UVs at real-world scale.
      *
      *  - The longest OBB axis is the "length"; the two faces whose normal is parallel
-     *    to it are the `section` (end) faces. Their texture is fitted once at real
-     *    scale, randomly offset, and clamped (non-repeating).
-     *  - All other faces are `sides`, box-mapped and tiled at real scale.
+     *    to it are the `section` (end) faces.
+     *  - All other faces are `sides`.
      *
-     * Returns per-vertex UV arrays (length count*2) plus the triangle index lists per
-     * role. A UV array is meaningful only at the vertices its role's indices reference.
+     * Both roles are mapped at real-world scale relative to the part's own bounding box
+     * and then shifted by a random offset, so identical parts get a different crop of
+     * the texture instead of looking cloned. Textures are authored at the largest
+     * obtainable extent for the material (a log face for wood), so a part normally fits
+     * inside one tile and never visibly repeats.
+     *
+     * The offsets come from a PRNG seeded on the shape (`seed`), not Math.random: the
+     * appearance must be stable across re-exports, or every run reshuffles every part.
+     *
+     * Returns per-vertex UV arrays (length count*2), the triangle index lists per role,
+     * and whether each role fits within a single tile (the caller picks CLAMP vs REPEAT
+     * from that — clamping a part that overruns its tile smears the edge pixel).
+     * A UV array is meaningful only at the vertices its role's indices reference.
      */
     private _planarUVsForMaterial(
         posF32: Float32Array, normF32: Float32Array, idx: Uint32Array, count: number,
-        modelUnitMM: number, sectionTex: any, sidesTex: any):
-        { sectionUV: Float32Array; sidesUV: Float32Array; sectionIdx: number[]; sidesIdx: number[] }
+        modelUnitMM: number, sectionTex: any, sidesTex: any, seed: number):
+        {
+            sectionUV: Float32Array; sidesUV: Float32Array;
+            sectionIdx: number[]; sidesIdx: number[];
+            sectionFits: boolean; sidesFits: boolean;
+        }
     {
+        const rnd = mulberry32(seed);
         // Longest axis (from centered positions) → the beam/board length.
         const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
         for (let i = 0; i < count; i++) for (let k = 0; k < 3; k++)
@@ -919,11 +975,17 @@ export class GLTFBuilder
         }
         const secW = (sectionTex?.realWidth ?? 150), secH = (sectionTex?.realHeight ?? 150);
         const spanA = (sMaxA - sMinA) * modelUnitMM / secW, spanB = (sMaxB - sMinB) * modelUnitMM / secH;
-        const offA = Math.random() * Math.max(0, 1 - spanA), offB = Math.random() * Math.max(0, 1 - spanB);
+        const offA = rnd() * Math.max(0, 1 - spanA), offB = rnd() * Math.max(0, 1 - spanB);
 
         // Sides texture is directional: its Y (v, realHeight) is the longitudinal grain
-        // direction. Default to a 562×1000 mm tile so v maps the long axis.
-        const sidW = (sidesTex?.realWidth ?? 562), sidH = (sidesTex?.realHeight ?? 1000);
+        // direction. Default to a 500×889 mm tile (a log face) so v maps the long axis.
+        const sidW = (sidesTex?.realWidth ?? 500), sidH = (sidesTex?.realHeight ?? 889);
+
+        // Side spans: v always runs along the length axis; u runs along whichever cross
+        // axis is not the face normal, so budget for the wider of the two.
+        const spanLen = ext[lengthAxis] * modelUnitMM / sidH;
+        const spanWid = Math.max(ext[axA], ext[axB]) * modelUnitMM / sidW;
+        const offU = rnd() * Math.max(0, 1 - spanWid), offV = rnd() * Math.max(0, 1 - spanLen);
 
         const sectionUV = new Float32Array(count * 2), sidesUV = new Float32Array(count * 2);
         for (let i = 0; i < count; i++)
@@ -940,14 +1002,20 @@ export class GLTFBuilder
                 // Sides: align texture-V with the material's LONGITUDINAL (length) axis so
                 // the grain runs down the beam; U spans the cross-width axis. The side face's
                 // normal is one of the two non-length axes; the width axis is the other one.
+                // Positions are taken relative to the part's own bbox (not absolute space) so
+                // the random offset is what distinguishes one part from the next.
                 const nx = Math.abs(normF32[i * 3]), ny = Math.abs(normF32[i * 3 + 1]), nz = Math.abs(normF32[i * 3 + 2]);
                 const N = nx >= ny && nx >= nz ? 0 : (ny >= nz ? 1 : 2);
                 const widthAxis = (N === axA) ? axB : axA;
-                sidesUV[i * 2] = posF32[i * 3 + widthAxis] * modelUnitMM / sidW;   // U → cross width (realWidth)
-                sidesUV[i * 2 + 1] = posF32[i * 3 + lengthAxis] * modelUnitMM / sidH; // V → length (realHeight, grain)
+                sidesUV[i * 2] = (posF32[i * 3 + widthAxis] - mn[widthAxis]) * modelUnitMM / sidW + offU;
+                sidesUV[i * 2 + 1] = (posF32[i * 3 + lengthAxis] - mn[lengthAxis]) * modelUnitMM / sidH + offV;
             }
         }
-        return { sectionUV, sidesUV, sectionIdx, sidesIdx };
+        return {
+            sectionUV, sidesUV, sectionIdx, sidesIdx,
+            sectionFits: spanA <= 1 && spanB <= 1,
+            sidesFits: spanWid <= 1 && spanLen <= 1,
+        };
     }
 
     /** Assemble a GltfNode for a Curve from its raw toBuffer() data. */
@@ -1044,19 +1112,46 @@ export class GLTFBuilder
 
         const hasStrokeWidth = (ext.style.strokeWidth ?? 0) > 0;
         const hasStrokeDash  = (ext.style.strokeDash?.length ?? 0) > 0;
-        if (hasStrokeWidth || hasStrokeDash)
+
+        // A material carries its own outline style (black, slightly transparent) so a
+        // textured part keeps a readable silhouette instead of the default red hairline.
+        // It applies unless the user set a stroke DELIBERATELY — note strokeWidth is 1
+        // by default, so its mere presence proves nothing; explicitData() is what
+        // distinguishes an author's choice from the inherited default.
+        const matEdge = (ext.style as any)._style?.material?.edge as
+            { color?: string; opacity?: number; width?: number } | undefined;
+        const strokeIsExplicit = ext.style.explicitData().stroke !== undefined;
+        const useMaterialEdge = !!matEdge && !strokeIsExplicit;
+
+        if (hasStrokeWidth || hasStrokeDash || useMaterialEdge)
         {
-            const edgeMatDef = ext.style.toGltfMaterial('edge_material', true) as any;
-            const [er, eg, eb, ea] = edgeMatDef.pbrMetallicRoughness.baseColorFactor;
-            const edgeMat = this._doc.createMaterial('edge_material')
-                .setBaseColorFactor([er, eg, eb, ea])
+            let color: [number, number, number, number];
+            let width: number;
+
+            if (useMaterialEdge)
+            {
+                color = [...rgbOf(matEdge!.color ?? '#000000'), matEdge!.opacity ?? 1] as
+                    [number, number, number, number];
+                width = Math.max(1, Math.round(matEdge!.width ?? 1));
+            }
+            else
+            {
+                const edgeMatDef = ext.style.toGltfMaterial('edge_material', true) as any;
+                color = edgeMatDef.pbrMetallicRoughness.baseColorFactor;
+                width = hasStrokeWidth ? Math.round(ext.style.strokeWidth!) : 1;
+            }
+
+            // The name records the outline's origin for anything reading the GLB.
+            const edgeMat = this._doc.createMaterial(useMaterialEdge ? 'material_edge' : 'edge_material')
+                .setBaseColorFactor(color)
                 .setMetallicFactor(0.0)
                 .setRoughnessFactor(1.0)
                 .setDoubleSided(true);
+            if (color[3] < 1) edgeMat.setAlphaMode(Material.AlphaMode.BLEND);
 
             const lineStyleProp = this._doc.createExtension(BentleyLineStyleExtension).createProperty();
-            lineStyleProp.width   = hasStrokeWidth ? Math.round(ext.style.strokeWidth!) : 1;
-            lineStyleProp.pattern = hasStrokeDash  ? dashPatternToUint16(ext.style.strokeDash!) : 0xFFFF;
+            lineStyleProp.width   = width;
+            lineStyleProp.pattern = hasStrokeDash ? dashPatternToUint16(ext.style.strokeDash!) : 0xFFFF;
             edgeMat.setExtension('BENTLEY_materials_line_style', lineStyleProp);
 
             edgeVisProp.edgeMaterial = edgeMat;

@@ -18,8 +18,8 @@
 use hypercurve::{
     ArcArcIntersection, BezierFlatteningOptions, BezierSubcurve2, BooleanOp, Classification,
     CircularArc2, Contour2, CurvePath2, CurvePolicy, CurveString2, EllipseMap2, FillRule,
-    FiniteProjectionOptions, LineArcIntersection, LineLineIntersection, LineSeg2, Point2,
-    RationalBSplineCurve2, Real, Region2, RegionView2, Segment2, SegmentIntersection, Similarity2,
+    FiniteProjectionOptions, LineArcIntersection, LineArcRegion2, LineLineIntersection, LineSeg2,
+    Point2, RationalBSplineCurve2, Real, RegionView2, Segment2, SegmentIntersection, Similarity2,
     Tolerance, elliptical_arc_path,
 };
 
@@ -118,7 +118,7 @@ fn boolean_native_once(a: &Contour2, b: &Contour2, op: BooleanOp, ladder: &[(f64
 
 /// Group a region's material and hole contours into [`NativeRegion`]s, assigning
 /// each hole to the material contour that contains it.
-fn associate_holes(region: &Region2, pol: &CurvePolicy) -> Vec<NativeRegion>
+fn associate_holes(region: &LineArcRegion2, pol: &CurvePolicy) -> Vec<NativeRegion>
 {
     let materials = region.material_contours();
     let holes = region.hole_contours();
@@ -155,7 +155,7 @@ fn associate_holes(region: &Region2, pol: &CurvePolicy) -> Vec<NativeRegion>
 }
 
 /// Unwrap a `hypercurve` `Classification`, turning uncertainty into an error.
-fn decided<T>(c: Classification<T>) -> Result<T, String>
+pub(crate) fn decided<T>(c: Classification<T>) -> Result<T, String>
 {
     match c
     {
@@ -232,9 +232,29 @@ fn projection_options(chord_error: f64) -> Result<FiniteProjectionOptions, Strin
 pub fn tessellate_open(cs: &CurveString2, chord_error: f64) -> Result<Vec<[f64; 2]>, String>
 {
     let opts = projection_options(chord_error)?;
-    cs.project_to_finite_polyline(&opts)
+    let mut pts = cs
+        .project_to_finite_polyline(&opts)
         .map(|poly| poly.into_points())
-        .map_err(|e| format!("hcurve: tessellate open failed ({e:?})"))
+        .map_err(|e| format!("hcurve: tessellate open failed ({e:?})"))?;
+
+    // hypercurve flattens arcs through rational Bezier subcurves, so the sampled
+    // ends can drift by an ulp from the curve string's exact endpoints. Snap them
+    // back: callers rely on the polyline starting/ending exactly on the curve.
+    if let (Some(first), Some(start)) = (pts.first_mut(), cs.start())
+    {
+        if let Some(p) = point_to_f64(start)
+        {
+            *first = p;
+        }
+    }
+    if let (Some(last), Some(end)) = (pts.last_mut(), cs.end())
+    {
+        if let Some(p) = point_to_f64(end)
+        {
+            *last = p;
+        }
+    }
+    Ok(pts)
 }
 
 /// Sample a closed contour to an f64 ring (first point repeated at the end).
@@ -473,6 +493,12 @@ pub fn nurbs(
     knots: &[f64],
 ) -> Result<RationalBSplineCurve2, String>
 {
+    // hypercurve itself accepts degree 1; meshup keeps polylines out of the NURBS
+    // path (see `open_polyline`), so enforce the documented minimum here.
+    if degree < 2
+    {
+        return Err(format!("hcurve: nurbs needs degree >= 2 (got {degree})"));
+    }
     let pol = policy();
     let cps: Vec<Point2> = control_points
         .iter()

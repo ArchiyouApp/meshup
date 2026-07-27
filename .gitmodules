@@ -4,3 +4,12 @@
 [submodule "rust/hyperreal"]
 	path = rust/hyperreal
 	url = https://github.com/timschmidt/hyperreal.git
+[submodule "rust/hypersolve"]
+	path = rust/hypersolve
+	url = https://github.com/timschmidt/hypersolve.git
+[submodule "rust/hyperlattice"]
+	path = rust/hyperlattice
+	url = https://github.com/timschmidt/hyperlattice.git
+[submodule "rust/hyperlimit"]
+	path = rust/hyperlimit
+	url = https://github.com/timschmidt/hyperlimit.git

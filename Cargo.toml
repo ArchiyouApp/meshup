@@ -7,13 +7,20 @@ members = [
 exclude = [
     "./rust/hypercurve",
     "./rust/hyperreal",
+    "./rust/hypersolve",
+    "./rust/hyperlattice",
+    "./rust/hyperlimit",
 ]
 resolver = "2"
 
-# The ArchiyouApp hypercurve fork (fillet/chamfer) needs hyperreal 0.13.1, which is
-# not yet published — it lives on timschmidt/hyperreal main. Patch every crates.io
-# hyperreal reference (hypercurve/hypersolve/hyperlimit) to the local 0.13.1 checkout.
-# TODO: drop this patch once hyperreal 0.13.1 (and a hypercurve release with fillet)
+# The ArchiyouApp hypercurve fork (fillet/chamfer + elliptical arcs) tracks
+# timschmidt/hypercurve main, which needs hyperreal and hypersolve versions that are
+# not published yet — they live on their upstream mains. Patch every crates.io
+# reference (hypercurve/hypersolve/hyperlimit) to the local submodule checkouts.
+# TODO: drop these patches once matching hyperreal/hypersolve/hypercurve releases
 # are published.
 [patch.crates-io]
 hyperreal = { path = "rust/hyperreal" }
+hypersolve = { path = "rust/hypersolve" }
+hyperlattice = { path = "rust/hyperlattice" }
+hyperlimit = { path = "rust/hyperlimit" }

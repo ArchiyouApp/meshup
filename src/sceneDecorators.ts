@@ -19,7 +19,7 @@
  *
  *    @sceneReplace   add result(s) to self's own layer; detach self   (extrude, split, hull…)
  *    @sceneAdd       add result(s) to the active layer; keep self     (select, segment)
- *    @sceneLayer(n)  add result(s) to a named layer 'n' under root    (iso, elevation, section)
+ *    @sceneLayer(n)  group result(s) in sub-layer 'n' of active layer (iso, elevation, section)
  *    @sceneUpdate    in-place mutator (returns this); re-attach self   (offset, cutoff, connect)
  *
  *  Scene bookkeeping only ever touches meshup's own SceneNode graph — it never calls into
@@ -191,8 +191,10 @@ export const sceneAdd: Decorator = (_t, _k, desc) =>
     return desc
 }
 
-/** Run; add result(s) to the named layer `name` under the scene root (does NOT change the
- *  active layer); keep self in the scene. */
+/** Run; group result(s) in a sub-layer `name` of the ACTIVE layer (does NOT change the active
+ *  layer); keep self in the scene. So `layer('test'); box(100).iso()` puts the projection in a
+ *  'test/iso' group, next to the box — not in a stray top-level 'iso' layer. Falls back to the
+ *  scene root when no active layer is resolvable. */
 export function sceneLayer(name: string): Decorator
 {
     return (_t, _k, desc) =>
@@ -204,8 +206,8 @@ export function sceneLayer(name: string): Decorator
             propagate(this, result)
             if (this._node && !this._suppressScene)
             {
-                const root = this._node.root() as Any
-                addTo(root?.ensureLayer?.(name) ?? null, result)
+                const parent = (activeLayerOf(this) ?? this._node.root()) as Any
+                addTo(parent?.ensureLayer?.(name) ?? null, result)
             }
             return result
         }
@@ -293,7 +295,8 @@ export const colSceneAdd: Decorator = (_t, _k, desc) =>
     return desc
 }
 
-/** Collection op: add result shape(s) to a named layer under the scene root; keep self. */
+/** Collection op: group result shape(s) in a sub-layer `name` of the active layer; keep self.
+ *  Mirrors @sceneLayer — see there for why the group is nested rather than top-level. */
 export function colSceneLayer(name: string): Decorator
 {
     return (_t, _k, desc) =>
@@ -303,7 +306,11 @@ export function colSceneLayer(name: string): Decorator
         {
             const result = fn.apply(this, args)
             const root = colSceneRoot(this) as Any
-            if (root) addColResults(root.ensureLayer(name), result, colModeler(this))
+            if (root)
+            {
+                const parent = (root.activeLayer?.() ?? colSourceLayer(this) ?? root) as Any
+                addColResults(parent.ensureLayer(name), result, colModeler(this))
+            }
             return result
         }
         return desc
