@@ -56,7 +56,7 @@ function decodeImageData(data: string): { bytes: Uint8Array; mime: string }
     }
     return { bytes, mime };
 }
-import { EDGE_PROJECTION_DEFAULTS } from './constants';
+import { EDGE_PROJECTION_DEFAULTS, SHAPE_DEFAULT_STYLE } from './constants';
 import { Mesh } from './Mesh';
 import { Curve } from './Curve';
 import { Polygon } from './Polygon';
@@ -91,10 +91,14 @@ function mulberry32(seed: number): () => number
     };
 }
 
-/** Parse a CSS color string to normalized 0..1 RGB, falling back to black. */
+/**
+ * Parse a CSS color string to LINEAR 0..1 RGB, falling back to black.
+ * glTF colour factors are linear; CSS colours are sRGB (see srgbToLinear in Style.ts).
+ */
 function rgbOf(color: string): [number, number, number]
 {
-    try { return new Color(color).toRgb().map(v => v / 255) as [number, number, number]; }
+    const toLinear = (c: number) => c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    try { return new Color(color).toRgb().map(v => toLinear(v / 255)) as [number, number, number]; }
     catch { return [0, 0, 0]; }
 }
 
@@ -813,6 +817,11 @@ export class GLTFBuilder
         const node = this._doc.createNode(name).setMesh(gltfMesh).setTranslation([tx, ty, tz]);
 
         // Base material factory (PBR ± an optional role texture with a given wrap mode).
+        //
+        // glTF base colour is baseColorFactor × baseColorTexture. Material textures are
+        // therefore authored as GREYSCALE tint masks: the factor supplies the hue and the
+        // texture only modulates it. Feeding a COLOURED texture here double-tints — brown
+        // over brown rendered ~2.5x too dark — so keep material textures monochrome.
         const makeMaterial = (nm: string, texData?: string, wrap = 10497): Material =>
         {
             const m = this._doc.createMaterial(nm)
@@ -1113,15 +1122,34 @@ export class GLTFBuilder
         const hasStrokeWidth = (ext.style.strokeWidth ?? 0) > 0;
         const hasStrokeDash  = (ext.style.strokeDash?.length ?? 0) > 0;
 
-        // A material carries its own outline style (black, slightly transparent) so a
-        // textured part keeps a readable silhouette instead of the default red hairline.
-        // It applies unless the user set a stroke DELIBERATELY — note strokeWidth is 1
-        // by default, so its mere presence proves nothing; explicitData() is what
-        // distinguishes an author's choice from the inherited default.
+        // A material carries its own outline style (black, 2px) so a textured part keeps
+        // a readable silhouette instead of the default red hairline. It applies unless
+        // the user chose a stroke DELIBERATELY.
+        //
+        // Detecting that means comparing to the default VALUES, not asking whether stroke
+        // was "set": Style.merge() runs the stroke setter, which marks it explicit, and
+        // every style cascaded from SHAPE_DEFAULT_STYLE goes through merge. So
+        // explicitData().stroke is populated on essentially every real shape and cannot
+        // distinguish an author's choice from an inherited default.
         const matEdge = (ext.style as any)._style?.material?.edge as
             { color?: string; opacity?: number; width?: number } | undefined;
-        const strokeIsExplicit = ext.style.explicitData().stroke !== undefined;
-        const useMaterialEdge = !!matEdge && !strokeIsExplicit;
+
+        const defStroke = SHAPE_DEFAULT_STYLE.stroke!;
+        const stroke = (ext.style as any)._style?.stroke ?? {};
+        // Colours go through Color normalisation on the way in ('red' → '#ff0000'), so
+        // compare canonical hex rather than the raw strings.
+        const sameColor = (a?: string, b?: string) =>
+        {
+            if (a === undefined || b === undefined) return true;
+            try { return new Color(a).toHex() === new Color(b).toHex(); }
+            catch { return a === b; }
+        };
+        const strokeIsCustom =
+            !sameColor(stroke.color, defStroke.color) ||
+            (stroke.width !== undefined && stroke.width !== defStroke.width) ||
+            (stroke.dash?.length ?? 0) > 0;
+
+        const useMaterialEdge = !!matEdge && !strokeIsCustom;
 
         if (hasStrokeWidth || hasStrokeDash || useMaterialEdge)
         {

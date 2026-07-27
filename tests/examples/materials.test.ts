@@ -21,10 +21,16 @@ describe('material PBR + texture reaches the GLB', () =>
         const mat = doc.getRoot().listMaterials()[0];
         expect(mat.getRoughnessFactor()).toBeCloseTo(0.72, 3);
         expect(mat.getMetallicFactor()).toBeCloseTo(0.1, 3);
+        // glTF baseColorFactor is LINEAR; CSS/material colours are sRGB. Writing sRGB
+        // straight in made everything render far too light (#808080 concrete showed as
+        // #e0e0e0), because three.js applies the transfer function again on output.
+        const srgbToLinear = (c: number) =>
+            c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+
         const [r, g, b] = mat.getBaseColorFactor();
-        expect(r).toBeCloseTo(0xc0 / 255, 2);
-        expect(g).toBeCloseTo(0x8a / 255, 2);
-        expect(b).toBeCloseTo(0x4a / 255, 2);
+        expect(r).toBeCloseTo(srgbToLinear(0xc0 / 255), 4);
+        expect(g).toBeCloseTo(srgbToLinear(0x8a / 255), 4);
+        expect(b).toBeCloseTo(srgbToLinear(0x4a / 255), 4);
     });
 
     it('embeds a base-color texture with UVs when texture data is present', async () =>
@@ -170,6 +176,43 @@ describe('material edge outline', () =>
         expect(r).toBeCloseTo(1, 6);
         expect(a).toBeCloseTo(0.5, 6);
         expect(mat.getExtension('BENTLEY_materials_line_style').width).toBe(2);
+    });
+
+    it('still wins when the style came through merge() — the real pipeline', () =>
+    {
+        // REGRESSION: the first implementation asked `explicitData().stroke !== undefined`.
+        // Style.merge() runs the stroke setter, which marks it explicit, and every style
+        // cascaded from SHAPE_DEFAULT_STYLE goes through merge — so in the app every shape
+        // looked like it had a deliberate stroke and the material outline never applied.
+        // A bare Mesh.Box never merges, which is exactly why the other tests missed it.
+        const box = Mesh.Box(100, 100, 100);
+        box.style.merge({
+            color: undefined, opacity: 1,
+            fill: { color: 'red', opacity: 1 },
+            stroke: { color: 'red', opacity: 1, width: 1, dash: [] },
+        } as any);
+
+        const doc = build(box, { name: 'steel', edge });
+        const mat = doc.getRoot().listMaterials().find((m: any) => m.getName() === 'material_edge');
+        expect(mat, 'material outline must survive a default stroke arriving via merge()').toBeTruthy();
+        const [r, g, b] = mat.getBaseColorFactor();
+        expect([r, g, b]).toEqual([0, 0, 0]);
+    });
+
+    it('does not let the material pbr colour bleed into an explicit stroke', () =>
+    {
+        // REGRESSION: Style.toGltfMaterial applied material.pbr.color even when isLine,
+        // so every edge came out the same colour as the surface it sat on — invisible.
+        const box = Mesh.Box(100, 100, 100);
+        box.style.stroke = { color: '#00ff00' };
+        box.style.strokeWidth = 3;
+
+        const doc = build(box, { name: 'douglas', pbr: { color: '#c08a4a' }, edge });
+        const mat = doc.getRoot().listMaterials().find((m: any) => m.getName() === 'edge_material');
+        const [r, g, b] = mat.getBaseColorFactor();
+        expect(g).toBeCloseTo(1, 3);     // the stroke's green
+        expect(r).toBeCloseTo(0, 3);
+        expect(b).toBeCloseTo(0, 3);
     });
 
     it('lets an explicit user stroke win over the material outline', () =>

@@ -46,6 +46,21 @@ export type StyleData = {
     material?: any; // TODO
 }
 
+/**
+ * sRGB 0..1 → linear 0..1.
+ *
+ * glTF defines baseColorFactor in LINEAR space, while CSS colours (and our materials
+ * database) are sRGB. Writing sRGB straight into the factor made every surface render
+ * far too light and washed out — a #808080 concrete came out #e0e0e0 on screen — because
+ * three.js converts the value back to sRGB for display, applying the transfer function
+ * a second time. Textures are unaffected: glTF marks baseColorTexture as sRGB-encoded
+ * and the loader tags it accordingly.
+ */
+function srgbToLinear(c: number): number
+{
+    return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
 /** Main Style class */
 export class Style
 {
@@ -567,18 +582,22 @@ export class Style
             ? (this._style.material as any).pbr
             : undefined;
 
-        if (pbr?.color)
+        // Only for the FILL. A line's colour comes from the stroke: overriding it with the
+        // material's base colour made every edge the same colour as the surface it sits
+        // on, i.e. invisible.
+        if (pbr?.color && !isLine)
         {
             try { [r, g, b] = new Color(pbr.color).toRgb().map(v => v / 255) as [number, number, number]; }
             catch { /* keep style color */ }
         }
 
-        const a = pbr?.alpha ?? this._style.opacity ?? 1;
+        const a = (isLine ? undefined : pbr?.alpha) ?? this._style.opacity ?? 1;
 
         const mat: Record<string, any> = {
             name: name ?? 'material',
             pbrMetallicRoughness: {
-                baseColorFactor: [r, g, b, a],
+                // LINEAR — see srgbToLinear. r/g/b are sRGB up to this point.
+                baseColorFactor: [srgbToLinear(r), srgbToLinear(g), srgbToLinear(b), a],
                 metallicFactor: pbr?.metallic ?? 0.0,
                 roughnessFactor: pbr?.roughness ?? 0.8,
             },

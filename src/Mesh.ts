@@ -1606,9 +1606,12 @@ export class Mesh extends Shape
         return new GLTFBuilder(up).add(this).applyExtensions().toGLB();
     }
     
-    toAMF(): string | undefined
+    /** Export Mesh to an AMF document (XML string).
+     *  @param name   Object name (also used as the object id in the document)
+     *  @param units  AMF unit name: millimeter, inch, feet, meter or micron */
+    toAMF(name: string = 'model', units: string = 'millimeter'): string | undefined
     {
-        return this.inner()?.toAMF('model', 'mm');
+        return this.inner()?.toAMF(name, units);
     }
 
     // ── BVH Spatial Queries ─────────────────────────────────────────────────
