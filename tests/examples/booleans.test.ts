@@ -67,7 +67,7 @@ describe('Example: Booleans', () =>
         box.move(100, 0, 0);
 
         // A pure translation must not change volume or topology.
-        expect(box.volume()).toBeCloseTo(volAfterSubtract, 1);
+        expect(box.volume()).toBeCloseTo(volAfterSubtract!, 1);
         expect(box.inner().triangleCount()).toBe(trisAfterSubtract);
 
         await save(OUTPUT_DIR + 'test.booleans.hole-after-move.gltf', await box.toGLTF());

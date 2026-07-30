@@ -554,7 +554,7 @@ describe('Polygon.difference() / subtract()', () =>
     it('subtract accepts a ShapeCollection of cutters', () =>
     {
         const pl = box();
-        const cutters = new ShapeCollection(
+        const cutters = new ShapeCollection<Curve>(
             Curve.Rect(20, 20, [0, 0, 0]),
             Curve.Rect(20, 20, [100, 0, 0]),
         );

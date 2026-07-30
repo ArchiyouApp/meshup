@@ -46,7 +46,7 @@ describe('distance() across shape types', () =>
     {
         const mesh = Mesh.Cube(10);                    // centered cube, x,y,z ∈ [-5,5]
         const pt = new Point([15, 0, 0]);              // 10 from the +X face
-        const vx = new Vertex(15, 0, 0);
+        const vx = new Vertex([15, 0, 0]);
         const poly = Polygon.from([[20, -5, 0], [20, 5, 0], [20, 5, 10], [20, -5, 10]]);
         const curve = Curve.Polyline([[15, 0, 0], [15, 0, 20]]);
 

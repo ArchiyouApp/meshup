@@ -50,7 +50,7 @@ describe('Curve.Ellipse()', () =>
         const e = Curve.Ellipse(3, 1.5);
         const o = e.offset(0.5);
         expect(o).toBeTruthy();
-        expect(o.isClosed()).toBe(true);
+        expect(o!.isClosed()).toBe(true);
     });
 
     it('tessellates to a smooth point set that stays on the ellipse', () =>

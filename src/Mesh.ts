@@ -1472,7 +1472,7 @@ export class Mesh extends Shape
         return meshes;
     }
 
-    grid(cx:number=2, cy:number=2, cz:number=1, spacing:number|PointLike=2):ShapeCollection
+    grid(cx:number=2, cy:number=2, cz:number=1, spacing:number|PointLike=2):ShapeCollection<Mesh>
     {
         if(typeof cx !== 'number' || typeof cy !== 'number' || typeof cz !== 'number')
         {
@@ -1482,7 +1482,7 @@ export class Mesh extends Shape
             ? new Vector(spacing, spacing, spacing)
             : Vector.from(spacing)
 
-        const meshes = new ShapeCollection();
+        const meshes = new ShapeCollection<Mesh>();
         for(let x=0; x<cx; x++)
         {
             for(let y=0; y<cy; y++)

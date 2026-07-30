@@ -41,8 +41,9 @@ export function isAxis(obj: any): obj is Axis {
 }
 
 export type PointLike = number | Point | Vector | Vertex |
-  Point3Js |  Vector3Js | VertexJs | Array<number> | 
-  { x: number; y: number; z: number; };
+  Point3Js |  Vector3Js | VertexJs | Array<number> |
+  // z is optional: the Point constructor accepts {x,y} and defaults z to 0
+  { x: number; y: number; z?: number; };
 
 export function isPointLike(obj: any): obj is PointLike 
 {

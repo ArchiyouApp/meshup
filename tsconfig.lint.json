@@ -1,0 +1,7 @@
+{
+  // Type-check everything, not just what ships. tsconfig.json deliberately includes only
+  // `src` because tsup's dts build reads it; tests and buildscripts must not end up in the
+  // published .d.ts. `pnpm lint` uses this config so they are still checked.
+  "extends": "./tsconfig.json",
+  "include": ["src", "tests", "buildscripts"]
+}

@@ -32,6 +32,19 @@ execSync(`wasm-pack build --release --no-opt --target web --out-dir ${WASM_DIR} 
     stdio: 'inherit' 
 });
 
+// 1a. Clean up the wasm-pack scaffolding we must not keep.
+//     - .gitignore: contains just "*". npm-packlist honours ignore files nested
+//       inside directories admitted by package.json "files", so leaving it here
+//       silently drops all of src/wasm/ (including meshup.js) from the published
+//       tarball on a machine where it exists, while packing fine on a fresh clone.
+//     - package.json: a second manifest declaring name "meshup" / license "MIT",
+//       which collides with the real package manifest.
+//     - README.md: the upstream csgrs readme, not ours. (LICENSE is kept: it is
+//       the MIT notice we are required to redistribute — see NOTICE.)
+['.gitignore', 'package.json', 'README.md'].forEach((f) =>
+    fs.rmSync(path.join(WASM_DIR, f), { force: true })
+);
+
 // 1b. Run wasm-opt manually so we can pass --enable-exception-handling,
 //     which preserves the wasm Exception Handling proposal instructions that
 //     std::panic::catch_unwind relies on. Without this flag wasm-opt v117
@@ -54,6 +67,35 @@ if (wasmOptBin) {
     console.log('[INFO]: Optimized wasm binary with exception-handling enabled');
 } else {
     console.warn('[WARN]: wasm-opt not found; skipping wasm optimization');
+}
+
+// 1c. Patch the generated glue: drop the `new URL('meshup_bg.wasm', import.meta.url)`
+//     fallback. We never ship meshup_bg.wasm as a sibling file (the bytes are inlined
+//     as base64 and handed to init() by src/loader.ts), and the static URL reference
+//     makes consumer bundlers such as webpack 5 fail with "Module not found".
+const gluePath = path.join(WASM_DIR, 'meshup.js');
+const glueSource = fs.readFileSync(gluePath, 'utf8');
+const glueNeedle = `    if (typeof module_or_path === 'undefined') {
+        module_or_path = new URL('${WASM_FILE_NAME}', import.meta.url);
+    }`;
+const glueReplacement = `    // PATCHED by buildscripts/build-wasm.ts: the wasm-pack fallback
+    //   module_or_path = new URL('${WASM_FILE_NAME}', import.meta.url)
+    // is removed on purpose. meshup never ships ${WASM_FILE_NAME} as a sibling file
+    // (the bytes are inlined as base64 and passed in by src/loader.ts), and the
+    // URL reference made bundlers such as webpack 5 fail with "Module not found".
+    if (typeof module_or_path === 'undefined') {
+        throw new Error('meshup wasm init: no module or path given. Use init()/initAsync() from meshup instead of calling the raw wasm glue.');
+    }`;
+
+if (glueSource.includes(glueNeedle)) {
+    fs.writeFileSync(gluePath, glueSource.replace(glueNeedle, glueReplacement));
+    console.log('[INFO]: Patched out the import.meta.url wasm fallback in src/wasm/meshup.js');
+} else if (!glueSource.includes('PATCHED by buildscripts/build-wasm.ts')) {
+    // wasm-bindgen changed its output shape: fail loudly rather than ship a bundler-hostile glue.
+    throw new Error(
+        `Could not patch ${gluePath}: the expected 'new URL(...)' fallback was not found. ` +
+        `wasm-bindgen output has changed — update glueNeedle in buildscripts/build-wasm.ts.`
+    );
 }
 
 // 2. Read the generated .wasm file

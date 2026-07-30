@@ -69,8 +69,8 @@ describe('Example: Offsets', async () =>
         const grown = pl1.copy().offset(1)!;
         const shrunk = pl1.copy().offset(-1)!;
 
-        expect(grown.bbox().width()).toBeGreaterThan(pl1.bbox().width());
-        expect(shrunk.bbox().width()).toBeLessThan(pl1.bbox().width());
+        expect(grown.bbox()!.width()).toBeGreaterThan(pl1.bbox()!.width());
+        expect(shrunk.bbox()!.width()).toBeLessThan(pl1.bbox()!.width());
     });
 
     it('Can offset a single straight line that lies on a non-XY coordinate plane', () =>

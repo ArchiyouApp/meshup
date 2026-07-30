@@ -522,18 +522,19 @@ describe('Curve.extrude()', () =>
 
     it('respects a custom direction', async () =>
     {
+        // Curve.extrude() is typed Mesh|Polygon|null; extruding these always yields a Mesh.
         const c = Curve.Line([0, 0, 0], [10, 0, 0]);
-        const mZ = c.extrude(5, [0, 0, 1]);
-        const mY = c.extrude(5, [1, 1, 1]);
+        const mZ = c.extrude(5, [0, 0, 1]) as Mesh;
+        const mY = c.extrude(5, [1, 1, 1]) as Mesh;
         // Both should produce geometry; bboxes should differ in the extruded axis
         expect(mZ!.bbox()!.max().z).toBeGreaterThan(0);
         expect(mY!.bbox()!.max().y).toBeGreaterThan(0);
         
         const a = Curve.Arc([0,0,0],[10,40,0], [20,0,0]);
-        const mA = a.extrude(10, [0, 0, 1]).color('blue');
+        const mA = a.extrude(10, [0, 0, 1])!.color('blue');
         expect(mA!.bbox()!.max().z).toBeCloseTo(10,1);
 
-        await save('test.curve.extrude.direction.gltf', await new ShapeCollection<Mesh>(mZ, mY, mA).toGLTF());
+        await save(OUTPUT_DIR + 'test.curve.extrude.direction.gltf', await new ShapeCollection<Mesh>(mZ, mY, mA as Mesh).toGLTF());
     });
 
 
@@ -602,7 +603,7 @@ describe('Curve.union()', () =>
         const c = res as Curve;
         expect(c.isClosed()).toBe(true);
         // Result spans the rect plus the protruding top of the circle.
-        const bb = c.bbox();
+        const bb = c.bbox()!;
         expect(bb.maxY()).toBeGreaterThan(h / 2);       // circle bulges above the rect top
         expect(bb.minY()).toBeCloseTo(-h / 2, 1);       // rect bottom preserved
     });
@@ -646,7 +647,7 @@ describe('Curve.union()', () =>
         // Non-crossing loop => full rectangle area (~1000). A crossing bowtie would
         // collapse to a near-zero / degenerate area.
         expect(poly.area()).toBeCloseTo(1000, 0);
-        const bb = connected.bbox();
+        const bb = connected.bbox()!;
         expect(bb.width()).toBeCloseTo(100, 3);
         expect(bb.depth()).toBeCloseTo(10, 3);
     });
@@ -661,11 +662,13 @@ describe('Curve.union()', () =>
             const r = Curve.Rect(w, h);
             const ct = Curve.Circle(w / 2).moveY(h / 2);
             const cb = ct.copy().mirrorY(0);
-            const pl = r.union(ct).union(cb);
+            // union() is typed Curve|ShapeCollection<Curve>|null; these tangent circles merge
+            // into one Curve, which is exactly what the assertion below checks.
+            const pl = (r.union(ct) as Curve).union(cb);
             expect(pl).toBeInstanceOf(Curve);
             const c = pl as Curve;
             expect(c.isClosed()).toBe(true);
-            const bb = c.bbox();
+            const bb = c.bbox()!;
             expect(bb.maxY()).toBeGreaterThan(h / 2);   // top circle bulge
             expect(bb.minY()).toBeLessThan(-h / 2);     // bottom circle bulge
         }

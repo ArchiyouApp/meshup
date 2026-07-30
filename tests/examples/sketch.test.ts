@@ -38,7 +38,7 @@ describe('Sketch', () =>
 
         expect(plortho).toBeInstanceOf(Curve);
         expect(plortho.length()).toBeCloseTo(200);
-        expect(plortho.normal().angle([0,-1,0])).toBeCloseTo(0);
+        expect(plortho.normal()!.angle([0,-1,0])).toBeCloseTo(0);
 
         const pl = new Sketch('top')
                     .lineTo('100<45')
@@ -59,7 +59,7 @@ describe('Sketch', () =>
                         .lineTo(`100<<${90-18}`)
                         .end().first().color('orange');
 
-        expect(pl3.normal().angle([1,0,0])).toBeCloseTo(0);
+        expect(pl3.normal()!.angle([1,0,0])).toBeCloseTo(0);
         expect(pl3.length()).toBeCloseTo(200);
 
         await save(OUTPUT_DIR + 'test.sketch.polar.gltf', await new ShapeCollection<Curve>(plortho, pl, pl2, pl3).toGLTF());

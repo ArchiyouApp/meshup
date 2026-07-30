@@ -1,5 +1,15 @@
 node_modules
-*.gltf
-*.svg
-target/
 dist/
+target/
+.turbo
+*.tgz
+.DS_Store
+
+# wasm-pack scaffolding we deliberately do not keep (see buildscripts/build-wasm.ts)
+src/wasm/.gitignore
+src/wasm/package.json
+src/wasm/README.md
+src/wasm/snippets/
+
+# test artifacts: every test writes through OUTPUT_DIR into tests/outputs/
+tests/outputs/

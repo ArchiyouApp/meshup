@@ -93,5 +93,12 @@ export {
 } from './GLTFBuilder';
 
 
-/** Convenience type alias for the meshup module namespace itself. */
-export type Meshup = typeof import('./index')
+/*  NOTE: there used to be a `export type Meshup = typeof import('./index')` alias here.
+    It is gone on purpose: a self-referential module type makes the rollup emit an
+    `Object.freeze({ get Bbox() {...}, ... })` namespace object that tsup's dts
+    NamespaceFixer cannot parse ("Expected a property assignment"), which broke
+    `dist/index.d.ts` entirely.
+
+    Consumers that need the module namespace as a type can spell it themselves:
+        type Meshup = typeof import('@archiyou/meshup')
+*/

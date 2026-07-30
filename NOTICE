@@ -1,0 +1,27 @@
+meshup (@archiyou/meshup)
+Copyright 2025 Mark van der Net / Archiyou
+
+This product includes software developed by Archiyou, licensed under the
+Apache License, Version 2.0. See the LICENSE file for the full text.
+
+-------------------------------------------------------------------------------
+
+This product also includes third-party software under other licenses.
+
+The Rust geometry kernel in `rust/` is a fork of csgrs by Timothy Schmidt,
+which itself derives from csg.js by Evan Wallace. It is licensed under the MIT
+License. The compiled WebAssembly binary produced from it is embedded as a
+base64 string in `src/meshup-js-binary.ts` and is therefore also contained in
+the published bundle `dist/index.js`.
+
+The JavaScript glue in `src/wasm/meshup.js` and the type declarations in
+`src/wasm/*.d.ts` are generated from that same Rust source by wasm-bindgen /
+wasm-pack.
+
+Any distribution of this package — including the bundled `dist/index.js` —
+redistributes that MIT-licensed work. The required copyright and permission
+notice is reproduced verbatim in THIRD-PARTY-NOTICES.txt and in
+src/wasm/LICENSE, both of which ship with this package.
+
+Full third-party attribution, including the Rust crates linked into the
+WebAssembly binary, is in THIRD-PARTY-NOTICES.txt.

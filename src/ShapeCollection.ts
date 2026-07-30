@@ -47,6 +47,10 @@ export interface CollectableShape {
 
 export class ShapeCollection<S extends CollectableShape = Shape>
 {
+    /** Array-like access: _setFakeArrayKeys() assigns the shapes onto numeric properties,
+     *  so col[0] / col[1] work at runtime. Declared here so they type-check too. */
+    [index: number]: S;
+
     _shapes: Array<S> = [];
     _groups = new Map<string, ShapeCollection<S>>();
     private _fakeArrayLength = 0;

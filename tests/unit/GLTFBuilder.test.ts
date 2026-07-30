@@ -315,5 +315,5 @@ function extractGLTFBin(glb: Uint8Array): ArrayBuffer
     const dv = new DataView(glb.buffer, glb.byteOffset);
     const jsonLength = dv.getUint32(12, true);
     const binStart = 20 + jsonLength + 8; // skip JSON chunk header
-    return glb.buffer.slice(glb.byteOffset + binStart);
+    return glb.buffer.slice(glb.byteOffset + binStart) as ArrayBuffer;
 }

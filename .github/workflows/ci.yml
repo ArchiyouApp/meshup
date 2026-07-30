@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      # No submodules: the Rust sources are only needed to rebuild the WASM, and both
+      # generated artifacts (src/wasm/, src/meshup-js-binary.ts) are committed. See
+      # the rust.yml workflow for the (manual) kernel rebuild.
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The base64 blob and the .wasm are both committed and can drift apart invisibly.
+      - name: Check WASM integrity
+        run: pnpm check:wasm-integrity
+
+      - name: Type-check
+        run: pnpm lint
+
+      # Tests write glTF/SVG artifacts through OUTPUT_DIR, relative to the package root.
+      - name: Test
+        run: pnpm test:run
+
+      - name: Build
+        run: pnpm build
+
+      # Guards the published file list: a stray nested .gitignore silently drops
+      # src/wasm/, and the 6.9 MB meshup_bg.wasm must not ship.
+      - name: Check pack
+        run: pnpm check:pack
+
+      # Nothing in the repo imports the built entry point, so exercise it for real.
+      - name: Smoke-test the tarball
+        run: |
+          set -euo pipefail
+          pnpm pack --pack-destination /tmp
+          TARBALL=$(ls /tmp/archiyou-meshup-*.tgz)
+          mkdir -p /tmp/smoke && cd /tmp/smoke
+          npm init -y >/dev/null
+          npm pkg set type=module >/dev/null
+          npm install --no-audit --no-fund "$TARBALL"
+          cat > smoke.mjs <<'EOF'
+          import { init, isInitialized, Mesh } from '@archiyou/meshup';
+          await init();
+          if (!isInitialized()) { throw new Error('meshup did not initialize'); }
+          const box = Mesh.Cube(10);
+          const glb = await box.toGLB();
+          if (!(glb?.byteLength > 0)) { throw new Error('toGLB() produced no bytes'); }
+          console.log(`✅ tarball smoke test OK — ${glb.byteLength} bytes of GLB`);
+          EOF
+          node smoke.mjs
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: meshup-tarball
+          path: /tmp/archiyou-meshup-*.tgz
+          if-no-files-found: error

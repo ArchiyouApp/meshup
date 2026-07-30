@@ -1,0 +1,74 @@
+name: Rust / WASM rebuild
+
+# Manual only. Rebuilding the kernel needs the five Rust submodules, the wasm32 target,
+# wasm-pack and a wasm-opt that understands --enable-exception-handling. It is slow and
+# its output (src/wasm/*, src/meshup-js-binary.ts) is committed, so the regular CI does
+# not run it — it verifies the committed artifacts are self-consistent instead.
+#
+# Use this to check that the Rust sources still produce a working kernel, and to review
+# the diff before committing a regenerated WASM.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 1 * *' # monthly drift check
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: cargo check
+        run: pnpm rust:check
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      - name: Rebuild the WASM kernel
+        run: pnpm build:wasm
+
+      # A rebuild is expected to change the binary (timestamps, toolchain versions).
+      # What matters is that the two committed artifacts stay in step and the suite passes.
+      - run: pnpm check:wasm-integrity
+      - run: pnpm lint
+      - run: pnpm test:run
+
+      - name: Report the artifact diff
+        run: |
+          git diff --stat -- src/wasm src/meshup-js-binary.ts || true
+
+      - name: Upload the rebuilt kernel
+        uses: actions/upload-artifact@v4
+        with:
+          name: rebuilt-wasm
+          path: |
+            src/wasm/meshup_bg.wasm
+            src/wasm/meshup.js
+            src/wasm/meshup.d.ts
+          if-no-files-found: error
+
+      - name: License audit
+        run: |
+          cargo install cargo-deny --locked
+          cd rust && cargo deny check licenses
+        continue-on-error: true
