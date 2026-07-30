@@ -25,9 +25,15 @@ import { Shape } from './Shape';
 
 import { Style } from './Style';
 import type { StyleData } from './Style';
-import type { Axis, ShapeType, SceneNodeGraphNode, SceneNodeData, BasePlane } from './types';
+import type { Axis, ShapeType, SceneNodeGraphNode, SceneNodeData, SceneDocData,
+    SceneShapeData, BasePlane } from './types';
 import { ShapeCollection } from './ShapeCollection';
 import { GLTFBuilder } from './GLTFBuilder';
+import { uuid } from './utils';
+// Value import, used only inside fromJSON() at call time. SceneNode → ShapeCollection → Curve
+// is already a runtime chain, and Curve imports SceneNode as `import type` only, so this adds
+// no new cycle.
+import { Curve } from './Curve';
 
 /** Plain-object serialisation of a SceneNode subtree, keeping live shape references so a
  *  component's scene can be recreated under a different modeler (host RunnerComponentImporter). */
@@ -64,6 +70,7 @@ export class SceneNode<S extends SceneNodeShape = Shape>
     name: string;
     style: Style;
 
+    private _id: string; // Stable identity — see id()
     private _shape: S | null = null; // Shape held directly in this container (not in child containers)
     private _children: SceneNode<S>[] = []; // Child containers (sub-groups / layers)
     private _parent: SceneNode<S> | null = null; // Back-reference to the parent container; null if this is the root
@@ -73,6 +80,7 @@ export class SceneNode<S extends SceneNodeShape = Shape>
     {
         this.name = name;
         this.style = new Style();
+        this._id = uuid();
     }
 
     //// STATIC FACTORIES ////
@@ -357,6 +365,34 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         return this._parent === null;
     }
 
+    //// IDENTITY ////
+
+    /** Stable id for this node.
+     *
+     *  `path()` identifies a node by name + sibling index, which is right for a script runner
+     *  (where the whole scene is rebuilt every run) but not for a document: renaming a node or
+     *  reordering its siblings silently changes its path. An id survives both, and survives
+     *  save/load via `setId()`. */
+    id(): string
+    {
+        return this._id;
+    }
+
+    /** Overwrite this node's id — for deserialisers restoring a saved document. See `Shape.setId()`. */
+    setId(id: string): this
+    {
+        this._id = id;
+        return this;
+    }
+
+    /** Find the first node in this subtree (including itself) with the given id. */
+    findById(id: string): SceneNode<S> | undefined
+    {
+        if (this._id === id) return this;
+        return this._children.reduce<SceneNode<S> | undefined>((found, child) =>
+            found ?? child.findById(id), undefined);
+    }
+
     /** Find the first descendant (DFS) whose name matches. */
     find(name: string): SceneNode<S> | undefined
     {
@@ -573,11 +609,84 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         }
 
         return {
+            id: this._id,
             name: renameRoot ? 'Scene' : this.name,
             shape: (shape as any)?.id?.() ?? null,
             style,
             children,
         };
+    }
+
+    //// DOCUMENT SERIALISATION ////
+
+    /** Serialise this subtree AND the geometry it holds into a self-contained, JSON-safe
+     *  document.
+     *
+     *  This is what `toData()` is not: `toData()` emits only a shape *uuid* because the host
+     *  ships geometry separately as GLB. `toJSON()` writes the geometry itself via
+     *  `Curve.toData()`, so the result round-trips through `JSON.stringify` and
+     *  `SceneNode.fromJSON()` with node ids, shape ids, names, styles and tree shape intact.
+     *
+     *  Only curve geometry is serialised — meshes have no exact JSON form and are skipped
+     *  (their nodes are kept, so the tree shape survives). */
+    toJSON(): SceneDocData
+    {
+        const shapes: SceneShapeData[] = [];
+        const seen = new Set<string>();
+
+        const collect = (node: SceneNode<S>): void =>
+        {
+            const shape = node.shape() as any;
+            if (shape && typeof shape.toData === 'function')
+            {
+                const id = shape.id();
+                if (!seen.has(id))
+                {
+                    seen.add(id);
+                    const entry: SceneShapeData = { id, geometry: shape.toData() };
+                    const name = shape.name?.();
+                    if (name !== undefined) entry.name = name;
+                    const style = shape.style?.explicitData?.();
+                    if (style && Object.keys(style).length) entry.style = style;
+                    shapes.push(entry);
+                }
+            }
+            node.children().forEach(collect);
+        };
+        collect(this);
+
+        return { version: 1, root: this.toData(), shapes };
+    }
+
+    /** Rebuild a scene written by `toJSON()`. Node ids, shape ids, names and styles are
+     *  restored, so references held elsewhere (selection, undo entries) still resolve. */
+    static fromJSON(doc: SceneDocData): SceneNode<Shape>
+    {
+        // Deserialise geometry once per shape id, then attach by reference.
+        const shapes = new Map<string, Shape>();
+        doc.shapes.forEach(entry =>
+        {
+            const shape = Curve.fromData(entry.geometry) as unknown as Shape;
+            shape.setId(entry.id);
+            if (entry.name !== undefined) shape.name(entry.name);
+            if (entry.style) shape.style.merge(entry.style as StyleData);
+            shapes.set(entry.id, shape);
+        });
+
+        const build = (data: SceneNodeData): SceneNode<Shape> =>
+        {
+            const node = new SceneNode<Shape>(data.name);
+            if (data.id) node.setId(data.id);
+            if (data.style) node.style.merge(data.style as StyleData);
+
+            const shape = data.shape ? shapes.get(data.shape) : undefined;
+            if (shape) node.setShape(shape);
+
+            (data.children ?? []).forEach(child => node.addChild(build(child)));
+            return node;
+        };
+
+        return build(doc.root);
     }
 
     /** Export this subtree as a plain ComponentGraphNode tree so it can be reconstructed in

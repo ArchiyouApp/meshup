@@ -24,14 +24,40 @@ export function remapAxis(x: number, y: number, z: number, up: 'x' | 'y' | 'z' =
 
 //// UUID ////
 
+/** Byte → two lowercase hex chars, precomputed. */
+const HEX_BYTE: string[] = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
+
+/** Buffer of random bytes, refilled in bulk and drained 16 at a time. */
+const UUID_POOL = new Uint8Array(16 * 256);
+let uuidPoolAt = UUID_POOL.length;
+
+/** RFC 4122 version-4 UUID.
+ *
+ *  Draws from a bulk-filled entropy pool: the previous implementation called
+ *  `crypto.getRandomValues` once **per character** (32 calls and 32 allocations per id), which
+ *  is ~100x slower and showed up as seconds of overhead when building large scenes, since every
+ *  `Shape` mints one on construction. */
 export function uuid(): string
 {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c =>
+    if (uuidPoolAt + 16 > UUID_POOL.length)
     {
-        const r = crypto.getRandomValues(new Uint8Array(1))[0] % 16;
-        const v = c === 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-    });
+        crypto.getRandomValues(UUID_POOL);
+        uuidPoolAt = 0;
+    }
+    const o = uuidPoolAt;
+    uuidPoolAt += 16;
+
+    const b6 = (UUID_POOL[o + 6] & 0x0f) | 0x40; // version 4
+    const b8 = (UUID_POOL[o + 8] & 0x3f) | 0x80; // variant 10xx
+
+    return HEX_BYTE[UUID_POOL[o]] + HEX_BYTE[UUID_POOL[o + 1]]
+         + HEX_BYTE[UUID_POOL[o + 2]] + HEX_BYTE[UUID_POOL[o + 3]] + '-'
+         + HEX_BYTE[UUID_POOL[o + 4]] + HEX_BYTE[UUID_POOL[o + 5]] + '-'
+         + HEX_BYTE[b6] + HEX_BYTE[UUID_POOL[o + 7]] + '-'
+         + HEX_BYTE[b8] + HEX_BYTE[UUID_POOL[o + 9]] + '-'
+         + HEX_BYTE[UUID_POOL[o + 10]] + HEX_BYTE[UUID_POOL[o + 11]]
+         + HEX_BYTE[UUID_POOL[o + 12]] + HEX_BYTE[UUID_POOL[o + 13]]
+         + HEX_BYTE[UUID_POOL[o + 14]] + HEX_BYTE[UUID_POOL[o + 15]];
 }
 
 //// FILE UTILS ////
