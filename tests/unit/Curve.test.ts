@@ -753,3 +753,103 @@ describe('Curve.intersect() / cutoffBy() off the XY plane', () =>
         expect(Math.abs(res.end().toArray()[1])).toBeLessThan(1e-6);
     });
 });
+
+describe('Curve.fillet()/chamfer() — per-corner `at`', () =>
+{
+    // A 20x20 rect, closed. Corner index vi is the junction of segment vi-1 and vi,
+    // i.e. the start of segment vi — the same indexing the kernel uses.
+    const rect = () => Curve.Rect(20, 20, [0, 0, 0], 'xy');
+
+    // One filleted corner of radius 3 removes r^2 - pi*r^2/4 = 9 - 7.0686 = 1.9314 of area.
+    const ONE_FILLET_LOSS = 9 - Math.PI * 9 / 4;
+
+    it('fillets every corner when `at` is omitted', () =>
+    {
+        const c = rect().fillet(3)!;
+        expect(c.inner().hasArcs()).toBe(true);
+        expect(c.area()).toBeCloseTo(400 - 4 * ONE_FILLET_LOSS, 2);
+    });
+
+    it('fillets only the corner at the given index', () =>
+    {
+        const c = rect().fillet(3, 0)!;
+        expect(c.inner().hasArcs()).toBe(true);
+        expect(c.area()).toBeCloseTo(400 - ONE_FILLET_LOSS, 2);
+    });
+
+    it('fillets only the corners in the given index list', () =>
+    {
+        const c = rect().fillet(3, new Uint32Array([0, 2]))!;
+        expect(c.area()).toBeCloseTo(400 - 2 * ONE_FILLET_LOSS, 2);
+    });
+
+    // [0, 2] is a valid PointLike, so a flat number array can never mean "corners 0 and 2".
+    // Pinning the documented resolution: it is the point (0,2), i.e. one nearest corner.
+    it('reads a flat number array as a point, not as an index list', () =>
+    {
+        const c = rect().fillet(3, [0, 2])!;
+        expect(c.area()).toBeCloseTo(400 - ONE_FILLET_LOSS, 2);
+    });
+
+    it('supports negative indices, counting from the end', () =>
+    {
+        const byNegative = rect().fillet(3, -1)!;
+        const byPositive = rect().fillet(3, 3)!;
+        expect(byNegative.area()).toBeCloseTo(byPositive.area()!, 6);
+        expect(byNegative.area()).toBeCloseTo(400 - ONE_FILLET_LOSS, 2);
+    });
+
+    // The index<->geometry mapping is the part that can silently be off by one, so pin it:
+    // fillet one corner and check that the ROUNDED one is the corner we asked for. The
+    // filleted corner is the only one no longer present as a sharp point on the result.
+    it('rounds the corner the index actually refers to', () =>
+    {
+        const before = rect();
+        const corners = before.vertices().toArray().map(v => new Point(v));
+
+        corners.forEach((corner, i) =>
+        {
+            const after = rect().fillet(3, i)!;
+            const survives = (p: Point) =>
+                after.vertices().toArray().some(v => new Point(v).distance(p) < 1e-6);
+
+            expect(survives(corner), `corner ${i} should have been rounded away`).toBe(false);
+            corners.filter((_, j) => j !== i).forEach((other, k) =>
+            {
+                expect(survives(other), `corner ${k} should have been left sharp`).toBe(true);
+            });
+        });
+    });
+
+    it('accepts a point and fillets the nearest corner', () =>
+    {
+        const target = new Point(10, -10, 0); // nearest corner of the centered rect
+        const c = rect().fillet(3, [target.x, target.y, target.z])!;
+        expect(c.area()).toBeCloseTo(400 - ONE_FILLET_LOSS, 2);
+        const survives = c.vertices().toArray().some(v => new Point(v).distance(target) < 1e-6);
+        expect(survives).toBe(false); // that corner is the one that got rounded
+    });
+
+    it('chamfers only the requested corner', () =>
+    {
+        const all = rect().chamfer(4);
+        const one = rect().chamfer(4, 0);
+        expect(all.inner().hasArcs()).toBe(false);
+        // each chamfer removes a right triangle of legs 4/sqrt(2)... use the all-corners
+        // case as the reference: one corner must remove exactly a quarter of the total loss
+        expect(400 - one.area()!).toBeCloseTo((400 - all.area()!) / 4, 4);
+    });
+
+    it('leaves the curve untouched for an empty selection', () =>
+    {
+        const c = rect().fillet(3, [])!;
+        expect(c.inner().hasArcs()).toBe(false);
+        expect(c.area()).toBeCloseTo(400, 6);
+    });
+
+    it('ignores an out-of-range index with a warning', () =>
+    {
+        const c = rect().fillet(3, 99)!;
+        expect(c.area()).toBeCloseTo(400, 6);
+    });
+});

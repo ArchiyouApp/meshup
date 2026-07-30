@@ -850,51 +850,61 @@ impl Curve3DJs
         vec![0.0, 1.0]
     }
 
-    /// Fillet (round) every interior corner with an arc of the given `radius`.
+    /// Fillet (round) interior corners with an arc of the given `radius`.
     /// Corners where the radius does not fit are left sharp. Works on both closed
     /// contours (every vertex) and open curve strings (interior vertices only —
     /// the two free endpoints are not corners).
+    ///
+    /// `at`: optional corner (vertex) indices to fillet. Omit for every corner. Vertex `vi`
+    /// is the junction of segment `vi-1` and segment `vi`; closed curves start at 0, open
+    /// curves at 1. Indices are resolved on the TS side (see Curve.fillet) so the tolerance
+    /// policy for point matching stays out of the kernel.
     #[wasm_bindgen(js_name = fillet)]
-    pub fn fillet(&self, radius: f64) -> Result<Curve3DJs, JsValue>
+    pub fn fillet(&self, radius: f64, at: Option<Vec<usize>>) -> Result<Curve3DJs, JsValue>
     {
+        let only = at.as_deref();
         match &self.geom
         {
             Geom::Closed(ct) =>
             {
-                let segs = hcurve::fillet_segments(ct.segments(), radius, true).map_err(err)?;
+                let segs = hcurve::fillet_segments(ct.segments(), radius, true, only).map_err(err)?;
                 let c = Contour2::try_new(segs).map_err(|e| err(format!("Curve3DJs::fillet: {e:?}")))?;
                 Ok(Curve3DJs::from_closed(self.frame.clone(), c))
             }
             Geom::Open(cs) =>
             {
-                let segs = hcurve::fillet_segments(cs.segments(), radius, false).map_err(err)?;
+                let segs = hcurve::fillet_segments(cs.segments(), radius, false, only).map_err(err)?;
                 let c = CurveString2::try_new(segs).map_err(|e| err(format!("Curve3DJs::fillet: {e:?}")))?;
                 Ok(Curve3DJs::from_open(self.frame.clone(), c))
             }
             // Fillet the line approximation of an exact conic path.
-            Geom::Path(_) => self.to_line_curve()?.fillet(radius),
+            Geom::Path(_) => self.to_line_curve()?.fillet(radius, at),
         }
     }
 
-    /// Chamfer (bevel) every interior corner, cutting back `setback` along each edge.
+    /// Chamfer (bevel) interior corners, cutting back `setback` along each edge.
     /// Works on both closed contours and open curve strings (interior vertices only).
+    ///
+    /// `at`: optional corner (vertex) indices to chamfer. Omit for every corner. Indexing
+    /// matches [`Curve3DJs::fillet`].
     #[wasm_bindgen(js_name = chamfer)]
-    pub fn chamfer(&self, setback: f64) -> Result<Curve3DJs, JsValue>
+    pub fn chamfer(&self, setback: f64, at: Option<Vec<usize>>) -> Result<Curve3DJs, JsValue>
     {
+        let only = at.as_deref();
         match &self.geom
         {
             Geom::Closed(ct) =>
             {
-                let chamfered = chamfer_op(ct, setback).map_err(err)?;
+                let chamfered = chamfer_op(ct, setback, only).map_err(err)?;
                 Ok(Curve3DJs::from_closed(self.frame.clone(), chamfered))
             }
             Geom::Open(cs) =>
             {
-                let chamfered = chamfer_op(cs, setback).map_err(err)?;
+                let chamfered = chamfer_op(cs, setback, only).map_err(err)?;
                 Ok(Curve3DJs::from_open(self.frame.clone(), chamfered))
             }
             // Chamfer the line approximation of an exact conic path.
-            Geom::Path(_) => self.to_line_curve()?.chamfer(setback),
+            Geom::Path(_) => self.to_line_curve()?.chamfer(setback, at),
         }
     }
 
@@ -1216,9 +1226,15 @@ impl CornerTarget for CurveString2
 /// open curve strings (interior vertices only — the two free endpoints are not
 /// corners). (Fillets use [`hcurve::fillet_segments`] instead — a `from_bulge` arc
 /// avoids the exactly-equidistant-center that hypercurve's vertex fillet demands.)
-fn chamfer_op<T: CornerTarget>(target: &T, amount: f64) -> Result<T, String>
+/// `only`: when `Some`, restrict chamfering to those corner (vertex) indices; every other
+/// corner is left sharp. `None` chamfers every fitting corner. An empty slice is a no-op.
+fn chamfer_op<T: CornerTarget>(target: &T, amount: f64, only: Option<&[usize]>) -> Result<T, String>
 {
     if !(amount.is_finite() && amount > 0.0)
+    {
+        return Ok(target.clone());
+    }
+    if only.is_some_and(|sel| sel.is_empty())
     {
         return Ok(target.clone());
     }
@@ -1242,6 +1258,10 @@ fn chamfer_op<T: CornerTarget>(target: &T, amount: f64) -> Result<T, String>
     let first = if closed { 0 } else { 1 };
     for vi in (first..n).rev()
     {
+        if only.is_some_and(|sel| !sel.contains(&vi))
+        {
+            continue; // not one of the requested corners — leave it sharp
+        }
         let segs = cur.corner_segments();
         let m = segs.len();
         if vi >= m

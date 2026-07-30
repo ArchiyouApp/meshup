@@ -16,7 +16,6 @@ pub mod sketch_js;
 pub mod vector_js;
 pub mod vertex_js;
 
-pub mod meshup; // Comment if wasm build fails
 
 // Optional: better panic messages in the browser console.
 #[cfg(feature = "console_error_panic_hook")]

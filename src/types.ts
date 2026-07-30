@@ -9,7 +9,6 @@ import {
   VertexJs, 
   Matrix4Js,
   MeshJs,
-  NurbsCurve3DJs,
   Curve3DJs,
   SketchJs,
   PlaneJs, 
@@ -30,7 +29,6 @@ export type CsgrsModule =
   PlaneJs:  typeof PlaneJs;
   PolygonJs: typeof PolygonJs;
   VertexJs: typeof VertexJs;
-  NurbsCurve3DJs: typeof NurbsCurve3DJs;
   Curve3DJs: typeof Curve3DJs;
   // TODO: more
 };
@@ -56,9 +54,20 @@ export function isPointLike(obj: any): obj is PointLike
     obj instanceof Vector3Js ||
     obj instanceof VertexJs ||
     (Array.isArray(obj) && obj.every(item => typeof item === 'number')) || // [x], [x,y], [x,y,z] - needs to be numbers
-    typeof obj === 'object' && obj !== null && 'x' in obj && 'y' in obj && 'z' in obj
+    // z is optional, matching PointLike and the Point constructor (which defaults it to 0)
+    typeof obj === 'object' && obj !== null && 'x' in obj && 'y' in obj
 }
 
+
+/** What Curve.fillet()/chamfer() accept for their `at` corner filter: a corner index
+ *  (negative counts from the end), several indices as a Uint32Array, a point (nearest
+ *  corner wins), a Vertex, a selector string, a collection, or an array mixing them.
+ *
+ *  A flat array of numbers is always a point, never an index list — `[0, 2]` is the
+ *  point (0,2). Use a Uint32Array for several indices. */
+export type CurveCornerSelection = number | string | PointLike | Vertex | Uint32Array
+  | Array<number | string | PointLike | Vertex>
+  | { toArray(): Array<any> };
 
 export type BasePlane = 'xy' | 'yz' | 'xz' | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
 export function isBasePlane(obj: any): obj is BasePlane {

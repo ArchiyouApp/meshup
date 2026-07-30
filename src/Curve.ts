@@ -26,7 +26,7 @@ import { ShapeCollection, getCsgrs, Mesh } from './index';
 import { Shape } from './Shape';
 import type { SceneNode } from './SceneNode';
 import { sceneReplace, sceneAdd, sceneUpdate, sceneCarry, sceneReplaceOrKeep } from './sceneDecorators';
-import type { CsgrsModule, PointLike, Axis, BasePlane } from './types';
+import type { CsgrsModule, PointLike, Axis, BasePlane, CurveCornerSelection } from './types';
 import { isPointLike, isBasePlane } from './types'
 import { Point } from './Point';
 import { Vector } from './Vector';
@@ -1892,30 +1892,133 @@ export class Curve extends Shape
         return this;
     }
 
-    /** Fillet (round) the sharp corners of a Curve with arcs of `radius`, via
-     *  hypercurve's exact vertex fillet. Works on both closed curves (every corner)
-     *  and open curves (interior corners only — the two free endpoints are not
-     *  corners). Corners where the radius does not fit are left sharp. (The optional
-     *  `at` corner filter is not yet supported — all fitting corners are filleted.) */
-    fillet(radius: number, at?: PointLike|Array<PointLike>): this|null
+    /** The corner points of this Curve, indexed exactly as the kernel indexes them:
+     *  corner `vi` is the junction of segment `vi-1` and segment `vi`, i.e. the start of
+     *  segment `vi`. Closed curves have a corner at every index; on open curves index 0 is
+     *  the free start point and is not a corner.
+     *
+     *  Deliberately does NOT collapse coincident points the way vertices() does — that
+     *  would shift the indices out of step with the kernel. */
+    private _cornerPoints(): Array<Point>
     {
-        void at; // TODO: fillet only the corners nearest `at`
-        try { return this.update(Curve.fromCsgrs(this.inner().fillet(radius))); }
+        return this.segments().toArray().map(seg => new Point(seg.start()));
+    }
+
+    /** Resolve a corner selection to kernel corner indices.
+     *
+     *  Accepts an index (negative counts from the end, as in segment()), a point (the
+     *  nearest corner wins), a Vertex, a selector string, a ShapeCollection, or an array
+     *  mixing those. Returns undefined for "every corner", which is what the kernel wants
+     *  when `at` is omitted. */
+    private _resolveCornerIndices(at?: CurveCornerSelection): Uint32Array|undefined
+    {
+        if (at === undefined || at === null) { return undefined; }
+        if (at instanceof Uint32Array) { return at; } // already kernel indices
+
+        const corners = this._cornerPoints();
+        if (corners.length === 0) { return new Uint32Array(); }
+
+        // A flat array of numbers is a PointLike ([x,y] / [x,y,z]), never a list of
+        // indices — isPointLike([0,2]) is true, so there is no way to tell them apart.
+        // Several corners by index therefore go through a Uint32Array (handled above).
+        // An empty array means "no corners", which isPointLike would otherwise swallow.
+        const items: Array<any> =
+            (at instanceof ShapeCollection) ? at.toArray()
+            : (Array.isArray(at) && at.length === 0) ? []
+            : (Array.isArray(at) && !isPointLike(at)) ? at
+            : [at];
+
+        const indices = new Set<number>();
+
+        for (const item of items)
+        {
+            // selector string: resolve to shapes, then treat those as points
+            if (typeof item === 'string')
+            {
+                const selected = this.select(item);
+                const shapes = (selected instanceof ShapeCollection) ? selected.toArray() : [selected];
+                shapes.filter(Boolean).forEach(s =>
+                {
+                    const i = this._nearestCornerIndex(corners, new Point((s as any).center?.() ?? s));
+                    if (i !== undefined) { indices.add(i); }
+                });
+                continue;
+            }
+
+            // plain index, negative counts from the end
+            if (typeof item === 'number' && Number.isInteger(item))
+            {
+                const i = item < 0 ? corners.length + item : item;
+                if (i >= 0 && i < corners.length) { indices.add(i); }
+                else { console.warn(`Curve: corner index ${item} is out of bounds, skipped`); }
+                continue;
+            }
+
+            const i = this._nearestCornerIndex(corners, new Point(item));
+            if (i !== undefined) { indices.add(i); }
+        }
+
+        return new Uint32Array([...indices].sort((a, b) => a - b));
+    }
+
+    /** Index of the corner nearest `p`. */
+    private _nearestCornerIndex(corners: Array<Point>, p: Point): number|undefined
+    {
+        let best: number|undefined = undefined;
+        let bestDist = Infinity;
+        corners.forEach((c, i) =>
+        {
+            const d = c.distance(p);
+            if (d < bestDist) { bestDist = d; best = i; }
+        });
+        return best;
+    }
+
+    /** Fillet (round) the sharp corners of a Curve with arcs of `radius`.
+     *  Works on both closed curves (every corner) and open curves (interior corners
+     *  only — the two free endpoints are not corners). Corners where the radius does
+     *  not fit are left sharp.
+     *
+     *  @param at  Optional corner filter: only these corners are filleted. Accepts a
+     *             corner index (negative counts from the end), a point (the nearest
+     *             corner wins), a Vertex, a selector string, a ShapeCollection, or an
+     *             array mixing those. Omit to fillet every corner.
+     *
+     *             NOTE: a flat array of numbers is always read as a point — `[0, 2]` is
+     *             the point (0,2), not corners 0 and 2, because the two are
+     *             indistinguishable. Pass several indices as a Uint32Array.
+     *
+     *  @example curve.fillet(5)                          // every corner
+     *  @example curve.fillet(5, 0)                       // just the first corner
+     *  @example curve.fillet(5, -1)                      // just the last corner
+     *  @example curve.fillet(5, new Uint32Array([0, 2])) // corners 0 and 2
+     *  @example curve.fillet(5, [10, 10, 0])             // the corner nearest that point
+     *  @example curve.fillet(5, 'vertex<<->[0,0,0]')     // the corner nearest the origin
+     */
+    fillet(radius: number, at?: CurveCornerSelection): this|null
+    {
+        try { return this.update(Curve.fromCsgrs(this.inner().fillet(radius, this._resolveCornerIndices(at)))); }
         catch (e) { console.warn('Curve.fillet():', e); return this; }
     }
 
     /** Chamfer (bevel) the sharp corners of a Curve, cutting back `setback` along
-     *  each edge. Works on both closed and open curves (interior corners only). */
-    chamfer(setback: number): this
+     *  each edge. Works on both closed and open curves (interior corners only).
+     *
+     *  @param at  Optional corner filter — see fillet(). Omit to chamfer every corner. */
+    chamfer(setback: number, at?: CurveCornerSelection): this
     {
-        try { return this.update(Curve.fromCsgrs(this.inner().chamfer(setback))); }
+        try { return this.update(Curve.fromCsgrs(this.inner().chamfer(setback, this._resolveCornerIndices(at)))); }
         catch (e) { console.warn('Curve.chamfer():', e); return this; }
     }
 
+    /** Fillet only the corners nearest the given curve parameters. */
     filletAtParams(radius: number, at: Array<number>): this|null
     {
-        void at; // TODO: fillet only the corners at the given params; currently all corners
-        return this.fillet(radius);
+        if (!Array.isArray(at) || at.length === 0) { return this.fillet(radius); }
+        // Map each param to the point on the curve there, then let fillet() snap those
+        // points to their nearest corners.
+        const pts = at.map(t => new Point(this.inner().pointAt(t)));
+        return this.fillet(radius, pts);
     }
 
     /** Extend the curve by `length` at its start / end / both, along the endpoint
@@ -2683,8 +2786,11 @@ export class Curve extends Shape
             const meshInner = (mesh as any)._mesh;
             if(!meshInner){ throw new Error('Mesh has no inner WASM object'); }
 
-            // TODO: MeshJs.intersectCurve still expects the legacy curve type; wire a Curve3DJs path.
-            const pts = mesh.inner()?.intersectCurve(this.inner() as any, tolerance);
+            // Tessellate here and hand the mesh a plain polyline. The old path called
+            // MeshJs.intersectCurve, which was typed for the curvo NurbsCurve3DJs and so
+            // always threw once curves became hypercurve-backed — the catch below turned
+            // that into a silent empty result.
+            const pts = mesh.inner()?.intersectPolyline(this.inner().tessellate(tolerance ?? 1e-4));
 
             return (pts || []).map((p: any) => Point.from(p));
         }

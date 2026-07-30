@@ -4,33 +4,12 @@
  * Phase 0A: SVG + GeoJSON import through the already-compiled WASM.
  */
 import { beforeAll, describe, it, expect, vi } from 'vitest';
-import { Importer, Sketch, Curve, Mesh, ShapeCollection, getCsgrs, initAsync } from '../../src/index';
+import { Importer, Sketch, Curve, Mesh, ShapeCollection, initAsync } from '../../src/index';
 
 beforeAll(async () =>
 {
     await initAsync();
 });
-
-/** The mesh importers (OBJ/STL/DXF) need a WASM build that exposes MeshJs.fromOBJ.
- *  The committed WASM predates them, so these tests auto-skip until csgrs is
- *  rebuilt from a source containing the fromOBJ/fromSTL/fromDXF bindings. */
-const meshImportReady = (): boolean =>
-{
-    try { return typeof (getCsgrs() as any)?.MeshJs?.fromOBJ === 'function'; }
-    catch { return false; }
-};
-
-const gltfReady = (): boolean =>
-{
-    try { return typeof (getCsgrs() as any)?.MeshJs?.fromGLTF === 'function'; }
-    catch { return false; }
-};
-
-const xmlMeshReady = (): boolean =>
-{
-    try { return typeof (getCsgrs() as any)?.MeshJs?.from3MF === 'function'; }
-    catch { return false; }
-};
 
 /** CRC-32 (IEEE) for the stored-ZIP builder below. */
 const crc32 = (bytes: Uint8Array): number =>
@@ -298,9 +277,8 @@ EOF
 
 describe('Importer: OBJ', () =>
 {
-    it('imports an OBJ tetrahedron', (ctx) =>
+    it('imports an OBJ tetrahedron', () =>
     {
-        if(!meshImportReady()){ ctx.skip(); return; }
         const mesh = Mesh.fromOBJ(OBJ_TETRA);
         expect(mesh).toBeInstanceOf(Mesh);
         const bbox = mesh.bbox()!;
@@ -309,9 +287,8 @@ describe('Importer: OBJ', () =>
         expect(bbox.height()).toBeCloseTo(10, 3);
     });
 
-    it('Importer.load auto-detects OBJ', (ctx) =>
+    it('Importer.load auto-detects OBJ', () =>
     {
-        if(!meshImportReady()){ ctx.skip(); return; }
         expect(Importer.detectFormat(OBJ_TETRA)).toBe('obj');
         const col = Importer.load(OBJ_TETRA);
         expect(col.toArray().length).toBe(1);
@@ -321,9 +298,8 @@ describe('Importer: OBJ', () =>
 
 describe('Importer: STL (round-trip)', () =>
 {
-    it('exports a cube to binary STL and re-imports it', (ctx) =>
+    it('exports a cube to binary STL and re-imports it', () =>
     {
-        if(!meshImportReady()){ ctx.skip(); return; }
         const cube = Mesh.Cube(10);
         const stl = cube.toSTLBinary()!;
         expect(stl).toBeInstanceOf(Uint8Array);
@@ -337,9 +313,8 @@ describe('Importer: STL (round-trip)', () =>
         expect(imported.toBuffer()!.indices.length).toBe(36);
     });
 
-    it('re-imports ASCII STL and auto-detects it', (ctx) =>
+    it('re-imports ASCII STL and auto-detects it', () =>
     {
-        if(!meshImportReady()){ ctx.skip(); return; }
         const cube = Mesh.Cube(20);
         const ascii = cube.toSTLAscii()!;
         expect(Importer.detectFormat(ascii)).toBe('stl');
@@ -350,9 +325,8 @@ describe('Importer: STL (round-trip)', () =>
 
 describe('Importer: DXF (mesh)', () =>
 {
-    it('imports a DXF circle as a flat mesh', (ctx) =>
+    it('imports a DXF circle as a flat mesh', () =>
     {
-        if(!meshImportReady()){ ctx.skip(); return; }
         const mesh = Mesh.fromDXF(DXF_CIRCLE);
         const bbox = mesh.bbox()!;
         expect(bbox.width()).toBeCloseTo(10, 1);   // diameter = 2*r
@@ -363,9 +337,8 @@ describe('Importer: DXF (mesh)', () =>
 
 describe('Importer: glTF/GLB (round-trip)', () =>
 {
-    it('exports a cube to GLB and re-imports it', async (ctx) =>
+    it('exports a cube to GLB and re-imports it', async () =>
     {
-        if(!gltfReady()){ ctx.skip(); return; }
         const cube = Mesh.Cube(10);
         const glb = await cube.toGLB();
         expect(glb).toBeInstanceOf(Uint8Array);
@@ -382,9 +355,8 @@ describe('Importer: glTF/GLB (round-trip)', () =>
 
 describe('Importer: AMF (round-trip)', () =>
 {
-    it('exports a cube to AMF and re-imports it', (ctx) =>
+    it('exports a cube to AMF and re-imports it', () =>
     {
-        if(!xmlMeshReady()){ ctx.skip(); return; }
         const cube = Mesh.Cube(10);
         const amf = cube.toAMF()!;
         expect(typeof amf).toBe('string');
@@ -399,9 +371,8 @@ describe('Importer: AMF (round-trip)', () =>
 
 describe('Importer: 3MF', () =>
 {
-    it('imports a tetrahedron from a minimal 3MF package', (ctx) =>
+    it('imports a tetrahedron from a minimal 3MF package', () =>
     {
-        if(!xmlMeshReady()){ ctx.skip(); return; }
         const zip = makeStoredZip('3D/3dmodel.model', TETRA_3MF_MODEL);
         expect(Importer.detectFormat(zip)).toBe('3mf');
         const mesh = Mesh.from3MF(zip);
@@ -415,9 +386,8 @@ describe('Importer: 3MF', () =>
 
 describe('Importer: DXF (2D curves)', () =>
 {
-    it('imports a DXF circle as a closed 2D curve', (ctx) =>
+    it('imports a DXF circle as a closed 2D curve', () =>
     {
-        if(!meshImportReady()){ ctx.skip(); return; } // SketchJs.fromDXF lands with fromOBJ
         const curves = Sketch.fromDXF(DXF_CIRCLE).toArray();
         expect(curves.length).toBe(1);
         expect(curves[0]).toBeInstanceOf(Curve);
@@ -428,9 +398,8 @@ describe('Importer: DXF (2D curves)', () =>
         expect(bb.height()).toBeCloseTo(0, 3);   // flat on XY
     });
 
-    it('Importer.load auto-detects DXF and returns curves', (ctx) =>
+    it('Importer.load auto-detects DXF and returns curves', () =>
     {
-        if(!meshImportReady()){ ctx.skip(); return; }
         expect(Importer.detectFormat(DXF_CIRCLE)).toBe('dxf');
         const col = Importer.load(DXF_CIRCLE);
         expect(col.toArray()[0]).toBeInstanceOf(Curve);

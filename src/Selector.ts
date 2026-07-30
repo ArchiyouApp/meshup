@@ -193,9 +193,10 @@ export class Selector
                 return n ? this._normalIsParallel(n, refNormal) : false;
             });
         }
-        // edge
-        // TODO: edge selection from meshes not yet available
-        return [];
+        // edge: an edge is a straight line, so it has no plane normal. "Parallel" here
+        // means its direction runs along the reference axis, not its normal.
+        return this._edgesFromTarget(target)
+            .filter(e => this._normalIsParallel(e.direction(), refNormal));
     }
 
     /**
@@ -275,6 +276,25 @@ export class Selector
         return [];
     }
 
+    /** Get all edges from a target, as 2-point Curves.
+     *
+     *  A Mesh yields its real model edges (see Mesh.edges(): unique, deduplicated by
+     *  position, with triangulation diagonals filtered out). A Curve yields its atomic
+     *  segments — the edges of a polyline are its individual spans. */
+    private _edgesFromTarget(target: ShapeCollection | Mesh | Curve): Array<Curve>
+    {
+        if (target instanceof Mesh) return target.edges().toArray();
+        if (target instanceof Curve) return target.segments().toArray();
+        if (target instanceof ShapeCollection)
+        {
+            return [
+                ...target.meshes().toArray().flatMap(m => m.edges().toArray()),
+                ...target.curves().toArray().flatMap(c => c.segments().toArray()),
+            ];
+        }
+        return [];
+    }
+
     /** Get all vertices (Points) from a target */
     private _verticesFromTarget(target: ShapeCollection | Mesh | Curve): Array<Point>
     {
@@ -308,8 +328,7 @@ export class Selector
             case 'wire':
                 return this._curvesFromTarget(target);
             case 'edge':
-                // TODO: edge extraction not yet available
-                return [];
+                return this._edgesFromTarget(target);
             default:
                 return [];
         }

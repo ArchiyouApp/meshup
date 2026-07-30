@@ -1054,9 +1054,16 @@ fn subsegment(seg: &Segment2, u0: f64, u1: f64) -> Result<Segment2, String>
 /// involve an arc, are nearly straight, or where the radius does not fit are left
 /// sharp. Works for closed contours (every vertex, wrapping) and open curve
 /// strings (interior vertices only — the two free endpoints are not corners).
-pub fn fillet_segments(segs: &[Segment2], radius: f64, closed: bool) -> Result<Vec<Segment2>, String>
+/// `only`: when `Some`, restrict filleting to those corner (vertex) indices; every other
+/// corner is left sharp. `None` fillets every fitting corner. An empty slice is a no-op.
+pub fn fillet_segments(segs: &[Segment2], radius: f64, closed: bool, only: Option<&[usize]>)
+    -> Result<Vec<Segment2>, String>
 {
     if !(radius.is_finite() && radius > 0.0) || segs.len() < 2
+    {
+        return Ok(segs.to_vec());
+    }
+    if only.is_some_and(|sel| sel.is_empty())
     {
         return Ok(segs.to_vec());
     }
@@ -1083,6 +1090,10 @@ pub fn fillet_segments(segs: &[Segment2], radius: f64, closed: bool) -> Result<V
         if !closed && (vi == 0 || vi >= n)
         {
             return None; // open endpoints are not corners
+        }
+        if only.is_some_and(|sel| !sel.contains(&vi))
+        {
+            return None; // not one of the requested corners — leave it sharp
         }
         let prev = if closed { (vi + n - 1) % n } else { vi - 1 };
         let cur = vi % n;

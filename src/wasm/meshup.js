@@ -153,6 +153,13 @@ function isLikeNone(x) {
     return x === undefined || x === null;
 }
 
+function passArray32ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 4, 4) >>> 0;
+    getUint32ArrayMemory0().set(arg, ptr / 4);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+
 function passArray8ToWasm0(arg, malloc) {
     const ptr = malloc(arg.length * 1, 1) >>> 0;
     getUint8ArrayMemory0().set(arg, ptr / 1);
@@ -253,17 +260,9 @@ const BooleanRegion3DJsFinalization = (typeof FinalizationRegistry === 'undefine
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_booleanregion3djs_free(ptr >>> 0, 1));
 
-const BooleanRegionJsFinalization = (typeof FinalizationRegistry === 'undefined')
-    ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_booleanregionjs_free(ptr >>> 0, 1));
-
 const ClosestPointResultJsFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_closestpointresultjs_free(ptr >>> 0, 1));
-
-const CompoundCurve3DJsFinalization = (typeof FinalizationRegistry === 'undefined')
-    ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_compoundcurve3djs_free(ptr >>> 0, 1));
 
 const Curve3DJsFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
@@ -281,14 +280,6 @@ const MeshJsFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_meshjs_free(ptr >>> 0, 1));
 
-const NurbsCurve3DJsFinalization = (typeof FinalizationRegistry === 'undefined')
-    ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_nurbscurve3djs_free(ptr >>> 0, 1));
-
-const NurbsSurfaceJsFinalization = (typeof FinalizationRegistry === 'undefined')
-    ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_nurbssurfacejs_free(ptr >>> 0, 1));
-
 const PlaneJsFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_planejs_free(ptr >>> 0, 1));
@@ -296,10 +287,6 @@ const PlaneJsFinalization = (typeof FinalizationRegistry === 'undefined')
 const Point3JsFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_point3js_free(ptr >>> 0, 1));
-
-const Point4JsFinalization = (typeof FinalizationRegistry === 'undefined')
-    ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_point4js_free(ptr >>> 0, 1));
 
 const PolygonJsFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
@@ -385,65 +372,6 @@ export class BooleanRegion3DJs {
 if (Symbol.dispose) BooleanRegion3DJs.prototype[Symbol.dispose] = BooleanRegion3DJs.prototype.free;
 
 /**
- * Result of a boolean operation: an exterior boundary curve with zero or more interior hole curves.
- * Each region from a Clip result is represented as one BooleanRegionJs.
- */
-export class BooleanRegionJs {
-    static __wrap(ptr) {
-        ptr = ptr >>> 0;
-        const obj = Object.create(BooleanRegionJs.prototype);
-        obj.__wbg_ptr = ptr;
-        BooleanRegionJsFinalization.register(obj, obj.__wbg_ptr, obj);
-        return obj;
-    }
-    __destroy_into_raw() {
-        const ptr = this.__wbg_ptr;
-        this.__wbg_ptr = 0;
-        BooleanRegionJsFinalization.unregister(this);
-        return ptr;
-    }
-    free() {
-        const ptr = this.__destroy_into_raw();
-        wasm.__wbg_booleanregionjs_free(ptr, 0);
-    }
-    /**
-     * Number of interior holes
-     * @returns {number}
-     */
-    holeCount() {
-        const ret = wasm.booleanregionjs_holeCount(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
-     * Get the interior hole curves of this region
-     * @returns {CompoundCurve3DJs[]}
-     */
-    get holes() {
-        const ret = wasm.booleanregionjs_holes(this.__wbg_ptr);
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * Get the exterior boundary curve of this region
-     * @returns {CompoundCurve3DJs}
-     */
-    get exterior() {
-        const ret = wasm.booleanregionjs_exterior(this.__wbg_ptr);
-        return CompoundCurve3DJs.__wrap(ret);
-    }
-    /**
-     * Whether this region has any interior holes
-     * @returns {boolean}
-     */
-    hasHoles() {
-        const ret = wasm.booleanregionjs_hasHoles(this.__wbg_ptr);
-        return ret !== 0;
-    }
-}
-if (Symbol.dispose) BooleanRegionJs.prototype[Symbol.dispose] = BooleanRegionJs.prototype.free;
-
-/**
  * Result of a closest-surface-point query returned to JavaScript.
  */
 export class ClosestPointResultJs {
@@ -522,423 +450,6 @@ export class ClosestPointResultJs {
     }
 }
 if (Symbol.dispose) ClosestPointResultJs.prototype[Symbol.dispose] = ClosestPointResultJs.prototype.free;
-
-export class CompoundCurve3DJs {
-    static __wrap(ptr) {
-        ptr = ptr >>> 0;
-        const obj = Object.create(CompoundCurve3DJs.prototype);
-        obj.__wbg_ptr = ptr;
-        CompoundCurve3DJsFinalization.register(obj, obj.__wbg_ptr, obj);
-        return obj;
-    }
-    __destroy_into_raw() {
-        const ptr = this.__wbg_ptr;
-        this.__wbg_ptr = 0;
-        CompoundCurve3DJsFinalization.unregister(this);
-        return ptr;
-    }
-    free() {
-        const ptr = this.__destroy_into_raw();
-        wasm.__wbg_compoundcurve3djs_free(ptr, 0);
-    }
-    /**
-     * Offset the compound curve using the geo-buf / Sketch polygon offset as a fallback.
-     * Tessellates to a polyline, closes it to form a polygon, offsets via geo-buf's
-     * straight-skeleton algorithm, then returns the exterior boundary as a degree-1 curve.
-     * The curve must lie in the XY plane (z ≈ 0).
-     * @param {number} distance
-     * @returns {CompoundCurve3DJs}
-     */
-    offsetGeo(distance) {
-        const ret = wasm.compoundcurve3djs_offsetGeo(this.__wbg_ptr, distance);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return CompoundCurve3DJs.__wrap(ret[0]);
-    }
-    /**
-     * @param {number} param
-     * @returns {Vector3Js}
-     */
-    tangentAt(param) {
-        const ret = wasm.compoundcurve3djs_tangentAt(this.__wbg_ptr, param);
-        return Vector3Js.__wrap(ret);
-    }
-    /**
-     * Tessellate curve into evenly spaced points by count
-     * @param {number | null} [tol]
-     * @returns {Point3Js[]}
-     */
-    tessellate(tol) {
-        const ret = wasm.compoundcurve3djs_tessellate(this.__wbg_ptr, !isLikeNone(tol), isLikeNone(tol) ? 0 : tol);
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * Trim the compound curve to the sub-curve between parameters t0 and t1.
-     * Parameters are in the compound curve's global knot domain.
-     * Returns one or more NurbsCurve3DJs segments.
-     * @param {number} t0
-     * @param {number} t1
-     * @returns {NurbsCurve3DJs[]}
-     */
-    trimRange(t0, t1) {
-        const ret = wasm.compoundcurve3djs_trimRange(this.__wbg_ptr, t0, t1);
-        if (ret[3]) {
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * @returns {Float64Array}
-     */
-    knotsDomain() {
-        const ret = wasm.compoundcurve3djs_knotsDomain(this.__wbg_ptr);
-        var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
-        return v1;
-    }
-    /**
-     * Perform a boolean operation (union / intersection / difference) with a NurbsCurve3D.
-     * Both curves must be planar and coplanar. The operation is performed in 2D
-     * and the result is projected back to 3D.
-     * Returns BooleanRegionJs results containing exterior curves and interior holes.
-     * @param {NurbsCurve3DJs} other
-     * @param {string} operation
-     * @returns {BooleanRegionJs[]}
-     */
-    booleanCurve(other, operation) {
-        _assertClass(other, NurbsCurve3DJs);
-        const ptr0 = passStringToWasm0(operation, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.compoundcurve3djs_booleanCurve(this.__wbg_ptr, other.__wbg_ptr, ptr0, len0);
-        if (ret[3]) {
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        var v2 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v2;
-    }
-    /**
-     * @param {Point3Js} point
-     * @returns {Point3Js}
-     */
-    closestPoint(point) {
-        _assertClass(point, Point3Js);
-        const ret = wasm.compoundcurve3djs_closestPoint(this.__wbg_ptr, point.__wbg_ptr);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return Point3Js.__wrap(ret[0]);
-    }
-    /**
-     * Get all unique control points across all spans
-     * @returns {Point3Js[]}
-     */
-    controlPoints() {
-        const ret = wasm.compoundcurve3djs_controlPoints(this.__wbg_ptr);
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * Get the point at given parameter
-     * @param {number} param
-     * @returns {Point3Js}
-     */
-    pointAtParam(param) {
-        const ret = wasm.compoundcurve3djs_pointAtParam(this.__wbg_ptr, param);
-        return Point3Js.__wrap(ret);
-    }
-    /**
-     * Rotate the compound curve by a unit quaternion given as components `(w, x, y, z)`.
-     * The quaternion is normalized before use.
-     * @param {number} w
-     * @param {number} x
-     * @param {number} y
-     * @param {number} z
-     * @returns {CompoundCurve3DJs}
-     */
-    rotateQuaternion(w, x, y, z) {
-        const ret = wasm.compoundcurve3djs_rotateQuaternion(this.__wbg_ptr, w, x, y, z);
-        return CompoundCurve3DJs.__wrap(ret);
-    }
-    /**
-     * Extrude each span of this compound curve along XYZ components.
-     *
-     * Returns one `NurbsSurfaceJs` per span.
-     * @param {number} dx
-     * @param {number} dy
-     * @param {number} dz
-     * @returns {NurbsSurfaceJs[]}
-     */
-    extrudeComponents(dx, dy, dz) {
-        const ret = wasm.compoundcurve3djs_extrudeComponents(this.__wbg_ptr, dx, dy, dz);
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * Find intersection points with another `CompoundCurve3DJs`.
-     * Intersects each span of `self` against each span of `other`.
-     * Returns the 3D intersection points.
-     * @param {CompoundCurve3DJs} other
-     * @returns {Point3Js[]}
-     */
-    intersectCompound(other) {
-        _assertClass(other, CompoundCurve3DJs);
-        const ret = wasm.compoundcurve3djs_intersectCompound(this.__wbg_ptr, other.__wbg_ptr);
-        if (ret[3]) {
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * Merge consecutive collinear degree-1 spans into single polyline spans.
-     *
-     * Walks through all spans and checks if consecutive degree-1 spans share
-     * the same direction (within a small angular tolerance). Collinear runs are
-     * collapsed into one polyline keeping only start and end points. Non-degree-1
-     * spans and non-collinear degree-1 spans are preserved unchanged.
-     *
-     * Always returns a `CompoundCurve3DJs`.
-     * @param {number} colinear_tol
-     * @returns {CompoundCurve3DJs}
-     */
-    mergeColinearLines(colinear_tol) {
-        const ret = wasm.compoundcurve3djs_mergeColinearLines(this.__wbg_ptr, colinear_tol);
-        return CompoundCurve3DJs.__wrap(ret);
-    }
-    /**
-     * Perform a boolean operation (union / intersection / difference) with another CompoundCurve3D.
-     * Both curves must be planar and coplanar. The operation is performed in 2D
-     * and the result is projected back to 3D.
-     * Returns BooleanRegionJs results containing exterior curves and interior holes.
-     * @param {CompoundCurve3DJs} other
-     * @param {string} operation
-     * @returns {BooleanRegionJs[]}
-     */
-    booleanCompoundCurve(other, operation) {
-        _assertClass(other, CompoundCurve3DJs);
-        const ptr0 = passStringToWasm0(operation, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.compoundcurve3djs_booleanCompoundCurve(this.__wbg_ptr, other.__wbg_ptr, ptr0, len0);
-        if (ret[3]) {
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        var v2 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v2;
-    }
-    /**
-     * Find the closest parameter on this compound curve to the given point.
-     * Iterates over all spans and returns the parameter with the minimum distance.
-     * @param {Point3Js} point
-     * @returns {number}
-     */
-    paramClosestToPoint(point) {
-        _assertClass(point, Point3Js);
-        const ret = wasm.compoundcurve3djs_paramClosestToPoint(this.__wbg_ptr, point.__wbg_ptr);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return ret[0];
-    }
-    /**
-     * @param {NurbsCurve3DJs[]} spans
-     */
-    constructor(spans) {
-        const ptr0 = passArrayJsValueToWasm0(spans, wasm.__wbindgen_malloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.compoundcurve3djs_new(ptr0, len0);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        this.__wbg_ptr = ret[0] >>> 0;
-        CompoundCurve3DJsFinalization.register(this, this.__wbg_ptr, this);
-        return this;
-    }
-    /**
-     * @returns {Point3Js[]}
-     */
-    bbox() {
-        const ret = wasm.compoundcurve3djs_bbox(this.__wbg_ptr);
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * @returns {CompoundCurve3DJs}
-     */
-    clone() {
-        const ret = wasm.compoundcurve3djs_clone(this.__wbg_ptr);
-        return CompoundCurve3DJs.__wrap(ret);
-    }
-    /**
-     * Scale the compound curve by factors along the X, Y, and Z axes
-     * @param {number} sx
-     * @param {number} sy
-     * @param {number} sz
-     * @returns {CompoundCurve3DJs}
-     */
-    scale(sx, sy, sz) {
-        const ret = wasm.compoundcurve3djs_scale(this.__wbg_ptr, sx, sy, sz);
-        return CompoundCurve3DJs.__wrap(ret);
-    }
-    /**
-     * PROPERTIES ///
-     * @returns {NurbsCurve3DJs[]}
-     */
-    spans() {
-        const ret = wasm.compoundcurve3djs_spans(this.__wbg_ptr);
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * Split the compound curve at parameter t, returning [left, right] as CompoundCurve3DJs.
-     * @param {number} t
-     * @returns {CompoundCurve3DJs[]}
-     */
-    split(t) {
-        const ret = wasm.compoundcurve3djs_split(this.__wbg_ptr, t);
-        if (ret[3]) {
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * @param {number | null} [tol]
-     * @returns {boolean}
-     */
-    closed(tol) {
-        const ret = wasm.compoundcurve3djs_closed(this.__wbg_ptr, !isLikeNone(tol), isLikeNone(tol) ? 0 : tol);
-        return ret !== 0;
-    }
-    /**
-     * Extend the compound curve at one or both ends.
-     *
-     * - **Degree-1 boundary spans** are extended inline (new control point).
-     * - **Higher-degree boundary spans** get a tangent line segment prepended/appended.
-     *
-     * # Arguments
-     * * `distance` – how far to extend (world units)
-     * * `side`     – `"end"` (default), `"start"`, or `"both"`
-     * @param {number} distance
-     * @param {string | null} [side]
-     * @returns {CompoundCurve3DJs}
-     */
-    extend(distance, side) {
-        var ptr0 = isLikeNone(side) ? 0 : passStringToWasm0(side, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        var len0 = WASM_VECTOR_LEN;
-        const ret = wasm.compoundcurve3djs_extend(this.__wbg_ptr, distance, ptr0, len0);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return CompoundCurve3DJs.__wrap(ret[0]);
-    }
-    /**
-     * @returns {number}
-     */
-    length() {
-        const ret = wasm.compoundcurve3djs_length(this.__wbg_ptr);
-        return ret;
-    }
-    /**
-     * Offset the compound curve by a distance with the specified corner type ('sharp','round','smooth').
-     * The curve must already lie in the XY plane (z = 0).
-     * @param {number} distance
-     * @param {string} corner_type
-     * @returns {CompoundCurve3DJs}
-     */
-    offset(distance, corner_type) {
-        const ptr0 = passStringToWasm0(corner_type, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.compoundcurve3djs_offset(this.__wbg_ptr, distance, ptr0, len0);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return CompoundCurve3DJs.__wrap(ret[0]);
-    }
-    /**
-     * Rotate the compound curve by Euler angles (in radians) around the X, Y, and Z axes
-     * @param {number} ax
-     * @param {number} ay
-     * @param {number} az
-     * @returns {CompoundCurve3DJs}
-     */
-    rotate(ax, ay, az) {
-        const ret = wasm.compoundcurve3djs_rotate(this.__wbg_ptr, ax, ay, az);
-        return CompoundCurve3DJs.__wrap(ret);
-    }
-    /**
-     * Extrude each span of this compound curve along a direction vector.
-     *
-     * Returns one `NurbsSurfaceJs` per span. The surfaces share boundaries at
-     * span junctions and together form a continuous ruled solid.
-     * @param {Vector3Js} direction
-     * @returns {NurbsSurfaceJs[]}
-     */
-    extrude(direction) {
-        _assertClass(direction, Vector3Js);
-        const ret = wasm.compoundcurve3djs_extrude(this.__wbg_ptr, direction.__wbg_ptr);
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * Reverse the direction of the compound curve (swap start/end).
-     * Returns a new reversed copy.
-     * @returns {CompoundCurve3DJs}
-     */
-    reverse() {
-        const ret = wasm.compoundcurve3djs_reverse(this.__wbg_ptr);
-        return CompoundCurve3DJs.__wrap(ret);
-    }
-    /**
-     * @param {number} param
-     * @returns {NurbsCurve3DJs}
-     */
-    find_span(param) {
-        const ret = wasm.compoundcurve3djs_find_span(this.__wbg_ptr, param);
-        return NurbsCurve3DJs.__wrap(ret);
-    }
-    /**
-     * Find intersection points with a `NurbsCurve3DJs`.
-     * Intersects each span of `self` against `other`.
-     * Returns the 3D intersection points.
-     * @param {NurbsCurve3DJs} other
-     * @returns {Point3Js[]}
-     */
-    intersect(other) {
-        _assertClass(other, NurbsCurve3DJs);
-        const ret = wasm.compoundcurve3djs_intersect(this.__wbg_ptr, other.__wbg_ptr);
-        if (ret[3]) {
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * Translate the compound curve by a Vector3Js offset
-     * @param {Vector3Js} offset
-     * @returns {CompoundCurve3DJs}
-     */
-    translate(offset) {
-        _assertClass(offset, Vector3Js);
-        const ret = wasm.compoundcurve3djs_translate(this.__wbg_ptr, offset.__wbg_ptr);
-        return CompoundCurve3DJs.__wrap(ret);
-    }
-}
-if (Symbol.dispose) CompoundCurve3DJs.prototype[Symbol.dispose] = CompoundCurve3DJs.prototype.free;
 
 /**
  * A planar 3D curve: a frame plus its local 2D hypercurve geometry.
@@ -1271,15 +782,23 @@ export class Curve3DJs {
         return ret >>> 0;
     }
     /**
-     * Fillet (round) every interior corner with an arc of the given `radius`.
+     * Fillet (round) interior corners with an arc of the given `radius`.
      * Corners where the radius does not fit are left sharp. Works on both closed
      * contours (every vertex) and open curve strings (interior vertices only —
      * the two free endpoints are not corners).
+     *
+     * `at`: optional corner (vertex) indices to fillet. Omit for every corner. Vertex `vi`
+     * is the junction of segment `vi-1` and segment `vi`; closed curves start at 0, open
+     * curves at 1. Indices are resolved on the TS side (see Curve.fillet) so the tolerance
+     * policy for point matching stays out of the kernel.
      * @param {number} radius
+     * @param {Uint32Array | null} [at]
      * @returns {Curve3DJs}
      */
-    fillet(radius) {
-        const ret = wasm.curve3djs_fillet(this.__wbg_ptr, radius);
+    fillet(radius, at) {
+        var ptr0 = isLikeNone(at) ? 0 : passArray32ToWasm0(at, wasm.__wbindgen_malloc);
+        var len0 = WASM_VECTOR_LEN;
+        const ret = wasm.curve3djs_fillet(this.__wbg_ptr, radius, ptr0, len0);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -1336,13 +855,19 @@ export class Curve3DJs {
         return v2;
     }
     /**
-     * Chamfer (bevel) every interior corner, cutting back `setback` along each edge.
+     * Chamfer (bevel) interior corners, cutting back `setback` along each edge.
      * Works on both closed contours and open curve strings (interior vertices only).
+     *
+     * `at`: optional corner (vertex) indices to chamfer. Omit for every corner. Indexing
+     * matches [`Curve3DJs::fillet`].
      * @param {number} setback
+     * @param {Uint32Array | null} [at]
      * @returns {Curve3DJs}
      */
-    chamfer(setback) {
-        const ret = wasm.curve3djs_chamfer(this.__wbg_ptr, setback);
+    chamfer(setback, at) {
+        var ptr0 = isLikeNone(at) ? 0 : passArray32ToWasm0(at, wasm.__wbindgen_malloc);
+        var len0 = WASM_VECTOR_LEN;
+        const ret = wasm.curve3djs_chamfer(this.__wbg_ptr, setback, ptr0, len0);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -1993,28 +1518,6 @@ export class MeshJs {
         return MeshJs.__wrap(ret);
     }
     /**
-     * Find intersection points between a NURBS curve and this Mesh.
-     * The curve is tessellated into a polyline (using the given tolerance),
-     * then each segment is tested against the mesh triangles.
-     *
-     * # Arguments
-     * - `curve`: A `NurbsCurve3DJs` to intersect with this mesh.
-     * - `tolerance`: Optional tessellation tolerance for the curve (default: 1e-4).
-     *
-     * # Returns
-     * A `Vec<Point3Js>` of 3D intersection points, in order along the curve.
-     * @param {NurbsCurve3DJs} curve
-     * @param {number | null} [tolerance]
-     * @returns {Point3Js[]}
-     */
-    intersectCurve(curve, tolerance) {
-        _assertClass(curve, NurbsCurve3DJs);
-        const ret = wasm.meshjs_intersectCurve(this.__wbg_ptr, curve.__wbg_ptr, !isLikeNone(tolerance), isLikeNone(tolerance) ? 0 : tolerance);
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
      * @param {number} density
      * @returns {any}
      */
@@ -2357,27 +1860,6 @@ export class MeshJs {
     }
     invalidateBoundingBox() {
         wasm.meshjs_invalidateBoundingBox(this.__wbg_ptr);
-    }
-    /**
-     * Find intersection points between a compound curve and this Mesh.
-     * Each span of the compound curve is tessellated and tested against the mesh.
-     *
-     * # Arguments
-     * - `curve`: A `CompoundCurve3DJs` to intersect with this mesh.
-     * - `tolerance`: Optional tessellation tolerance (default: 1e-4).
-     *
-     * # Returns
-     * A `Vec<Point3Js>` of 3D intersection points, in order along the curve.
-     * @param {CompoundCurve3DJs} curve
-     * @param {number | null} [tolerance]
-     * @returns {Point3Js[]}
-     */
-    intersectCompoundCurve(curve, tolerance) {
-        _assertClass(curve, CompoundCurve3DJs);
-        const ret = wasm.meshjs_intersectCompoundCurve(this.__wbg_ptr, curve.__wbg_ptr, !isLikeNone(tolerance), isLikeNone(tolerance) ? 0 : tolerance);
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
     }
     /**
      * Slice at a section plane and return visible/hidden edge projections plus
@@ -2834,708 +2316,6 @@ export class MeshJs {
 }
 if (Symbol.dispose) MeshJs.prototype[Symbol.dispose] = MeshJs.prototype.free;
 
-export class NurbsCurve3DJs {
-    static __wrap(ptr) {
-        ptr = ptr >>> 0;
-        const obj = Object.create(NurbsCurve3DJs.prototype);
-        obj.__wbg_ptr = ptr;
-        NurbsCurve3DJsFinalization.register(obj, obj.__wbg_ptr, obj);
-        return obj;
-    }
-    static __unwrap(jsValue) {
-        if (!(jsValue instanceof NurbsCurve3DJs)) {
-            return 0;
-        }
-        return jsValue.__destroy_into_raw();
-    }
-    __destroy_into_raw() {
-        const ptr = this.__wbg_ptr;
-        this.__wbg_ptr = 0;
-        NurbsCurve3DJsFinalization.unregister(this);
-        return ptr;
-    }
-    free() {
-        const ptr = this.__destroy_into_raw();
-        wasm.__wbg_nurbscurve3djs_free(ptr, 0);
-    }
-    /**
-     * Offset the curve using the geo-buf / Sketch polygon offset as a fallback.
-     * Tessellates to a polyline, closes it to form a polygon, offsets via geo-buf's
-     * straight-skeleton algorithm, then returns the exterior boundary as a degree-1 curve.
-     * The curve must lie in the XY plane (z ≈ 0).
-     * @param {number} distance
-     * @returns {CompoundCurve3DJs}
-     */
-    offsetGeo(distance) {
-        const ret = wasm.nurbscurve3djs_offsetGeo(this.__wbg_ptr, distance);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return CompoundCurve3DJs.__wrap(ret[0]);
-    }
-    /**
-     * @param {number} param
-     * @returns {Vector3Js}
-     */
-    tangentAt(param) {
-        const ret = wasm.nurbscurve3djs_tangentAt(this.__wbg_ptr, param);
-        return Vector3Js.__wrap(ret);
-    }
-    /**
-     * @param {number | null} [tol]
-     * @returns {Point3Js[]}
-     */
-    tessellate(tol) {
-        const ret = wasm.nurbscurve3djs_tessellate(this.__wbg_ptr, !isLikeNone(tol), isLikeNone(tol) ? 0 : tol);
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * Trim the curve to the sub-curve between parameters t0 and t1.
-     * When t0 < t1, returns the "inside" portion.
-     * Returns one or more NurbsCurve3DJs segments.
-     * @param {number} t0
-     * @param {number} t1
-     * @returns {NurbsCurve3DJs[]}
-     */
-    trimRange(t0, t1) {
-        const ret = wasm.nurbscurve3djs_trimRange(this.__wbg_ptr, t0, t1);
-        if (ret[3]) {
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * Create an exact NURBS circle.
-     *
-     * # Arguments
-     *
-     * * `radius`  – radius of the circle (required)
-     * * `center`  – centre point; defaults to the origin
-     * * `normal`  – plane normal; defaults to `(0, 0, 1)` (XY-plane).
-     *               The X and Y axes of the circle plane are derived from this vector.
-     *
-     * Returns a closed degree-2 NURBS curve that is an exact rational circle.
-     * @param {number} radius
-     * @param {Point3Js | null} [center]
-     * @param {Vector3Js | null} [normal]
-     * @returns {NurbsCurve3DJs}
-     */
-    static makeCircle(radius, center, normal) {
-        let ptr0 = 0;
-        if (!isLikeNone(center)) {
-            _assertClass(center, Point3Js);
-            ptr0 = center.__destroy_into_raw();
-        }
-        let ptr1 = 0;
-        if (!isLikeNone(normal)) {
-            _assertClass(normal, Vector3Js);
-            ptr1 = normal.__destroy_into_raw();
-        }
-        const ret = wasm.nurbscurve3djs_makeCircle(radius, ptr0, ptr1);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return NurbsCurve3DJs.__wrap(ret[0]);
-    }
-    /**
-     * Get the plane the curve lies on, returned as [normal, localX, localY].
-     * Returns an empty array if the curve is not planar.
-     * Local axes are aligned to the closest global axes for consistency.
-     * @param {number | null} [tolerance]
-     * @returns {Vector3Js[]}
-     */
-    getOnPlane(tolerance) {
-        const ret = wasm.nurbscurve3djs_getOnPlane(this.__wbg_ptr, !isLikeNone(tolerance), isLikeNone(tolerance) ? 0 : tolerance);
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * @returns {Float64Array}
-     */
-    knotsDomain() {
-        const ret = wasm.nurbscurve3djs_knotsDomain(this.__wbg_ptr);
-        var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
-        return v1;
-    }
-    /**
-     * Perform a boolean operation (union / intersection / difference) with another NurbsCurve3D.
-     * Both curves must be planar and coplanar. The operation is performed in 2D
-     * and the result is projected back to 3D.
-     * Returns BooleanRegionJs results containing exterior curves and interior holes.
-     * @param {NurbsCurve3DJs} other
-     * @param {string} operation
-     * @returns {BooleanRegionJs[]}
-     */
-    booleanCurve(other, operation) {
-        _assertClass(other, NurbsCurve3DJs);
-        const ptr0 = passStringToWasm0(operation, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.nurbscurve3djs_booleanCurve(this.__wbg_ptr, other.__wbg_ptr, ptr0, len0);
-        if (ret[3]) {
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        var v2 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v2;
-    }
-    /**
-     * @param {Point3Js[]} points
-     * @param {boolean} normalize
-     * @returns {NurbsCurve3DJs}
-     */
-    static makePolyline(points, normalize) {
-        const ptr0 = passArrayJsValueToWasm0(points, wasm.__wbindgen_malloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.nurbscurve3djs_makePolyline(ptr0, len0, normalize);
-        return NurbsCurve3DJs.__wrap(ret);
-    }
-    /**
-     * PROPERTIES ///
-     * @returns {Point3Js[]}
-     */
-    controlPoints() {
-        const ret = wasm.nurbscurve3djs_controlPoints(this.__wbg_ptr);
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * Get the point at given parameter
-     * @param {number} param
-     * @returns {Point3Js}
-     */
-    pointAtParam(param) {
-        const ret = wasm.nurbscurve3djs_pointAtParam(this.__wbg_ptr, param);
-        return Point3Js.__wrap(ret);
-    }
-    /**
-     * @param {number} length
-     * @returns {number}
-     */
-    paramAtLength(length) {
-        const ret = wasm.nurbscurve3djs_paramAtLength(this.__wbg_ptr, length);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return ret[0];
-    }
-    /**
-     * @param {number} radius
-     * @param {Float64Array} at
-     * @returns {CompoundCurve3DJs}
-     */
-    filletAtParams(radius, at) {
-        const ptr0 = passArrayF64ToWasm0(at, wasm.__wbindgen_malloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.nurbscurve3djs_filletAtParams(this.__wbg_ptr, radius, ptr0, len0);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return CompoundCurve3DJs.__wrap(ret[0]);
-    }
-    /**
-     * Create NURBS Curve (degree 3) passing through given control points
-     *
-     *  # Arguments
-     *
-     * * `points` - Control points to interpolate through (x,y,z)
-     *
-     * @param {Point3Js[]} points
-     * @param {number} degree
-     * @returns {NurbsCurve3DJs}
-     */
-    static makeInterpolated(points, degree) {
-        const ptr0 = passArrayJsValueToWasm0(points, wasm.__wbindgen_malloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.nurbscurve3djs_makeInterpolated(ptr0, len0, degree);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return NurbsCurve3DJs.__wrap(ret[0]);
-    }
-    /**
-     * Rotate the curve by a unit quaternion given as components `(w, x, y, z)`.
-     * The quaternion is normalized before use.
-     * @param {number} w
-     * @param {number} x
-     * @param {number} y
-     * @param {number} z
-     * @returns {NurbsCurve3DJs}
-     */
-    rotateQuaternion(w, x, y, z) {
-        const ret = wasm.nurbscurve3djs_rotateQuaternion(this.__wbg_ptr, w, x, y, z);
-        return NurbsCurve3DJs.__wrap(ret);
-    }
-    /**
-     * Extrude this curve along XYZ components to create a `NurbsSurfaceJs`.
-     * @param {number} dx
-     * @param {number} dy
-     * @param {number} dz
-     * @returns {NurbsSurfaceJs}
-     */
-    extrudeComponents(dx, dy, dz) {
-        const ret = wasm.nurbscurve3djs_extrudeComponents(this.__wbg_ptr, dx, dy, dz);
-        return NurbsSurfaceJs.__wrap(ret);
-    }
-    /**
-     * Find intersection points with a `CompoundCurve3DJs`.
-     * Intersects `self` against each span of the compound curve.
-     * Returns the 3D intersection points.
-     * @param {CompoundCurve3DJs} other
-     * @returns {Point3Js[]}
-     */
-    intersectCompound(other) {
-        _assertClass(other, CompoundCurve3DJs);
-        const ret = wasm.nurbscurve3djs_intersectCompound(this.__wbg_ptr, other.__wbg_ptr);
-        if (ret[3]) {
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * Perform a boolean operation (union / intersection / difference) with a CompoundCurve3D.
-     * Both curves must be planar and coplanar. The operation is performed in 2D
-     * and the result is projected back to 3D.
-     * Returns BooleanRegionJs results containing exterior curves and interior holes.
-     * @param {CompoundCurve3DJs} other
-     * @param {string} operation
-     * @returns {BooleanRegionJs[]}
-     */
-    booleanCompoundCurve(other, operation) {
-        _assertClass(other, CompoundCurve3DJs);
-        const ptr0 = passStringToWasm0(operation, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.nurbscurve3djs_booleanCompoundCurve(this.__wbg_ptr, other.__wbg_ptr, ptr0, len0);
-        if (ret[3]) {
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        var v2 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v2;
-    }
-    /**
-     * @param {Point3Js} point
-     * @returns {number}
-     */
-    paramClosestToPoint(point) {
-        _assertClass(point, Point3Js);
-        const ret = wasm.nurbscurve3djs_paramClosestToPoint(this.__wbg_ptr, point.__wbg_ptr);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return ret[0];
-    }
-    /**
-     * @param {number} degree
-     * @param {Point3Js[]} control_points
-     * @param {Float64Array | null | undefined} weights
-     * @param {Float64Array} knots
-     */
-    constructor(degree, control_points, weights, knots) {
-        const ptr0 = passArrayJsValueToWasm0(control_points, wasm.__wbindgen_malloc);
-        const len0 = WASM_VECTOR_LEN;
-        var ptr1 = isLikeNone(weights) ? 0 : passArrayF64ToWasm0(weights, wasm.__wbindgen_malloc);
-        var len1 = WASM_VECTOR_LEN;
-        const ptr2 = passArrayF64ToWasm0(knots, wasm.__wbindgen_malloc);
-        const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.nurbscurve3djs_new(degree, ptr0, len0, ptr1, len1, ptr2, len2);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        this.__wbg_ptr = ret[0] >>> 0;
-        NurbsCurve3DJsFinalization.register(this, this.__wbg_ptr, this);
-        return this;
-    }
-    /**
-     * @returns {Point3Js[]}
-     */
-    bbox() {
-        const ret = wasm.nurbscurve3djs_bbox(this.__wbg_ptr);
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * Loft through an ordered array of curves to create a `NurbsSurfaceJs`.
-     *
-     * Static method — call as `NurbsCurve3DJs.loft(curves, degreeV?)`.
-     *
-     * # Arguments
-     * * `curves`   – ordered array of profile curves
-     * * `degree_v` – optional degree for the loft direction
-     * @param {NurbsCurve3DJs[]} curves
-     * @param {number | null} [degree_v]
-     * @returns {NurbsSurfaceJs}
-     */
-    static loft(curves, degree_v) {
-        const ptr0 = passArrayJsValueToWasm0(curves, wasm.__wbindgen_malloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.nurbscurve3djs_loft(ptr0, len0, isLikeNone(degree_v) ? 0x100000001 : (degree_v) >>> 0);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return NurbsSurfaceJs.__wrap(ret[0]);
-    }
-    /**
-     * @returns {NurbsCurve3DJs}
-     */
-    clone() {
-        const ret = wasm.nurbscurve3djs_clone(this.__wbg_ptr);
-        return NurbsCurve3DJs.__wrap(ret);
-    }
-    /**
-     * @returns {Float64Array}
-     */
-    knots() {
-        const ret = wasm.nurbscurve3djs_knots(this.__wbg_ptr);
-        var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
-        return v1;
-    }
-    /**
-     * Scale the curve by factors along the X, Y, and Z axes
-     * @param {number} sx
-     * @param {number} sy
-     * @param {number} sz
-     * @returns {NurbsCurve3DJs}
-     */
-    scale(sx, sy, sz) {
-        const ret = wasm.nurbscurve3djs_scale(this.__wbg_ptr, sx, sy, sz);
-        return NurbsCurve3DJs.__wrap(ret);
-    }
-    /**
-     * Split the curve at parameter t, returning [left, right].
-     * @param {number} t
-     * @returns {NurbsCurve3DJs[]}
-     */
-    split(t) {
-        const ret = wasm.nurbscurve3djs_split(this.__wbg_ptr, t);
-        if (ret[3]) {
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * Sweep this curve (as profile) along a `rail` curve to create a `NurbsSurfaceJs`.
-     *
-     * # Arguments
-     * * `rail`     – the path curve
-     * * `degree_v` – optional degree for the sweep direction
-     * @param {NurbsCurve3DJs} rail
-     * @param {number | null} [degree_v]
-     * @returns {NurbsSurfaceJs}
-     */
-    sweep(rail, degree_v) {
-        _assertClass(rail, NurbsCurve3DJs);
-        const ret = wasm.nurbscurve3djs_sweep(this.__wbg_ptr, rail.__wbg_ptr, isLikeNone(degree_v) ? 0x100000001 : (degree_v) >>> 0);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return NurbsSurfaceJs.__wrap(ret[0]);
-    }
-    /**
-     * @returns {boolean}
-     */
-    closed() {
-        const ret = wasm.nurbscurve3djs_closed(this.__wbg_ptr);
-        return ret !== 0;
-    }
-    /**
-     * Get the degree of the curve
-     * @returns {number}
-     */
-    degree() {
-        const ret = wasm.nurbscurve3djs_degree(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
-     * Extend a curve at one or both ends.
-     *
-     * - **Degree 1 (polyline)**: appends/prepends a new control point along the last/first segment direction.
-     * - **Degree > 1**: adds a straight-line segment tangent to the curve at the boundary.
-     *
-     * Always returns a `CompoundCurve3DJs` (single-span for extended polylines).
-     *
-     * # Arguments
-     * * `distance` – how far to extend (world units)
-     * * `side`     – `"end"` (default), `"start"`, or `"both"`
-     * @param {number} distance
-     * @param {string | null} [side]
-     * @returns {CompoundCurve3DJs}
-     */
-    extend(distance, side) {
-        var ptr0 = isLikeNone(side) ? 0 : passStringToWasm0(side, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        var len0 = WASM_VECTOR_LEN;
-        const ret = wasm.nurbscurve3djs_extend(this.__wbg_ptr, distance, ptr0, len0);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return CompoundCurve3DJs.__wrap(ret[0]);
-    }
-    /**
-     * @param {number} radius
-     * @param {Point3Js[] | null} [at]
-     * @returns {CompoundCurve3DJs}
-     */
-    fillet(radius, at) {
-        var ptr0 = isLikeNone(at) ? 0 : passArrayJsValueToWasm0(at, wasm.__wbindgen_malloc);
-        var len0 = WASM_VECTOR_LEN;
-        const ret = wasm.nurbscurve3djs_fillet(this.__wbg_ptr, radius, ptr0, len0);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return CompoundCurve3DJs.__wrap(ret[0]);
-    }
-    /**
-     * @returns {number}
-     */
-    length() {
-        const ret = wasm.nurbscurve3djs_length(this.__wbg_ptr);
-        return ret;
-    }
-    /**
-     * Offset the curve by a distance in the specified corner type ('sharp','round', 'smooth').
-     * The curve must already lie in the XY plane (z = 0).
-     * @param {number} distance
-     * @param {string} corner_type
-     * @returns {CompoundCurve3DJs}
-     */
-    offset(distance, corner_type) {
-        const ptr0 = passStringToWasm0(corner_type, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.nurbscurve3djs_offset(this.__wbg_ptr, distance, ptr0, len0);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return CompoundCurve3DJs.__wrap(ret[0]);
-    }
-    /**
-     * Rotate the curve by Euler angles (in radians) around the X, Y, and Z axes
-     * @param {number} ax
-     * @param {number} ay
-     * @param {number} az
-     * @returns {NurbsCurve3DJs}
-     */
-    rotate(ax, ay, az) {
-        const ret = wasm.nurbscurve3djs_rotate(this.__wbg_ptr, ax, ay, az);
-        return NurbsCurve3DJs.__wrap(ret);
-    }
-    /**
-     * Extrude this curve along a direction vector to create a `NurbsSurfaceJs`.
-     * @param {Vector3Js} direction
-     * @returns {NurbsSurfaceJs}
-     */
-    extrude(direction) {
-        _assertClass(direction, Vector3Js);
-        const ret = wasm.nurbscurve3djs_extrude(this.__wbg_ptr, direction.__wbg_ptr);
-        return NurbsSurfaceJs.__wrap(ret);
-    }
-    /**
-     * Reverse the direction of this curve (swap start/end).
-     * Returns a new reversed copy.
-     * @returns {NurbsCurve3DJs}
-     */
-    reverse() {
-        const ret = wasm.nurbscurve3djs_reverse(this.__wbg_ptr);
-        return NurbsCurve3DJs.__wrap(ret);
-    }
-    /**
-     * @returns {Float64Array}
-     */
-    weights() {
-        const ret = wasm.nurbscurve3djs_weights(this.__wbg_ptr);
-        var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
-        return v1;
-    }
-    /**
-     * Find intersection points with another `NurbsCurve3DJs`.
-     * Returns the 3D intersection points.
-     * @param {NurbsCurve3DJs} other
-     * @returns {Point3Js[]}
-     */
-    intersect(other) {
-        _assertClass(other, NurbsCurve3DJs);
-        const ret = wasm.nurbscurve3djs_intersect(this.__wbg_ptr, other.__wbg_ptr);
-        if (ret[3]) {
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * Check if all control points lie on a single plane
-     * @param {number | null} [tolerance]
-     * @returns {boolean}
-     */
-    isPlanar(tolerance) {
-        const ret = wasm.nurbscurve3djs_isPlanar(this.__wbg_ptr, !isLikeNone(tolerance), isLikeNone(tolerance) ? 0 : tolerance);
-        return ret !== 0;
-    }
-    /**
-     * Translate the curve by a Vector3Js offset
-     * @param {Vector3Js} offset
-     * @returns {NurbsCurve3DJs}
-     */
-    translate(offset) {
-        _assertClass(offset, Vector3Js);
-        const ret = wasm.nurbscurve3djs_translate(this.__wbg_ptr, offset.__wbg_ptr);
-        return NurbsCurve3DJs.__wrap(ret);
-    }
-}
-if (Symbol.dispose) NurbsCurve3DJs.prototype[Symbol.dispose] = NurbsCurve3DJs.prototype.free;
-
-/**
- * JavaScript wrapper around Curvo's `NurbsSurface3D`.
- *
- * ## Construction
- * Surfaces are obtained from the curve classes:
- * - `curve.extrude(direction)` / `curve.extrudeComponents(dx, dy, dz)` on `NurbsCurve3DJs`
- * - `curve.sweep(rail, degreeV?)` on `NurbsCurve3DJs`
- * - `NurbsCurve3DJs.loft(curves, degreeV?)` static method
- * - `compound.extrude(direction)` / `compound.extrudeComponents(dx, dy, dz)` on `CompoundCurve3DJs`
- *
- * ## Output
- * Call `toArrays(tolerance?)` to get `{ positions, normals, indices }` typed arrays
- * suitable for direct use in WebGL / Three.js buffer geometries.
- */
-export class NurbsSurfaceJs {
-    static __wrap(ptr) {
-        ptr = ptr >>> 0;
-        const obj = Object.create(NurbsSurfaceJs.prototype);
-        obj.__wbg_ptr = ptr;
-        NurbsSurfaceJsFinalization.register(obj, obj.__wbg_ptr, obj);
-        return obj;
-    }
-    __destroy_into_raw() {
-        const ptr = this.__wbg_ptr;
-        this.__wbg_ptr = 0;
-        NurbsSurfaceJsFinalization.unregister(this);
-        return ptr;
-    }
-    free() {
-        const ptr = this.__destroy_into_raw();
-        wasm.__wbg_nurbssurfacejs_free(ptr, 0);
-    }
-    /**
-     * Knot domains as [u_min, u_max, v_min, v_max]
-     * @returns {Float64Array}
-     */
-    knotsDomain() {
-        const ret = wasm.nurbssurfacejs_knotsDomain(this.__wbg_ptr);
-        var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
-        return v1;
-    }
-    /**
-     * Return a regular (uniform grid) tessellation as `{ positions, normals, indices }`.
-     *
-     * # Arguments
-     * * `divs_u` – number of divisions in the U direction
-     * * `divs_v` – number of divisions in the V direction
-     * @param {number} divs_u
-     * @param {number} divs_v
-     * @returns {any}
-     */
-    toArraysRegular(divs_u, divs_v) {
-        const ret = wasm.nurbssurfacejs_toArraysRegular(this.__wbg_ptr, divs_u, divs_v);
-        return ret;
-    }
-    /**
-     * Scale the surface by per-axis factors
-     * @param {number} sx
-     * @param {number} sy
-     * @param {number} sz
-     * @returns {NurbsSurfaceJs}
-     */
-    scale(sx, sy, sz) {
-        const ret = wasm.nurbssurfacejs_scale(this.__wbg_ptr, sx, sy, sz);
-        return NurbsSurfaceJs.__wrap(ret);
-    }
-    /**
-     * Rotate the surface by Euler angles (radians)
-     * @param {number} ax
-     * @param {number} ay
-     * @param {number} az
-     * @returns {NurbsSurfaceJs}
-     */
-    rotate(ax, ay, az) {
-        const ret = wasm.nurbssurfacejs_rotate(this.__wbg_ptr, ax, ay, az);
-        return NurbsSurfaceJs.__wrap(ret);
-    }
-    /**
-     * Point on surface at parameters (u, v)
-     * @param {number} u
-     * @param {number} v
-     * @returns {Point3Js}
-     */
-    pointAt(u, v) {
-        const ret = wasm.nurbssurfacejs_pointAt(this.__wbg_ptr, u, v);
-        return Point3Js.__wrap(ret);
-    }
-    /**
-     * U-direction degree of the surface
-     * @returns {number}
-     */
-    uDegree() {
-        const ret = wasm.nurbssurfacejs_uDegree(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
-     * V-direction degree of the surface
-     * @returns {number}
-     */
-    vDegree() {
-        const ret = wasm.nurbssurfacejs_vDegree(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
-     * Normal vector at parameters (u, v)
-     * @param {number} u
-     * @param {number} v
-     * @returns {Vector3Js}
-     */
-    normalAt(u, v) {
-        const ret = wasm.nurbssurfacejs_normalAt(this.__wbg_ptr, u, v);
-        return Vector3Js.__wrap(ret);
-    }
-    /**
-     * Tessellate the surface and return `{ positions, normals, indices }` flat typed arrays.
-     *
-     * # Arguments
-     * * `tolerance` – adaptive tessellation normal-tolerance (default `1e-2`).
-     *                 Smaller values produce a finer mesh.
-     * @param {number | null} [tolerance]
-     * @returns {any}
-     */
-    toArrays(tolerance) {
-        const ret = wasm.nurbssurfacejs_toArrays(this.__wbg_ptr, !isLikeNone(tolerance), isLikeNone(tolerance) ? 0 : tolerance);
-        return ret;
-    }
-    /**
-     * Translate the surface by a vector
-     * @param {Vector3Js} offset
-     * @returns {NurbsSurfaceJs}
-     */
-    translate(offset) {
-        _assertClass(offset, Vector3Js);
-        const ret = wasm.nurbssurfacejs_translate(this.__wbg_ptr, offset.__wbg_ptr);
-        return NurbsSurfaceJs.__wrap(ret);
-    }
-}
-if (Symbol.dispose) NurbsSurfaceJs.prototype[Symbol.dispose] = NurbsSurfaceJs.prototype.free;
-
 export class PlaneJs {
     static __wrap(ptr) {
         ptr = ptr >>> 0;
@@ -3771,75 +2551,6 @@ export class Point3Js {
     }
 }
 if (Symbol.dispose) Point3Js.prototype[Symbol.dispose] = Point3Js.prototype.free;
-
-export class Point4Js {
-    __destroy_into_raw() {
-        const ptr = this.__wbg_ptr;
-        this.__wbg_ptr = 0;
-        Point4JsFinalization.unregister(this);
-        return ptr;
-    }
-    free() {
-        const ptr = this.__destroy_into_raw();
-        wasm.__wbg_point4js_free(ptr, 0);
-    }
-    /**
-     * @returns {string}
-     */
-    toString() {
-        let deferred1_0;
-        let deferred1_1;
-        try {
-            const ret = wasm.point4js_toString(this.__wbg_ptr);
-            deferred1_0 = ret[0];
-            deferred1_1 = ret[1];
-            return getStringFromWasm0(ret[0], ret[1]);
-        } finally {
-            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
-        }
-    }
-    /**
-     * @returns {number}
-     */
-    get w() {
-        const ret = wasm.closestpointresultjs_normal_x(this.__wbg_ptr);
-        return ret;
-    }
-    /**
-     * @returns {number}
-     */
-    get x() {
-        const ret = wasm.closestpointresultjs_point_x(this.__wbg_ptr);
-        return ret;
-    }
-    /**
-     * @returns {number}
-     */
-    get y() {
-        const ret = wasm.closestpointresultjs_point_y(this.__wbg_ptr);
-        return ret;
-    }
-    /**
-     * @returns {number}
-     */
-    get z() {
-        const ret = wasm.closestpointresultjs_point_z(this.__wbg_ptr);
-        return ret;
-    }
-    /**
-     * @param {number} x
-     * @param {number} y
-     * @param {number} z
-     * @param {number} w
-     */
-    constructor(x, y, z, w) {
-        const ret = wasm.point4js_new(x, y, z, w);
-        this.__wbg_ptr = ret >>> 0;
-        Point4JsFinalization.register(this, this.__wbg_ptr, this);
-        return this;
-    }
-}
-if (Symbol.dispose) Point4Js.prototype[Symbol.dispose] = Point4Js.prototype.free;
 
 export class PolygonJs {
     static __wrap(ptr) {
@@ -5610,18 +4321,10 @@ function __wbg_get_imports() {
         const ret = BooleanRegion3DJs.__wrap(arg0);
         return ret;
     };
-    imports.wbg.__wbg_booleanregionjs_new = function(arg0) {
-        const ret = BooleanRegionJs.__wrap(arg0);
-        return ret;
-    };
     imports.wbg.__wbg_call_abb4ff46ce38be40 = function() { return handleError(function (arg0, arg1) {
         const ret = arg0.call(arg1);
         return ret;
     }, arguments) };
-    imports.wbg.__wbg_compoundcurve3djs_new = function(arg0) {
-        const ret = CompoundCurve3DJs.__wrap(arg0);
-        return ret;
-    };
     imports.wbg.__wbg_curve3djs_new = function(arg0) {
         const ret = Curve3DJs.__wrap(arg0);
         return ret;
@@ -5645,9 +4348,6 @@ function __wbg_get_imports() {
             wasm.__wbindgen_free(deferred0_0, deferred0_1, 1);
         }
     };
-    imports.wbg.__wbg_getRandomValues_1c61fac11405ffdc = function() { return handleError(function (arg0, arg1) {
-        globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
-    }, arguments) };
     imports.wbg.__wbg_getRandomValues_9b655bdd369112f2 = function() { return handleError(function (arg0, arg1) {
         globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
     }, arguments) };
@@ -5789,10 +4489,6 @@ function __wbg_get_imports() {
         const ret = new Uint8Array(getArrayU8FromWasm0(arg0, arg1));
         return ret;
     };
-    imports.wbg.__wbg_new_no_args_cb138f77cf6151ee = function(arg0, arg1) {
-        const ret = new Function(getStringFromWasm0(arg0, arg1));
-        return ret;
-    };
     imports.wbg.__wbg_new_with_year_month_day_hr_min_sec_b77701fa8c756a9f = function(arg0, arg1, arg2, arg3, arg4, arg5) {
         const ret = new Date(arg0 >>> 0, arg1, arg2, arg3, arg4, arg5);
         return ret;
@@ -5805,22 +4501,6 @@ function __wbg_get_imports() {
         const ret = arg0.next();
         return ret;
     }, arguments) };
-    imports.wbg.__wbg_now_8cf15d6e317793e1 = function(arg0) {
-        const ret = arg0.now();
-        return ret;
-    };
-    imports.wbg.__wbg_nurbscurve3djs_new = function(arg0) {
-        const ret = NurbsCurve3DJs.__wrap(arg0);
-        return ret;
-    };
-    imports.wbg.__wbg_nurbscurve3djs_unwrap = function(arg0) {
-        const ret = NurbsCurve3DJs.__unwrap(arg0);
-        return ret;
-    };
-    imports.wbg.__wbg_nurbssurfacejs_new = function(arg0) {
-        const ret = NurbsSurfaceJs.__wrap(arg0);
-        return ret;
-    };
     imports.wbg.__wbg_point3js_new = function(arg0) {
         const ret = Point3Js.__wrap(arg0);
         return ret;
@@ -5861,22 +4541,6 @@ function __wbg_get_imports() {
         const len1 = WASM_VECTOR_LEN;
         getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
         getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
-    };
-    imports.wbg.__wbg_static_accessor_GLOBAL_769e6b65d6557335 = function() {
-        const ret = typeof global === 'undefined' ? null : global;
-        return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
-    };
-    imports.wbg.__wbg_static_accessor_GLOBAL_THIS_60cf02db4de8e1c1 = function() {
-        const ret = typeof globalThis === 'undefined' ? null : globalThis;
-        return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
-    };
-    imports.wbg.__wbg_static_accessor_SELF_08f5a74c69739274 = function() {
-        const ret = typeof self === 'undefined' ? null : self;
-        return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
-    };
-    imports.wbg.__wbg_static_accessor_WINDOW_a8924b26aa92d024 = function() {
-        const ret = typeof window === 'undefined' ? null : window;
-        return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
     };
     imports.wbg.__wbg_value_57b7b035e117f7ee = function(arg0) {
         const ret = arg0.value;

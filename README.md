@@ -17,6 +17,11 @@ fluent, chainable JS API — built as the modeling kernel for
   interpolated splines, compounds) as first-class, chainable objects.
 - **CSG booleans**: `union`, `difference`/`subtract`, `intersection` on meshes; robust 2D
   boolean ops on curves (with automatic fallback for degenerate/self-intersecting input).
+- **Corner operations**: `fillet`/`chamfer` on every corner or only selected ones
+  (`curve.fillet(5, 0)`, `curve.fillet(5, [10, 10, 0])`, `curve.fillet(5, 'vertex<<->[0,0,0]')`).
+- **Edges & selection**: `mesh.edges()` returns deduplicated model edges grouped into
+  `boundary` / `crease` / `flat`, and the `Selector` can query them (`'edge|z'`,
+  `'edge<<->[0,0,0]'`).
 - **Transforms & alignment**: move/rotate/mirror/scale, `alignByPoints`, `rotateSwing`,
   bounding boxes (`Bbox`, oriented `OBbox`), replication (`replicate`, `row`, grids).
 - **Sketch & text**: 2D sketch primitives, TrueType and Hershey stroke-font text
@@ -163,19 +168,16 @@ Prefer the package root, which is a built, type-checked bundle.
 
 Honest list as of 0.1.0 — these are real and not yet fixed:
 
-- `Curve.fillet(at)` / `Curve.chamfer(at)` **ignore the `at` argument** and operate on every
-  corner (`src/Curve.ts`).
-- `Selector` cannot select edges of a `Mesh`; that branch is a stub and returns nothing
-  (`src/Selector.ts`, `src/Mesh.ts`). Edge extraction via the kernel is not implemented.
 - `Polygon.offset()` does not offset interior holes (`src/Polygon.ts`).
 - `ShapeCollection.offset()` only offsets `Curve` members and warns about the rest.
 - Large boolean workloads can panic inside WASM (reproducible around a 10×10×10 grid of
   boolean ops). A panic poisons the module: subsequent kernel calls in the same process
   fail, so the process must be restarted.
-- The `Curve` kernel is mid-migration from curvo to hypercurve; a few paths still use the
-  legacy type.
-- OBJ/STL/DXF import paths exist but are dormant pending a kernel rebuild; the `Importer`
-  tests feature-detect and skip them.
+- `Sketch.loft()` throws — only `Curve.loft()` is implemented.
+- PLY is the one import format that is declared but not implemented.
+- `Mesh.edges()` classifies an edge by the angle between adjacent face normals, so a
+  smooth-shaded curved surface (sphere, cylinder wall) yields many near-coplanar edges.
+  Raise `featureAngle` to thin them out.
 - The library writes diagnostics to `console.warn`/`console.error` unconditionally; there is
   no verbosity switch yet.
 

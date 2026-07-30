@@ -32,7 +32,6 @@ opt-level = "z"
 getrandom = { version = "0.3", features = ["wasm_js"], optional = true }
 # geometry
 nalgebra = { version = "=0.34.1", features = ["serde-serialize"] }
-curvo = { version = "0.1.81" } # updated to 0.1.81 for bug fixes; being migrated to hypercurve
 # planar exact-arithmetic curve kernel (replacing curvo).
 # Using the ArchiyouApp fork (submodule at ./hypercurve) which adds fillet/chamfer
 # ahead of the crates.io release. TODO: switch back to `version = "0.3"` (or newer)

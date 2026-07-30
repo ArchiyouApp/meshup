@@ -299,3 +299,77 @@ describe('Mesh.layflat()', () =>
         expect(bb.maxY() - bb.minY()).toBeCloseTo(100, 0);
     });
 });
+describe('Mesh.edges()', () =>
+{
+    it('returns the 12 edges of a cube, each once', () =>
+    {
+        const edges = Mesh.Cube(10).edges();
+        expect(edges.length).toBe(12);
+        edges.toArray().forEach(e => expect(e.length()).toBeCloseTo(10, 6));
+    });
+
+    it('groups the edges of a closed solid as creases, with no boundary', () =>
+    {
+        const edges = Mesh.Cube(10).edges();
+        expect(edges.group('crease')?.length).toBe(12);
+        expect(edges.group('boundary')).toBeUndefined(); // a cube is watertight
+    });
+
+    it('reports the open border of a single face as boundary edges', () =>
+    {
+        // One planar quad: every edge has exactly one adjacent face.
+        const plate = Mesh.fromPoints([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]]);
+        const edges = plate.edges();
+        expect(edges.group('boundary')?.length).toBe(4);
+        expect(edges.group('crease')).toBeUndefined();
+    });
+
+    it('hides triangulation diagonals unless asked for them', () =>
+    {
+        const tri = Mesh.Cube(10).triangulate();
+        // 12 triangles: each cube face is split by a diagonal that is not a model edge.
+        expect(tri.edges().length).toBe(12);          // only the real cube edges
+        expect(tri.edges(10, true).length).toBe(18);  // + the 6 face diagonals
+        expect(tri.edges(10, true).group('flat')?.length).toBe(6);
+    });
+
+    it('reconstructNgons() merges coplanar faces back together', () =>
+    {
+        const tri = Mesh.Cube(10).triangulate();
+        expect(tri.polygons().length).toBe(12);
+        expect(tri.reconstructNgons().polygons().length).toBe(6);
+    });
+
+    it('deduplicates: every edge is shared by exactly two faces on a closed solid', () =>
+    {
+        // 6 faces x 4 edges = 24 face-edges, halved to 12 unique edges.
+        const edges = Mesh.Cube(10).edges();
+        const keys = edges.toArray().map(e =>
+        {
+            const [a, b] = [e.start(), e.end()].map(p => `${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}`);
+            return a < b ? `${a}|${b}` : `${b}|${a}`;
+        });
+        expect(new Set(keys).size).toBe(12);
+    });
+});
+
+describe('Selector — edges on a Mesh', () =>
+{
+    it('selects mesh edges parallel to an axis', () =>
+    {
+        const box = Mesh.Box(10, 20, 30);
+        const zEdges = box.select('edge|z');
+        expect(zEdges).toBeTruthy();
+        // a box has 4 edges along each axis
+        const found = (zEdges as any).length ?? 1;
+        expect(found).toBe(4);
+    });
+
+    it('selects the mesh edge closest to a point', () =>
+    {
+        const box = Mesh.Box(10, 10, 10);
+        const edge = box.select('edge<<->[10,10,10]');
+        expect(edge).toBeTruthy();
+        expect(edge.type).toBe('Curve');
+    });
+});

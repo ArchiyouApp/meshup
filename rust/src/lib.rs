@@ -34,7 +34,6 @@ pub mod io;
 pub mod vertex;
 pub mod polygon;
 pub mod mesh;
-pub mod nurbs;
 pub mod hcurve;
 pub mod sketch;
 

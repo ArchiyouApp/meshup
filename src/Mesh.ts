@@ -23,7 +23,7 @@ import { Style } from './Style';
 import { sceneReplace, sceneAdd, sceneLayer, sceneCarry, sceneReplaceOrKeep, replaceInScene } from './sceneDecorators';
 import { GLTFBuilder } from './GLTFBuilder';
 
-import { MeshJs, PolygonJs, PlaneJs, Vector3Js, NurbsCurve3DJs, CompoundCurve3DJs } from './wasm/meshup';
+import { MeshJs, PolygonJs, PlaneJs, Vector3Js, VertexJs } from './wasm/meshup';
 import { Polygon } from './Polygon';
 import { ShapeCollection } from './ShapeCollection';
 import { Vertex } from './Vertex';
@@ -481,12 +481,124 @@ export class Mesh extends Shape
         return bb.width() === 0 || bb.depth() === 0 || bb.height() === 0;
     }
 
-    /** Returns the outline edges of this mesh as Curves
-     *  TODO: implement proper edge extraction via CSGRS
-     */
-    edges(): ShapeCollection<Curve>
+    /** Merge coplanar, edge-adjacent faces back into n-gons.
+     *  Booleans and triangulation leave a face split into many coplanar triangles; this
+     *  rebuilds the original faces, so edges() reports real model edges rather than
+     *  triangulation diagonals. */
+    @sceneReplace
+    reconstructNgons(): Mesh
     {
-        throw new Error('Mesh.edges(): not yet implemented — requires CSGRS edge extraction');
+        return Mesh.from(this.inner().reconstructNgons());
+    }
+
+    /** The edges of this mesh as Curves, each unique edge returned once.
+     *
+     *  Derived from the face rings: every consecutive vertex pair of every polygon
+     *  (outer boundary and holes) is an edge, deduplicated by position. Endpoints are
+     *  quantised to a 1e-6 grid before keying, mirroring the kernel's own edge
+     *  extraction, so the two faces meeting at an edge agree on it.
+     *
+     *  The result is grouped by how many faces meet at the edge and how sharply:
+     *    - 'boundary' — exactly one adjacent face (a naked/open edge)
+     *    - 'crease'   — two faces meeting at more than `featureAngle` degrees
+     *    - 'flat'     — two near-coplanar faces (usually a triangulation diagonal)
+     *
+     *  @param featureAngle  Dihedral angle in degrees above which an edge counts as a
+     *                       crease. Default 10, matching the projection pipeline.
+     *  @param all           Return every edge including 'flat' ones. By default flat
+     *                       edges are left out, since they are triangulation artefacts
+     *                       rather than model edges. Call reconstructNgons() first to
+     *                       remove most of them at the source.
+     */
+    @sceneCarry
+    edges(featureAngle: number = 10, all: boolean = false): ShapeCollection<Curve>
+    {
+        const QUANT = 1e6; // 1e-6 grid, same as the kernel's edge key
+        const key = (p: Point) =>
+            `${Math.round(p.x * QUANT)},${Math.round(p.y * QUANT)},${Math.round(p.z * QUANT)}`;
+
+        type EdgeRecord = { a: Point, b: Point, normals: Array<Vector> };
+        const found = new Map<string, EdgeRecord>();
+
+        const addRing = (ring: Array<Point>, normal: Vector) =>
+        {
+            const n = ring.length;
+            if (n < 2) { return; }
+
+            for (let i = 0; i < n; i++)
+            {
+                const a = ring[i];
+                const b = ring[(i + 1) % n];
+                const [ka, kb] = [key(a), key(b)];
+                if (ka === kb) { continue; } // degenerate
+
+                // Canonical direction-independent key: the two faces sharing this edge
+                // walk it in opposite directions.
+                const id = (ka < kb) ? `${ka}|${kb}` : `${kb}|${ka}`;
+                const existing = found.get(id);
+                if (existing) { existing.normals.push(normal); }
+                else { found.set(id, { a, b, normals: [normal] }); }
+            }
+        };
+
+        this.polygons().toArray().forEach(poly =>
+        {
+            const normal = poly.normal();
+
+            // vertices() sometimes repeats the first vertex at the end; the modulo wrap in
+            // addRing already closes the ring, so drop it to avoid a zero-length edge.
+            const verts = poly.vertices().toArray().map(v => new Point(v));
+            if (verts.length > 1 && verts[0].distance(verts[verts.length - 1]) < TOLERANCE)
+            {
+                verts.pop();
+            }
+            addRing(verts, normal);
+
+            // Hole rings bound the face too, so their edges are real edges.
+            const holes = (poly.inner()?.holes() ?? []) as Array<Array<VertexJs>>;
+            holes.forEach(hole => addRing(hole.map(v => new Point(Vertex.from(v))), normal));
+        });
+
+        const edges: Array<Curve> = [];
+        const groups: Record<string, Array<Curve>> = { boundary: [], crease: [], flat: [] };
+
+        found.forEach(rec =>
+        {
+            let group: 'boundary'|'crease'|'flat';
+            if (rec.normals.length === 1) { group = 'boundary'; }
+            else
+            {
+                // Sharpest pair wins: a non-manifold edge with >2 faces counts as a crease
+                // if any two of them disagree.
+                let maxAngle = 0;
+                for (let i = 0; i < rec.normals.length; i++)
+                {
+                    for (let j = i + 1; j < rec.normals.length; j++)
+                    {
+                        maxAngle = Math.max(maxAngle, rec.normals[i].angle(rec.normals[j]));
+                    }
+                }
+                group = (maxAngle > featureAngle) ? 'crease' : 'flat';
+            }
+
+            if (group === 'flat' && !all) { return; }
+
+            try
+            {
+                const edge = Curve.Line(rec.a, rec.b);
+                edges.push(edge);
+                groups[group].push(edge);
+            }
+            catch (e) { /* zero-length after quantisation — skip */ }
+        });
+
+        const collection = new ShapeCollection<Curve>(...edges);
+        Object.entries(groups).forEach(([name, shapes]) =>
+        {
+            if (shapes.length) { collection.tagGroup(name, new ShapeCollection<Curve>(...shapes)); }
+        });
+
+        return collection;
     }
 
     /** Store annotations on this mesh — placeholder for old-API compat */
@@ -1423,8 +1535,11 @@ export class Mesh extends Shape
 
         try 
         {
-            // TODO: MeshJs.intersectCurve is still curvo-typed; wire a Curve3DJs path.
-            const pts = this.inner()?.intersectCurve(curve.inner() as any, tolerance);
+            // Tessellate here and hand the mesh a plain polyline. The old path called
+            // MeshJs.intersectCurve, which was typed for the curvo NurbsCurve3DJs and so
+            // always threw once curves became hypercurve-backed — the catch below turned
+            // that into a silent empty result.
+            const pts = this.inner()?.intersectPolyline(curve.inner().tessellate(tolerance ?? 1e-4));
 
             return (pts || []).map(p => Point.from(p));
         }

@@ -4,10 +4,8 @@ use crate::csg::CSG;
 use crate::wasm::{
     js_metadata_to_string, matrix_js::Matrix4Js, plane_js::PlaneJs, point_js::Point3Js,
     polygon_js::PolygonJs, sketch_js::SketchJs, vector_js::Vector3Js,
-    meshup::{NurbsCurve3DJs, CompoundCurve3DJs},
 };
 use crate::io::gltf::{UpAxis};
-use curvo::prelude::Tessellation;
 use js_sys::{Float64Array, Object, Reflect, Uint32Array, Uint8Array};
 use nalgebra::{Matrix4, Point3, Quaternion, UnitQuaternion, Vector3};
 use serde_wasm_bindgen::from_value;
@@ -1054,56 +1052,11 @@ impl MeshJs {
     // Self { inner: metaball_mesh }
     // }
 
-    /// Find intersection points between a NURBS curve and this Mesh.
-    /// The curve is tessellated into a polyline (using the given tolerance),
-    /// then each segment is tested against the mesh triangles.
-    ///
-    /// # Arguments
-    /// - `curve`: A `NurbsCurve3DJs` to intersect with this mesh.
-    /// - `tolerance`: Optional tessellation tolerance for the curve (default: 1e-4).
-    ///
-    /// # Returns
-    /// A `Vec<Point3Js>` of 3D intersection points, in order along the curve.
-    #[wasm_bindgen(js_name = intersectCurve)]
-    pub fn intersect_curve(&self, curve: &NurbsCurve3DJs, tolerance: Option<f64>) -> Vec<Point3Js> {
-        let tol = tolerance.unwrap_or(1e-4);
-        let polyline: Vec<Point3<Real>> = curve.inner
-            .tessellate(Some(tol))
-            .iter()
-            .map(|p| Point3::new(p.x as Real, p.y as Real, p.z as Real))
-            .collect();
-
-        self.inner
-            .intersect_polyline(&polyline)
-            .into_iter()
-            .map(|p| Point3Js::from(p))
-            .collect()
-    }
-
-    /// Find intersection points between a compound curve and this Mesh.
-    /// Each span of the compound curve is tessellated and tested against the mesh.
-    ///
-    /// # Arguments
-    /// - `curve`: A `CompoundCurve3DJs` to intersect with this mesh.
-    /// - `tolerance`: Optional tessellation tolerance (default: 1e-4).
-    ///
-    /// # Returns
-    /// A `Vec<Point3Js>` of 3D intersection points, in order along the curve.
-    #[wasm_bindgen(js_name = intersectCompoundCurve)]
-    pub fn intersect_compound_curve(&self, curve: &CompoundCurve3DJs, tolerance: Option<f64>) -> Vec<Point3Js> {
-        let tol = tolerance.unwrap_or(1e-4);
-        let polyline: Vec<Point3<Real>> = curve.inner
-            .tessellate(Some(tol))
-            .iter()
-            .map(|p| Point3::new(p.x as Real, p.y as Real, p.z as Real))
-            .collect();
-
-        self.inner
-            .intersect_polyline(&polyline)
-            .into_iter()
-            .map(|p| Point3Js::from(p))
-            .collect()
-    }
+    // NOTE: intersectCurve / intersectCompoundCurve used to live here. They took the
+    // curvo-backed NurbsCurve3DJs / CompoundCurve3DJs, whose only contribution was
+    // tessellating the curve before calling intersect_polyline below. Curves are
+    // hypercurve-backed (Curve3DJs) now, so the TS side tessellates and calls
+    // intersectPolyline directly — see Curve.intersection() / Mesh.intersection().
 
     /// Find intersection points between a raw polyline (array of Point3Js) and this Mesh.
     /// Each consecutive pair of points defines a segment tested against the mesh.

@@ -2429,7 +2429,6 @@ dependencies = [
  "console_error_panic_hook",
  "contour_tracing",
  "core2",
- "curvo",
  "doc-image-embed",
  "dxf",
  "earcutr 0.5.0",
