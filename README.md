@@ -1,7 +1,7 @@
 # Meshup (`@archiyou/meshup`)
 
 A general-purpose 3D mesh/curve modeling library for TypeScript, powered by a Rust/WASM
-kernel (a fork of [csgrs](https://github.com/timschmidt/csgrs)). It combines CSG
+kernel (currently a fork of [csgrs](https://github.com/timschmidt/csgrs), but rebasing soon). It combines CSG
 (constructive solid geometry), quasi-CAD curve/sketch tooling, and mesh utilities behind a
 fluent, chainable JS API — built as the modeling kernel for
 [Archiyou](https://archiyou.com) Script CAD, but usable standalone in Node or the browser.
@@ -136,33 +136,9 @@ const curves = Importer.fromSVG(svgString);
 const shapes = Importer.load(fileBytes, { format: 'stl' }); // or auto-detect
 ```
 
-## API surface
+## Examples
 
-The full class list is re-exported from the package root:
-
-`Point`, `Vector`, `Vertex`, `Shape`, `Mesh`, `Polygon`, `Curve`, `ShapeCollection`,
-`Sketch`, `Bbox`, `OBbox`, `SceneNode`, `GLTFBuilder`, `Importer`, plus the `Style`/color
-types and glTF extension helpers. See `src/index.ts` for the canonical export list, and
-`tests/examples/` in the repository for runnable usage patterns (scenes, booleans, curves,
-offsets, SVG, alignments, isometry, text).
-
-### The `src/*` subpath is internal
-
-The package also ships its TypeScript sources, so `@archiyou/meshup/src/Curve` and friends
-resolve. This exists for Archiyou's own packages and is **not a supported API** — treat it
-as private and expect it to change without a major bump. Caveats if you use it anyway:
-
-- It is raw `.ts`. Node cannot run it (type stripping is disabled under `node_modules`), so
-  it only works through a bundler or test runner that transpiles dependencies.
-- Write the specifier **without an extension** (`@archiyou/meshup/src/Curve`). Vite's export
-  pattern matcher mis-resolves an `"./src/*.ts"` export pattern for any module whose name
-  ends in `ts` — it reads `src/constants` as `src/constan` + `.ts` — so the package
-  deliberately maps only the extensionless form.
-- Your own `tsc` compiles it under *your* tsconfig (`skipLibCheck` does not apply — that
-  only covers `.d.ts`). It needs `target: ES2022`, `lib` including `DOM`, and
-  `experimentalDecorators: true`.
-
-Prefer the package root, which is a built, type-checked bundle.
+Check tests/examples.
 
 ## Known limitations
 
