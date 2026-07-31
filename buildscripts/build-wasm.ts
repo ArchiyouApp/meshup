@@ -106,8 +106,10 @@ const wasmBuffer = fs.readFileSync(wasmPath);
 const base64Wasm = wasmBuffer.toString('base64');
 
 // 4. Generate the TypeScript file
+// The `: string` annotation is load-bearing: without it TypeScript infers the literal type and
+// copies the entire multi-megabyte base64 blob into the generated .d.ts.
 const tsContent = `// This file is auto-generated, and used to load WASM directly from base64 string. Do not edit.
-export const WASM_BASE64 = "${base64Wasm}";
+export const WASM_BASE64: string = "${base64Wasm}";
 `;
 
 fs.writeFileSync(OUTPUT_TS_PATH, tsContent);

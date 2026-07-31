@@ -25,7 +25,8 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && pnpm build:dts",
+    "build:dts": "tsc -p tsconfig.json --emitDeclarationOnly --declarationMap false --outDir dist",
     "build:wasm": "tsx buildscripts/build-wasm.ts",
     "rust:check": "cd ./rust && cargo check --features wasm --target wasm32-unknown-unknown",
     "test": "vitest",
