@@ -61,7 +61,23 @@ impl Frame
             n.y += (a.z - b.z) * (a.x + b.x);
             n.z += (a.x - b.x) * (a.y + b.y);
         }
-        let n = if n.norm() > 1e-9
+        // Newell's sum grows with the SQUARE of the coordinates, so an ABSOLUTE floor asks
+        // "is this normal trustworthy?" and gets a different answer for the same shape
+        // drawn in millimetres versus metres. For a loop enclosing no real area the sum is
+        // pure cancellation noise of order eps * extent^2 — above a few thousand units that
+        // noise clears 1e-9, so a garbage normal was trusted and the curve was rebuilt on a
+        // plane unrelated to its points. That is what put lines nowhere near the XY plane
+        // into isometric drawings of building-scale models.
+        //
+        // Scale the floor the same way the sum scales, so the decision is about the shape
+        // rather than about its units. A loop with genuine area clears this easily; a
+        // degenerate one falls through to the robust path below, as it always should have.
+        let extent = pts
+            .iter()
+            .map(|p| (p - pts[0]).norm())
+            .fold(0.0f64, |m, d| m.max(d));
+        let newell_floor = (extent * extent * 1e-9).max(1e-9);
+        let n = if n.norm() > newell_floor
         {
             n.normalize()
         }
@@ -79,17 +95,29 @@ impl Frame
                 .iter()
                 .map(|p| span.cross(&(p - origin)))
                 .max_by(|a, b| a.norm().partial_cmp(&b.norm()).unwrap_or(std::cmp::Ordering::Equal));
+            // Same relative reasoning as the Newell floor above: this cross product scales
+            // as span x offset, i.e. with the SQUARE of the extent, so for a collinear set
+            // it is cancellation noise of order eps * extent^2. An absolute 1e-9 sits right
+            // on that noise at a few thousand units — which is why a handful of edges per
+            // drawing (5 of 424 on a building-scale frame) picked up a normal made of pure
+            // noise while the rest were fine.
+            let cross_floor = (extent * extent * 1e-9).max(1e-9);
             match best
             {
-                Some(cross) if cross.norm() > 1e-9 => cross.normalize(),
+                Some(cross) if cross.norm() > cross_floor => cross.normalize(),
                 // Truly collinear: any perpendicular plane contains the line. Prefer a
                 // cardinal plane the points actually lie in (curves are usually drawn in
                 // XY / XZ / YZ), else any perpendicular to the span.
                 _ =>
                 {
+                    // "Constant" must also be judged relative to the geometry: a coordinate
+                    // held genuinely fixed still wobbles by ~eps * extent through the
+                    // projection arithmetic, which clears an absolute 1e-9 well before the
+                    // model is large enough to notice.
+                    let constant_tol = (extent * 1e-9).max(1e-9);
                     let constant = |sel: fn(&Point3<Real>) -> Real| -> bool {
                         let v0 = sel(&pts[0]);
-                        pts.iter().all(|p| (sel(p) - v0).abs() < 1e-9)
+                        pts.iter().all(|p| (sel(p) - v0).abs() < constant_tol)
                     };
                     if constant(|p| p.z) { Vector3::z() }
                     else if constant(|p| p.y) { Vector3::y() }

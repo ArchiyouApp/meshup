@@ -15,6 +15,9 @@ import { Vector } from "./Vector";
 import { Bbox } from "./Bbox";
 import { Shape } from "./Shape";
 import { Style } from "./Style";
+import { Curve } from "./Curve";
+import { sceneReplace } from "./sceneDecorators";
+import { TOLERANCE } from "./constants";
 import { VertexJs  } from "./wasm/meshup";
 import { uuid, rad } from "./utils";
 
@@ -214,6 +217,29 @@ export class Vertex extends Shape
       if (typeof shape?.distanceTo === 'function') return shape.distanceTo(this); // Mesh
       if (typeof shape?.distance === 'function')   return shape.distance(this);   // Curve, Polygon
       throw new Error(`Vertex.distance(): unsupported type. Got: ${(other as any)?.constructor?.name ?? typeof other}`);
+  }
+
+  //// 3D OPERATIONS ////
+
+  /**
+   * Sweep this vertex into a straight line Curve.
+   *
+   * This is the first link of the classic vertex → line → face → solid chain: the Curve it
+   * returns has extrude() (giving a Polygon for a straight sweep), and that Polygon has
+   * extrude() in turn (giving a solid Mesh).
+   *
+   * @param length     Distance to sweep.
+   * @param direction  Direction to sweep in. Defaults to this vertex's own normal when it has
+   *                   one, otherwise +Z.
+   */
+  @sceneReplace
+  extrude(length: number, direction?: PointLike): Curve
+  {
+    const normal = this.normal();
+    const resolved = direction ?? ((normal.length() > TOLERANCE) ? normal : Vector.from(0, 0, 1));
+    const d = Vector.from(resolved as any).normalize().scale(length);
+
+    return Curve.Line(this.toPoint(), new Point(this.x + d.x, this.y + d.y, this.z + d.z));
   }
 
   //// SHAPE PROTOCOL ////

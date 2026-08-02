@@ -98,6 +98,21 @@ export class Vector
   }
 
   /** Returns true if this vector is parallel (or anti-parallel) to the given PointLike, within the given angular tolerance in degrees */
+  /** Signed angle (degrees) between this Vector and `other`, with `ref` defining the
+   *  positive sense of rotation: positive when this x other points the same way as `ref`.
+   *  Mirrors OpenCascade's gp_Vec::AngleWithRef(). */
+  angleRef(other: PointLike, ref: PointLike): number
+  {
+    if(!isPointLike(other)){ throw new Error('Vector::angleRef(): Invalid argument. Please supply a PointLike instance.'); }
+    if(!isPointLike(ref)){ throw new Error('Vector::angleRef(): Invalid reference. Please supply a PointLike instance.'); }
+
+    const otherVec = Vector.from(other as any);
+    const refVec = Vector.from(ref as any);
+    const angle = this.angle(otherVec);
+    const cross = this.copy().cross(otherVec);
+    return (cross.dot(refVec) < 0) ? -angle : angle;
+  }
+
   isParallel(other: PointLike, tolerance: number = 1e-6): boolean
   {
     if(!isPointLike(other)){ throw new Error('Vector::isParallel(): Invalid argument. Please supply a PointLike instance.'); }
@@ -217,6 +232,12 @@ export class Vector
     return this;
   }
 
+  /** Alias for scale */
+  scaled(scalar: number | PointLike): this
+  {
+    return this.scale(scalar);
+  }
+
   cross(other: Vector3Js|Vector): this
   {
     const v = other instanceof Vector ? other.inner() : other;
@@ -228,6 +249,18 @@ export class Vector
   {
     this._inner = this._inner.reverse();
     return this;
+  }
+
+  /** Alias for reverse */
+  reversed(): this
+  {
+    return this.reverse();
+  }
+
+  /** Alias for rotate - rotate this Vector around the given axis by angle (degrees) */
+  rotated(axis: PointLike, angle: number): this
+  {
+    return this.rotate(axis, angle);
   }
 
   round(decimals: number = 0): this

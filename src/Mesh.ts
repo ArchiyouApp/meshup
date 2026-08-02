@@ -1107,6 +1107,83 @@ export class Mesh extends Shape
         return this.update(this.inner()?.union(other.inner() as MeshJs));
     }
 
+    /**
+     * Sweep this mesh along a direction to make a solid — the last step of the classic
+     * vertex → line → face → solid chain, here for a *surface* built from several faces
+     * (a lofted roof, a folded plate).
+     *
+     * The solid is built directly: this surface is the bottom cap, a translated copy the top
+     * cap, and every boundary edge is swept into a side wall. That keeps a folded surface (two
+     * roof planes meeting at a ridge) as one watertight solid without any boolean work.
+     *
+     * @param length     Distance to sweep.
+     * @param direction  Direction to sweep in. Defaults to +Z.
+     * @returns A new solid Mesh, or null when there is nothing to sweep.
+     */
+    @sceneReplace
+    extrude(length: number, direction: PointLike = [0, 0, 1]): Mesh | null
+    {
+        const faceVerts = this.polygons().toArray().map(poly => poly.vertices().toArray().map(v => new Point(v.x, v.y, v.z)));
+        if (faceVerts.length === 0)
+        {
+            console.warn('Mesh.extrude(): the mesh has no faces to sweep. Returning null.');
+            return null;
+        }
+
+        if ((this.volume() ?? 0) > TOLERANCE)
+        {
+            console.warn('Mesh.extrude(): this mesh is already a closed solid — sweeping it makes a solid of its '
+                       + 'whole hull. Extrude the surface or face you meant to sweep instead.');
+        }
+
+        const d = Vector.from(direction).normalize().scale(length);
+        const moved = (p: Point) => new Point(p.x + d.x, p.y + d.y, p.z + d.z);
+
+        // Boundary edges are the ones used by a single face; interior edges are shared by two.
+        // Same 1e-6 quantisation as edges() so coincident vertices match up.
+        const QUANT = 1e6;
+        const key = (p: Point) => `${Math.round(p.x * QUANT)},${Math.round(p.y * QUANT)},${Math.round(p.z * QUANT)}`;
+        const edgeUse = new Map<string, { a: Point, b: Point, count: number }>();
+
+        faceVerts.forEach(verts =>
+        {
+            for (let i = 0; i < verts.length; i++)
+            {
+                const a = verts[i];
+                const b = verts[(i + 1) % verts.length];
+                const ka = key(a), kb = key(b);
+                if (ka === kb) { continue; } // zero-length edge
+                const undirected = (ka < kb) ? `${ka}|${kb}` : `${kb}|${ka}`;
+                const seen = edgeUse.get(undirected);
+                if (seen) { seen.count++; }
+                else { edgeUse.set(undirected, { a, b, count: 1 }); } // keep this face's direction
+            }
+        });
+
+        const faces: Array<Array<PointLike>> = [];
+        faceVerts.forEach(verts =>
+        {
+            faces.push([...verts].reverse());       // bottom cap, flipped to face away from the sweep
+            faces.push(verts.map(moved));           // top cap
+        });
+        edgeUse.forEach(({ a, b, count }) =>
+        {
+            if (count !== 1) { return; }            // interior edge: no wall there
+            faces.push([a, b, moved(b), moved(a)]);
+        });
+
+        // Winding above only faces outward when sweeping along the surface normal. Sweeping the
+        // other way turns the whole solid inside out (see Polygon.extrude), so flip every face.
+        const avgNormal = this.polygons().toArray().reduce(
+            (acc, poly) => acc.add(poly.normal()), Vector.from(0, 0, 0));
+        const along = (avgNormal.length() > TOLERANCE)
+            ? avgNormal.normalize().dot(Vector.from(direction).normalize())
+            : 1;
+        const oriented = (along < 0) ? faces.map(f => [...f].reverse()) : faces;
+
+        return Mesh.fromPolygons(oriented);
+    }
+
     /** Add given Mesh to the current (Alias for union) */
     add(other:Mesh): this
     {
@@ -1829,6 +1906,19 @@ export class Mesh extends Shape
         const b = other.inner();
         if (!a || !b) return false;
         return a.hits(b);
+    }
+
+    /** Alias for hits(): do these two meshes physically overlap?
+     *  More stable than comparing distances when you only need a yes/no. */
+    intersects(other: Mesh): boolean
+    {
+        return this.hits(other);
+    }
+
+    /** Alias for hits() */
+    overlaps(other: Mesh): boolean
+    {
+        return this.hits(other);
     }
 
     /**

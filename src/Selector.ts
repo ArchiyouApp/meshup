@@ -468,7 +468,8 @@ export class Selector
             parts.push(this._escapeRegex(pattern.slice(lastIndex)));
         }
 
-        return { regex: new RegExp(`^${parts.join('')}$`), slotNames };
+        // 'i': selector tokens (shape shortcuts, axes, sides) are case-insensitive
+        return { regex: new RegExp(`^${parts.join('')}$`, 'i'), slotNames };
     }
 
     /**
@@ -489,7 +490,10 @@ export class Selector
         {
             if (found) return found;
             const def = paramDefs[paramName];
-            const resolvedValue = paramName === 'shape' ? this._normalizeShape(value) : value;
+            // axis/plane tokens are matched case-insensitively ('E|Z' == 'E|z')
+            const resolvedValue = paramName === 'shape'
+                ? this._normalizeShape(value)
+                : (paramName === 'axis' || paramName === 'plane') ? value.toLowerCase() : value;
             if (typeof def === 'function')
             {
                 deferred.push(paramName);
@@ -499,9 +503,9 @@ export class Selector
             {
                 return { param: paramName, raw: value, value: resolvedValue };
             }
-            if (typeof def === 'object' && def !== null && value in def)
+            if (typeof def === 'object' && def !== null && resolvedValue in def)
             {
-                return { param: paramName, raw: value, value: def[value] };
+                return { param: paramName, raw: value, value: def[resolvedValue] };
             }
             return null;
         }, null);

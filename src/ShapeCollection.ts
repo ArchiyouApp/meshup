@@ -17,10 +17,12 @@ import { Vertex } from './Vertex';
 import { Mesh } from './Mesh';
 import { Curve } from './Curve';
 import { Shape } from './Shape';
+import type { AlignTarget } from './Shape';
 import { Point } from './Point';
 import { Bbox } from './Bbox';
+import { Selector } from './Selector';
 import type { SceneNode } from './SceneNode';
-import { colSceneAdd, colSceneLayer, colSceneReplace } from './sceneDecorators';
+import { colSceneAdd, colSceneLayer, colSceneReplace, sceneCarry } from './sceneDecorators';
 
 import { MeshJs } from './wasm/meshup';
 import { GLTFBuilder } from './GLTFBuilder';
@@ -272,6 +274,27 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return new ShapeCollection<Curve>(...this._shapes.filter(s => s instanceof Curve) as Curve[]);
     }
 
+    /** Alias for meshes() - the mesh kernel's equivalent of brep solids */
+    @sceneCarry
+    solids(): ShapeCollection<Mesh>
+    {
+        return this.meshes();
+    }
+
+    /** Only the Shapes that are visible (not hidden with hide()) */
+    @sceneCarry
+    visible(): ShapeCollection<S>
+    {
+        return new ShapeCollection<S>(...this._shapes.filter(s => (s as any).style?.visible !== false));
+    }
+
+    /** Only the Shapes that are hidden with hide() */
+    @sceneCarry
+    hidden(): ShapeCollection<S>
+    {
+        return new ShapeCollection<S>(...this._shapes.filter(s => (s as any).style?.visible === false));
+    }
+
     //// COPY / CLONE ////
 
     /** Deep copy of ShapeCollection, creating duplicates of Shapes */
@@ -338,6 +361,17 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return this._shapes[this._shapes.length - 1];
     }
 
+    /** Select subshapes (faces/edges/vertices/shapes) with a selector string.
+     *  The Selector supports 'collection' targets - see Selector.ts */
+    @sceneCarry
+    select(what: string)
+    {
+        // Selector targets concrete meshup Shapes; S is only constrained to CollectableShape
+        const result = new Selector(what).execute(this as unknown as ShapeCollection<Shape>);
+        Selector.warnIfEmpty(what, result);
+        return (result instanceof ShapeCollection) ? result.checkSingle() : result;
+    }
+
     checkSingle(): S | this
     {
         if (this._shapes.length === 1) return this._shapes[0];
@@ -359,6 +393,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     filter(callback: (shape: S, index: number, array: S[]) => boolean): ShapeCollection<S>
     {
         return new ShapeCollection<S>(...this._shapes.filter(callback));
+    }
+
+    /** Sort the Shapes in a new ShapeCollection (does not mutate this one) */
+    @sceneCarry
+    sort(callback: (a: S, b: S) => number): ShapeCollection<S>
+    {
+        return new ShapeCollection<S>(...[...this._shapes].sort(callback));
     }
 
     map<T>(callback: (shape: S, index: number, array: S[]) => T): T[]
@@ -420,6 +461,22 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         incoming.forEach(s => { if (!this.has(s as S)) this._shapes.push(s as S); });
         this._setFakeArrayKeys();
         return this;
+    }
+
+    /** New ShapeCollection with duplicates removed.
+     *  Vertices are compared by coordinate (within TOLERANCE), other Shapes by identity. */
+    @sceneCarry
+    unique(): ShapeCollection<S>
+    {
+        const kept: Array<S> = [];
+        this._shapes.forEach(s =>
+        {
+            const isDupe = kept.some(k =>
+                (k === s) ||
+                ((k instanceof Vertex) && (s instanceof Vertex) && k.toPoint().equals(s.toPoint())));
+            if (!isDupe) kept.push(s);
+        });
+        return new ShapeCollection<S>(...kept);
     }
 
     pop(): S | undefined
@@ -562,6 +619,32 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         const bb = this.bbox();
         if (!bb) return this;
         return this.translate(0, 0, z - bb.min().z);
+    }
+
+    /** Move the whole collection so that the `pivot` point on its combined bbox lands on the
+     *  `alignment` point of `other`. Same contract as Shape.align(), but the collection is
+     *  moved as one unit — the shapes keep their positions relative to each other.
+     *
+     *  @example
+     *    parts.align(base, 'bottom', 'top')      // sits the whole group on top of base
+     *    parts.align(other, 'center', 'center')  // centres the group on other
+     */
+    align(other: AlignTarget, pivot: string | PointLike = 'center', alignment: string | PointLike = 'center'): this
+    {
+        const selfBbox = this.bbox();
+        const otherBbox = Shape.bboxOf(other);
+        if (!selfBbox || !otherBbox) return this;
+
+        const fromPos = Shape.bboxPointOf(selfBbox, pivot);
+        const toPos   = Shape.bboxPointOf(otherBbox, alignment);
+
+        return this.translate(toPos.x - fromPos.x, toPos.y - fromPos.y, toPos.z - fromPos.z);
+    }
+
+    /** Alias for align() */
+    alignTo(other: AlignTarget, pivot: string | PointLike = 'center', alignment: string | PointLike = 'center'): this
+    {
+        return this.align(other, pivot, alignment);
     }
 
     rotateX(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'x', origin); }
@@ -1131,13 +1214,14 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         featureAngle: number = 10,
     ): ShapeCollection<any>
     {
-        return this._isometry(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
+        return this._iso(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
     }
 
     /** Internal isometric projection — skips scene management (no @scene* decorators fire), so
-     *  it's safe to call from other ops. The public isometry() wraps this with @colSceneAdd to
-     *  add the projection to the scene. */
-    private _isometry(
+     *  it's safe to call from other ops and from exporters. The public isometry()/iso() wrap this
+     *  with @colSceneAdd / @colSceneLayer('iso') to add the projection to the scene; calling those
+     *  from an exporter pollutes the scenegraph of every later export in the same run. */
+    _iso(
         cam: PointLike = [-1, -1, 1],
         hiddenLines: boolean = false,
         includeHiddenShapes: boolean = false,
@@ -1184,7 +1268,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         featureAngle: number=10,
     ): ShapeCollection<any>
     {
-        return this._isometry(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
+        return this._iso(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
     }
 
     isoTest(
@@ -1224,6 +1308,18 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      */
     @colSceneLayer('elevation')
     elevation(
+        from: PointLike | BasePlane = 'front',
+        hiddenLines: boolean = false,
+        includeHiddenShapes: boolean = false,
+        samples: number = 16,
+        featureAngle: number = 10,
+    ): ShapeCollection<any>
+    {
+        return this._elevation(from, hiddenLines, includeHiddenShapes, samples, featureAngle);
+    }
+
+    /** Internal elevation projection — skips scene management, like {@link _iso}. */
+    _elevation(
         from: PointLike | BasePlane = 'front',
         hiddenLines: boolean = false,
         includeHiddenShapes: boolean = false,
@@ -1283,10 +1379,26 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     //// OUTPUTS ////
 
-    toSVG(): string
+    /**
+     * Serialize the collection's 2D curves to one SVG document.
+     *
+     * Line weight is SCALE-RELATIVE by default: it is derived from the drawing's own size
+     * rather than fixed in model units. That is what makes the same stylesheet work for a
+     * 10mm bracket and a 30m building — once the drawing is fitted into a view (a document
+     * page, say), the stroke lands in the same fraction of the page either way, so a line
+     * weight becomes a property of the paper instead of a property of the model.
+     *
+     * The stylesheet is also the SINGLE source of truth: per-curve presentation attributes
+     * are emitted only where a shape genuinely deviates from the defaults (see
+     * Style.toSvgAttrs omitDefaults). Previously every path carried BOTH a stroke-width
+     * attribute and a conflicting CSS rule, four times apart, with CSS silently winning.
+     *
+     * @param options.strokeWidth - line width in MODEL units, overriding the derived one.
+     * @param options.nonScalingStroke - pin stroke + dash to device pixels. Off by default;
+     *      see Style.toSvgAttrs for why.
+     */
+    toSVG(options?: { strokeWidth?: number; nonScalingStroke?: boolean }): string
     {
-        console.warn('ShapeCollection::toSVG(): Only 2D Curves are outputted!');
-
         const curves = this.curves();
         if (curves.length === 0)
         {
@@ -1304,13 +1416,15 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             groupCol.toArray().forEach(shape => curveToGroup.set(shape as S, groupName));
         });
 
+        const styleOpts = { omitDefaults: true, nonScalingStroke: options?.nonScalingStroke === true };
+
         curves.forEach(curve =>
         {
             const svg = (curve as any).toSVG();
             const vbMatch = svg.match(/viewBox="([^"]*)"/);
             const groupName = curveToGroup.get(curve as unknown as S);
             const cssClass = 'line' + (groupName ? ` ${groupName}` : '');
-            paths.push((curve as any).toSVGElem(cssClass));
+            paths.push((curve as any).toSVGElem(cssClass, styleOpts));
             if (vbMatch)
             {
                 const [vx, vy, vw, vh] = vbMatch[1].split(' ').map(Number);
@@ -1321,7 +1435,20 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
         if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 1; maxY = 1; }
         const vb = `${minX} ${minY} ${maxX - minX} ${maxY - minY}`;
-        const style = '<style>.line{fill:none;stroke:black;stroke-width:0.25px}.hidden{stroke:#888;stroke-dasharray:3 2}</style>';
+        // Scale-relative line weight. The divisor is chosen so that a drawing fitted to a
+        // page lands around 0.25mm — a normal technical line weight — whatever the model's
+        // real size, since the view scale is (page size / drawing size) and this is
+        // (drawing size / 800): the two cancel.
+        const drawingSize = Math.max(maxX - minX, maxY - minY) || 1;
+        const strokeWidth = options?.strokeWidth ?? drawingSize / 800;
+        // Dashes tied to the line weight, so hidden lines keep the same rhythm at any size.
+        const dash = `${+(strokeWidth * 12).toFixed(4)} ${+(strokeWidth * 8).toFixed(4)}`;
+
+        const style = '<style>'
+            + `.line{fill:none;stroke:black;stroke-width:${+strokeWidth.toFixed(4)};`
+            + 'stroke-linecap:round;stroke-linejoin:round}'
+            + `.hidden{stroke:#888;stroke-dasharray:${dash}}`
+            + '</style>';
         return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}">${style}${paths.join('')}</svg>`;
     }
 
@@ -1334,6 +1461,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return pts.filter(Boolean);
     }
 
+    @sceneCarry
     toMesh(): ShapeCollection<Mesh>
     {
         const meshes = this._shapes

@@ -140,6 +140,13 @@ export class Bbox
         return Math.max(s.x, s.y, s.z);
     }
 
+    /** Smallest of the three bbox dimensions */
+    minSize(): number
+    {
+        const s = this.size();
+        return Math.min(s.x, s.y, s.z);
+    }
+
     width(): number
     {
         return this._max.x - this._min.x;
@@ -252,6 +259,15 @@ export class Bbox
         const w = this.width(), d = this.depth(), h = this.height();
         if (w >= d && w >= h) return 'x';
         if (d >= w && d >= h) return 'y';
+        return 'z';
+    }
+
+    /** Axis of the smallest bbox dimension */
+    minSizeAxis(): Axis
+    {
+        const w = this.width(), d = this.depth(), h = this.height();
+        if (w <= d && w <= h) return 'x';
+        if (d <= w && d <= h) return 'y';
         return 'z';
     }
 

@@ -65,6 +65,12 @@ export class OBbox
 
     //// FACTORY METHODS ////
 
+    /** A zero-size OBbox at the origin — what an empty shape measures. */
+    static empty(): OBbox
+    {
+        return new OBbox([0, 0, 0], [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0]);
+    }
+
     /**
      * Build an OBbox from a cloud of points using PCA.
      * The returned box is the tightest oriented box aligned to the
@@ -74,7 +80,10 @@ export class OBbox
     {
         if (points.length < 1)
         {
-            throw new Error('OBbox::fromPoints(): Need at least one point.');
+            // An empty shape is a legitimate boolean result (two solids that turn out not to
+            // overlap). Hand back a zero-size box at the origin rather than throwing, so
+            // measuring one reads 0 instead of taking the whole script down.
+            return OBbox.empty();
         }
 
         const pts = points.map(p => new Point(p));
@@ -251,6 +260,25 @@ export class OBbox
     height(): number
     {
         return this._halfExtents[2] * 2;
+    }
+
+    /** Biggest of the three principal sizes. Axes are sorted by variance, so this is width().
+     *  Named to match Bbox.maxSize(). */
+    maxSize(): number
+    {
+        return this.width();
+    }
+
+    /** Smallest of the three principal sizes — the thickness. Named to match Bbox.minSize(). */
+    minSize(): number
+    {
+        return this.height();
+    }
+
+    /** Thickness is commonly used for the smallest side */
+    thickness(): number
+    {
+        return this.height();
     }
 
     is1D(): boolean

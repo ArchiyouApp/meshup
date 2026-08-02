@@ -93,10 +93,14 @@ function toShapes(result: Any): Any[]
 function propagate(self: Any, result: Any): void
 {
     const scene = sceneRootOf(self)
+    // A ShapeCollection source often has no `_modeler` of its own - fall back to its shapes
+    const modeler = self?._modeler ?? self?._shapes?.find((s: Any) => s?._modeler)?._modeler ?? null
+    // Carry onto the ShapeCollection itself too, so chained collection ops keep the reference
+    if (result?.isShapeCollection?.() && result._modeler == null) result._modeler = modeler
     toShapes(result).forEach(s =>
     {
         if (s == null || typeof s !== 'object') return
-        if (s._modeler == null) s._modeler = self?._modeler ?? null
+        if (s._modeler == null) s._modeler = modeler
         if (s._scene == null) s._scene = scene
         if (self?._suppressScene) s._suppressScene = true
     })

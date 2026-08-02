@@ -24,6 +24,10 @@ import { Point } from './Point';
 
 import { uuid } from './utils';
 
+/** Anything align()/alignTo() can be aimed at: a Shape, a ShapeCollection (both have a
+ *  bbox()), or a bare point (treated as a zero-size bbox at that location). */
+export type AlignTarget = Shape | ShapeCollection<any> | Point | PointLike;
+
 export abstract class Shape
 {
     private _id: string;
@@ -222,6 +226,20 @@ export abstract class Shape
     moveY(dy: number): this { return this.translate(0, dy, 0); }
     moveZ(dz: number): this { return this.translate(0, 0, dz); }
 
+    /** Move this shape so its bbox centre lands on `target` */
+    moveTo(target: PointLike | number, py?: number, pz?: number): this
+    {
+        const bb = this.bbox();
+        if (!bb) return this;
+        const c = bb.center();
+        const t = Point.from(target as PointLike, py, pz);
+        return this.translate(t.x - c.x, t.y - c.y, t.z - c.z);
+    }
+
+    moveToX(x: number): this { const bb = this.bbox(); return bb ? this.translate(x - bb.center().x, 0, 0) : this; }
+    moveToY(y: number): this { const bb = this.bbox(); return bb ? this.translate(0, y - bb.center().y, 0) : this; }
+    moveToZ(z: number): this { const bb = this.bbox(); return bb ? this.translate(0, 0, z - bb.center().z) : this; }
+
     rotateX(angleDeg: number, pivot?: PointLike): this { return this.rotateAround(angleDeg, 'x', pivot); }
     rotateY(angleDeg: number, pivot?: PointLike): this { return this.rotateAround(angleDeg, 'y', pivot); }
     rotateZ(angleDeg: number, pivot?: PointLike): this { return this.rotateAround(angleDeg, 'z', pivot); }
@@ -244,34 +262,45 @@ export abstract class Shape
      *    box.align(other, 'center', 'center') // centres box on other
      *    box.align(curve.middle(), 'lefttop') // align to a bare point
      */
-    align(other: Shape | Point | PointLike, pivot: string | PointLike = 'center', alignment: string | PointLike = 'center'): this
+    align(other: AlignTarget, pivot: string | PointLike = 'center', alignment: string | PointLike = 'center'): this
     {
         const selfBbox  = this.bbox();
-        // A Point / PointLike behaves like a Vertex: a zero-size bbox at that location.
-        const otherBbox = Shape.isShape(other)
-            ? other.bbox()
-            : (() => { const p = new Point(other as Point | PointLike); return new Bbox([p.x, p.y, p.z], [p.x, p.y, p.z]); })();
+        const otherBbox = Shape.bboxOf(other);
         if (!selfBbox || !otherBbox) return this;
 
-        const fromPos = isPointLike(pivot)
-            ? Shape._bboxPercToPoint(selfBbox, pivot)
-            : selfBbox.corner(pivot as string);
-
-        const toPos = isPointLike(alignment)
-            ? Shape._bboxPercToPoint(otherBbox, alignment)
-            : otherBbox.corner(alignment as string);
+        const fromPos = Shape.bboxPointOf(selfBbox, pivot);
+        const toPos   = Shape.bboxPointOf(otherBbox, alignment);
 
         return this.translate(toPos.x - fromPos.x, toPos.y - fromPos.y, toPos.z - fromPos.z);
     }
 
     /** Alias for align() */
-    alignTo(other: Shape, pivot: string | PointLike = 'center', alignment: string | PointLike = 'center'): this
+    alignTo(other: AlignTarget, pivot: string | PointLike = 'center', alignment: string | PointLike = 'center'): this
     {
         return this.align(other, pivot, alignment);
     }
 
+    /** Bbox of anything an alignment can target: a Shape, a ShapeCollection, or a bare point.
+     *  A Point / PointLike behaves like a Vertex: a zero-size bbox at that location. */
+    static bboxOf(target: AlignTarget): Bbox | undefined
+    {
+        if (typeof (target as { bbox?: unknown })?.bbox === 'function')
+        {
+            return (target as { bbox(): Bbox | undefined }).bbox();
+        }
+        const p = new Point(target as Point | PointLike);
+        return new Bbox([p.x, p.y, p.z], [p.x, p.y, p.z]);
+    }
+
+    /** Resolve an alignment spec — a corner keyword ('lefttop') or a [x%, y%, z%] triple —
+     *  to a world-space Point on `bb`. */
+    static bboxPointOf(bb: Bbox, spec: string | PointLike): Point
+    {
+        return isPointLike(spec) ? Shape.bboxPercToPoint(bb, spec) : bb.corner(spec as string);
+    }
+
     /** Resolve a [x%, y%, z%] percentage triple to a world-space Point within `bb`. */
-    private static _bboxPercToPoint(bb: Bbox, perc: PointLike): Point
+    static bboxPercToPoint(bb: Bbox, perc: PointLike): Point
     {
         const p = new Point(perc);
         return new Point(

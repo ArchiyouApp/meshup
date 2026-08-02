@@ -11,10 +11,13 @@
 //!    visible/hidden.
 //! 4. Consecutive same-visibility samples are merged into projected polylines.
 
+use parry3d_f64::bounding_volume::Aabb;
+
+use crate::csg::CSG;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Matrix4, Point3, Vector3};
 
 use crate::float_types::{
     parry3d::query::RayCast,
@@ -115,7 +118,79 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S> {
     ///   More samples give finer HLR at the cost of more ray casts.
     /// - `occluders` — additional meshes that can occlude edges of `self`.
     ///   The mesh itself is always included as an occluder.
+    /// Canonical extent the hidden-line solve is normalised to before running.
+    ///
+    /// The solve is a long chain of ray casts, dot products and epsilon comparisons, and
+    /// its floating-point conditioning depends on the magnitude of the coordinates it is
+    /// handed. The same notched box therefore came back with 11 visible edges at size 100
+    /// but 13 at size 13 and 17 at size 5 — the surplus being short mis-classified
+    /// fragments strewn along a silhouette line, which read as a stray dashed line in a
+    /// drawing. Whether a face hides an edge is a question about shape, and its answer
+    /// must not change with the unit the model was drawn in.
+    ///
+    /// Rather than chase each tolerance individually, the geometry is scaled into the
+    /// range these tolerances were tuned for, solved, and scaled back — which makes every
+    /// absolute epsilon downstream behave as a relative one.
+    const PROJECTION_CANONICAL_EXTENT: Real = 100.0;
+
+    /// Project visible and hidden edges, normalising scale first (see above).
     pub fn project_edges(
+        &self,
+        view_normal: &Vector3<Real>,
+        plane_origin: &Point3<Real>,
+        plane_normal: &Vector3<Real>,
+        feature_angle_deg: Real,
+        n_samples: usize,
+        occluders: &[&Mesh<S>],
+    ) -> EdgeProjectionResult {
+        let extent = {
+            let mut bb = self.bounding_box();
+            for m in occluders {
+                let o = m.bounding_box();
+                bb = Aabb::new(bb.mins.inf(&o.mins), bb.maxs.sup(&o.maxs));
+            }
+            let d = bb.maxs - bb.mins;
+            d.x.max(d.y).max(d.z)
+        };
+
+        // Degenerate or already canonical → solve in place, no copies.
+        if !extent.is_finite() || extent <= tolerance() {
+            return self.project_edges_normalized(
+                view_normal, plane_origin, plane_normal, feature_angle_deg, n_samples, occluders);
+        }
+        let k = Self::PROJECTION_CANONICAL_EXTENT / extent;
+        if (k - 1.0).abs() < 1e-9 {
+            return self.project_edges_normalized(
+                view_normal, plane_origin, plane_normal, feature_angle_deg, n_samples, occluders);
+        }
+
+        let scaling = Matrix4::new_scaling(k);
+        let scaled_self = self.transform(&scaling);
+        let scaled_occluders: Vec<Mesh<S>> =
+            occluders.iter().map(|m| m.transform(&scaling)).collect();
+        let scaled_refs: Vec<&Mesh<S>> = scaled_occluders.iter().collect();
+        // The plane origin is a position, so it scales with everything else. The view and
+        // plane NORMALS are directions and are unaffected by a uniform scaling.
+        let scaled_origin = Point3::from(plane_origin.coords * k);
+
+        let mut result = scaled_self.project_edges_normalized(
+            view_normal, &scaled_origin, plane_normal, feature_angle_deg, n_samples, &scaled_refs);
+
+        // Undo the normalisation so callers get their own coordinate system back.
+        let inv = 1.0 / k;
+        for polyline in result
+            .visible_polylines
+            .iter_mut()
+            .chain(result.hidden_polylines.iter_mut())
+        {
+            for p in polyline.iter_mut() {
+                *p = Point3::from(p.coords * inv);
+            }
+        }
+        result
+    }
+
+    fn project_edges_normalized(
         &self,
         view_normal: &Vector3<Real>,
         plane_origin: &Point3<Real>,
@@ -953,6 +1028,83 @@ mod tests {
 
         assert_eq!(r.visible_polylines.len(), 18, "sub should have 18 visible edges");
         assert_eq!(r.hidden_polylines.len(), 3, "sub should have 3 hidden edges");
+    }
+
+    #[test]
+    fn probe_where_planarity_is_lost() {
+        let n = Vector3::new(-1.0_f64, -1.0, 1.0).normalize();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+
+        // Max |p . n| over every returned point = distance from the projection plane.
+        fn dev(r: &EdgeProjectionResult, n: &Vector3<Real>) -> Real {
+            let mut max: Real = 0.0;
+            for pl in r.visible_polylines.iter().chain(r.hidden_polylines.iter()) {
+                for p in pl {
+                    let d = (p.coords.dot(n)).abs();
+                    if d > max { max = d; }
+                }
+            }
+            max
+        }
+
+        for size in [100.0 as Real, 4000.0] {
+            let m = translate(crate::mesh::Mesh::<()>::cube(size, None),
+                -size / 2.0, -size / 2.0, -size / 2.0);
+
+            // A: the public path (normalises internally, then scales back)
+            let a = m.project_edges(&n, &origin, &n, 10.0, 16, &[]);
+            // B: bypass normalisation entirely — solve at the raw size
+            let b = m.project_edges_normalized(&n, &origin, &n, 10.0, 16, &[]);
+            // C: normalise by hand, measure BEFORE scaling back
+            let k = 100.0 / size;
+            let scaled = m.transform(&nalgebra::Matrix4::new_scaling(k));
+            let c = scaled.project_edges_normalized(&n, &origin, &n, 10.0, 16, &[]);
+
+            eprintln!(
+                "WHERE size={size:6} | public={:.3e} | raw(no-norm)={:.3e} | normalised-before-scaleback={:.3e}",
+                dev(&a, &n), dev(&b, &n), dev(&c, &n));
+        }
+    }
+
+    /// The hidden-line solve must answer the same question the same way whatever unit the
+    /// model is drawn in.
+    ///
+    /// Reproduces the reported artefact: a cube with a smaller cube subtracted from one
+    /// corner, projected isometrically. This came back with 11 visible edges at size 100
+    /// but 13 at size 13 and 17 at size 5, the surplus being short fragments along the
+    /// notch's silhouette that looked like a stray dashed line in the drawing.
+    ///
+    /// Note the `.reconstruct_ngons()`: the WASM booleans apply it (see wasm/mesh_js.rs),
+    /// and the raw BSP output does NOT trip this. Testing the plain `difference()` misses
+    /// the bug entirely.
+    #[test]
+    fn notched_box_projection_is_scale_invariant() {
+        fn counts_at(size: Real) -> (usize, usize) {
+            let main = translate(
+                crate::mesh::Mesh::<()>::cube(size, None),
+                -size / 2.0, -size / 2.0, -size / 2.0,
+            );
+            // Notch CENTRED on the leftfronttop corner, matching Mesh.moveTo() in the TS API.
+            let notch = translate(
+                crate::mesh::Mesh::<()>::cube(size / 2.0, None),
+                -size / 2.0 - size / 4.0, -size / 2.0 - size / 4.0, size / 2.0 - size / 4.0,
+            );
+            let sub = main.difference(&notch).reconstruct_ngons();
+
+            let view = Vector3::new(1.0_f64, 1.0, 1.0).normalize();
+            let origin = Point3::new(0.0, 0.0, 0.0);
+            let r = sub.project_edges(&view, &origin, &view, 10.0, 16, &[]);
+            (r.visible_polylines.len(), r.hidden_polylines.len())
+        }
+
+        let reference = counts_at(100.0);
+        assert_eq!(reference.0, 11, "the notched box has 11 visible edges from [1,1,1]");
+        for size in [5.0 as Real, 8.0, 13.0, 20.0, 60.0, 250.0, 1000.0] {
+            assert_eq!(
+                counts_at(size), reference,
+                "edge count changed at size {size} — the projection is scale-dependent again",
+            );
+        }
     }
 
     #[test]

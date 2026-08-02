@@ -513,33 +513,52 @@ export class Style
 
     /**
      * Build a string of SVG presentation attributes from this style.
+     *
      * @param closed - when true the fill color is applied; when false fill is "none".
+     * @param opts.nonScalingStroke - emit `vector-effect="non-scaling-stroke"`.
+     *      DEFAULT FALSE, and deliberately so. Non-scaling-stroke pins the line width —
+     *      and the dash pattern — to device pixels, ignoring every transform above the
+     *      element. That is right for an on-screen overlay you always want one pixel wide,
+     *      and wrong for anything with a real scale: in a document the drawing is placed in
+     *      a view that scales model units to millimetres of paper, so a "0.25" line stopped
+     *      tracking the drawing and dashes no longer matched the geometry at any zoom.
+     *      Callers that genuinely want constant-width lines opt in.
+     * @param opts.omitDefaults - skip every property whose value is the shape default.
+     *      For use by serializers that ship their own stylesheet (see ShapeCollection.toSVG):
+     *      a presentation attribute and a CSS rule for the same property both being present
+     *      is a silent trap, because CSS wins and the attribute looks authoritative but is
+     *      inert. With this set, the stylesheet owns the defaults and only genuine per-shape
+     *      overrides are emitted — so an author's .color('blue') actually takes effect.
      */
-    toSvgAttrs(closed: boolean = false): string {
+    toSvgAttrs(closed: boolean = false, opts?: { nonScalingStroke?: boolean; omitDefaults?: boolean }): string {
         const parts: string[] = [];
+        const omitDefaults = opts?.omitDefaults === true;
+        const defaultStroke = SHAPE_DEFAULT_STYLE.stroke!;
 
         // fill
         if (closed && this._style.fill?.color)
         {
-            parts.push(`fill="${this._style.fill.color}"`);
+            const isDefaultFill = this._style.fill.color === SHAPE_DEFAULT_STYLE.fill?.color;
+            if (!(omitDefaults && isDefaultFill)) parts.push(`fill="${this._style.fill.color}"`);
             const fo = this._style.fill.opacity;
             if (fo !== undefined && fo !== 1) parts.push(`fill-opacity="${fo}"`);
         }
-        else
+        else if (!omitDefaults)
         {
             parts.push('fill="none"');
         }
 
         // stroke
-        const sc = this._style.stroke?.color ?? SHAPE_DEFAULT_STYLE.stroke!.color!;
-        parts.push(`stroke="${sc}"`);
+        const sc = this._style.stroke?.color ?? defaultStroke.color!;
+        if (!(omitDefaults && sc === defaultStroke.color)) parts.push(`stroke="${sc}"`);
 
         const so = this._style.stroke?.opacity;
         if (so !== undefined && so !== 1) parts.push(`stroke-opacity="${so}"`);
 
         const sw = this._style.stroke?.width;
-        if (sw !== undefined) parts.push(`stroke-width="${sw}"`);
-        parts.push('vector-effect="non-scaling-stroke"');
+        if (sw !== undefined && !(omitDefaults && sw === defaultStroke.width)) parts.push(`stroke-width="${sw}"`);
+
+        if (opts?.nonScalingStroke) parts.push('vector-effect="non-scaling-stroke"');
 
         const dash = this._style.stroke?.dash;
         if (dash && dash.length > 0) parts.push(`stroke-dasharray="${dash.join(' ')}"`);

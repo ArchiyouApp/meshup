@@ -799,6 +799,76 @@ export class Polygon extends Shape
         return this;
     }
 
+    /**
+     * Keep only the area this polygon shares with another closed shape (planar boolean AND).
+     *
+     * Polygons are flat, so there is no solid boolean to fall back on: the operation runs on
+     * the boundary curves, exactly like difference(). The other shape must be closed and
+     * planar; it is projected onto this polygon's plane first, so a shape drawn on a
+     * parallel/coincident plane still works.
+     *
+     * Mutates in place and returns `this` — use `poly.copy().intersection(other)` to keep the
+     * original. When the shapes do not overlap, or the boolean fails, the polygon is left
+     * unchanged and a warning is emitted. Interior holes on this polygon are dropped.
+     *
+     * @param other Closed Curve, Polygon, or ShapeCollection of them (applied in sequence).
+     */
+    @sceneUpdate
+    intersection(other: Curve | Polygon | ShapeCollection<Curve | Polygon>): this
+    {
+        if (ShapeCollection.isShapeCollection(other))
+        {
+            (other as ShapeCollection<Curve | Polygon>).toArray()
+                .forEach(s => this.intersection(s as Curve | Polygon));
+            return this;
+        }
+        if (!(other instanceof Curve) && !(other instanceof Polygon))
+        {
+            throw new Error('Polygon::intersection(): supply a closed Curve, a Polygon, or a ShapeCollection of them.');
+        }
+
+        const pieces = this._boundaryBoolean(other, 'intersection');
+        if (!pieces) { return this; } // unchanged — a warning was already emitted
+
+        if (pieces.length > 1)
+        {
+            console.warn(`Polygon.intersection(): the shapes overlap in ${pieces.length} separate regions; keeping the largest.`);
+        }
+        return this._keepPiece(pieces, false);
+    }
+
+    /**
+     * Merge another closed shape into this polygon (planar boolean OR). Same boundary-curve
+     * contract as intersection(): closed + planar operand, projected onto this polygon's plane,
+     * mutates in place and returns `this`. Shapes that do not touch cannot merge into one
+     * polygon — the largest region is kept and a warning is emitted.
+     *
+     * @param other Closed Curve, Polygon, or ShapeCollection of them (applied in sequence).
+     */
+    @sceneUpdate
+    union(other: Curve | Polygon | ShapeCollection<Curve | Polygon>): this
+    {
+        if (ShapeCollection.isShapeCollection(other))
+        {
+            (other as ShapeCollection<Curve | Polygon>).toArray()
+                .forEach(s => this.union(s as Curve | Polygon));
+            return this;
+        }
+        if (!(other instanceof Curve) && !(other instanceof Polygon))
+        {
+            throw new Error('Polygon::union(): supply a closed Curve, a Polygon, or a ShapeCollection of them.');
+        }
+
+        const pieces = this._boundaryBoolean(other, 'union');
+        if (!pieces) { return this; } // unchanged — a warning was already emitted
+
+        if (pieces.length > 1)
+        {
+            console.warn(`Polygon.union(): the shapes do not touch, so the result is ${pieces.length} separate regions; keeping the largest.`);
+        }
+        return this._keepPiece(pieces, false);
+    }
+
     /** Boundary-curve difference for a single closed cutter. Returns the resulting polygon
      *  piece(s), or null when the cutter is unusable / the boolean failed / produced nothing.
      *  Mirrors split()'s closed-cutter branch but does not require the result to be ≥2 pieces.
@@ -806,29 +876,42 @@ export class Polygon extends Shape
      *  inside other ops. */
     private _difference(other: Curve | Polygon): Array<Polygon> | null
     {
+        return this._boundaryBoolean(other, 'difference');
+    }
+
+    /** Planar boolean between this polygon and another closed shape, done on the boundary
+     *  curves (polygons are flat, so there is no solid boolean to fall back on). Returns the
+     *  resulting polygon piece(s), or null when the operand is unusable / the boolean failed /
+     *  produced nothing.
+     *  Internal: skips scene management (no @scene* decorators fire) so it's safe to compose
+     *  inside other ops. */
+    private _boundaryBoolean(other: Curve | Polygon, op: 'difference' | 'intersection' | 'union'): Array<Polygon> | null
+    {
+        const label = `Polygon.${op}()`;
+
         if (this.hasHoles())
         {
-            console.warn('Polygon.difference(): polygon has interior holes; only the outer boundary is subtracted and holes are dropped.');
+            console.warn(`${label}: polygon has interior holes; only the outer boundary is used and holes are dropped.`);
         }
 
-        // The cutter as a closed Curve. A Polygon cutter uses its closed boundary.
+        // The other operand as a closed Curve. A Polygon operand uses its closed boundary.
         const spine = (other instanceof Polygon)
             ? Curve.Polyline(other.vertices().toArray()).close()
             : other;
 
         if (!spine.isClosed())
         {
-            console.warn('Polygon.difference(): the cutter must be a closed Curve or a Polygon. Returning unchanged.');
+            console.warn(`${label}: the other shape must be a closed Curve or a Polygon. Returning unchanged.`);
             return null;
         }
         if (!spine.isPlanar())
         {
-            console.warn('Polygon.difference(): the cutter is not planar; cannot subtract reliably. Returning unchanged.');
+            console.warn(`${label}: the other shape is not planar; cannot combine reliably. Returning unchanged.`);
             return null;
         }
         if (spine.selfIntersecting())
         {
-            console.warn('Polygon.difference(): the cutter is self-intersecting; refusing to subtract to avoid degenerate shapes. Returning unchanged.');
+            console.warn(`${label}: the other shape is self-intersecting; refusing to combine to avoid degenerate shapes. Returning unchanged.`);
             return null;
         }
 
@@ -873,20 +956,22 @@ export class Polygon extends Shape
         const reseamed = [...bverts.slice(seam), ...bverts.slice(0, seam)];
         const boundary = Curve.Polyline(reseamed).close();
 
-        const diff = boundary.difference(knife);
-        if (diff === null)
+        const result = (op === 'difference') ? boundary.difference(knife)
+                     : (op === 'intersection') ? boundary.intersection(knife)
+                     :                           boundary.union(knife);
+        if (result === null || result === undefined)
         {
-            console.warn('Polygon.difference(): boolean subtraction failed. Returning unchanged.');
+            console.warn(`${label}: the boundary boolean failed. Returning unchanged.`);
             return null;
         }
-        const regionCurves = (diff instanceof Curve) ? [diff] : diff.toArray();
+        const regionCurves = (result instanceof Curve) ? [result] : (result as ShapeCollection<Curve>).toArray();
         const pieces = regionCurves
             .map(c => c.toPolygon())
             .filter((p): p is Polygon => p !== undefined);
 
         if (pieces.length === 0)
         {
-            console.warn('Polygon.difference(): no valid polygon piece could be built from the subtraction result. Returning unchanged.');
+            console.warn(`${label}: no valid polygon piece could be built from the result. Returning unchanged.`);
             return null;
         }
 
@@ -1022,7 +1107,96 @@ export class Polygon extends Shape
         return Mesh.fromPolygons(oriented);
     }
 
+    /**
+     * Loft from this polygon's boundary to one or more other profiles, giving a solid Mesh.
+     *
+     * This polygon's boundary is a closed curve, so lofting to another closed profile caps
+     * both ends into a watertight solid (see Curve.loft()). Polygon profiles are used as their
+     * closed boundary; open profiles are lofted as-is into a surface.
+     *
+     * @param others  A single Curve/Polygon or an array of them to loft through (in order).
+     * @param solid   Cap the ends into a watertight solid when all profiles are closed (default true).
+     */
+    @sceneReplace
+    loft(others: Curve | Polygon | Array<Curve | Polygon>, solid: boolean = true): Mesh | Polygon | null
+    {
+        const otherList = Array.isArray(others) ? others : [others];
+        if (otherList.some(o => !(o instanceof Curve) && !(o instanceof Polygon)))
+        {
+            console.warn('Polygon.loft(): all profiles must be Curves or Polygons. Returning null.');
+            return null;
+        }
+
+        const profiles = otherList.map(o => (o instanceof Polygon) ? o.toCurve() : o);
+        // Curve.loft() is @sceneReplace too, but our boundary Curve is a throwaway that was
+        // never added to a scene, so nothing gets replaced there - only this Polygon is.
+        return this.toCurve().loft(profiles, solid);
+    }
+
+    /** Rotate this polygon so it lies flat on the XY plane (its normal pointing +Z) and drop
+     *  it onto z = 0. Unlike Mesh.layflat(), which has to guess the thin axis from an oriented
+     *  bounding box, a Polygon has an exact plane normal to rotate. Mutates and returns `this`. */
+    @sceneUpdate
+    layflat(): this
+    {
+        const normal = this.normal().normalize();
+        const up = Vector.from(0, 0, 1);
+        const dot = normal.dot(up);
+
+        if (dot <= 1 - TOLERANCE) // already flat and facing up? then only the drop below is needed
+        {
+            // Flipped (facing -Z) has no unique rotation axis: turn it over around X.
+            const q = (dot <= -1 + TOLERANCE)
+                ? { x: 1, y: 0, z: 0, w: 0 }
+                : normal.copy().rotationBetween(up);
+            this.rotateQuaternion(q);
+        }
+
+        return this.translate(0, 0, -this.bbox().minZ());
+    }
+
+    //// SELECTION ////
+
+    /** Select (sub)shapes with a selector string (see Selector.ts).
+     *  Delegates to the single-polygon Mesh so all Mesh selectors work here too. */
+    @sceneCarry
+    select(what: string)
+    {
+        return this.toMesh().select(what);
+    }
+
+    /** Boundary edges of this Polygon as Curves */
+    @sceneCarry
+    edges(featureAngle: number = 10, all: boolean = true): ShapeCollection<Curve>
+    {
+        return this.toMesh().edges(featureAngle, all);
+    }
+
     //// EXPORT ////
+
+    /** This polygon's outer boundary as a closed Curve. Interior holes are not included.
+     *  The Curve is a fresh, scene-less shape - the caller places it if it needs to be visible. */
+    toCurve(): Curve
+    {
+        return Curve.Polyline(this._boundaryVertices()).close();
+    }
+
+    /** Outer boundary vertices with the closing duplicate (if any) removed.
+     *  vertices() can repeat the first vertex at the end to close the loop; a zero-length
+     *  segment makes Curve.close() fail with "No connection found to create a compound curve". */
+    private _boundaryVertices(): Array<Vertex>
+    {
+        const verts = this.vertices().toArray();
+        if (verts.length > 1)
+        {
+            const f = verts[0], l = verts[verts.length - 1];
+            if (Math.abs(f.x - l.x) < TOLERANCE && Math.abs(f.y - l.y) < TOLERANCE && Math.abs(f.z - l.z) < TOLERANCE)
+            {
+                return verts.slice(0, -1);
+            }
+        }
+        return verts;
+    }
 
     /** Polygon is basically Mesh with one polygon */
     @sceneCarry
