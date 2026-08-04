@@ -1,15 +1,105 @@
-//! Edge projection with BVH-accelerated hidden-line removal (HLR).
+//! Edge projection and hidden-line removal.
 //!
-//! Inspired by [`three-edge-projection`](https://github.com/gkjohnson/three-edge-projection).
+//! Turning a solid into a line drawing is two separate jobs: deciding **which
+//! edges are worth drawing at all**, and deciding **which parts of them you can
+//! see**. This module owns the first job for every strategy, and holds the
+//! original implementation of the second.
 //!
-//! # Pipeline
-//! 1. Triangulate the mesh and record each edge's adjacent face normals.
-//! 2. Classify edges as **boundary**, **silhouette**, or **feature/crease**.
-//!    Back-facing smooth interior edges are discarded.
-//! 3. For each surviving edge, sample `n_samples` positions along it, cast a
-//!    ray toward the viewer against all occluder TriMeshes, and tag each sample
-//!    visible/hidden.
-//! 4. Consecutive same-visibility samples are merged into projected polylines.
+//! # Stage 1-3: choosing the edges (shared by every strategy)
+//!
+//! ## 1. Collect edges from polygon rings, not triangles
+//!
+//! `extract_edges` walks `mesh.polygons` and takes each polygon's outer ring
+//! plus its hole rings. Each edge is keyed by its two endpoints quantised to a
+//! 1 µm grid, so the same edge discovered from both adjoining faces lands on one
+//! entry — and that entry accumulates *both* face normals, which is what makes
+//! classification possible below.
+//!
+//! Using polygon boundaries rather than triangle edges is deliberate.
+//! Triangulating a face invents interior edges that are not features of the
+//! shape, and CSG leaves plenty of them behind.
+//!
+//! ## 2. Repair BSP splitting
+//!
+//! A boolean operation splits an edge wherever an operand's BSP plane crossed
+//! it, leaving several collinear fragments where the model has one edge.
+//! `merge_collinear_edges` groups edges by (direction, adjacent-normal
+//! signature) and re-chains fragments that share an endpoint, so one logical
+//! edge becomes one edge again rather than a row of separate polylines.
+//!
+//! ## 3. Classify against the view
+//!
+//! `classify_edge`, in priority order:
+//!
+//! ```text
+//! 1 adjacent face        -> Boundary    naked edge of an open shell; always kept
+//! |n0 . n1| > cos(angle) -> dropped     coplanar: a BSP artifact or tessellation seam
+//! (n0.v) * (n1.v) <= 0   -> Silhouette  the faces straddle the view: outer contour
+//! otherwise              -> Feature     a crease between two faces
+//! ```
+//!
+//! `Boundary | Silhouette` is what `EdgeKind::is_outline` reports, and what
+//! ends up in `silhouette_indices`.
+//!
+//! **This is where `feature_angle_deg` bites.** On a tessellated sphere or
+//! cylinder nearly every triangle edge passes a low threshold, so thousands of
+//! edges survive and whichever visibility solver runs next does thousands of
+//! times more work. If a curved model projects slowly, raise the feature angle
+//! before suspecting the solver.
+//!
+//! # Stage 4: deciding visibility — the sampling solver
+//!
+//! This module's own answer, and the default. Inspired by
+//! [`three-edge-projection`](https://github.com/gkjohnson/three-edge-projection),
+//! though that library computes exact intervals where this samples.
+//!
+//! Because its tolerances are absolute lengths, the scene is first scaled to
+//! `Mesh::PROJECTION_CANONICAL_EXTENT`, solved, and scaled back — see the note
+//! on that constant. A parry3d `TriMesh` (BVH) is built over the mesh plus its
+//! occluders, and a ray origin is placed `far_dist` beyond everything.
+//!
+//! Then per edge, sample and cast:
+//!
+//! ```text
+//! edge:  *---x---x---x---x---x---x---*     x = sample position
+//!                    |
+//!                    ray fired from far away back toward the sample;
+//!                    anything hit first means this sample is hidden
+//! ```
+//!
+//! Sample count is `max(n_samples, ceil(projected_len / 25) + 1)`, capped at
+//! `EDGE_MAX_SAMPLES`. Where two neighbouring samples *disagree*, the interval
+//! is bisected to locate the transition — up to `EDGE_ADAPTIVE_MAX_DEPTH`
+//! levels, floored by `EDGE_MIN_PROJECTED_SEGMENT_LEN`. Runs of equal
+//! visibility are then chained into polylines by `chain_segments`.
+//!
+//! ## Two consequences worth knowing before you rely on it
+//!
+//! **Endpoints are approximate.** A transition is only ever located to bisection
+//! depth, floored at 1.0 unit in a space normalised to 100 — so every
+//! visible/hidden boundary can sit ~1% of the model away from the silhouette it
+//! should land on. Endpoints are also inset by 2% before sampling (so rays do
+//! not graze a vertex), which shortens edges slightly.
+//!
+//! **An occluder narrower than the sample spacing is missed entirely.**
+//!
+//! ```text
+//! edge:  *---x---x---x---x---x---x---*
+//!                  ###                    ### = occluder, thinner than the gap
+//!        every sample reports "visible", so no interval disagrees,
+//!        so bisection never runs, so the occlusion is never found
+//! ```
+//!
+//! Bisection can only refine what sampling already straddled: it cannot find
+//! what sampling stepped over. Raising `n_samples` moves the threshold but never
+//! removes it. This is why a small shape crossing a large one loses its
+//! occlusion, and why [`crate::mesh::hlr::exact`] exists.
+//!
+//! # The alternatives
+//!
+//! [`crate::mesh::hlr`] holds solvers that compute occlusion instead of probing
+//! for it, selectable with [`HlrStrategy`]. They reuse stages 1-3 above
+//! unchanged and replace only stage 4.
 
 use parry3d_f64::bounding_volume::Aabb;
 

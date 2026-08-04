@@ -28,7 +28,7 @@
 //!    triangle is in front is therefore a single sub-interval with a closed-form
 //!    boundary — one division, no search.
 //!
-//! Those intervals accumulate into an [`IntervalSet`]; inverting it yields the
+//! Those intervals accumulate into an `IntervalSet`; inverting it yields the
 //! visible pieces. Every boundary is a true silhouette crossing, and a triangle
 //! covering any positive-width part of the edge contributes it regardless of how
 //! narrow that part is.
@@ -36,6 +36,56 @@
 //! The solve is scale-invariant by construction — every tolerance below is
 //! relative to the scene extent or to the unit parameter range — so unlike the
 //! sampling path it needs no normalisation into a canonical size.
+//!
+//! # How it runs
+//!
+//! **Setup, once per projection** (`OccluderSet::build`). An orthonormal view
+//! basis `(u, v, w)` is built with `w` pointing at the viewer, so a point's
+//! screen position is `(p·u, p·v)` and its depth is `p·w` — larger meaning
+//! nearer. Every occluder triangle is projected into that basis once. Triangles
+//! seen edge-on are dropped (they cover no area, so they hide nothing), the rest
+//! are wound counter-clockwise so the clip below is a uniform `>= 0` test on all
+//! three edges, and their screen-space boxes go into a binned 2-D BVH
+//! ([`super::bvh2d`]).
+//!
+//! Back faces are deliberately *kept*. Culling them is only sound for closed
+//! shells, and an open shell's back faces really do occlude.
+//!
+//! **Per edge** (`OccluderSet::occlusion_of`). Query the BVH with the
+//! segment's box to get the triangles that could possibly overlap it, then for
+//! each candidate:
+//!
+//! 1. **Clip to the outline.** Each triangle edge is a half-plane. The signed
+//!    distance of the segment's two endpoints from that line is affine in `t`,
+//!    so the range where the segment is inside is closed-form; do it three times
+//!    and `[t0, t1]` is exact. Signs come from `robust::orient2d`, so a sliver
+//!    cannot flip sides between one test and the next.
+//!
+//!    ```text
+//!          /\
+//!         /  \        edge  *------------*
+//!        /____\              t0        t1
+//!    ```
+//!
+//! 2. **Compare depth.** Across `[t0, t1]` the edge's depth is affine in `t`,
+//!    and the triangle's supporting-plane depth is affine too (barycentric
+//!    interpolation of its corner depths). Their difference is therefore affine,
+//!    and the part where the triangle is in front is a single sub-interval whose
+//!    boundary is one division. No bisection, no tolerance on the location.
+//!
+//! **Two constants carry the robustness.**
+//!
+//! `DEPTH_BIAS_REL` is how far in front something must be to count as
+//! occluding. It is what lets an edge's *own* adjacent faces — and the coplanar
+//! touching face of a neighbouring box — decline to hide it, with no adjacency
+//! bookkeeping at all: those faces evaluate to a depth difference of zero.
+//! It replaces the geometry nudge the sampling path needed for the same case.
+//!
+//! `MIN_SEGMENT_LEN_REL` cleans up after it. Where an occluder meets an edge
+//! at a shared vertex the bias necessarily leaves a hair unoccluded, so a fully
+//! hidden edge would otherwise be reported as hidden *plus* a visible fragment
+//! some `1e-8` of its length long — invisible in a drawing, but it inflates edge
+//! counts and reads as a stray dash.
 
 use std::fmt::Debug;
 
@@ -68,14 +118,14 @@ const DEGENERATE_AREA_REL: Real = 1e-14;
 
 /// Shortest piece worth emitting, as a fraction of scene extent.
 ///
-/// [`DEPTH_BIAS_REL`] necessarily leaves a hair of an edge unoccluded wherever
+/// `DEPTH_BIAS_REL` necessarily leaves a hair of an edge unoccluded wherever
 /// the occluding face *touches* it — at a shared vertex the depth difference
 /// passes through zero, so the crossing is found just inside the bias rather
 /// than exactly at the vertex. A fully hidden edge would otherwise be reported
 /// as hidden plus a visible fragment some `1e-8` of its length long, which is
 /// invisible in a drawing but inflates edge counts and reads as a stray dash.
 ///
-/// This must stay comfortably above [`DEPTH_BIAS_REL`] — the fragments it exists
+/// This must stay comfortably above `DEPTH_BIAS_REL` — the fragments it exists
 /// to remove are that size — and comfortably below anything a drawing could
 /// show, which at `1e-5` of the model extent it is.
 const MIN_SEGMENT_LEN_REL: Real = 1e-5;
