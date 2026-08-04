@@ -750,6 +750,14 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return this;
     }
 
+    /** Drop every style set on the Shapes in this Collection.
+     *  See {@link Shape.resetStyle}. */
+    resetStyle(): this
+    {
+        this._shapes.forEach(shape => (shape as any).resetStyle?.());
+        return this;
+    }
+
     /** Hide Shapes in Collection */
     hide(): this
     {
@@ -1093,6 +1101,139 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             .map(shape => shape._copy() as Mesh);
     }
 
+    /** The linear shapes in this collection — Curves that are drawn in their
+     *  own right rather than being the edges of a solid.
+     *
+     *  A wireframe, a centreline or imported linework is geometry in the
+     *  drawing like any other: a solid standing in front of it has to hide it,
+     *  and it has to appear in the projection. Returns detached copies for the
+     *  same reason {@link _visibleProjectionMeshes} does — the projection runs
+     *  decorated ops that must not touch the scene graph.
+     */
+    private _visibleProjectionCurves(includeHiddenShapes: boolean): Curve[]
+    {
+        const shapes = this._shapes as any[];
+        const projectedShapes = includeHiddenShapes
+            ? shapes
+            : shapes.filter(shape => shape.style?.visible !== false);
+
+        return projectedShapes
+            .filter((shape): shape is Curve => shape instanceof Curve)
+            .map(shape => shape._copy() as Curve);
+    }
+
+    /** Stable key for a Shape's explicitly-set style.
+     *
+     *  Shapes sharing a key can be projected in one call and styled together,
+     *  which is what keeps style-per-shape from costing one occluder rebuild
+     *  per shape.
+     */
+    private static _styleKey(shape: any): string
+    {
+        try { return JSON.stringify(shape?.style?.explicitData?.() ?? {}); }
+        catch { return '{}'; }
+    }
+
+    /** One of `shapes` if they all carry the same explicit style, else null.
+     *
+     *  The merged projection has no way to tell which mesh produced which edge,
+     *  so it can only style the result when the answer does not depend on
+     *  knowing. Shapes with no styling at all return null too — there is
+     *  nothing to apply.
+     */
+    private static _sharedStyleSource(shapes: any[]): any | null
+    {
+        if (!shapes.length) return null;
+        const first = ShapeCollection._styleKey(shapes[0]);
+        if (first === '{}') return null;
+        return shapes.every(s => ShapeCollection._styleKey(s) === first) ? shapes[0] : null;
+    }
+
+    /** Copy a source Shape's explicit style onto everything in `target`.
+     *
+     *  Only the *explicit* entries travel: a projected edge that inherits a
+     *  default would start overriding the scene's cascade with a value nobody
+     *  asked for. This is what carries `.color('blue')` and `.dashed()` from a
+     *  shape onto the line work the projection makes of it.
+     */
+    private static _inheritStyle(target: ShapeCollection<any>, source: any): void
+    {
+        const data = source?.style?.explicitData?.();
+        if (!data || Object.keys(data).length === 0) return;
+        target.forEach((shape: any) => shape?.style?.merge?.(data));
+    }
+
+    /** Project free-standing Curves, hidden by `occluders`.
+     *
+     *  Returns an UNFLATTENED collection: the caller merges it into the mesh
+     *  projection before flattening to screen, because that step recentres on
+     *  the origin and doing it twice would pull the two apart.
+     */
+    private static _projectLinearShapes(
+        curves: Curve[],
+        occluders: Mesh[],
+        viewDir: Vector,
+        planeNormal: Vector,
+    ): ShapeCollection<any>
+    {
+        const result = new ShapeCollection<any>();
+        if (!curves.length) return result;
+
+        // One projection per distinct style, not per curve: the occluder set is
+        // rebuilt on each call, so per-curve calls would rebuild it for every
+        // edge of a wireframe.
+        const byStyle = new Map<string, Curve[]>();
+        for (const curve of curves)
+        {
+            const key = ShapeCollection._styleKey(curve);
+            const group = byStyle.get(key);
+            if (group) group.push(curve); else byStyle.set(key, [curve]);
+        }
+
+        const [vx, vy, vz] = viewDir.toArray();
+        const [nx, ny, nz] = planeNormal.toArray();
+
+        for (const group of byStyle.values())
+        {
+            const points: number[] = [];
+            const counts: number[] = [];
+            for (const curve of group)
+            {
+                // Tessellate so arcs and splines project as the shapes they
+                // are; a straight Curve comes back as its two endpoints.
+                const pts = curve.tessellate?.() ?? curve.points?.() ?? [];
+                if (pts.length < 2) continue;
+                for (const p of pts) points.push(p.x, p.y, p.z);
+                counts.push(pts.length);
+            }
+            if (!counts.length) continue;
+
+            // Same ownership rule as Mesh._projectEdges: WASM takes the handles
+            // by value, so clone or the caller's Meshes are consumed.
+            const occJs = occluders
+                .map(m => m.inner()?.clone?.())
+                .filter((m): m is any => m != null);
+
+            const r = MeshJs.projectPolylines(
+                new Float64Array(points), new Uint32Array(counts),
+                vx, vy, vz, 0, 0, 0, nx, ny, nz, occJs);
+            if (!r) continue;
+
+            const hidden = Mesh.projectedPolylinesToShapeCollection(r.hiddenPolylines());
+            const visible = Mesh.projectedPolylinesToShapeCollection(r.visiblePolylines());
+            r.free?.();
+
+            // The source shape's own styling rides along with its line work.
+            ShapeCollection._inheritStyle(hidden, group[0]);
+            ShapeCollection._inheritStyle(visible, group[0]);
+
+            if (hidden.length) result.addGroup('hidden', hidden);
+            if (visible.length) result.addGroup('visible', visible);
+        }
+
+        return result;
+    }
+
     private static _makeProjectionOptions(
         viewDirection: Vector,
         planeNormal: Vector,
@@ -1239,6 +1380,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         hiddenLines: boolean,
         featureAngle: number,
         strategy: HlrStrategy,
+        curves: Curve[] = [],
     ): ShapeCollection<any>
     {
         const order = ShapeCollection._depthOrder(meshes, viewDir);
@@ -1289,8 +1431,14 @@ export class ShapeCollection<S extends CollectableShape = Shape>
                 const g = projected.group(name);
                 if (g?.length) g.forEach((s: any) => own.add(s));
             }
+            // This path knows exactly which shape produced which line work, so
+            // each shape's own styling can travel with it.
+            ShapeCollection._inheritStyle(own, meshes[i]);
             if (own.length) result.tagGroup(`shape-${i}`, own);
         }
+
+        ShapeCollection._appendProjectionGroups(
+            result, ShapeCollection._projectLinearShapes(curves, meshes, viewDir, planeNormal));
 
         return Mesh._flattenProjectionToScreen(result, planeNormal);
     }
@@ -1371,6 +1519,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         samples: number,
         featureAngle: number,
         strategy: HlrStrategy = HLR_STRATEGY_DEFAULT,
+        curves: Curve[] = [],
     ): ShapeCollection<any>
     {
         const merged = new ShapeCollection<Mesh>(...meshes).merge() as Mesh;
@@ -1470,6 +1619,19 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             });
         });
 
+        // Merging destroys which mesh each edge came from, so a per-mesh style
+        // cannot be attributed here. When every mesh agrees on its styling
+        // there is only one answer and it can be applied; otherwise the line
+        // work stays unstyled rather than guessing. The per-shape strategies
+        // keep provenance and do this properly.
+        const shared = ShapeCollection._sharedStyleSource(meshes);
+        if (shared) ShapeCollection._inheritStyle(iso, shared);
+
+        // Linear shapes are hidden by the solids but never occlude, and must be
+        // merged in before flattening — that step recentres on the origin.
+        ShapeCollection._appendProjectionGroups(
+            iso, ShapeCollection._projectLinearShapes(curves, meshes, viewDir, planeNormal));
+
         if (!hiddenLines && iso.group('hidden'))
         {
             iso.removeGroup('hidden');
@@ -1508,11 +1670,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     ): ShapeCollection<any>
     {
         const meshes = this._visibleProjectionMeshes(includeHiddenShapes);
-        if (!meshes.length)
+        const curves = this._visibleProjectionCurves(includeHiddenShapes);
+        if (!meshes.length && !curves.length)
         {
             return new ShapeCollection<any>();
         }
-        if (meshes.length === 1)
+        // A lone mesh with no linear shapes has the fast single-mesh path.
+        if (meshes.length === 1 && !curves.length)
         {
             return meshes[0].isometry(cam, hiddenLines, false, samples, featureAngle, view);
         }
@@ -1524,7 +1688,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         if (strategy === 'clip' || strategy === 'painter')
         {
             return ShapeCollection._projectPerShape(
-                meshes, camDirVec, planeNormal, hiddenLines, featureAngle, strategy);
+                meshes, camDirVec, planeNormal, hiddenLines, featureAngle, strategy, curves);
         }
 
         // Technique: project the merged solid first, then add touching-face
@@ -1540,6 +1704,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             samples,
             featureAngle,
             strategy,
+            curves,
         );
     }
         
@@ -1621,7 +1786,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         {
             return new ShapeCollection<any>();
         }
-        if (meshes.length === 1)
+        const curves = this._visibleProjectionCurves(includeHiddenShapes);
+        if (meshes.length === 1 && !curves.length)
         {
             return meshes[0].elevation(from, hiddenLines, samples, featureAngle, view);
         }
@@ -1633,7 +1799,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         if (strategy === 'clip' || strategy === 'painter')
         {
             return ShapeCollection._projectPerShape(
-                meshes, viewDir, planeNormal, hiddenLines, featureAngle, strategy);
+                meshes, viewDir, planeNormal, hiddenLines, featureAngle, strategy, curves);
         }
 
         return ShapeCollection._projectMergedProjectionWithContactFaces(
@@ -1644,6 +1810,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             samples,
             featureAngle,
             strategy,
+            curves,
         );
     }
 

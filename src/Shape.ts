@@ -371,6 +371,20 @@ export abstract class Shape
         return this;
     }
 
+    /** Drop every style set on this Shape, back to the defaults.
+     *
+     *  A fresh {@link Style} rather than a cleared one, so the "explicitly set"
+     *  bookkeeping resets too: after this the Shape contributes nothing of its
+     *  own to the scene's style cascade, exactly as if it had never been styled.
+     *  That is the difference between this and setting the properties back to
+     *  their default values by hand, which would keep overriding a parent.
+     */
+    resetStyle(): this
+    {
+        this.style = new Style();
+        return this;
+    }
+
     //// SELECTING ////
 
     select(_what: string)

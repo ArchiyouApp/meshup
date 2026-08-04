@@ -1317,6 +1317,55 @@ impl MeshJs {
         self.inner.is_convex()
     }
 
+    /// Hidden-line-project free-standing polylines against a set of solids.
+    ///
+    /// This is the entry point for linear shapes — wireframes, centrelines,
+    /// imported linework — which are part of the drawing but belong to no mesh.
+    /// They are hidden by the occluders but never occlude anything themselves.
+    ///
+    /// - `points` – all polyline vertices, flattened as x,y,z triples.
+    /// - `counts` – how many *points* each polyline contributes, in order.
+    ///
+    /// Occlusion is always solved exactly here. The sampling solver never
+    /// supported curves at all, so there is no prior behaviour to preserve, and
+    /// no reason to approximate what can be computed.
+    #[wasm_bindgen(js_name = projectPolylines)]
+    pub fn project_polylines_js(
+        points: Vec<Real>,
+        counts: Vec<u32>,
+        vx: Real, vy: Real, vz: Real,
+        ox: Real, oy: Real, oz: Real,
+        nx: Real, ny: Real, nz: Real,
+        occluders: Vec<MeshJs>,
+    ) -> crate::wasm::edge_projection_js::EdgeProjectionResultJs {
+        let mut polylines: Vec<Vec<Point3<Real>>> = Vec::with_capacity(counts.len());
+        let mut at = 0usize;
+        for n in counts {
+            let n = n as usize;
+            let mut line = Vec::with_capacity(n);
+            for i in 0..n {
+                let base = (at + i) * 3;
+                if base + 2 >= points.len() { break; }
+                line.push(Point3::new(points[base], points[base + 1], points[base + 2]));
+            }
+            at += n;
+            if line.len() >= 2 { polylines.push(line); }
+        }
+
+        let occ_inner: Vec<crate::mesh::Mesh<String>> =
+            occluders.into_iter().map(|m| m.inner).collect();
+        let occ_refs: Vec<&crate::mesh::Mesh<String>> = occ_inner.iter().collect();
+
+        let result = crate::mesh::hlr::project_polylines_exact(
+            &polylines,
+            &Vector3::new(vx, vy, vz),
+            &Point3::new(ox, oy, oz),
+            &Vector3::new(nx, ny, nz),
+            &occ_refs,
+        );
+        crate::wasm::edge_projection_js::EdgeProjectionResultJs { inner: result }
+    }
+
     /// Slice at a section plane and return visible/hidden edge projections plus
     /// the cut sketch.
     ///

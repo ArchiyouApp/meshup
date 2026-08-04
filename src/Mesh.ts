@@ -2494,6 +2494,17 @@ export class Mesh extends Shape
 
     _projectedPolylinesToShapeCollection(polylines: Array<[number, number, number][]>): ShapeCollection<Shape>
     {
+        return Mesh.projectedPolylinesToShapeCollection(polylines);
+    }
+
+    /** Turn raw projected polylines into Curves.
+     *
+     *  Static because the conversion depends on nothing but the polylines, and
+     *  the linear-shape projection in ShapeCollection needs it without having a
+     *  Mesh to hand. The instance method above stays as the existing spelling.
+     */
+    static projectedPolylinesToShapeCollection(polylines: Array<[number, number, number][]>): ShapeCollection<Shape>
+    {
         const curves = new ShapeCollection<Shape>();
         polylines.forEach(points =>
         {

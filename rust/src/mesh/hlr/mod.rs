@@ -13,4 +13,4 @@ pub mod convex;
 pub mod exact;
 pub mod intervals;
 
-pub use exact::project_edges_exact;
+pub use exact::{project_edges_exact, project_polylines_exact};

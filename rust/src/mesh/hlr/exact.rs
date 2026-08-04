@@ -179,6 +179,142 @@ fn clip_halfplane(lo: &mut Real, hi: &mut Real, s_a: Real, s_b: Real) -> bool {
     *hi - *lo > MIN_SPAN
 }
 
+/// Everything needed to ask "what hides this segment?" — the occluder
+/// triangles projected once into the view basis, indexed for lookup, plus the
+/// scale-relative tolerances derived from the scene.
+///
+/// Built once per projection and shared by both callers: mesh edges
+/// ([`project_edges_exact`]) and free-standing curves
+/// ([`project_polylines_exact`]) are the same question asked of the same
+/// occluders, so they must not answer it differently.
+pub struct OccluderSet {
+    basis: ViewBasis,
+    tris: Vec<ProjTri>,
+    bvh: Bvh2,
+    depth_bias: Real,
+    query_pad: Real,
+    /// Largest dimension of everything involved; every tolerance scales off it.
+    pub extent: Real,
+}
+
+impl OccluderSet {
+    /// Project and index every triangle of `meshes`.
+    pub fn build<S: Clone + Send + Sync + Debug>(
+        meshes: &[&Mesh<S>],
+        view_normal: &Vector3<Real>,
+        extra_bounds: Option<parry3d_f64::bounding_volume::Aabb>,
+    ) -> Self {
+        let basis = ViewBasis::new(view_normal);
+
+        // Scene extent, for the relative tolerances. `extra_bounds` lets a
+        // caller include geometry that is not an occluder but is being drawn —
+        // curves, say — so the tolerances match the whole drawing.
+        let extent = {
+            let mut bb = extra_bounds;
+            for m in meshes {
+                let o = m.bounding_box();
+                bb = Some(match bb {
+                    None => o,
+                    Some(b) => parry3d_f64::bounding_volume::Aabb::new(
+                        b.mins.inf(&o.mins), b.maxs.sup(&o.maxs)),
+                });
+            }
+            match bb {
+                None => 1.0,
+                Some(b) => {
+                    let d = b.maxs - b.mins;
+                    let e = d.x.max(d.y).max(d.z);
+                    if e.is_finite() && e > 0.0 { e } else { 1.0 }
+                },
+            }
+        };
+        let min_area2 = DEGENERATE_AREA_REL * extent * extent;
+
+        // Back faces are kept. Culling them is only sound for closed shells,
+        // and an open shell's back faces really do occlude — correctness first.
+        let mut tris: Vec<ProjTri> = Vec::new();
+        let mut boxes: Vec<Aabb2> = Vec::new();
+        for source in meshes {
+            for poly in &source.polygons {
+                for tri in poly.triangulate() {
+                    let p = [
+                        basis.xy(&tri[0].position),
+                        basis.xy(&tri[1].position),
+                        basis.xy(&tri[2].position),
+                    ];
+                    let d = [
+                        basis.depth(&tri[0].position),
+                        basis.depth(&tri[1].position),
+                        basis.depth(&tri[2].position),
+                    ];
+
+                    let area2 = orient2d(p[0], p[1], p[2]);
+                    if area2.abs() <= min_area2 {
+                        continue; // seen edge-on: covers no area, hides nothing
+                    }
+                    // Wind counter-clockwise so the half-plane test below is a
+                    // uniform `>= 0` on all three edges.
+                    let (p, d, area2) = if area2 < 0.0 {
+                        ([p[0], p[2], p[1]], [d[0], d[2], d[1]], -area2)
+                    } else {
+                        (p, d, area2)
+                    };
+
+                    boxes.push(Aabb2::from_triangle(p[0], p[1], p[2]));
+                    tris.push(ProjTri { p, d, area2 });
+                }
+            }
+        }
+        let bvh = Bvh2::build(&boxes);
+
+        OccluderSet {
+            basis,
+            tris,
+            bvh,
+            depth_bias: DEPTH_BIAS_REL * extent,
+            query_pad: DEPTH_BIAS_REL * extent,
+            extent,
+        }
+    }
+
+    /// Direction toward the viewer.
+    #[inline]
+    pub fn view_dir(&self) -> Vector3<Real> {
+        self.basis.w
+    }
+
+    /// Fill `out` with the parameter ranges of segment `v0 → v1` that are hidden.
+    pub fn occlusion_of(
+        &self,
+        v0: &Point3<Real>,
+        v1: &Point3<Real>,
+        out: &mut IntervalSet,
+        scratch: &mut Vec<usize>,
+    ) {
+        out.clear();
+        let a = self.basis.xy(v0);
+        let b = self.basis.xy(v1);
+        let da = self.basis.depth(v0);
+        let db = self.basis.depth(v1);
+
+        self.bvh
+            .query(&Aabb2::from_segment(a, b).padded(self.query_pad), scratch);
+        for &ti in scratch.iter() {
+            accumulate_occlusion(&self.tris[ti], a, b, da, db, self.depth_bias, out);
+        }
+    }
+
+    /// Shortest piece worth emitting for a segment of this projected length.
+    #[inline]
+    fn min_span_for(&self, projected_len: Real) -> Real {
+        if projected_len > 0.0 {
+            (MIN_SEGMENT_LEN_REL * self.extent / projected_len).min(0.5)
+        } else {
+            0.0
+        }
+    }
+}
+
 /// Project the edges of `mesh` with exact interval hidden-line removal.
 ///
 /// Mirrors the signature of the sampling solver minus `n_samples`, which has no
@@ -191,64 +327,16 @@ pub fn project_edges_exact<S: Clone + Send + Sync + Debug>(
     feature_angle_deg: Real,
     occluders: &[&Mesh<S>],
 ) -> EdgeProjectionResult {
-    let basis = ViewBasis::new(view_normal);
-    let view_dir = basis.w;
     let plane_n = plane_normal.normalize();
     let feature_thresh = normalize_feature_angle_rad(feature_angle_deg);
 
-    // ── scene extent, for the relative tolerances ────────────────────────────
-    let extent = {
-        let mut bb = mesh.bounding_box();
-        for m in occluders {
-            let o = m.bounding_box();
-            bb = parry3d_f64::bounding_volume::Aabb::new(bb.mins.inf(&o.mins), bb.maxs.sup(&o.maxs));
-        }
-        let d = bb.maxs - bb.mins;
-        let e = d.x.max(d.y).max(d.z);
-        if e.is_finite() && e > 0.0 { e } else { 1.0 }
-    };
-    let depth_bias = DEPTH_BIAS_REL * extent;
-    let min_area2 = DEGENERATE_AREA_REL * extent * extent;
-    let query_pad = DEPTH_BIAS_REL * extent;
-
-    // ── collect and project every occluder triangle ──────────────────────────
-    //
-    // Back faces are kept. Culling them is only sound for closed shells, and an
-    // open shell's back faces really do occlude — correctness first.
-    let mut tris: Vec<ProjTri> = Vec::new();
-    let mut boxes: Vec<Aabb2> = Vec::new();
-    for source in std::iter::once(mesh).chain(occluders.iter().copied()) {
-        for poly in &source.polygons {
-            for tri in poly.triangulate() {
-                let p = [
-                    basis.xy(&tri[0].position),
-                    basis.xy(&tri[1].position),
-                    basis.xy(&tri[2].position),
-                ];
-                let d = [
-                    basis.depth(&tri[0].position),
-                    basis.depth(&tri[1].position),
-                    basis.depth(&tri[2].position),
-                ];
-
-                let area2 = orient2d(p[0], p[1], p[2]);
-                if area2.abs() <= min_area2 {
-                    continue; // seen edge-on: covers no area, hides nothing
-                }
-                // Wind counter-clockwise so the half-plane test below is a
-                // uniform `>= 0` on all three edges.
-                let (p, d, area2) = if area2 < 0.0 {
-                    ([p[0], p[2], p[1]], [d[0], d[2], d[1]], -area2)
-                } else {
-                    (p, d, area2)
-                };
-
-                boxes.push(Aabb2::from_triangle(p[0], p[1], p[2]));
-                tris.push(ProjTri { p, d, area2 });
-            }
-        }
-    }
-    let bvh = Bvh2::build(&boxes);
+    // The mesh occludes its own back edges, so it belongs in its own occluder set.
+    let mut all: Vec<&Mesh<S>> = Vec::with_capacity(occluders.len() + 1);
+    all.push(mesh);
+    all.extend_from_slice(occluders);
+    let occ = OccluderSet::build(&all, view_normal, None);
+    let view_dir = occ.view_dir();
+    let extent = occ.extent;
 
     // ── walk the edges ───────────────────────────────────────────────────────
     let edges = merge_collinear_edges(extract_edges(mesh));
@@ -264,33 +352,86 @@ pub fn project_edges_exact<S: Clone + Send + Sync + Debug>(
             continue;
         };
 
-        let a = basis.xy(&edge.v0);
-        let b = basis.xy(&edge.v1);
-        let da = basis.depth(&edge.v0);
-        let db = basis.depth(&edge.v1);
-
-        occluded.clear();
-        bvh.query(&Aabb2::from_segment(a, b).padded(query_pad), &mut candidates);
-        for &ti in &candidates {
-            accumulate_occlusion(&tris[ti], a, b, da, db, depth_bias, &mut occluded);
-        }
+        occ.occlusion_of(&edge.v0, &edge.v1, &mut occluded, &mut candidates);
 
         // Output lives on the projection plane, which is a separate thing from
         // the view basis used for the occlusion solve above.
         let proj_v0 = project_point(&edge.v0, plane_origin, &plane_n);
         let proj_v1 = project_point(&edge.v1, plane_origin, &plane_n);
 
-        // Convert the length floor into this edge's parameter space.
-        let proj_len = (proj_v1 - proj_v0).norm();
-        let min_span = if proj_len > 0.0 {
-            (MIN_SEGMENT_LEN_REL * extent / proj_len).min(0.5)
-        } else {
-            0.0
-        };
+        let min_span = occ.min_span_for((proj_v1 - proj_v0).norm());
         emit(&occluded, &proj_v0, &proj_v1, kind, min_span, &mut result);
     }
 
     result
+}
+
+/// Project free-standing polylines with the same hidden-line solve used for
+/// mesh edges.
+///
+/// Linear shapes — a wireframe, a centreline, an imported DXF — are geometry in
+/// the drawing like any other, and a solid standing in front of one has to hide
+/// it. They have no adjacent faces, so there is nothing to classify: every
+/// segment is drawn, and only visibility decides what survives. Each segment is
+/// treated as a boundary edge, which puts it in the silhouette set, matching how
+/// a naked edge of an open mesh is already handled.
+///
+/// `occluders` are the solids that can hide these polylines. The polylines
+/// themselves never occlude — they have no area.
+pub fn project_polylines_exact<S: Clone + Send + Sync + Debug>(
+    polylines: &[Vec<Point3<Real>>],
+    view_normal: &Vector3<Real>,
+    plane_origin: &Point3<Real>,
+    plane_normal: &Vector3<Real>,
+    occluders: &[&Mesh<S>],
+) -> EdgeProjectionResult {
+    let plane_n = plane_normal.normalize();
+
+    // Include the polylines' own bounds in the extent so the relative
+    // tolerances suit the whole drawing, not just the solids in it. A curve
+    // running well outside the meshes would otherwise be measured against a
+    // scale it has nothing to do with.
+    let bounds = polyline_bounds(polylines);
+    let occ = OccluderSet::build(occluders, view_normal, bounds);
+
+    let mut result = EdgeProjectionResult::default();
+    let mut occluded = IntervalSet::new();
+    let mut candidates: Vec<usize> = Vec::new();
+
+    for line in polylines {
+        for pair in line.windows(2) {
+            let (v0, v1) = (pair[0], pair[1]);
+            if (v1 - v0).norm() < 1e-9 * occ.extent {
+                continue;
+            }
+            occ.occlusion_of(&v0, &v1, &mut occluded, &mut candidates);
+
+            let proj_v0 = project_point(&v0, plane_origin, &plane_n);
+            let proj_v1 = project_point(&v1, plane_origin, &plane_n);
+            let min_span = occ.min_span_for((proj_v1 - proj_v0).norm());
+            emit(&occluded, &proj_v0, &proj_v1, EdgeKind::Boundary, min_span, &mut result);
+        }
+    }
+    result
+}
+
+/// Bounding box of every point in `polylines`, or `None` when there are none.
+fn polyline_bounds(
+    polylines: &[Vec<Point3<Real>>],
+) -> Option<parry3d_f64::bounding_volume::Aabb> {
+    let mut out: Option<parry3d_f64::bounding_volume::Aabb> = None;
+    for line in polylines {
+        for p in line {
+            out = Some(match out {
+                None => parry3d_f64::bounding_volume::Aabb::new(*p, *p),
+                Some(b) => parry3d_f64::bounding_volume::Aabb::new(
+                    b.mins.inf(&p.coords.into()),
+                    b.maxs.sup(&p.coords.into()),
+                ),
+            });
+        }
+    }
+    out
 }
 
 /// Add the range over which `tri` hides the edge `a → b` to `out`.
@@ -668,6 +809,51 @@ mod tests {
                 "visible run ended at x={x}, which is {err} off the true boundary",
             );
         }
+    }
+
+    #[test]
+    fn a_polyline_is_hidden_where_a_solid_stands_in_front_of_it() {
+        // A line running along x at the origin, and a cube sitting in front of
+        // its middle. Viewed down +Z.
+        let view = Vector3::new(0.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let blocker: Mesh<()> = Mesh::<()>::cube(20.0, None).translate(-10.0, -10.0, 5.0);
+
+        let line = vec![Point3::new(-100.0, 0.0, 0.0), Point3::new(100.0, 0.0, 0.0)];
+        let r = project_polylines_exact(&[line], &view, &origin, &view, &[&blocker]);
+
+        // Hidden exactly across the cube's 20-unit width...
+        assert_eq!(r.hidden_polylines.len(), 1);
+        let hidden_len = (r.hidden_polylines[0][1] - r.hidden_polylines[0][0]).norm();
+        assert!((hidden_len - 20.0).abs() < 1e-9, "hidden span was {hidden_len}");
+
+        // ...leaving the two ends visible, and the breaks on the cube's faces.
+        assert_eq!(r.visible_polylines.len(), 2);
+        for pl in &r.visible_polylines {
+            for p in pl {
+                let on_end = p.x.abs() > 99.999;
+                let on_blocker = (p.x.abs() - 10.0).abs() < 1e-9;
+                assert!(on_end || on_blocker, "unexpected break at x={}", p.x);
+            }
+        }
+    }
+
+    #[test]
+    fn an_unoccluded_polyline_survives_whole_and_counts_as_outline() {
+        let view = Vector3::new(0.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let line = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(10.0, 10.0, 0.0),
+        ];
+        let r = project_polylines_exact::<()>(&[line], &view, &origin, &view, &[]);
+
+        // Two segments, nothing to hide them, and both are outline: a curve has
+        // no adjacent faces, so it is never an interior crease.
+        assert_eq!(r.visible_polylines.len(), 2);
+        assert!(r.hidden_polylines.is_empty());
+        assert_eq!(r.silhouette_indices.len(), 2);
     }
 
     #[test]
