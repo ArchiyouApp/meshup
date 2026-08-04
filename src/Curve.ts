@@ -693,7 +693,15 @@ export class Curve extends Shape
         if(rest.length === 0){ return first.copy(); }
         try
         {
-            return Curve.fromCsgrs(first.inner().concat(rest.map(c => c.inner())));
+            // Fold one at a time: concat() borrows its operand. It used to take the whole
+            // array, which wasm-bindgen unwraps by consuming each element — so every input
+            // curve was freed here and the caller's next use of one threw
+            // "null pointer passed to rust".
+            const joined = rest.reduce(
+                (acc: Curve3DJs, c: Curve) => acc.concat(c.inner()),
+                first.inner(),
+            );
+            return Curve.fromCsgrs(joined);
         }
         catch (e)
         {

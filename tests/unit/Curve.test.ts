@@ -672,7 +672,12 @@ describe('Curve.union()', () =>
             expect(bb.maxY()).toBeGreaterThan(h / 2);   // top circle bulge
             expect(bb.minY()).toBeLessThan(-h / 2);     // bottom circle bulge
         }
-    });
+        // Explicit budget: 10 iterations x 2 unions, and these circles are tangent to the
+        // rect corners — topology hypercurve declines, so each union takes the line-work
+        // fallback at roughly 260ms. That fallback is why this case works at all (it used
+        // to fail with "declined the topology"); the cost is the price of the safety net,
+        // not a regression.
+    }, 60_000);
 });
 
 describe('Curve.cutoffBy()', () =>

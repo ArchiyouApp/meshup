@@ -123,7 +123,8 @@ export interface SdfSample
 /** Which hidden-line-removal algorithm to run.
  *
  *  The algorithms live side by side so they can be compared on the same model.
- *  `'raycast'` is the default and is unchanged from before this option existed.
+ *  `'exact'` is the default (see `ISOMETRY_HLR_STRATEGY_DEFAULT`); `'raycast'` is the
+ *  original sampling solver and remains available by naming it explicitly.
  *
  *  - `'raycast'` — samples visibility at points along each edge and bisects
  *    where neighbouring samples disagree. Endpoints are approximate, and an
@@ -147,7 +148,7 @@ export interface ProjectEdgeOptions
   planeNormal?: PointLike; // for elevation and section
   featureAngle?: number; // Minimum crease angle in degrees
   samples?: number; // HLR ray samples per edge — 'raycast' only
-  strategy?: HlrStrategy; // which HLR algorithm to run (default 'raycast')
+  strategy?: HlrStrategy; // which HLR algorithm to run (default: ISOMETRY_HLR_STRATEGY_DEFAULT)
 }
 
 /** Trailing options accepted by the projection entry points
@@ -156,10 +157,10 @@ export interface ProjectEdgeOptions
  */
 export interface ProjectionViewOptions
 {
-  /** Which HLR algorithm to run. Default `'raycast'`. */
+  /** Which HLR algorithm to run. Defaults to {@link ISOMETRY_HLR_STRATEGY_DEFAULT}. */
   strategy?: HlrStrategy;
-  /** Fall back to `'raycast'` with a warning when a per-shape strategy does
-   *  not apply to this scene, instead of throwing. Default `false`, so a
+  /** Fall back to {@link ISOMETRY_HLR_STRATEGY_DEFAULT} with a warning when a per-shape
+   *  strategy does not apply to this scene, instead of throwing. Default `false`, so a
    *  strategy that cannot run says so rather than silently changing. */
   fallback?: boolean;
 }

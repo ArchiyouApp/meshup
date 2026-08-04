@@ -29,7 +29,7 @@ import { colSceneAdd, colSceneLayer, colSceneReplace, sceneCarry } from './scene
 import { MeshJs } from './wasm/meshup';
 import { GLTFBuilder } from './GLTFBuilder';
 
-import { TOLERANCE, HLR_STRATEGY_DEFAULT } from './constants';
+import { TOLERANCE, ISOMETRY_HLR_STRATEGY_DEFAULT } from './constants';
 
 /** Minimal interface a shape must satisfy to be held in a ShapeCollection. */
 export interface CollectableShape {
@@ -1241,7 +1241,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         planeNormal: Vector,
         featureAngle: number,
         samples: number,
-        strategy: HlrStrategy = HLR_STRATEGY_DEFAULT,
+        strategy: HlrStrategy = ISOMETRY_HLR_STRATEGY_DEFAULT,
     ): ProjectEdgeOptions
     {
         return {
@@ -1282,7 +1282,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      */
     private static _resolveStrategy(meshes: Mesh[], view: ProjectionViewOptions): HlrStrategy
     {
-        const strategy = view.strategy ?? HLR_STRATEGY_DEFAULT;
+        const strategy = view.strategy ?? ISOMETRY_HLR_STRATEGY_DEFAULT;
         if (strategy !== 'clip' && strategy !== 'painter') return strategy;
 
         const reason = ShapeCollection._perShapeBlocker(meshes);
@@ -1290,8 +1290,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
         if (view.fallback)
         {
-            console.warn(`ShapeCollection: '${strategy}' does not apply here (${reason}) — falling back to '${HLR_STRATEGY_DEFAULT}'.`);
-            return HLR_STRATEGY_DEFAULT;
+            console.warn(`ShapeCollection: '${strategy}' does not apply here (${reason}) — falling back to '${ISOMETRY_HLR_STRATEGY_DEFAULT}'.`);
+            return ISOMETRY_HLR_STRATEGY_DEFAULT;
         }
         throw new Error(
             `ShapeCollection: '${strategy}' projection requires convex, non-interpenetrating shapes (${reason}). `
@@ -1520,7 +1520,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         hiddenLines: boolean,
         samples: number,
         featureAngle: number,
-        strategy: HlrStrategy = HLR_STRATEGY_DEFAULT,
+        strategy: HlrStrategy = ISOMETRY_HLR_STRATEGY_DEFAULT,
         curves: Curve[] = [],
     ): ShapeCollection<any>
     {

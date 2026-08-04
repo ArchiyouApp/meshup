@@ -69,9 +69,19 @@ export const EDGE_PROJECTION_DEFAULTS = {
  */
 export const HLR_STRATEGIES = ['raycast', 'exact', 'clip', 'painter'] as const;
 
-/** The algorithm used when none is named. The original sampling solver, so
- *  callers written before the option existed are unaffected. */
-export const HLR_STRATEGY_DEFAULT = 'raycast';
+/** The hidden-line algorithm {@link Mesh.isometry} (and `elevation` / `section` and their
+ *  collection equivalents) use when the caller names none.
+ *
+ *  `'exact'`: occlusion is solved as exact parametric intervals, so segment endpoints land
+ *  on the true silhouette crossing and no occluder can slip between samples. The previous
+ *  default, `'raycast'`, probes visibility at a finite number of points along each edge and
+ *  bisects to find transitions — so endpoints are only approximate and an occluder narrower
+ *  than the sample spacing is missed entirely.
+ *
+ *  This is also the target that `'clip'` and `'painter'` fall back to when a scene does not
+ *  meet their convex, non-interpenetrating requirement, so those degrade to the exact
+ *  solver rather than to sampling. */
+export const ISOMETRY_HLR_STRATEGY_DEFAULT = 'exact';
 
 /** Strategies resolved per shape in TypeScript rather than inside the kernel. */
 export const HLR_PER_SHAPE_STRATEGIES = ['clip', 'painter'] as const;

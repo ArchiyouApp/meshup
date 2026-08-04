@@ -1316,11 +1316,17 @@ impl Curve3DJs
     ///
     /// `others` are mapped into this curve's plane by an exact similarity; a non-coplanar
     /// operand is an error.
+    /// NOTE: takes `other` by REFERENCE, one curve at a time, and callers fold.
+    ///
+    /// It originally took `Vec<Curve3DJs>`, which looks natural but is a trap: wasm-bindgen
+    /// unwraps each element by *destroying it into a raw pointer*, so every operand's JS
+    /// wrapper was freed on the way in. Callers that reused an input afterwards — and
+    /// `Curve.Compound()` sits under every `Sketch.end()` and `ShapeCollection.combine()` —
+    /// then hit "null pointer passed to rust". A borrowed argument cannot do that.
     #[wasm_bindgen(js_name = concat)]
-    pub fn concat(&self, others: Vec<Curve3DJs>) -> Result<Curve3DJs, JsValue>
+    pub fn concat(&self, other: &Curve3DJs) -> Result<Curve3DJs, JsValue>
     {
         let mut spans = self.exact_spans().map_err(err)?;
-        for other in &others
         {
             spans.extend(other.spans_in_frame(&self.frame).ok_or_else(|| {
                 JsValue::from_str("Curve3DJs::concat(): operand is not coplanar with this curve")

@@ -34,7 +34,7 @@ import { Selector } from './Selector';
 
 // Settings
 import { TOLERANCE, SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT,
-    SHAPES_CYLINDER_SEGMENTS_RADIAL, EDGE_PROJECTION_DEFAULTS, EDGE_PROJECTION_LIMITS, HLR_STRATEGY_DEFAULT, BASE_PLANE_NAME_TO_PLANE } from './constants';
+    SHAPES_CYLINDER_SEGMENTS_RADIAL, EDGE_PROJECTION_DEFAULTS, EDGE_PROJECTION_LIMITS, ISOMETRY_HLR_STRATEGY_DEFAULT, BASE_PLANE_NAME_TO_PLANE } from './constants';
 
     
 
@@ -2397,7 +2397,7 @@ export class Mesh extends Shape
      */
     static _singleMeshStrategy(strategy: HlrStrategy | undefined): HlrStrategy
     {
-        if (!strategy) return HLR_STRATEGY_DEFAULT;
+        if (!strategy) return ISOMETRY_HLR_STRATEGY_DEFAULT;
         return (strategy === 'clip' || strategy === 'painter') ? 'exact' : strategy;
     }
 
@@ -2443,7 +2443,7 @@ export class Mesh extends Shape
         const occJs = occluders
             .map(m => m.inner()?.clone?.())
             .filter((m): m is MeshJs => m != null);
-        const strategy = optionsWithDefaults.strategy ?? HLR_STRATEGY_DEFAULT;
+        const strategy = optionsWithDefaults.strategy ?? ISOMETRY_HLR_STRATEGY_DEFAULT;
         const r = this.inner()?.projectEdges(vx, vy, vz || 0, ox, oy, oz || 0, nx, ny, nz || 0, fa, ns, occJs, strategy);
         if (!r)
         {
@@ -2733,7 +2733,7 @@ export class Mesh extends Shape
             view.x, view.y, view.z,
             pivot.x, pivot.y, pivot.z,
             planeN.x, planeN.y, planeN.z,
-            fa, ns, occJs, options.strategy ?? HLR_STRATEGY_DEFAULT,
+            fa, ns, occJs, options.strategy ?? ISOMETRY_HLR_STRATEGY_DEFAULT,
         );
         if (!r)
         {

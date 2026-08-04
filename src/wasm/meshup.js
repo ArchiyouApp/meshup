@@ -462,12 +462,6 @@ export class Curve3DJs {
         Curve3DJsFinalization.register(obj, obj.__wbg_ptr, obj);
         return obj;
     }
-    static __unwrap(jsValue) {
-        if (!(jsValue instanceof Curve3DJs)) {
-            return 0;
-        }
-        return jsValue.__destroy_into_raw();
-    }
     __destroy_into_raw() {
         const ptr = this.__wbg_ptr;
         this.__wbg_ptr = 0;
@@ -864,13 +858,19 @@ export class Curve3DJs {
      *
      * `others` are mapped into this curve's plane by an exact similarity; a non-coplanar
      * operand is an error.
-     * @param {Curve3DJs[]} others
+     * NOTE: takes `other` by REFERENCE, one curve at a time, and callers fold.
+     *
+     * It originally took `Vec<Curve3DJs>`, which looks natural but is a trap: wasm-bindgen
+     * unwraps each element by *destroying it into a raw pointer*, so every operand's JS
+     * wrapper was freed on the way in. Callers that reused an input afterwards — and
+     * `Curve.Compound()` sits under every `Sketch.end()` and `ShapeCollection.combine()` —
+     * then hit "null pointer passed to rust". A borrowed argument cannot do that.
+     * @param {Curve3DJs} other
      * @returns {Curve3DJs}
      */
-    concat(others) {
-        const ptr0 = passArrayJsValueToWasm0(others, wasm.__wbindgen_malloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.curve3djs_concat(this.__wbg_ptr, ptr0, len0);
+    concat(other) {
+        _assertClass(other, Curve3DJs);
+        const ret = wasm.curve3djs_concat(this.__wbg_ptr, other.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -4374,10 +4374,6 @@ function __wbg_get_imports() {
     }, arguments) };
     imports.wbg.__wbg_curve3djs_new = function(arg0) {
         const ret = Curve3DJs.__wrap(arg0);
-        return ret;
-    };
-    imports.wbg.__wbg_curve3djs_unwrap = function(arg0) {
-        const ret = Curve3DJs.__unwrap(arg0);
         return ret;
     };
     imports.wbg.__wbg_done_62ea16af4ce34b24 = function(arg0) {

@@ -203,8 +203,15 @@ export class Curve3DJs {
    *
    * `others` are mapped into this curve's plane by an exact similarity; a non-coplanar
    * operand is an error.
+   * NOTE: takes `other` by REFERENCE, one curve at a time, and callers fold.
+   *
+   * It originally took `Vec<Curve3DJs>`, which looks natural but is a trap: wasm-bindgen
+   * unwraps each element by *destroying it into a raw pointer*, so every operand's JS
+   * wrapper was freed on the way in. Callers that reused an input afterwards — and
+   * `Curve.Compound()` sits under every `Sketch.end()` and `ShapeCollection.combine()` —
+   * then hit "null pointer passed to rust". A borrowed argument cannot do that.
    */
-  concat(others: Curve3DJs[]): Curve3DJs;
+  concat(other: Curve3DJs): Curve3DJs;
   /**
    * Effective polynomial degree: the max over exact spans (line = 1, arc/conic/quadratic
    * = 2, cubic and above = 3+). A native re-architecture of curvo's single-NURBS
@@ -1009,7 +1016,7 @@ export interface InitOutput {
   readonly curve3djs_clone: (a: number) => number;
   readonly curve3djs_closePath: (a: number) => [number, number, number];
   readonly curve3djs_closed: (a: number) => number;
-  readonly curve3djs_concat: (a: number, b: number, c: number) => [number, number, number];
+  readonly curve3djs_concat: (a: number, b: number) => [number, number, number];
   readonly curve3djs_controlPoints: (a: number) => [number, number];
   readonly curve3djs_degree: (a: number) => number;
   readonly curve3djs_extend: (a: number, b: number, c: number, d: number) => [number, number, number];

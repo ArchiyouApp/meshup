@@ -15,7 +15,7 @@
  */
 
 import type { HlrStrategy, PointLike } from './types';
-import { HLR_STRATEGY_DEFAULT } from './constants';
+import { ISOMETRY_HLR_STRATEGY_DEFAULT } from './constants';
 
 /** Settings for a projection, independent of which algorithm runs it. */
 export interface IsometryOptions
@@ -48,7 +48,7 @@ export interface ResolvedIsometryOptions extends Required<Omit<IsometryOptions, 
 }
 
 const DEFAULTS: ResolvedIsometryOptions = {
-    method: HLR_STRATEGY_DEFAULT,
+    method: ISOMETRY_HLR_STRATEGY_DEFAULT,
     hiddenLines: false,
     includeHiddenShapes: false,
     featureAngle: 10,
