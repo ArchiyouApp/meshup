@@ -1,5 +1,5 @@
 import { beforeAll, describe, it, expect } from 'vitest';
-import { Curve, initAsync, Polygon } from '../../src/index';
+import { Curve, initAsync, Mesh, Polygon } from '../../src/index';
 import { Bbox } from '../../src/Bbox';
 import { Vertex } from '../../src/Vertex';
 
@@ -207,5 +207,61 @@ describe('Bbox shape generation', () =>
         expect(bbox.getSidesShapes('top', 'vertex').length).toBe(4);
         // 'topleft' pins Z and X → both the top face and the left face
         expect(bbox.getSidesShapes('topleft', 'face').length).toBe(2);
+    });
+});
+
+describe('Bbox.shape()', () =>
+{
+    it('3D bbox gives a box Mesh of the right size and place', () =>
+    {
+        const bbox = new Bbox([0, 0, 0], [10, 20, 30]);
+        const shape = bbox.shape() as Mesh;
+        expect(shape).toBeInstanceOf(Mesh);
+        expect(shape.bbox().min().toArray()).toEqual([0, 0, 0]);
+        expect(shape.bbox().max().toArray()).toEqual([10, 20, 30]);
+        expect(shape.volume()!).toBeCloseTo(10 * 20 * 30, 6);
+    });
+
+    it('2D bbox gives a closed rectangle Curve in the flat plane', () =>
+    {
+        const bbox = new Bbox([0, 0, 5], [10, 20, 5]);
+        const shape = bbox.shape() as Curve;
+        expect(shape).toBeInstanceOf(Curve);
+        expect(shape.isClosed()).toBe(true);
+        expect(shape.bbox().min().toArray()).toEqual([0, 0, 5]);
+        expect(shape.bbox().max().toArray()).toEqual([10, 20, 5]);
+    });
+
+    it('1D bbox gives a line Curve along its one axis', () =>
+    {
+        const bbox = new Bbox([0, 3, 0], [10, 3, 0]);
+        const shape = bbox.shape() as Curve;
+        expect(shape).toBeInstanceOf(Curve);
+        expect(shape.isClosed()).toBe(false);
+        expect(shape.start().toArray()).toEqual([0, 3, 0]);
+        expect(shape.end().toArray()).toEqual([10, 3, 0]);
+    });
+
+    it('zero-size bbox gives a Vertex at its centre', () =>
+    {
+        const bbox = new Bbox([2, 3, 4], [2, 3, 4]);
+        const shape = bbox.shape() as Vertex;
+        expect(shape).toBeInstanceOf(Vertex);
+        expect(shape.position().toArray()).toEqual([2, 3, 4]);
+    });
+
+    it('the dimensionality accessors refuse a bbox of the wrong dimension', () =>
+    {
+        const box = new Bbox([0, 0, 0], [10, 20, 30]);
+        expect(box.vertex()).toBeNull();
+        expect(box.line()).toBeNull();
+        expect(box.rect()).toBeNull();
+        expect(new Bbox([2, 3, 4], [2, 3, 4]).line()).toBeNull();
+    });
+
+    it('toShape() is an alias for shape()', () =>
+    {
+        const bbox = new Bbox([0, 0, 0], [10, 20, 30]);
+        expect(bbox.toShape()).toBeInstanceOf(Mesh);
     });
 });

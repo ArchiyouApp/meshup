@@ -22,7 +22,7 @@ import { isPointLike } from './types';
 import type { ShapeCollection } from './ShapeCollection';
 import { Point } from './Point';
 
-import { uuid } from './utils';
+import { uuid, nodeToString } from './utils';
 
 /** Anything align()/alignTo() can be aimed at: a Shape, a ShapeCollection (both have a
  *  bbox()), or a bare point (treated as a zero-size bbox at that location). */
@@ -63,6 +63,26 @@ export abstract class Shape
     inner():any
     {
         throw new Error('Shape::inner(): method not implemented for base Shape class.');
+    }
+
+    /** Annotations (dimension lines, labels) linked to this Shape by the host app.
+     *  meshup itself never reads these — it only keeps the two-sided link intact. */
+    _annotations: Array<any> = [];
+
+    /** Link annotation(s) to this Shape (host-app side of the two-sided annotation link) */
+    addAnnotations(annotations: any|Array<any>): this
+    {
+        // NOTE: several from()-constructors use Object.create and skip field initializers
+        if (!this._annotations){ this._annotations = []; }
+        const list = Array.isArray(annotations) ? annotations : [annotations];
+        list.forEach(a => { if (a && !this._annotations.includes(a)) this._annotations.push(a); });
+        return this;
+    }
+
+    /** Annotations linked to this Shape */
+    annotations(): Array<any>
+    {
+        return this._annotations ?? [];
     }
 
      //// ABSTRACT: implemented by subclasses ////
@@ -362,7 +382,14 @@ export abstract class Shape
 
     toString(): string
     {
-        return `<Shape id=${this.id()} type=${this.type} subtype=${this.subtype()}>`;
+        return `<Shape id=${this.id()} type=${this.type} subtype=${this.subtype()} ${this.nodeString()}>`;
+    }
+
+    /** Scene membership of this Shape, as shown by every toString(): the node holding it,
+     *  or that it is not in the scene at all. */
+    nodeString(): string
+    {
+        return nodeToString(this._node);
     }
 
     async toGLB(up: Axis = 'z'): Promise<Uint8Array|undefined>

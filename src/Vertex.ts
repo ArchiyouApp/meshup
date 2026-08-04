@@ -139,13 +139,14 @@ export class Vertex extends Shape
     return this;
   }
 
+  /** Scale Vertex around an origin (default: the Vertex itself, which makes it a no-op - same as the brep kernel) */
   override scale(factor: number | PointLike, origin?: PointLike): this
   {
     const [sx, sy, sz] = (typeof factor === 'number')
       ? [factor, factor, factor]
       : [new Point(factor).x, new Point(factor).y, new Point(factor).z];
 
-    const o = origin ? new Point(origin) : new Point(0, 0, 0);
+    const o = origin ? new Point(origin) : this.center();
 
     this._vertex = new VertexJs(
       new Point(
@@ -270,6 +271,6 @@ export class Vertex extends Shape
 
   toString(): string
   {
-    return `<Vertex(${this.x}, ${this.y}, ${this.z})>`;
+    return `<Vertex(${this.x}, ${this.y}, ${this.z}) ${this.nodeString()}>`;
   }
 }

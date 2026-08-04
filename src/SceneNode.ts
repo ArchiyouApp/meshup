@@ -28,6 +28,7 @@ import type { StyleData } from './Style';
 import type { Axis, ShapeType, SceneNodeGraphNode, SceneNodeData, BasePlane } from './types';
 import { ShapeCollection } from './ShapeCollection';
 import { GLTFBuilder } from './GLTFBuilder';
+import { uuid } from './utils';
 
 /** Plain-object serialisation of a SceneNode subtree, keeping live shape references so a
  *  component's scene can be recreated under a different modeler (host RunnerComponentImporter). */
@@ -63,6 +64,8 @@ export class SceneNode<S extends SceneNodeShape = Shape>
 {
     name: string;
     style: Style;
+
+    private _id?: string; // lazy: see id()
 
     private _shape: S | null = null; // Shape held directly in this container (not in child containers)
     private _children: SceneNode<S>[] = []; // Child containers (sub-groups / layers)
@@ -341,6 +344,17 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         // Skip `this` itself — start from children
         const all = this._traverse();
         return all.slice(1); // first element is `this`
+    }
+
+    /** Unique id of this node. Nodes are not identified by name — names repeat across
+     *  layers — so this is what tells two nodes apart when debugging.
+     *
+     *  Generated on first use, not in the constructor: ids are only ever read while
+     *  debugging, and a big scene builds tens of thousands of nodes at once. (`??=` also
+     *  survives the Object.create() construction paths that skip field initializers.) */
+    id(): string
+    {
+        return this._id ??= uuid();
     }
 
     /** Return the root container (walk up _parent chain). */

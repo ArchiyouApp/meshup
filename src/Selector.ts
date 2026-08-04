@@ -11,12 +11,15 @@
  * 
  */
 
-import { 
+import {
     MAIN_AXIS,
     SELECTOR_SHAPES,
-    BASE_PLANE_NAME_TO_PLANE
+    BASE_PLANE_NAME_TO_PLANE,
+    BBOX_SIDES,
+    BBOX_SIDE_TO_BOUND
   } from "./constants"
 
+import type { Bbox } from "./Bbox";
 import type { Vertex } from "./Vertex";
 import { Curve } from "./Curve";
 import { Mesh } from "./Mesh";
@@ -158,15 +161,42 @@ export class Selector
     /** Angle tolerance in degrees for "parallel" normal comparisons */
     static ANGLE_TOLERANCE = 1.0;
 
+    /** Relative tolerance (of bbox size) for "on the same side plane" and score ties */
+    static SIDE_TOLERANCE = 1e-6;
+
     /**
      *  side: face/edge/vertex||<side>
-     *  Return subshapes that are on the specified side of the target's bounding box (e.g. top, bottom, left, right, front, back).
+     *  Return the target's *own* subshapes that sit on - or, failing that, face - the given
+     *  side(s) of its bounding box (e.g. top, bottom, left, right, front, back).
+     *
+     *  Two passes, so that rotated shapes give a useful answer too:
+     *    1. flush: subshapes lying entirely on the requested bbox side plane(s). This is the
+     *       common, axis-aligned case and is greedy (a top face made of 2 triangles gives 2).
+     *    2. facing: nothing is flush (a rotated box has no subshape parallel to its bbox), so
+     *       take the subshapes that face the side most - faces by normal, edges/vertices by
+     *       how far they reach along the side direction. Equal scorers are all returned.
+     *  A side selector therefore always returns at least one subshape, as long as the target
+     *  has subshapes of the requested type at all.
      */
-    private _side(target: Mesh | Curve | ShapeCollection): undefined | ShapeCollection
+    private _side(target: Mesh | Curve | ShapeCollection): ShapeCollection
     {
-        return target.bbox()?.getSidesShapes(
-                                this.params.alignments, 
-                                this.params.shape);
+        const bbox = target.bbox();
+        const sides = this._sideKeywords();
+        const items = this._sideSubshapes(target);
+
+        if (!bbox || sides.length === 0 || items.length === 0) return new ShapeCollection([]);
+
+        const tolerance = Selector.SIDE_TOLERANCE * Math.max(bbox.maxSize(), 1);
+
+        const flush = items.filter(item =>
+            sides.every(side => this._isOnSidePlane(item, side, bbox, tolerance)));
+
+        const selected = (flush.length > 0)
+            ? flush
+            : this._facingSide(items, this._sideDirection(sides), tolerance);
+
+        // vertices are collected as Points, but a selection hands back Shapes
+        return new ShapeCollection(selected.map(s => (s instanceof Point) ? s.toVertex() : s));
     }
 
     /**
@@ -332,6 +362,94 @@ export class Selector
             default:
                 return [];
         }
+    }
+
+    //// SIDE SELECTOR HELPERS ////
+
+    /** The side keywords used in the selector, e.g. 'left-front-bottom' → ['front','bottom','left'] */
+    private _sideKeywords(): Array<string>
+    {
+        const alignments = (this.params.alignments as string || '').toLowerCase();
+        return BBOX_SIDES.filter(side => alignments.includes(side));
+    }
+
+    /** Outward unit direction of the requested side(s): 'front' → -y, 'frontleft' → (-y-x) normalized */
+    private _sideDirection(sides: Array<string>): Vector
+    {
+        return sides
+            .reduce((dir, side) => dir.add(BASE_PLANE_NAME_TO_PLANE[side].normal), new Vector(0, 0, 0))
+            .normalize();
+    }
+
+    /** Subshapes of the target that a side selector picks from.
+     *  Vertices are deduplicated by position: a mesh repeats every corner once per polygon. */
+    private _sideSubshapes(target: Mesh | Curve | ShapeCollection): Array<Polygon | Curve | Point>
+    {
+        const shape = this.params.shape as string;
+        if (shape === 'face') return this._facesFromTarget(target);
+        if (shape === 'edge') return this._edgesFromTarget(target);
+
+        // vertex: use the corner vertices of a Curve (its control points repeat at segment joins)
+        const targets = (target instanceof ShapeCollection)
+            ? [...target.meshes().toArray(), ...target.curves().toArray()]
+            : [target];
+
+        const points = targets.flatMap((t: any) =>
+            (t instanceof Curve) ? t.vertices().toArray().map((v: Vertex) => v.toPoint())
+                                 : (t instanceof Mesh) ? t.vertices() : []);
+
+        const seen = new Set<string>();
+        return points.filter((p: Point) =>
+        {
+            const key = p.copy().round().toArray().join(','); // round() mutates: keep the point itself exact
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    }
+
+    /** All points that define a subshape - used to test whether it lies flush on a side plane */
+    private _subshapePoints(item: Polygon | Curve | Point): Array<Point>
+    {
+        if (item instanceof Point) return [item];
+        if (item instanceof Polygon) return item.vertices().toArray().map(v => v.toPoint());
+        if (item instanceof Curve) return item.points();
+        return [];
+    }
+
+    /** Does the subshape lie entirely on the given bbox side plane (within tolerance)? */
+    private _isOnSidePlane(item: Polygon | Curve | Point, side: string, bbox: Bbox, tolerance: number): boolean
+    {
+        const { axis, max } = BBOX_SIDE_TO_BOUND[side];
+        const bound = (max) ? bbox.maxAtAxis(axis) : bbox.minAtAxis(axis);
+        return this._subshapePoints(item).every(p => Math.abs(p[axis] - bound) <= tolerance);
+    }
+
+    /** The subshapes facing the given direction most.
+     *  Faces are ranked by how much their normal points that way (the polygon *facing* the side),
+     *  then - like edges and vertices - by how far they reach along the direction. */
+    private _facingSide(items: Array<Polygon | Curve | Point>, dir: Vector, tolerance: number): Array<Polygon | Curve | Point>
+    {
+        let candidates = items;
+
+        if (this.params.shape === 'face')
+        {
+            const alignment = (f: any) => f.normal().dot(dir);
+            // faces turned away from the side are no candidates - unless none is turned towards it
+            // (a flat plate has no face facing 'front'), then reach along the direction decides
+            const facing = items.filter(f => alignment(f) > Selector.SIDE_TOLERANCE);
+            candidates = this._bestScoring(facing.length ? facing : items, alignment, Selector.SIDE_TOLERANCE);
+        }
+
+        return this._bestScoring(candidates, item => this._shapeCenter(item).toVector().dot(dir), tolerance);
+    }
+
+    /** All items whose score is the highest, ties (within tolerance) included */
+    private _bestScoring<T>(items: Array<T>, score: (item: T) => number, tolerance: number): Array<T>
+    {
+        const scores = items.map(score);
+        const best = Math.max(...scores);
+        return items.filter((_, i) => scores[i] >= best - tolerance);
     }
 
     //// GEOMETRY HELPERS ////

@@ -6,6 +6,7 @@ import { Curve } from '../../src/Curve';
 import { Polygon } from '../../src/Polygon';
 import { Point } from '../../src/Point';
 import { Vertex } from '../../src/Vertex';
+import { Vector } from '../../src/Vector';
 import { ShapeCollection } from '../../src/ShapeCollection';
 
 beforeAll(async () =>
@@ -170,6 +171,82 @@ describe('Selector.execute()', () =>
             {
                 const n = f.normal ? f.normal() : f.polygons()[0].normal();
                 expect(Math.abs(n.y)).toBeCloseTo(1, 0);
+            });
+        });
+
+        it('face||front returns the mesh own face, not the bbox plane', () =>
+        {
+            const cube = Mesh.Cube(10);
+            const faces = (new Selector('face||front').execute(cube) as ShapeCollection).toArray() as Polygon[];
+            // the front face of the cube itself: area 10x10, every vertex on the front plane
+            expect(faces.reduce((sum, f) => sum + f.area(), 0)).toBeCloseTo(100);
+            faces.forEach(f => f.vertices().toArray().forEach(v => expect(v.toPoint().y).toBeCloseTo(-5)));
+        });
+
+        // A rotated box has no subshape flush with its (axis-aligned) bounding box, but a side
+        // selector must still return the subshape facing that side - see 'facing' pass in Selector
+        describe('rotated shapes', () =>
+        {
+            // 10 (x) x 10 (y) x 100 (z) box, tilted around two axes
+            const rotatedBox = () => Mesh.Box(10, 10, 100).rotateX(-10).rotateY(10);
+
+            it('face||front returns the polygon facing front', () =>
+            {
+                const box = rotatedBox();
+                const result = new Selector('face||front').execute(box) as ShapeCollection;
+                expect(result.length).toBe(1);
+
+                const face = result.first() as Polygon;
+                expect(face).toBeInstanceOf(Polygon);
+                // it is the box own 10 x 100 side face (a bbox plane would be bigger)
+                expect(face.area()).toBeCloseTo(1000);
+                // and no other polygon of the box faces front more
+                const facingFront = (f: Polygon) => f.normal().dot(new Vector(0, -1, 0));
+                box.polygons().toArray().forEach(f =>
+                    expect(facingFront(f)).toBeLessThanOrEqual(facingFront(face) + 1e-9));
+            });
+
+            it('face||top returns the polygon facing up', () =>
+            {
+                const face = (new Selector('face||top').execute(rotatedBox()) as ShapeCollection).first() as Polygon;
+                expect(face.area()).toBeCloseTo(100); // the 10 x 10 top face
+                expect(face.normal().dot(new Vector(0, 0, 1))).toBeGreaterThan(0.9);
+            });
+
+            it('every side returns at least one face', () =>
+            {
+                const box = rotatedBox();
+                ['front', 'back', 'left', 'right', 'top', 'bottom'].forEach(side =>
+                {
+                    const result = new Selector(`face||${side}`).execute(box) as ShapeCollection;
+                    expect(result.length, `face||${side}`).toBeGreaterThan(0);
+                });
+            });
+
+            it('vertex||front returns the box own vertices reaching furthest to the front', () =>
+            {
+                const box = rotatedBox();
+                const result = new Selector('vertex||front').execute(box) as ShapeCollection;
+                // rotateY leaves y untouched, so the two corners of one edge tie as front-most
+                expect(result.length).toBe(2);
+                result.toArray().forEach(v =>
+                {
+                    expect(v).toBeInstanceOf(Vertex);
+                    expect((v as Vertex).toPoint().y).toBeCloseTo(box.bbox().minY());
+                });
+            });
+
+            it('edge||front returns an edge of the box itself', () =>
+            {
+                const box = rotatedBox();
+                const result = new Selector('edge||front').execute(box) as ShapeCollection;
+                expect(result.length).toBeGreaterThan(0);
+
+                const edge = result.first() as Curve;
+                expect(edge).toBeInstanceOf(Curve);
+                // an edge of the box: 10, 10 or 100 long - not a bbox edge
+                const boxEdgeLengths = box.edges().toArray().map(e => e.length());
+                expect(boxEdgeLengths.some(l => Math.abs(l - edge.length()) < 1e-6)).toBe(true);
             });
         });
     });
@@ -338,11 +415,14 @@ describe('Selector.execute() on Curve targets', () =>
             expect(edge.length()).toBeCloseTo(10);
         });
 
-        it('edge||left-front returns no edges on a flat curve (that corner is a vertex, not an edge)', () =>
+        it('edge||left-front returns the two edges meeting at that corner of a flat curve', () =>
         {
+            // No edge lies on both side planes, so the two edges reaching furthest towards
+            // the left-front corner are returned (they tie).
             const rect = Curve.Rect(10, 10);
             const result = new Selector('edge||left-front').execute(rect) as ShapeCollection;
-            expect(result.length).toBe(0);
+            expect(result.length).toBe(2);
+            result.toArray().forEach(e => expect(e).toBeInstanceOf(Curve));
         });
 
         it('vertex||left is greedy: returns both left corners of a flat rect', () =>
@@ -361,12 +441,11 @@ describe('Selector.execute() on Curve targets', () =>
             expect(result.length).toBe(1);
         });
 
-        it('face||front returns the bbox face polygon', () =>
+        it('face||front returns nothing on a Curve: side selectors return the target own subshapes', () =>
         {
             const rect = Curve.Rect(10, 10);
             const result = new Selector('face||front').execute(rect) as ShapeCollection;
-            const faces = result.toArray();
-            expect(faces.length).toBeGreaterThan(0);
+            expect(result.length).toBe(0);
         });
     });
 

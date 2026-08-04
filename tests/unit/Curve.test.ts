@@ -853,3 +853,126 @@ describe('Curve.fillet()/chamfer() — per-corner `at`', () =>
         expect(c.area()).toBeCloseTo(400, 6);
     });
 });
+
+describe('Curve.perpendicularPointTo()', () =>
+{
+    /** The connector must meet the curve at a right angle */
+    const expectPerpendicular = (c: Curve, from: Point, foot: Point) =>
+    {
+        const tangent = c.tangentAt(foot)!;
+        const connector = foot.toVector().subtract(from).normalize();
+        expect(Math.abs(connector.dot(tangent))).toBeLessThan(0.05);
+    };
+
+    it('drops a perpendicular onto a line', () =>
+    {
+        const c = Curve.Line([0, 0, 0], [100, 0, 0]);
+        const foot = c.perpendicularPointTo([50, 30, 0]) as Point;
+        expect(foot.toArray()).toEqual([50, 0, 0]);
+        expect(c.perpendicularPointTo([50, 30, 0], true).length).toEqual(1);
+    });
+
+    it('returns a point already on the curve unchanged', () =>
+    {
+        const c = Curve.Line([0, 0, 0], [100, 0, 0]);
+        expect((c.perpendicularPointTo([30, 0, 0]) as Point).toArray()).toEqual([30, 0, 0]);
+    });
+
+    it('finds no foot past the end of a line, and falls back to the closest point', () =>
+    {
+        const c = Curve.Line([0, 0, 0], [100, 0, 0]);
+        expect(c.perpendicularPointTo([150, 30, 0], true)).toEqual([]);
+        const foot = c.perpendicularPointTo([150, 30, 0]) as Point;
+        expect(foot.distance([100, 0, 0])).toBeCloseTo(0, 6);
+    });
+
+    it('finds the near and the far foot on a circle', () =>
+    {
+        const c = Curve.Circle(50);
+        const from = new Point(200, 0, 0);
+        const feet = c.perpendicularPointTo(from, true);
+        expect(feet.length).toEqual(2);
+        expect(feet[0].distance([50, 0, 0])).toBeCloseTo(0, 3);   // nearest first
+        expect(feet[1].distance([-50, 0, 0])).toBeCloseTo(0, 3);
+        feet.forEach(f => expectPerpendicular(c, from, f));
+        expect((c.perpendicularPointTo(from) as Point).distance([50, 0, 0])).toBeCloseTo(0, 3);
+    });
+
+    it('works from inside a circle and off its axes', () =>
+    {
+        const c = Curve.Circle(50);
+        const inside = c.perpendicularPointTo([10, 0, 0], true);
+        expect(inside.length).toEqual(2);
+        expect(inside[0].distance([50, 0, 0])).toBeCloseTo(0, 3);
+
+        const diagonal = c.perpendicularPointTo([100, 100, 0], true);
+        expect(diagonal.length).toEqual(2);
+        expect(diagonal[0].distance([35.355, 35.355, 0])).toBeCloseTo(0, 2);
+    });
+
+    it('works on a circle away from the origin', () =>
+    {
+        const c = Curve.Circle(50, [200, 100, 0]);
+        const feet = c.perpendicularPointTo([200, 300, 0], true);
+        expect(feet.length).toEqual(2);
+        expect(feet[0].distance([200, 150, 0])).toBeCloseTo(0, 3);
+    });
+
+    it('returns one point when every point of a circle qualifies', () =>
+    {
+        const c = Curve.Circle(50);
+        const feet = c.perpendicularPointTo([0, 0, 0], true);
+        expect(feet.length).toEqual(1);
+        expect(feet[0].distance([50, 0, 0])).toBeCloseTo(0, 6);
+    });
+
+    it('finds a foot on every side of a rectangle from within', () =>
+    {
+        const c = Curve.Rect(100, 50);
+        const from = new Point(10, 5, 0);
+        const feet = c.perpendicularPointTo(from, true);
+        expect(feet.length).toEqual(4);
+        feet.forEach(f => expectPerpendicular(c, from, f));
+    });
+
+    it('skips the corners of a rectangle, which have no tangent', () =>
+    {
+        const c = Curve.Rect(100, 50);
+        // straight out from a corner nothing is perpendicular...
+        expect(c.perpendicularPointTo([200, 200, 0], true)).toEqual([]);
+        // ...but the nearest point is still reported
+        const foot = c.perpendicularPointTo([200, 200, 0]) as Point;
+        expect(foot.distance([50, 25, 0])).toBeCloseTo(0, 3);
+
+        // opposite a side there are two: one on that side, one on the far one
+        const feet = c.perpendicularPointTo([200, 10, 0], true);
+        expect(feet.length).toEqual(2);
+        expect(feet[0].distance([50, 10, 0])).toBeCloseTo(0, 3);
+    });
+
+    it('counts the ends of an open arc when they are perpendicular', () =>
+    {
+        const c = Curve.Arc([50, 0, 0], [0, 50, 0], [-50, 0, 0], 'threepoint');
+        const feet = c.perpendicularPointTo([200, 0, 0], true);
+        expect(feet.length).toEqual(2); // both ends of the half circle
+        expect(feet[0].distance([50, 0, 0])).toBeCloseTo(0, 3);
+        expect(feet[1].distance([-50, 0, 0])).toBeCloseTo(0, 3);
+
+        expect(c.perpendicularPointTo([0, 200, 0], true).length).toEqual(1);
+    });
+
+    it('finds several feet on a wavy spline', () =>
+    {
+        const c = Curve.Interpolated([[0, 0, 0], [50, 50, 0], [100, -50, 0], [150, 0, 0]]);
+        const from = new Point(75, 100, 0);
+        const feet = c.perpendicularPointTo(from, true);
+        expect(feet.length).toBeGreaterThan(1);
+        feet.forEach(f => expectPerpendicular(c, from, f));
+    });
+
+    it('rejects anything that is not a point', () =>
+    {
+        const c = Curve.Line([0, 0, 0], [100, 0, 0]);
+        expect(() => c.perpendicularPointTo('nonsense' as any)).toThrow();
+    });
+});

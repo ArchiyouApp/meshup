@@ -11,7 +11,8 @@ import { ShapeCollection } from './ShapeCollection';
 import type { PointLike, Axis } from './types';
 import { isPointLike } from './types';
 
-import { BASE_PLANE_NAME_TO_PLANE, TOLERANCE, BBOX_SIDES } from './constants';
+import { BASE_PLANE_NAME_TO_PLANE, TOLERANCE, BBOX_SIDES, BBOX_FLAT_EPS, BBOX_FLAT_REL_EPS } from './constants';
+import { addResultToScene } from './sceneDecorators';
 
 
 /** Axis-aligned Bounding Box */
@@ -19,6 +20,9 @@ export class Bbox
 {
     private _min: Point;
     private _max: Point;
+    /** The Shape this bbox was measured from — lets box()/rect() land in its scene.
+     *  Non-enumerable: a Bbox is compared and serialised by its bounds alone. */
+    declare _source: any;
 
     constructor(min: PointLike|Array<PointLike>, max?: PointLike)
     {
@@ -36,6 +40,7 @@ export class Bbox
         {
             throw new Error('Bbox::constructor(): Invalid parameters. Please supply (min:PointLike, max:PointLike) or ([min:PointLike, max:PointLike])');
         }
+        Object.defineProperty(this, '_source', { value: null, writable: true, enumerable: false });
     }
 
     static fromMesh(m:Mesh): Bbox
@@ -45,7 +50,25 @@ export class Bbox
         {
             throw new Error('Mesh has no bounding box.');
         }
-        return new Bbox(bbox.min, bbox.max);
+        return new Bbox(bbox.min, bbox.max)._fromShape(m);
+    }
+
+    //// SCENE ////
+
+    /** Tie this bbox to the Shape it was measured from, so the shapes it makes can join that
+     *  shape's scene. Fluent and internal — set by the bbox() accessors. */
+    _fromShape(shape: any): this
+    {
+        this._source = shape;
+        return this;
+    }
+
+    /** Put a shape this bbox just built into the measured shape's scene (no-op when there is
+     *  no source, or the source is standalone / tmp()). */
+    _attach<T>(shape: T): T
+    {
+        addResultToScene(this._source, shape);
+        return shape;
     }
 
     //// CALCULATED PROPERTIES ////
@@ -104,7 +127,7 @@ export class Bbox
 
         // For flat XY bboxes (height = 0), top/bottom address Y; front/back are ignored.
         // For 3D bboxes, top/bottom address Z, front/back address Y.
-        const isXYPlane = this.height() === 0;
+        const isXYPlane = this._isFlatAlong(this.height());
         let y: number, z: number;
 
         if (isXYPlane)
@@ -180,12 +203,12 @@ export class Bbox
         return this._max[axis] - this._min[axis];
     }
 
-    /** Returns the axis that has zero extent in a 2D bbox, or null for 3D bboxes */
+    /** Returns the axis that has (near-)zero extent in a 2D bbox, or null for 3D bboxes */
     axisMissingIn2D(): Axis | null
     {
-        if (this.height() === 0) return 'z';
-        if (this.depth()  === 0) return 'y';
-        if (this.width()  === 0) return 'x';
+        if (this._isFlatAlong(this.height())) return 'z';
+        if (this._isFlatAlong(this.depth())) return 'y';
+        if (this._isFlatAlong(this.width())) return 'x';
         return null;
     }
 
@@ -271,32 +294,114 @@ export class Bbox
         return 'z';
     }
 
+    /** Is the bbox flat along this extent?
+     *  NOT an exact zero test: a shape rotated onto a plane (layflat(), a lofted face laid
+     *  down) keeps float residue — a 100mm part typically lands ~1e-14 thick, and an exact
+     *  test would call that a 3D bbox and break every 2D code path downstream.
+     *  Scales with the bbox so the check holds for very large models too. */
+    private _isFlatAlong(extent: number): boolean
+    {
+        return extent <= Math.max(BBOX_FLAT_EPS, this.maxSize() * BBOX_FLAT_REL_EPS);
+    }
+
+    /** A zero-size bbox: every extent collapsed (what an empty or single-point shape measures) */
+    isPoint():boolean
+    {
+        return [this.width(), this.depth(), this.height()].every(d => this._isFlatAlong(d));
+    }
+
     is1D():boolean
     {
-        const dims = [this.width(), this.depth(), this.height()].filter(d => d > 0);
+        const dims = [this.width(), this.depth(), this.height()].filter(d => !this._isFlatAlong(d));
         return dims.length === 1;
     }
-    
+
     is2D():boolean
     {
-        return this.height() === 0 || this.depth() === 0 || this.width() === 0;
+        return this._isFlatAlong(this.height()) || this._isFlatAlong(this.depth()) || this._isFlatAlong(this.width());
     }
 
     is3D():boolean
     {
-        return this.height() > 0 && this.depth() > 0 && this.width() > 0;
+        return !this.is2D();
     }
 
     //// SHAPE REPRESENTATIONS ////
 
-    /** Returns a rectangular Curve outline of this bbox on the XY plane */
-    rect(): any
+    /**
+     * The real geometry of this bounding box, matching its dimensionality:
+     *   - 3D → a box `Mesh`
+     *   - 2D → a closed rectangle `Curve` in the plane the bbox is flat in
+     *   - 1D → a straight line `Curve` along the bbox' one axis
+     *   - a zero-size (point) bbox → a `Vertex` at its centre
+     *
+     * Mirrors OBbox.shape() (and the brep Bbox), except everything here stays axis-aligned.
+     *
+     * The result is added to the scene the measured shape lives in (same layer an
+     * `@sceneAdd` result would land on). Measured off a standalone or `tmp()` shape it stays
+     * out of the scene, as does a bbox built straight from points.
+     */
+    shape(): Vertex|Curve|Mesh|null
     {
-        throw new Error('Bbox.rect(): not yet implemented');
+        // vertex()/line()/rect()/box() attach the result themselves
+        return this.isPoint() ? this.vertex()
+                : this.is1D() ? this.line()
+                : this.is2D() ? this.rect()
+                : this.box();
     }
 
-    /** Generate a box Mesh representation of this bbox */
+    /** Alias for shape() */
+    toShape(): Vertex|Curve|Mesh|null
+    {
+        return this.shape();
+    }
+
+    /** A Vertex at the centre of a zero-size bbox. Null when the bbox has any size. */
+    vertex(): Vertex|null
+    {
+        if(!this.isPoint())
+        {
+            console.warn(`Bbox::vertex(): Bbox has size, so can't turn it into a single Vertex!`);
+            return null;
+        }
+        return this._attach(new Vertex(this.center()));
+    }
+
+    /** A straight line Curve along this bbox' one non-flat axis. Null when not 1D. */
+    line(): Curve|null
+    {
+        if(!this.is1D())
+        {
+            console.warn(`Bbox::line(): Bbox is not 1D, so can't turn it into a single line!`);
+            return null;
+        }
+        return this._attach(Curve.Line(this._min, this._max));
+    }
+
+    /** Returns a closed rectangular Curve outline of this (flat) bbox.
+     *  The plane is the one the bbox is flat in (XY for a 2D shape on the ground plane).
+     *  Returns null for a 3D bbox — use box() for that. */
+    rect(): Curve|null
+    {
+        if(!this.is2D())
+        {
+            console.warn(`Bbox::rect(): Bbox is not 2D, so can't turn it into a rectangle Curve!`);
+            return null;
+        }
+        const flatAxis = this.axisMissingIn2D();
+        const plane = (flatAxis === 'z') ? 'xy' : (flatAxis === 'y') ? 'xz' : 'yz';
+        return this._attach(Curve.RectBetween(this._min, this._max, plane));
+    }
+
+    /** Generate a box Mesh representation of this bbox.
+     *  Added to the scene the measured shape lives in - see _attach(). */
     box(): Mesh
+    {
+        return this._attach(this._boxRaw());
+    }
+
+    /** The box Mesh without any scene bookkeeping - for measuring/derivation inside meshup */
+    _boxRaw(): Mesh
     {
         return Mesh.Box(this.width(), this.depth(), this.height())
                 .translate(this.center());
@@ -305,7 +410,7 @@ export class Bbox
     /** get all planes as polygons of this bbox */
     planes(): Array<Polygon>
     {
-       return this.box().polygons().toArray();
+       return this._boxRaw().polygons().toArray();
     }
 
     /** Get side face of bbox  
@@ -322,40 +427,50 @@ export class Bbox
         });
     }
     
-    /** Returns the back side Polygon (max-Y side) */
-    back(): Polygon|undefined
+    /** Sub-shape at a named side of this bbox, matching the bbox' own dimensionality:
+     *  a Polygon for a 3D bbox, the side edge (Curve) for a flat 2D one, a Vertex for a point.
+     *  This mirrors the brep Bbox, where side accessors degrade the same way. */
+    getSide(side: string): Polygon|Curve|Vertex|undefined
     {
-        return this.getPlane('back');    
+        if(this._isFlatAlong(this.maxSize())){ return new Vertex(this.center()); }
+        if(this.is2D()){ return this.getSidesShapes(side, 'edge').first() as Curve|undefined; }
+        return this.getPlane(side);
     }
 
-    /** Returns the left polygon of this bbox (min-X side) */
-    left(): Polygon|undefined
+    /** Returns the back side of this bbox (max-Y side) */
+    back(): Polygon|Curve|Vertex|undefined
     {
-        return this.getPlane('left');
+        return this.getSide('back');
     }
 
-    /** Returns the right polygon of this bbox (max-X side) */
-    right(): Polygon|undefined
+    /** Returns the left side of this bbox (min-X side) */
+    left(): Polygon|Curve|Vertex|undefined
     {
-        return this.getPlane('right');
+        return this.getSide('left');
     }
 
-    /** Returns the top polygon of this bbox (max-Z side) */
-    top(): Polygon|undefined
+    /** Returns the right side of this bbox (max-X side) */
+    right(): Polygon|Curve|Vertex|undefined
     {
-        return this.getPlane('top');
+        return this.getSide('right');
     }
 
-    /** Returns bottom polygon of this bbox (min-Z side) */
-    bottom(): Polygon|undefined
+    /** Returns the top side of this bbox (max-Z side) */
+    top(): Polygon|Curve|Vertex|undefined
     {
-        return this.getPlane('bottom');
+        return this.getSide('top');
     }
 
-    /** Returns the front polygon of this bbox (min-Y side) */
-    front(): Polygon|undefined
+    /** Returns the bottom side of this bbox (min-Z side) */
+    bottom(): Polygon|Curve|Vertex|undefined
     {
-        return this.getPlane('front');
+        return this.getSide('bottom');
+    }
+
+    /** Returns the front side of this bbox (min-Y side) */
+    front(): Polygon|Curve|Vertex|undefined
+    {
+        return this.getSide('front');
     }
 
     /** Returns the face(s), edge(s) or vertex/vertices at the given named side of the bbox.
@@ -391,17 +506,16 @@ export class Bbox
             return new ShapeCollection<Polygon>(planes);
         }
 
-        const EPS = 1e-9;
         const mins    = [this._min.x, this._min.y, this._min.z];
         const maxs    = [this._max.x, this._max.y, this._max.z];
         const extents = [this.width(), this.depth(), this.height()];
 
         // Real axes have extent; degenerate axes (flat/thin bboxes) are always at their single value.
-        const realAxes = ([0, 1, 2] as Array<0|1|2>).filter(a => extents[a] > EPS);
+        const realAxes = ([0, 1, 2] as Array<0|1|2>).filter(a => !this._isFlatAlong(extents[a]));
 
         // Each side keyword pins one axis to its min (false) or max (true) bound.
         // On a flat XY bbox (Z degenerate) top/bottom alias to back/front (Y), matching corner().
-        const isXYPlane = this.height() <= EPS;
+        const isXYPlane = this._isFlatAlong(this.height());
         const AXIS_OF: Record<string, 0|1|2> = { left: 0, right: 0, front: 1, back: 1, bottom: 2, top: 2 };
         const MAX_KEYS = new Set(['right', 'back', 'top']);
         const pins = new Map<0|1|2, boolean>();

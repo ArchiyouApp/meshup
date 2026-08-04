@@ -26,7 +26,7 @@ import { ShapeCollection, getCsgrs, Mesh } from './index';
 import { Shape } from './Shape';
 import type { SceneNode } from './SceneNode';
 import { sceneReplace, sceneAdd, sceneUpdate, sceneCarry, sceneReplaceOrKeep } from './sceneDecorators';
-import type { CsgrsModule, PointLike, Axis, BasePlane, CurveCornerSelection } from './types';
+import type { CsgrsModule, PointLike, Axis, BasePlane, CurveCornerSelection, OrientationXY } from './types';
 import { isPointLike, isBasePlane } from './types'
 import { Point } from './Point';
 import { Vector } from './Vector';
@@ -35,10 +35,32 @@ import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { Polygon } from './Polygon';
 
-import { rad } from "./utils";
+import { rad, shortestArcAxisAngle, primaryOrthoXYAngle } from "./utils";
 import { GLTFBuilder } from './GLTFBuilder';
 import { Selector } from './Selector';
 
+
+/** Chord tolerance used when locating perpendicular feet. Matches the kernel's own DEFAULT_CHORD
+ *  (see wasm/curve_js.rs) so the sampled polyline is the one pointAtParam() interpolates over,
+ *  rather than the coarser TESSELATION_TOLERANCE used for display tessellation. */
+const PERPENDICULAR_CHORD_TOLERANCE = 1e-4;
+
+/** How far off a right angle a connector may be (~1°) and still count as perpendicular. Wide
+ *  enough to absorb the chord tolerance above, narrow enough to reject corners. */
+const PERPENDICULAR_ANGLE_TOLERANCE = Math.sin(rad(1));
+
+/** Least number of samples along a curve when looking for perpendicular feet. Keeps coarse
+ *  polylines (a rectangle tessellates to its four corners) from hiding the feet on their edges. */
+const PERPENDICULAR_MIN_SAMPLES = 64;
+
+/** Relative size below which the orthogonality measure counts as exactly zero — well under any
+ *  real signal, well over floating point noise. */
+const PERPENDICULAR_ZERO_TOLERANCE = 1e-9;
+
+/** How finely a loft subdivides a curved segment, counted per full turn: a whole circle becomes
+ *  this many ring steps, a quarter-circle fillet a quarter of them. Straight segments are lofted
+ *  as they are, so a rectangle stays four faces however high this is. */
+const LOFT_SEGMENTS_PER_TURN = 64;
 
 export class Curve extends Shape
 {
@@ -1084,6 +1106,161 @@ export class Curve extends Shape
         return Vector.from(this.inner().tangentAt(param));
     }
 
+    /** Find the point on this Curve where the line from the given point to that point
+     *  is perpendicular to the Curve (the foot of the perpendicular).
+     *
+     *  By default the *nearest* such point is returned. Some points have no perpendicular foot at
+     *  all — beyond the end of a line, or straight out from the corner of a rectangle — and then
+     *  the closest point on the Curve is returned instead.
+     *
+     *  Pass `all = true` to get every perpendicular foot instead (a circle seen from outside
+     *  has two, a wavy curve can have many), sorted by distance ascending. That list contains
+     *  only genuine perpendicular feet and may be empty.
+     *
+     *  NOTE: feet are computed on the curve's tessellation, so on arcs and ellipses they are
+     *  accurate to the kernel chord tolerance (~1e-4).
+     *
+     *  @param point - the point to drop the perpendicular from
+     *  @param all - return every perpendicular foot instead of only the nearest one
+     */
+    perpendicularPointTo(point: PointLike): Point|null;
+    perpendicularPointTo(point: PointLike, all: true): Array<Point>;
+    perpendicularPointTo(point: PointLike, all?: boolean): Point|Array<Point>|null;
+    perpendicularPointTo(point: PointLike, all: boolean = false): Point|Array<Point>|null
+    {
+        if(!isPointLike(point)){ throw new Error(`Curve::perpendicularPointTo(): Please supply a PointLike. Got: ${point}`); }
+
+        const from = Point.from(point);
+        const feet = this._perpendicularFeet(from);
+
+        if(all){ return feet.map(f => f.point); }
+        if(feet.length){ return feet[0].point; }
+
+        // Nothing on this Curve is perpendicular to `point`: fall back to the closest point on it
+        const param = this.paramClosestToPoint(from);
+        return (param === null) ? null : this.pointAtParam(param);
+    }
+
+    /** Subdivide a polyline until no segment is longer than a fraction of the whole, so that every
+     *  straight run carries interior points whose tangent is the run's own direction. */
+    private _densified(poly: Array<Point>): Array<Point>
+    {
+        const total = poly.reduce( (acc, p, i) => (i === 0) ? 0 : acc + p.distance(poly[i-1]), 0);
+        const maxLength = total / PERPENDICULAR_MIN_SAMPLES;
+        if(maxLength <= 0){ return poly; }
+
+        return poly.slice(0, -1).reduce( (acc:Array<Point>, a, i) =>
+        {
+            const ab = poly[i+1].toVector().subtract(a);
+            const steps = Math.max(1, Math.ceil(ab.length() / maxLength));
+            // NOTE: only the start of each segment — the next segment contributes its own start
+            return acc.concat(Array.from({ length: steps }, (_, k) => ab.copy().scale(k / steps).add(a).toPoint()));
+        }, []).concat(poly[poly.length-1]);
+    }
+
+    /** All perpendicular feet from a point onto this Curve, sorted by distance ascending.
+     *
+     *  Runs on the same tessellated polyline that pointAtParam() interpolates over. A foot is a
+     *  point where the connector is orthogonal to the tangent, i.e. a zero of
+     *  g(s) = (C(s) − from) · T(s) — which covers both the near feet (a local minimum of the
+     *  distance) and the far ones (a local maximum, e.g. the back of a circle).
+     *
+     *  Every zero of g is located by a sign change between two consecutive tessellation vertices
+     *  and then verified against the segment's own direction. That verification is what keeps
+     *  corners out: g jumps across a corner and produces a sign change there, but the curve has no
+     *  tangent at a corner so nothing through it is perpendicular to the Curve.
+     */
+    private _perpendicularFeet(from: Point): Array<{ point: Point, distance: number }>
+    {
+        // Drop repeated points so every segment has a direction, then split up long segments: a
+        // coarse polyline such as a rectangle only holds its corners, and a corner has no usable
+        // tangent — without intermediate points the feet on its straight runs cannot be seen.
+        const pts = this._densified(
+                this.tessellate(PERPENDICULAR_CHORD_TOLERANCE).reduce( (acc:Array<Point>, p) =>
+                    (acc.length && acc[acc.length-1].equals(p, Curve.ZERO_LENGTH_TOLERANCE)) ? acc : acc.concat(p), []));
+        if(pts.length < 2){ return []; }
+
+        // A closed tessellation repeats its first point, making its seam an interior junction
+        const wraps = pts[0].equals(pts[pts.length-1]);
+
+        const segs = pts.slice(0, -1).map( (a, i) =>
+        {
+            // NOTE: Vector math mutates in place (subtracted/scaled are aliases, not copies),
+            // so every operand below is a freshly built Vector
+            const ab = pts[i+1].toVector().subtract(a);
+            const len = ab.length();
+            return { a, len, dir: ab.normalize() }; // ab is ours, normalising it in place is safe
+        });
+
+        if(segs.every( s => s.len <= 0 )){ return []; }
+
+        // Tangent at every vertex: the mean of the segment directions meeting there
+        const tangents = pts.map( (_, i) =>
+        {
+            const before = (i > 0) ? segs[i-1] : (wraps ? segs[segs.length-1] : null);
+            const after = (i < segs.length) ? segs[i] : (wraps ? segs[0] : null);
+            if(!before){ return (after as { dir:Vector }).dir.copy(); }
+            if(!after){ return before.dir.copy(); }
+            const mean = before.dir.copy().add(after.dir);
+            return (mean.length() > Curve.ZERO_LENGTH_TOLERANCE) ? mean.normalize() : after.dir.copy();
+        });
+
+        const dists = pts.map( p => p.distance(from) );
+        // g = (vertex − from) · tangent. Values that are zero but for rounding are snapped, so a
+        // foot landing exactly on a vertex — the seam of a circle, say — still reads as a sign
+        // change instead of two same-sign neighbours a few ulps apart.
+        const g = pts.map( (p, i) =>
+        {
+            const value = p.toVector().subtract(from).dot(tangents[i]);
+            return (Math.abs(value) <= PERPENDICULAR_ZERO_TOLERANCE * dists[i]) ? 0 : value;
+        });
+
+        // Equidistant from the whole curve and perpendicular everywhere: the centre of a circle
+        if(wraps
+            && (Math.max(...dists) - Math.min(...dists)) < Curve.ZERO_LENGTH_TOLERANCE
+            && g.every( (v, i) => Math.abs(v) <= PERPENDICULAR_ANGLE_TOLERANCE * dists[i] ))
+        {
+            console.warn('Curve::perpendicularPointTo(): Every point on this Curve is perpendicular to the given point. Returning the start of the domain.');
+            return [{ point: pts[0], distance: dists[0] }];
+        }
+
+        /** Keep a candidate only when the connector really is orthogonal to the curve there */
+        const isPerpendicular = (point: Point, dir: Vector, distance: number): boolean =>
+                (distance <= Curve.ZERO_LENGTH_TOLERANCE)
+                || (Math.abs(point.toVector().subtract(from).dot(dir)) <= PERPENDICULAR_ANGLE_TOLERANCE * distance);
+
+        const feet: Array<{ point: Point, distance: number }> = [];
+
+        // Zeros of g between two vertices. `<= 0` on the left end so a zero sitting exactly on a
+        // vertex is claimed by one pair only.
+        segs.forEach( (s, i) =>
+        {
+            const [gA, gB] = [g[i], g[i+1]];
+            if(!((gA <= 0 && gB > 0) || (gA >= 0 && gB < 0))){ return; }
+            const u = (gA === gB) ? 0 : gA / (gA - gB);
+            const point = s.dir.copy().scale(u * s.len).add(s.a).toPoint();
+            const distance = point.distance(from);
+            if(!isPerpendicular(point, s.dir, distance)){ return; } // a corner, not a foot
+            feet.push({ point, distance });
+        });
+
+        // The ends of an open curve are feet too when the connector happens to meet them at a right
+        // angle (the ends of a half circle seen from its axis), and no sign change reveals those.
+        if(!wraps)
+        {
+            [{ i: 0, s: segs[0] }, { i: pts.length-1, s: segs[segs.length-1] }]
+                .forEach( end =>
+                {
+                    const point = pts[end.i];
+                    if(!isPerpendicular(point, end.s.dir, dists[end.i])){ return; }
+                    if(feet.some( f => f.point.equals(point, PERPENDICULAR_CHORD_TOLERANCE) )){ return; }
+                    feet.push({ point, distance: dists[end.i] });
+                });
+        }
+
+        return feet.sort( (a, b) => a.distance - b.distance );
+    }
+
     /** Minimum distance to another PointLike or Curve
      *  Returns null if the closest parameter cannot be determined.
      */
@@ -1217,11 +1394,12 @@ export class Curve extends Shape
     {
         const b = this.inner()?.bbox();
         return (b && b.length >= 6)
-            ? new Bbox([b[0], b[1], b[2]], [b[3], b[4], b[5]])
+            ? new Bbox([b[0], b[1], b[2]], [b[3], b[4], b[5]])._fromShape(this)
             : undefined;
     }
 
-    /** Get oriented bounding box of this Curve using PCA */
+    /** Get the oriented bounding box of this Curve: the tightest (minimum-area) box around a
+     *  planar curve, the PCA box for a curve that runs through 3D. */
     obbox(): OBbox
     {
         return OBbox.fromCurve(this);
@@ -1230,7 +1408,7 @@ export class Curve extends Shape
     /** Whether this Curve is essentially a cuboid (rectangle in 2D).
      *
      *  A single line is 1D and never a cuboid. For 2D-or-bigger curves, builds
-     *  the PCA-based OBB and checks every tessellated point: each point must
+     *  the OBB and checks every tessellated point: each point must
      *  sit on the OBB surface — within ±halfExtent on every non-zero axis and
      *  touching at least one face — within `tolerance`. Arcs / circles /
      *  splines / non-rect polylines fail; tessellated rectangles pass even
@@ -1288,8 +1466,10 @@ export class Curve extends Shape
      *  `curve`/`wire` (the curve itself or its spans).
      *  Selectors are greedy: an underspecified selector returns every match.
      *  A ShapeCollection result is collapsed to the single shape when there is
-     *  exactly one match (checkSingle), and an empty result warns. */
-    @sceneAdd
+     *  exactly one match (checkSingle), and an empty result warns.
+     *  Selecting does not add anything to the scene - it hands back a reference to
+     *  geometry that is already there. `select(…).copy()` is what puts a new shape in. */
+    @sceneCarry
     select(what: string)
     {
         const result = new Selector(what).execute(this);
@@ -1428,13 +1608,6 @@ export class Curve extends Shape
             // Clone so combining/consuming the segment never frees this curve's span.
             return [Curve.fromCsgrs(inner.clone())];
         });
-    }
-
-    /** Store annotations on this curve — placeholder for old-API compat */
-    addAnnotations(_annotations: any[]): this
-    {
-        // TODO: implement when annotation storage is added to geometry classes
-        return this;
     }
 
     /** Center point of this curve's bounding box */
@@ -1619,9 +1792,7 @@ export class Curve extends Shape
             if (srcLen > 1e-10)
             {
                 scaleFactor = tgtLen / srcLen;
-                this.translate([-q1.x, -q1.y, -q1.z]);
-                this.scale(scaleFactor);
-                this.translate([q1.x, q1.y, q1.z]);
+                this.scale(scaleFactor, q1);
             }
         }
 
@@ -1682,14 +1853,15 @@ export class Curve extends Shape
         return this;
     }
 
+    /** Scale Curve with a uniform factor or per-axis [sx, sy, sz] around an origin (default: center of this Curve) */
     override scale(factor: number | PointLike, origin?: PointLike): this
     {
         const [sx, sy, sz] = (typeof factor === 'number') ? [factor, factor, factor] : [Point.from(factor).x, Point.from(factor).y, Point.from(factor).z];
-        const o = origin ? Point.from(origin) : null;
+        const o = origin ? Point.from(origin) : this.center();
         // hypercurve only supports uniform (similarity) scaling of native geometry;
         // for a per-axis scale, resample the boundary and rebuild as a polyline.
         const uniform = Math.abs(sx - sy) < 1e-9 && Math.abs(sy - sz) < 1e-9;
-        if (o) { this.translate([-o.x, -o.y, -o.z]); }
+        this.translate([-o.x, -o.y, -o.z]);
         if (uniform)
         {
             this.update(this.inner().scale(sx));
@@ -1699,7 +1871,7 @@ export class Curve extends Shape
             const pts = this.tessellate().map(p => [p.x * sx, p.y * sy, p.z * sz] as [number, number, number]);
             this.update(Curve.Polyline(pts));
         }
-        if (o) { this.translate([o.x, o.y, o.z]); }
+        this.translate([o.x, o.y, o.z]);
         return this;
     }
 
@@ -2969,23 +3141,18 @@ export class Curve extends Shape
             ]);
         }
 
-        // Ruled loft: resample every profile to the same number of points (by
-        // arc-length parameter) and stitch corresponding points between consecutive
-        // profiles into quads. hypercurve has no surfaces, so we build the mesh directly.
-        const N = 64;
-        const rings: Point[][] = profiles.map(p =>
-        {
-            const r: Point[] = [];
-            for (let i = 0; i <= N; i++) { r.push(new Point(p.inner().pointAt(i / N))); }
-            return r;
-        });
+        // Ruled loft: sample every profile at matching positions and stitch corresponding points
+        // between consecutive profiles into quads. hypercurve has no surfaces, so we build the
+        // mesh directly.
+        const rings = this._loftRings(profiles);
+        const steps = rings[0].length - 1;
         const mkVert = (pt: Point) => new VertexJs(new Point3Js(pt.x, pt.y, pt.z), new Vector3Js(0, 0, 0));
         const polygons: PolygonJs[] = [];
         for (let k = 0; k < rings.length - 1; k++)
         {
             const A = rings[k];
             const B = rings[k + 1];
-            for (let i = 0; i < N; i++)
+            for (let i = 0; i < steps; i++)
             {
                 polygons.push(new PolygonJs([mkVert(A[i]), mkVert(A[i + 1]), mkVert(B[i + 1]), mkVert(B[i])], {}));
             }
@@ -3000,8 +3167,10 @@ export class Curve extends Shape
             const firstOut = Vector.from(first.center()).subtracted(profiles[1].center()).normalize();
             const lastOut  = Vector.from(last.center()).subtracted(profiles[profiles.length - 2].center()).normalize();
 
-            const firstCap = this._makeCap(first, firstOut);
-            const lastCap  = this._makeCap(last, lastOut);
+            // NOTE: cap from the ring, not from the profile's own tessellation — a cap sampled any
+            // other way than the wall it closes leaves gaps along the seam
+            const firstCap = this._makeCap(first, firstOut, rings[0]);
+            const lastCap  = this._makeCap(last, lastOut, rings[rings.length - 1]);
             if (firstCap) { polygons.push(firstCap); }
             if (lastCap)  { polygons.push(lastCap); }
         }
@@ -3010,10 +3179,60 @@ export class Curve extends Shape
         return Mesh.from(this._csgrs.MeshJs.fromPolygons(polygons, {}));
     }
 
-    /** Build a single cap face for a closed profile, wound so its normal faces `outward`. */
-    private _makeCap(profile: Curve, outward: Vector): PolygonJs | null
+    /** Ring sample points for a ruled loft, one array per profile, all of the same length.
+     *
+     *  Profiles that share a structure — the same number of segments — are matched segment by
+     *  segment, so lofting a rectangle onto a rectangle yields four quads instead of a finely
+     *  resampled tube. A segment that is straight in every profile needs no subdivision at all;
+     *  a curved one is subdivided by how far it turns. Profiles whose segments do not line up
+     *  fall back to uniform arc-length sampling.
+     */
+    private _loftRings(profiles: Curve[]): Point[][]
     {
-        const pts = profile.tessellate();
+        const uniform = (): Point[][] => profiles.map( p =>
+                Array.from({ length: LOFT_SEGMENTS_PER_TURN + 1 },
+                    (_, i) => new Point(p.inner().pointAt(i / LOFT_SEGMENTS_PER_TURN))));
+
+        const segments = profiles.map( p => p._atomicSegments() );
+        const count = segments[0].length;
+        if(count === 0 || segments.some( s => s.length !== count )){ return uniform(); }
+
+        const steps = Array.from({ length: count }, (_, j) =>
+        {
+            if(segments.every( s => s[j].degree() === 1 )){ return 1; }
+            // the profile that turns the most through this segment sets its resolution
+            const turn = Math.max(...segments.map( s => Curve._turnOf(s[j]) ));
+            return Math.max(2, Math.ceil(LOFT_SEGMENTS_PER_TURN * turn / 360));
+        });
+
+        return segments.map( (segs, i) =>
+        {
+            const ring = segs.flatMap( (seg, j) =>
+                    Array.from({ length: steps[j] }, (_, k) => new Point(seg.inner().pointAt(k / steps[j]))));
+            // close the ring: a closed profile returns to its start, an open one stops at its end
+            ring.push(new Point(profiles[i].inner().pointAt(1)));
+            return ring;
+        });
+    }
+
+    /** How far a segment turns from end to end, in degrees. Summed over sub-steps so that a
+     *  segment turning more than half a turn does not fold back onto a smaller angle. */
+    private static _turnOf(segment: Curve): number
+    {
+        const STEPS = 4;
+        return Array.from({ length: STEPS }, (_, k) =>
+        {
+            const from = Vector.from(segment.inner().tangentAt(k / STEPS));
+            const to = Vector.from(segment.inner().tangentAt((k + 1) / STEPS));
+            return from.angle(to);
+        }).reduce( (total, angle) => total + angle, 0);
+    }
+
+    /** Build a single cap face for a closed profile, wound so its normal faces `outward`.
+     *  Pass `ring` to cap exactly the points the surrounding wall was built from. */
+    private _makeCap(profile: Curve, outward: Vector, ring?: Point[]): PolygonJs | null
+    {
+        const pts = ring ?? profile.tessellate();
         // Drop the closing duplicate point if present (closed curves repeat the first vertex).
         const capPts = (pts.length > 1 && pts[0].distance(pts[pts.length - 1]) < 1e-6)
             ? pts.slice(0, -1)
@@ -3166,11 +3385,71 @@ export class Curve extends Shape
         return bb ? this.translate(0, 0, -bb.minZ()) : this;
     }
 
+    /** Rotate this Curve so that direction `from` ends up pointing along `to`, using the
+     *  shortest arc between the two.
+     *  @param pivot  point the rotation turns around (default: this Curve's center)
+     */
+    rotateVecToVec(from: PointLike, to: PointLike, pivot?: PointLike): this
+    {
+        const f = Vector.from(from as any);
+        const t = Vector.from(to as any);
+        const { axis, angle } = shortestArcAxisAngle(f, t);
+        if (angle === 0) { return this; }
+        return this.rotateAround(angle, axis, pivot ?? this.center());
+    }
+
+    /** Rotate this Curve so its oriented bounding box lines up with the world axes:
+     *  the OBB's thinnest axis onto +Z first, then its longest axis onto +X.
+     *  For a planar Curve the thinnest axis is the plane normal, so this lays it flat
+     *  on the XY plane (without moving it there — use layflat() for that).
+     *  Position of the center is kept.
+     */
+    rotateToAxesOBbox(): this
+    {
+        const center = this.center();
+        // axes()[2] = least variance (plane normal for a planar curve), axes()[0] = greatest
+        this.rotateVecToVec(this.obbox().axes()[2], [0, 0, 1], center);
+        // NOTE: the OBB is recomputed — its axes turned with the curve in the step above
+        this.rotateVecToVec(this.obbox().axes()[0], [1, 0, 0], center);
+        return this;
+    }
+
+    /** Rotate this Curve to align it with the world axes as much as possible.
+     *
+     *  First `rotateToAxesOBbox()` brings the curve flat onto the XY plane, then it is
+     *  turned around Z so its dominant segment direction lands on the X or Y axis.
+     *  The second step only ever turns around Z (by at most a quarter turn), so it can
+     *  never undo the flat alignment of the first.
+     *
+     *  @param o  'vertical' (default) puts the dominant segment direction on the Y axis,
+     *            'horizontal' puts it on the X axis
+     */
+    rotateToOrtho(o: OrientationXY = 'vertical'): this
+    {
+        this.rotateToAxesOBbox();
+
+        const edges = this.edges().toArray().map(e =>
+        {
+            const d = e.direction();
+            return { x: d.x, y: d.y, z: d.z, length: e.length() };
+        });
+
+        const angle = primaryOrthoXYAngle(edges, o);
+        return (angle === 0) ? this : this.rotateZ(angle, this.center());
+    }
+
+    /** Rotate this Curve to align as much as possible to the world axes.
+     *  Alias for rotateToOrtho() */
+    autoRotate(o: OrientationXY = 'vertical'): this
+    {
+        return this.rotateToOrtho(o);
+    }
+
     //// OUTPUTS ////
 
     toString()
     {
-        return `<Curve (${this.isCompound() ? 'Compound' : 'Single'}): length="${this.length().toFixed(3)}", planar="${this.isPlanar()}", closed="${this.isClosed()}">`;
+        return `<Curve (${this.isCompound() ? 'Compound' : 'Single'}): length="${this.length().toFixed(3)}", planar="${this.isPlanar()}", closed="${this.isClosed()}" ${this.nodeString()}>`;
     }
 
     /** Return raw tessellated points as a flat Float32Array (xyz per point, no axis remapping).

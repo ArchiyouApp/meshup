@@ -35,6 +35,34 @@ describe('Polygon construction', () =>
         expect(p.inner).toBeTruthy();
     });
 
+    // Regression: vertices built from bare positions get a ZERO normal from
+    // Point.toVertexJs(). A zero-normal surface takes no light, so the polygon rendered
+    // flat grey in any PBR viewer whatever colour it carried. Every construction path that
+    // starts from positions must hand its vertices the polygon's plane normal.
+    it('gives every vertex the polygon plane normal', () =>
+    {
+        const normalsOf = (p: Polygon) => (p.inner().vertices() as any[])
+            .map(v => { const n = v.normal(); return [n.x, n.y, n.z]; });
+
+        const expectPlanar = (label: string, p: Polygon) =>
+        {
+            const ns = normalsOf(p);
+            expect(ns.length, label).toBeGreaterThan(2);
+            ns.forEach(([x, y, z]) =>
+            {
+                expect(Math.hypot(x, y, z), label).toBeCloseTo(1, 5);
+                expect(Math.abs(z), label).toBeCloseTo(1, 5);   // SQUARE lies in Z=0
+            });
+        };
+
+        expectPlanar('constructor', new Polygon(SQUARE));
+        expectPlanar('from()', Polygon.from(SQUARE));
+
+        const offset = new Polygon(SQUARE);
+        offset.offset(0.1);
+        expectPlanar('offset()', offset);
+    });
+
     it('throws when fewer than 3 vertices are provided', () =>
     {
         expect(() => new Polygon([[0, 0, 0], [1, 0, 0]])).toThrow();
@@ -333,6 +361,38 @@ describe('Polygon.obbox()', () =>
         const ob = p.obbox();
         expect(ob.center().x).toBeCloseTo(0.5);
         expect(ob.center().y).toBeCloseTo(0.5);
+    });
+
+    it('hugs a face with a slanted end instead of tilting off it (minimum-area, like Curve)', () =>
+    {
+        // Same shape that tipped the PCA frame over: 50 x 400 with one sloping end
+        const p = new Polygon([[0, 0, 0], [50, 0, 0], [50, 400, 0], [0, 300, 0]]);
+        const ob = p.obbox();
+
+        expect(ob.width()).toBeCloseTo(400, 6);
+        expect(ob.depth()).toBeCloseTo(50, 6);
+        expect(ob.is2D()).toBe(true);
+    });
+
+    it('follows the plane of a tilted face', () =>
+    {
+        const p = new Polygon([[0, 0, 0], [50, 0, 0], [50, 400, 0], [0, 300, 0]])
+                        .rotateX(35).rotateZ(-20).move(300, 200, 100);
+        const ob = p.obbox();
+
+        expect(ob.width()).toBeCloseTo(400, 4);
+        expect(ob.depth()).toBeCloseTo(50, 4);
+        expect(ob.is2D()).toBe(true);
+        // and it still wraps every vertex
+        const c = ob.center(), axes = ob.axes(), half = ob.halfExtents();
+        p.vertices().forEach(v =>
+        {
+            axes.forEach((a, i) =>
+            {
+                const proj = (v.x - c.x) * a.x + (v.y - c.y) * a.y + (v.z - c.z) * a.z;
+                expect(Math.abs(proj)).toBeLessThanOrEqual(half[i] + 1e-6);
+            });
+        });
     });
 });
 

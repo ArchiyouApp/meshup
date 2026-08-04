@@ -17,8 +17,9 @@
  *  This is what lets the modeler work with meshup shapes directly: `extrude()` still returns
  *  a `Mesh`, `split()` still returns a `ShapeCollection<Mesh>`, etc.
  *
+ *    @sceneCarry     no scene mutation; results carry self's scene root (select, sub-shapes)
  *    @sceneReplace   add result(s) to self's own layer; detach self   (extrude, split, hull…)
- *    @sceneAdd       add result(s) to the active layer; keep self     (select, segment)
+ *    @sceneAdd       add result(s) to the active layer; keep self     (segment)
  *    @sceneLayer(n)  group result(s) in sub-layer 'n' of active layer (iso, elevation, section)
  *    @sceneUpdate    in-place mutator (returns this); re-attach self   (offset, cutoff, connect)
  *
@@ -361,4 +362,21 @@ export const sceneUpdate: Decorator = (_t, _k, desc) =>
         return result
     }
     return desc
+}
+
+/** Add `result` to the scene the way an @sceneAdd method would, for shape *producers that are
+ *  not Shapes themselves* — Bbox / OBbox, which build a Curve or Mesh from the shape they were
+ *  measured on. The measured shape is the source: results carry its `_modeler`/scene root and
+ *  land on the active layer, but only when the source is really in a scene and not `tmp()`. */
+export function addResultToScene(source: Any, result: Any): void
+{
+    if (!source) return
+    // A ShapeCollection has no node of its own: anchor on the first of its shapes that is in
+    // the scene, so `collection.bbox().box()` lands next to the shapes it measured.
+    const anchor = (source._node) ? source : (source._shapes?.find((s: Any) => s?._node) ?? source)
+    propagate(anchor, result)
+    if (anchor._node && !anchor._suppressScene)
+    {
+        addTo(activeLayerOf(anchor), result)
+    }
 }

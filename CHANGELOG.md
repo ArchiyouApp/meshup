@@ -4,6 +4,88 @@ All notable changes to `@archiyou/meshup` are documented here.
 This project follows [semantic versioning](https://semver.org/); while on 0.x, minor
 versions may contain breaking changes.
 
+## Unreleased
+
+### Added
+
+- **`Mesh.rotateToOrtho()` and `Curve.rotateToOrtho()`** — rotate a shape to align it with
+  the world axes as much as possible, matching the brep kernel's `Shape.rotateToOrtho()`.
+  `'vertical'` (default) puts the dominant edge direction on the Y axis, `'horizontal'` on X.
+  `autoRotate()` is an alias, as in brep. Supporting methods added alongside:
+  `rotateVecToVec(from, to, pivot?)` (shortest-arc rotation, on both `Mesh` and `Curve`),
+  `rotateToAxesOBbox()` (OBB thin axis → +Z, long axis → +X, on both) and
+  `Mesh.rotateToAlignLargestFaceToZ()`. Two deliberate differences from brep: the dominant
+  face is found by summing area per normal *direction* rather than taking the single largest
+  polygon (a tessellated mesh has no single dominant triangle), and the final alignment turn
+  is constrained to Z by at most a quarter turn, so it can never tilt the shape back out of
+  the XY plane.
+
+- **`OBbox.shape()`** (with `toShape()` alias, and the `box()` / `rect()` / `line()` accessors
+  it dispatches to) — the real geometry of an oriented bounding box, reachable from
+  `Mesh.obbox()` and `Curve.obbox()` and mirroring the brep kernel's `OBbox.shape()`.
+  A 3D box gives a box `Mesh` built from its 8 corners, a 2D box a closed rectangle `Curve`
+  in its own plane, a 1D box a line `Curve`, and a zero-size box `null`. Unlike the `Bbox`
+  equivalents the result follows the box's own principal axes, so it is a genuinely oriented
+  box. The PCA frame is made right-handed first — the Jacobi solver can return a mirrored
+  frame, which would build the box inside-out.
+
+- **Every `Shape.toString()` now shows scene membership**, in both kernels: `node={ name:
+  'myShape', id: '…' }` for a Shape that is in the scene, `node=<not in scene>` for one that
+  is not — the usual question when something does not turn up in the viewer. Backed by
+  `Shape.nodeString()`, the `nodeToString()` helper in `utils`, and a new `SceneNode.id()`
+  (names repeat across layers, ids do not; the id is generated on first use so building a
+  large scene pays nothing for it).
+
+### Changed
+
+- **`OBbox.is1D()` / `is2D()` / `is3D()` are tolerance-aware**, using the same absolute +
+  relative convention as `Bbox` instead of testing extents against exactly 0. A flat shape
+  that has been rotated measures a thickness of ~1e-15, not 0, and so used to be reported as
+  3D. `is2D()` now also means *exactly* two axes have size (it used to be true for 1D and
+  point boxes as well); `isPoint()` is new.
+
+- **`select()` no longer adds its result to the scene.** `Mesh.select()` and `Curve.select()`
+  were `@sceneAdd`, so every selection dropped a shape into the active layer — but selecting
+  hands back a reference to geometry that is already in the scene, it does not make anything
+  new. They are `@sceneCarry` now: no scene mutation, while the result still carries the
+  source's scene root, so `select(…).copy()` puts the copy in the active layer as before.
+
+### Fixed
+
+- **`OBbox.fromCurve()` counted coincident tessellation points twice, tilting the box.**
+  A closed curve tessellates with its start point repeated at the end (and a compound curve
+  repeats every shared segment endpoint); weighting those points double skews the covariance
+  the principal axes come from. A plain 200×100 `Curve.Rect()` measured as a 210×121 box
+  rotated by 6°. Coincident points are now dropped before the PCA, as `fromMesh()` already
+  did. This tightens every `Curve.obbox()` result, and with it `layflat()` and
+  `rotateToOrtho()` on curves.
+
+- **Side selectors (`F||front`, `E||top`, `V||leftfrontbottom`, …) returned bounding-box
+  geometry instead of the target's own subshapes.** `Selector._side()` handed back freshly
+  built `Bbox.getSidesShapes()` planes/lines/vertices, so `box(10,10,100).rotateX(-10)
+  .rotateY(10).select('F||front')` gave the front plane of the bounding box rather than the
+  polygon facing front. The selector now picks from the target's own faces/edges/vertices in
+  two passes: subshapes lying flush on the requested bbox side plane(s), and — when a shape
+  is rotated and nothing is flush — the subshapes facing that side most (faces ranked by
+  normal, edges/vertices by how far they reach along the side direction, ties all returned).
+  A side selector therefore always returns at least one subshape when the target has
+  subshapes of that type. Two consequences: `face||…` on a `Curve` now returns nothing (a
+  curve has no faces), and a multi-side selector like `edge||left-front` on a flat rect
+  returns the two edges meeting at that corner instead of nothing.
+
+- **`Mesh.fromPolygons()` (and `Mesh.fromPoints()`, which delegates to it) produced
+  zero-length vertex normals.** The vertices are built from bare positions and
+  `Point.toVertexJs()` defaults its normal to `(0,0,0)`, which was handed to `PolygonJs`
+  unchanged. A zero-normal surface takes no light, so such meshes rendered flat grey in
+  any PBR viewer whatever colour they carried, and exported a useless `NORMAL` buffer to
+  glTF. Each polygon now gets its own plane normal (flat shading). Callers holding real
+  per-vertex normals should keep building `PolygonJs` themselves via
+  `Point.toVertexJs(normal)`.
+- **`Polygon` had the same zero-normal defect** on every path that builds it from
+  positions — the constructor, `Polygon.from(points)` and `offset()` — so `Polygon` shapes
+  rendered flat grey too. They now carry the plane normal as well. `_applyVertexTransform()`
+  (translate/rotate/scale/mirror) already mapped normals itself and is unchanged.
+
 ## 0.1.0
 
 First published release. Previously the package was private to the Archiyou monorepo and

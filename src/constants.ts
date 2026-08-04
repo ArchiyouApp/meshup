@@ -7,7 +7,20 @@ export const TOLERANCE = 1e-5; // general tolerance for geometric comparisons, i
 // after Point operations we round to a given tolerance to avoid inaccuracies in further operations
 export const POINT_TOLERANCE = TOLERANCE; 
 export const ANGLE_COMPARE_TOLERANCE = 1e-3; // in degrees, for comparing angles (e.g. to detect axis-alignment)
-export const TESSELATION_TOLERANCE = 1e-3; 
+/** Below this extent a bbox axis counts as flat (Bbox.is2D/is1D/axisMissingIn2D).
+ *  Deliberately far tighter than TOLERANCE: this only has to absorb float residue from
+ *  rotating a shape onto a plane (layflat()), not real thickness. The relative term keeps
+ *  it meaningful for very large models. */
+export const BBOX_FLAT_EPS = 1e-9;
+export const BBOX_FLAT_REL_EPS = 1e-9;
+/** How flat a point cloud has to be before OBbox orients it with the exact minimum-area
+ *  (rotating-calipers) frame instead of PCA. Deliberately looser than BBOX_FLAT_EPS: a curve
+ *  that came out of a boolean, an offset or a projection is planar to within kernel tolerance,
+ *  not to float residue — and it still deserves the tight frame. Absolute + relative, same
+ *  convention as BBOX_FLAT_EPS. */
+export const OBBOX_PLANAR_EPS = 1e-7;
+export const OBBOX_PLANAR_REL_EPS = 1e-7;
+export const TESSELATION_TOLERANCE = 1e-3;
 
 export const SHAPES_SPHERE_SEGMENTS_WIDTH = 32;
 export const SHAPES_SPHERE_SEGMENTS_HEIGHT = 16;
@@ -31,6 +44,16 @@ export const BASE_PLANE_NAME_TO_PLANE = {
 } as Record<string, { normal: [number, number, number], xDir: [number, number, number], yDir: [number, number, number] }>;
 
 export const BBOX_SIDES = ['top', 'bottom', 'front', 'back', 'left', 'right'];
+
+/** Which bbox bound a side keyword pins: 'left' is at the min of x, 'top' at the max of z */
+export const BBOX_SIDE_TO_BOUND = {
+    left:   { axis: 'x', max: false },
+    right:  { axis: 'x', max: true },
+    front:  { axis: 'y', max: false },
+    back:   { axis: 'y', max: true },
+    bottom: { axis: 'z', max: false },
+    top:    { axis: 'z', max: true },
+} as Record<string, { axis: 'x'|'y'|'z', max: boolean }>;
 
 // Follow BREP terminology for subshapes. Face = Polygon, Wire = Curve
 export const SELECTOR_SHAPES = ['mesh', 'curve', 'face', 'edge', 'wire','vertex'];

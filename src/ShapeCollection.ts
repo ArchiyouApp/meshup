@@ -464,16 +464,17 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     }
 
     /** New ShapeCollection with duplicates removed.
-     *  Vertices are compared by coordinate (within TOLERANCE), other Shapes by identity. */
+     *  Vertices are compared by coordinate, other Shapes by identity.
+     *  @param tolerance - coordinate tolerance for the Vertex comparison (default TOLERANCE) */
     @sceneCarry
-    unique(): ShapeCollection<S>
+    unique(tolerance?: number): ShapeCollection<S>
     {
         const kept: Array<S> = [];
         this._shapes.forEach(s =>
         {
             const isDupe = kept.some(k =>
                 (k === s) ||
-                ((k instanceof Vertex) && (s instanceof Vertex) && k.toPoint().equals(s.toPoint())));
+                ((k instanceof Vertex) && (s instanceof Vertex) && k.toPoint().equals(s.toPoint(), tolerance)));
             if (!isDupe) kept.push(s);
         });
         return new ShapeCollection<S>(...kept);
@@ -509,7 +510,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             if (mn.z < minZ) minZ = mn.z;  if (mx.z > maxZ) maxZ = mx.z;
         });
         if (!isFinite(minX)) return undefined;
-        return new Bbox([minX, minY, minZ], [maxX, maxY, maxZ]);
+        return new Bbox([minX, minY, minZ], [maxX, maxY, maxZ])._fromShape(this);
     }
 
     area(): number | undefined
@@ -676,9 +677,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return this;
     }
 
-    scale(factor: number | PointLike, origin: PointLike = { x: 0, y: 0, z: 0 }): this
+    /** Scale all Shapes in this collection as a group around an origin (default: center of the collection) */
+    scale(factor: number | PointLike, origin?: PointLike): this
     {
-        this._shapes.forEach(shape => shape.scale?.(factor, origin));
+        // NOTE: always resolve the origin here, so the collection scales as a whole
+        // instead of every Shape scaling around its own center
+        const o = origin ?? (this.isEmpty() ? new Point(0, 0, 0) : this.center());
+        this._shapes.forEach(shape => shape.scale?.(factor, o));
         return this;
     }
 
@@ -956,9 +961,41 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         );
     }
 
-    intersecting(other: S): ShapeCollection<any>
+    /** The shapes in this collection that touch or intersect `other` — a filter, not a
+     *  geometry operation (see intersections() for the intersection geometry itself).
+     *  Shapes that only touch (a shared endpoint, an edge lying on `other`) count as
+     *  intersecting, which is what selections like "edges on this bbox side" rely on. */
+    intersecting(other: any, tolerance: number = TOLERANCE): ShapeCollection<any>
     {
-        throw new Error('ShapeCollection::intersecting(): not yet implemented');
+        const others = ShapeCollection.isShapeCollection(other)
+                            ? (other as ShapeCollection<any>).toArray()
+                            : [other];
+
+        return new ShapeCollection<any>(
+            ...this._shapes.filter(shape =>
+                others.some(o => ShapeCollection._touches(shape, o, tolerance)))
+        );
+    }
+
+    /** Alias for intersecting() (brep API compat) */
+    intersectors(other: any, tolerance: number = TOLERANCE): ShapeCollection<any>
+    {
+        return this.intersecting(other, tolerance);
+    }
+
+    /** Do two shapes touch or overlap? Distance-based where possible (so shapes that only
+     *  touch still count), falling back to real intersection geometry. */
+    private static _touches(shape: any, other: any, tolerance: number): boolean
+    {
+        const dist = (typeof shape?.distance === 'function')
+                        ? shape.distance(other)
+                        : (typeof other?.distance === 'function') ? other.distance(shape) : null;
+
+        if (typeof dist === 'number' && Number.isFinite(dist))
+        {
+            return dist <= tolerance;
+        }
+        return ShapeCollection._pairIntersection(shape, other) !== null;
     }
 
     /** Intersect every shape in this collection with `other` (a Curve, Mesh, or another
@@ -1452,6 +1489,22 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}">${style}${paths.join('')}</svg>`;
     }
 
+
+    /** All vertices of all shapes in this collection (Curve control/segment vertices,
+     *  Polygon and Mesh corner vertices). Vertices in the collection are passed through. */
+    @sceneCarry
+    vertices(): ShapeCollection<Vertex>
+    {
+        const verts: Array<Vertex> = [];
+        this._shapes.forEach(s =>
+        {
+            if (s instanceof Vertex){ verts.push(s); return; }
+            const sub = (s as any).vertices?.() as ShapeCollection<Vertex>|Array<Vertex>|undefined;
+            if (!sub) return;
+            verts.push(...(Array.isArray(sub) ? sub : sub.toArray()));
+        });
+        return new ShapeCollection<Vertex>(...verts);
+    }
 
     /** Returns all start/end vertices of curves in this collection */
     curveVertices(): Array<Vertex>

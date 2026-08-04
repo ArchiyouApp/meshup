@@ -23,6 +23,23 @@ import { Style } from './Style';
 import { uuid } from './utils';
 import { sceneReplace, sceneUpdate, sceneCarry } from './sceneDecorators';
 
+/** Build a PolygonJs from vertices that were made from bare positions.
+ *
+ *  Point.toVertexJs() defaults its normal to (0,0,0), and a zero-normal surface takes no
+ *  light: the polygon renders flat grey in any PBR viewer whatever colour it carries, and
+ *  exports a useless NORMAL buffer to glTF. Every such polygon therefore gets its own
+ *  plane normal — the same rule as Mesh.fromPolygons().
+ *
+ *  NOT for vertices that already carry meaningful normals (a transformed polygon, say):
+ *  setNewNormal() would flatten them. See _applyVertexTransform(), which maps the normals
+ *  itself and builds its PolygonJs directly. */
+function polygonFromPositions(verts: VertexJs[], metadata: any = {}): PolygonJs
+{
+    const polygon = new PolygonJs(verts, metadata);
+    polygon.setNewNormal();
+    return polygon;
+}
+
 export class Polygon extends Shape
 {
     _polygon: PolygonJs;
@@ -41,7 +58,7 @@ export class Polygon extends Shape
         }
         const verts: VertexJs[] = vertices.map(v => Point.from(v).toVertexJs());
 
-        this._polygon = new PolygonJs(verts, metadata);
+        this._polygon = polygonFromPositions(verts, metadata);
     }
 
     inner(): PolygonJs
@@ -70,7 +87,7 @@ export class Polygon extends Shape
         }
         else
         {
-            poly._polygon = new PolygonJs(p.map(v => Point.from(v).toVertexJs()), {});
+            poly._polygon = polygonFromPositions(p.map(v => Point.from(v).toVertexJs()));
         }
         return poly;
     }
@@ -238,13 +255,14 @@ export class Polygon extends Shape
         return this;
     }
 
+    /** Scale Polygon with a uniform factor or per-axis [sx, sy, sz] around an origin (default: center of this Polygon) */
     override scale(factor: number | PointLike, origin?: PointLike): this
     {
         const [sx, sy, sz] = (typeof factor === 'number')
             ? [factor, factor, factor]
             : [Point.from(factor).x, Point.from(factor).y, Point.from(factor).z];
 
-        const o = origin ? Point.from(origin) : new Point(0, 0, 0);
+        const o = origin ? Point.from(origin) : this.center();
 
         this._applyVertexTransform(
             pos  => Vector.from(
@@ -340,13 +358,15 @@ export class Polygon extends Shape
         return new Bbox(
             [bb.min.x, bb.min.y, bb.min.z],
             [bb.max.x, bb.max.y, bb.max.z]
-        );
+        )._fromShape(this);
     }
 
-    /** Oriented bounding box of this polygon (minimum-volume via PCA) */
+    /** Oriented bounding box of this polygon: the tightest (minimum-area) box around it.
+     *  A Polygon is planar by construction, so the exact route always applies — no need to
+     *  drop duplicate vertices first the way Curve does, since the hull ignores them. */
     obbox(): OBbox
     {
-        return OBbox.fromPoints(this.vertices().toArray());
+        return OBbox.fromPlanarPoints(this.vertices().toArray())._fromShape(this);
     }
 
     /** Minimum distance from this polygon surface to a point, vertex, curve, polygon, or mesh. */
@@ -500,7 +520,7 @@ export class Polygon extends Shape
         // Mutate in place: replace the inner PolygonJs with the offset boundary.
         // `style` lives on the Shape base and is preserved untouched.
         const verts: VertexJs[] = pts.map(p => Point.from(p).toVertexJs());
-        this._polygon = new PolygonJs(verts, {});
+        this._polygon = polygonFromPositions(verts);
         return this;
     }
 
@@ -1165,11 +1185,21 @@ export class Polygon extends Shape
         return this.toMesh().select(what);
     }
 
-    /** Boundary edges of this Polygon as Curves */
+    /** Boundary edges of this Polygon as line Curves: the outer loop, then one loop per hole.
+     *  These are the polygon's real edges — NOT the edges of its triangulation. For those
+     *  (feature-angle filtered, useful for shading/silhouettes) use `toMesh().edges()`. */
     @sceneCarry
-    edges(featureAngle: number = 10, all: boolean = true): ShapeCollection<Curve>
+    edges(): ShapeCollection<Curve>
     {
-        return this.toMesh().edges(featureAngle, all);
+        const loopEdges = (verts: Array<Vertex>): Array<Curve> =>
+            verts
+                .map((v, i) => Curve.Line(v.toPoint(), verts[(i + 1) % verts.length].toPoint()))
+                .filter(c => c.length() > TOLERANCE); // drops the closing segment of a repeated first vertex
+
+        const holes = ((this._polygon.holes() as VertexJs[][]) ?? [])
+                        .flatMap(hole => loopEdges(hole.map(v => Vertex.from(v))));
+
+        return new ShapeCollection<Curve>(...loopEdges(this._boundaryVertices()), ...holes);
     }
 
     //// EXPORT ////

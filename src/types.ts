@@ -38,6 +38,13 @@ export function isAxis(obj: any): obj is Axis {
   return obj === 'x' || obj === 'y' || obj === 'z';
 }
 
+/** In-plane orientation of a Shape: aligned with the X axis ('horizontal')
+ *  or with the Y axis ('vertical'). See Mesh/Curve.rotateToOrtho(). */
+export type OrientationXY = 'horizontal'|'vertical';
+export function isOrientationXY(obj: any): obj is OrientationXY {
+  return obj === 'horizontal' || obj === 'vertical';
+}
+
 export type PointLike = number | Point | Vector | Vertex |
   Point3Js |  Vector3Js | VertexJs | Array<number> |
   // z is optional: the Point constructor accepts {x,y} and defaults z to 0

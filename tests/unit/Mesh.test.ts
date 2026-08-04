@@ -2,6 +2,7 @@ import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync, ShapeCollection } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
+import { Polygon } from '../../src/Polygon';
 import { save } from '../../src/utils';
 
 const OUTPUT_DIR = './tests/outputs/mesh/';
@@ -87,6 +88,22 @@ describe('Mesh.fromPolygons()', () =>
         const m = Mesh.fromPolygons([tri]);
         expect(m).toBeTruthy();
         expect(m.positions().length).toBeGreaterThan(0);
+    });
+
+    // Regression: the vertices are built from bare positions, and Point.toVertexJs()
+    // defaults to a ZERO normal. A zero-normal surface takes no light — it renders flat
+    // grey in any PBR viewer whatever colour it carries — so every polygon must come out
+    // carrying its own plane normal.
+    it('gives every vertex the polygon plane normal', () =>
+    {
+        const { normals } = Mesh.fromPolygons([[[0,0,0], [5,0,0], [2.5,5,0]]]).toBuffer();
+
+        expect(normals.length).toBeGreaterThan(0);
+        for (let i = 0; i < normals.length; i += 3)
+        {
+            expect(Math.hypot(normals[i], normals[i+1], normals[i+2])).toBeCloseTo(1, 5);
+            expect(Math.abs(normals[i+2])).toBeCloseTo(1, 5);   // the triangle lies in Z=0
+        }
     });
 
     // Regression: vertex 2 = (1,0,0) lies exactly on edge [0→1] = (0,0,0)→(2,0,0).
@@ -286,9 +303,9 @@ describe('Mesh.layflat()', () =>
         expect(bb.maxZ() - bb.minZ()).toBeCloseTo(20, 0);
     });
 
-    it('fast-paths an already-flat mesh (skips OBB, only translates to Z=0)', () =>
+    it('only translates an already-flat mesh to Z=0', () =>
     {
-        // Already sitting at Z > 0 but flat — fast path translates, no rotation.
+        // Already sitting at Z > 0 but flat — dominant face is parallel to XY, no rotation.
         const m = Mesh.Box(200, 100, 20).moveZ(50);
         m.layflat();
         const bb = m.bbox();
@@ -297,6 +314,36 @@ describe('Mesh.layflat()', () =>
         // X/Y footprint unchanged (no in-plane rotation)
         expect(bb.maxX() - bb.minX()).toBeCloseTo(200, 0);
         expect(bb.maxY() - bb.minY()).toBeCloseTo(100, 0);
+    });
+
+    // Regression: the old AABB-span fast path called this plate "already flat" because its
+    // tilted AABB height (123) was still under half the smallest footprint span — so it was
+    // only dropped, never rotated, and came to rest on an edge.
+    it('lays a tilted plate flat even when its tilted AABB is still Z-thin', () =>
+    {
+        const m = Mesh.Box(400, 200, 10).rotateX(35).rotateZ(15);
+        m.layflat();
+        const bb = m.bbox();
+        expect(bb.minZ()).toBeCloseTo(0, 1);
+        expect(bb.maxZ() - bb.minZ()).toBeCloseTo(10, 0);
+    });
+
+    // Regression: on a sheared solid the OBB's least-variance axis points nowhere near any
+    // face, so aligning it to +Z left the shape tilted with nothing resting on the plane.
+    it('puts a face of a sheared (non plate-like) solid on the XY plane', () =>
+    {
+        const bottom = new Polygon([[-250, -250, 0], [250, -250, 0], [250, 250, 0], [-250, 250, 0]]);
+        const sheared = bottom.loft(bottom.copy().translate(100, 100, 1000)) as Mesh;
+        sheared.rotateX(20).layflat();
+
+        const bb = sheared.bbox();
+        expect(bb.minZ()).toBeCloseTo(0, 5);
+
+        // at least one face is parallel to XY *and* touching z = 0
+        const onPlane = sheared.polygons().toArray().filter(p =>
+            Math.abs(Math.abs(p.normal().normalize().z) - 1) < 1e-6
+            && Math.abs(p.bbox().maxZ()) < 1e-6);
+        expect(onPlane.length).toBeGreaterThan(0);
     });
 });
 describe('Mesh.edges()', () =>

@@ -9,7 +9,7 @@
  * 
  */
 
-import type { CsgrsModule, Axis, BasePlane, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions } from './types';
+import type { CsgrsModule, Axis, BasePlane, OrientationXY, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions } from './types';
 import { isAxis, isBasePlane, isPointLike } from './types';
 
 import { Curve, getCsgrs } from './index';
@@ -18,9 +18,9 @@ import { Point } from './Point';
 import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { Vector } from './Vector'
-import { rad, deg } from './utils';
+import { rad, deg, shortestArcAxisAngle, primaryOrthoXYAngle } from './utils';
 import { Style } from './Style';
-import { sceneReplace, sceneAdd, sceneLayer, sceneCarry, sceneReplaceOrKeep, replaceInScene } from './sceneDecorators';
+import { sceneReplace, sceneLayer, sceneCarry, sceneReplaceOrKeep, replaceInScene } from './sceneDecorators';
 import { GLTFBuilder } from './GLTFBuilder';
 
 import { MeshJs, PolygonJs, PlaneJs, Vector3Js, VertexJs } from './wasm/meshup';
@@ -251,8 +251,17 @@ export class Mesh extends Shape
 
     // MESH FROM DATA
 
-    /** Create Mesh directly from planar polygons defined by (N >= 3) vertices  
+    /** Create Mesh directly from planar polygons defined by (N >= 3) vertices
      *  For some export formats (like STL) polygons are triangulated first
+     *
+     *  Only positions are given here, so every vertex would be born with a ZERO normal:
+     *  Point.toVertexJs() defaults to (0,0,0). That is not a cosmetic detail — a
+     *  zero-normal surface takes no light, so the mesh renders flat grey in any PBR
+     *  viewer however it is coloured (and exports a useless NORMAL buffer to glTF). Each
+     *  polygon therefore gets its own plane normal assigned to its vertices, i.e. these
+     *  meshes are flat-shaded. Callers that have real per-vertex normals (a tessellated
+     *  curved surface, say) should build their own PolygonJs with them — see
+     *  Point.toVertexJs(normal) — and go through Mesh.from(MeshJs.fromPolygons(...)).
     */
     static fromPolygons(verts: Array<Array<PointLike|PointLike|PointLike>>):Mesh
     {
@@ -262,16 +271,18 @@ export class Mesh extends Shape
         }
 
         const polygons: Array<PolygonJs> = [];
-        verts.forEach((poly, i) => 
+        verts.forEach((poly, i) =>
         {
-            if (!Array.isArray(poly) || poly.length < 3) 
+            if (!Array.isArray(poly) || poly.length < 3)
             {
                 console.warn(`Mesh::fromVertices(): Invalid polygon at index ${i}. Supply something [<PointLike>,<PointLike>,<PointLike>]`);
             }
             else
             {
                 const polyVerts = poly.map(v => Point.from(v).toVertexJs());
-                polygons.push(new PolygonJs(polyVerts, {}));
+                const polygon = new PolygonJs(polyVerts, {});
+                polygon.setNewNormal(); // flat normal from the polygon plane - see above
+                polygons.push(polygon);
             }
         });
 
@@ -601,13 +612,6 @@ export class Mesh extends Shape
         return collection;
     }
 
-    /** Store annotations on this mesh — placeholder for old-API compat */
-    addAnnotations(_annotations: any[]): this
-    {
-        // TODO: implement when annotation storage is added to geometry classes
-        return this;
-    }
-
     /** Calculate oriented bounding box of current Mesh using PCA */
     obbox(): OBbox
     {
@@ -856,25 +860,24 @@ export class Mesh extends Shape
              (world z) to avoid unexpected twisting. */
         if(sourcePoints.length === 2)
         {
+            // NOTE: Vector math mutates in place, so always work on copies here
             // Step 1: translate so p1 → q1
-            this.translate(q1.subtract(p1));
+            this.translate(q1.copy().subtract(p1));
 
             // Step 2: optional uniform scale (before rotation, centered at q1)
             if (withScale)
             {
-                const srcLen = p2.subtract(p1).length();
-                const tgtLen = q2.subtract(q1).length();
+                const srcLen = p2.copy().subtract(p1).length();
+                const tgtLen = q2.copy().subtract(q1).length();
 
                 if (srcLen > TOLERANCE)
                 {
-                    this.translate(q1.reverse()); // move to origin for scaling
-                    this.scale(tgtLen / srcLen);
-                    this.translate(q1); // move back
+                    this.scale(tgtLen / srcLen, q1.toPoint());
                 }
             }
             // Step 3: rotate around q1 to align p2 → q2, keeping world z as up
-            const srcDir = p2.subtract(p1).normalize();
-            const tgtDir = q2.subtract(q1).normalize();
+            const srcDir = p2.copy().subtract(p1).normalize();
+            const tgtDir = q2.copy().subtract(q1).normalize();
             this.rotateSwing(srcDir, tgtDir, [0,0,1]);
 
             return this;
@@ -885,12 +888,13 @@ export class Mesh extends Shape
 
             // Three point alignment
 
+            // NOTE: Vector math mutates in place, so always work on copies here
             // Step 1: translate so p1 → q1
-            this.translate(q1.subtract(p1));
+            this.translate(q1.copy().subtract(p1));
 
             // Edge vectors (source and target)
-            const srcEdge = p2.subtract(p1);
-            const tgtEdge = q2.subtract(q1);
+            const srcEdge = p2.copy().subtract(p1);
+            const tgtEdge = q2.copy().subtract(q1);
 
             // Step 2: optional uniform scale (before rotation, centered at q1)
             let scaleFactor = 1;
@@ -901,29 +905,33 @@ export class Mesh extends Shape
                 if (srcLen > 1e-10)
                 {
                     scaleFactor = tgtLen / srcLen;
-                    this.translate(q1.copy().reverse()); // move to origin for scaling
-                    this.scale(scaleFactor);
-                    this.translate(q1);
+                    this.scale(scaleFactor, q1.toPoint());
                 }
             }
 
-            // Step 3: rotate around q1 to align srcEdge → tgtEdge
-            const R1 = srcEdge.rotationBetween(tgtEdge);
-            this.translate(q1.copy().reverse()); // move to origin for rotation
-            this.rotateQuaternion(R1.w, R1.x, R1.y, R1.z);
-            this.translate(q1);
+            /* Step 3: rotate around q1 to align srcEdge → tgtEdge
+                NOTE: rotateQuaternion() re-centers the Mesh on its own bbox center, so wrapping it
+                in translate(-q1)/translate(q1) does not pivot around q1. Feed the same rotation to
+                rotateAround() instead, which does rotate about a real pivot. */
+            const R1 = srcEdge.copy().rotationBetween(tgtEdge);
+            const sinHalf1 = Math.sqrt(Math.max(0, 1 - R1.w * R1.w));
+            if (sinHalf1 > 1e-10)
+            {
+                const angle1 = 2 * Math.acos(Math.max(-1, Math.min(1, R1.w)));
+                this.rotateAround(deg(angle1), [R1.x / sinHalf1, R1.y / sinHalf1, R1.z / sinHalf1], q1.toPoint());
+            }
 
             // Step 4: twist around the now-aligned edge axis to place p3 → q3
             const p3 = Vector.from(sourcePoints[2]);
             const q3 = Vector.from(targetPoints[2]!); // we know this exists because of the earlier length check
 
             // Where p3 ended up after translate + scale + R1 (relative to q1):
-            const rel = Vector.from(p3.subtract(p1))
+            const rel = p3.copy().subtract(p1)
                             .scale(scaleFactor)
                             .rotateQuaternion(R1.w, R1.x, R1.y, R1.z);
 
             // Where q3 sits relative to q1:
-            const goal = Vector.from(q3.subtract(q1));
+            const goal = q3.copy().subtract(q1);
 
             // Twist axis = the aligned first edge (unit)
             const axLen = tgtEdge.length();
@@ -948,11 +956,8 @@ export class Mesh extends Shape
 
                     if (Math.abs(angle) > 1e-10)
                     {
-                        const half = angle / 2;
-                        const sh = Math.sin(half);
-                        this.translate(-q1.x, -q1.y, -q1.z);
-                        this.rotateQuaternion(Math.cos(half), axis.x * sh, axis.y * sh, axis.z * sh);
-                        this.translate(q1.x, q1.y, q1.z);
+                        // pivot around q1 (see the note at step 3)
+                        this.rotateAround(deg(angle), [axis.x, axis.y, axis.z], q1.toPoint());
                     }
                 }
             }
@@ -961,19 +966,14 @@ export class Mesh extends Shape
         }
     }
 
-    /** Scale Mesh with a uniform factor or per-axis [sx, sy, sz]. Optionally around an origin point. */
+    /** Scale Mesh with a uniform factor or per-axis [sx, sy, sz] around an origin point (default: center of this Mesh) */
     override scale(factor: number | PointLike, origin?: PointLike): this
     {
         const [sx, sy, sz] = (typeof factor === 'number') ? [factor, factor, factor] : [Point.from(factor).x, Point.from(factor).y, Point.from(factor).z];
-        if (origin)
-        {
-            const o = Point.from(origin);
-            this.translate(-o.x, -o.y, -o.z);
-            this._mesh = this.inner()?.scale(sx, sy, sz);
-            this.translate(o.x, o.y, o.z);
-            return this;
-        }
+        const o = origin ? Point.from(origin) : this.center();
+        this.translate(-o.x, -o.y, -o.z);
         this._mesh = this.inner()?.scale(sx, sy, sz);
+        this.translate(o.x, o.y, o.z);
         return this;
     }
 
@@ -1738,8 +1738,10 @@ export class Mesh extends Shape
     /** Select (sub)shapes with a selector string (see Selector.ts).
      *  Selectors are greedy: an underspecified selector returns every match.
      *  A ShapeCollection result is collapsed to the single shape when there is
-     *  exactly one match (checkSingle), and an empty result warns. */
-    @sceneAdd
+     *  exactly one match (checkSingle), and an empty result warns.
+     *  Selecting does not add anything to the scene - it hands back a reference to
+     *  geometry that is already there. `select(…).copy()` is what puts a new shape in. */
+    @sceneCarry
     select(what:string)
     {
         const result = new Selector(what).execute(this);
@@ -1752,7 +1754,7 @@ export class Mesh extends Shape
 
     toString(): string
     {
-        return `<Mesh id=${this.id()} vertices=${this.vertices().length} polygons=${this.polygons().length}>`;
+        return `<Mesh id=${this.id()} vertices=${this.vertices().length} polygons=${this.polygons().length} ${this.nodeString()}>`;
     }
 
     toPolygons(): undefined|Array<PolygonJs>
@@ -2158,51 +2160,119 @@ export class Mesh extends Shape
     //// LAYOUT & ALIGNMENT ////
 
     /** Rotate the mesh to lay flat on the XY plane, then drop it so its bottom sits at Z = 0.
-     *  Aligns the thinnest OBB axis (least-variance = dominant face normal) with world +Z
-     *  using a shortest-arc rotation so the in-plane orientation is never disturbed.
-     *  This avoids the instability of toOrthoQuaternion() on symmetric plates where the
-     *  two largest PCA eigenvalues are equal and their eigenvectors are numerically arbitrary.
+     *  Aligns the dominant face direction — the normal carrying the largest total face area —
+     *  with world Z, along the shortest arc, so the in-plane orientation is never disturbed.
+     *  A mesh whose dominant face is already parallel to XY is therefore only translated.
      *
-     *  Fast path: if Z is already clearly the shortest AABB dimension, the mesh is already
-     *  flat — skip the O(n·50) PCA and only translate to Z = 0.
+     *  NOT the OBB's thinnest axis: that is a PCA direction of least variance and only lines
+     *  up with a real face on plate-like shapes. On a sheared loft or a blocky part it points
+     *  nowhere near a face, and layflat() would leave the shape tilted with nothing at all
+     *  resting on Z = 0. Going by face area is also what keeps degenerate plates (equal X/Y
+     *  eigenvalues, arbitrary eigenvectors) stable — their two big faces group together
+     *  regardless of how the PCA in-plane axes happen to fall.
      */
     layflat(): this
     {
-        const bb = this.bbox();
-        const xSpan = bb.maxX() - bb.minX();
-        const ySpan = bb.maxY() - bb.minY();
-        const zSpan = bb.maxZ() - bb.minZ();
+        this.rotateToAlignLargestFaceToZ();
+        const minZ = this.bbox().minZ();
+        return (Math.abs(minZ) > 1e-10) ? this.translate(0, 0, -minZ) : this;
+    }
 
-        // Fast path: Z is unambiguously the thinnest dimension (< half of both X and Y
-        // spans), so the mesh is already lying flat — no rotation needed.
-        if (zSpan <= xSpan && zSpan <= ySpan && zSpan < Math.min(xSpan, ySpan) * 0.5)
-            return Math.abs(bb.minZ()) > 1e-10 ? this.translate(0, 0, -bb.minZ()) : this;
+    /** Rotate this Mesh so that direction `from` ends up pointing along `to`, using the
+     *  shortest arc between the two.
+     *  @param pivot  point the rotation turns around (default: this Mesh's center)
+     */
+    rotateVecToVec(from: PointLike, to: PointLike, pivot?: PointLike): this
+    {
+        const f = Vector.from(from as any);
+        const t = Vector.from(to as any);
+        const { axis, angle } = shortestArcAxisAngle(f, t);
+        if (angle === 0) { return this; }
+        return this.rotateAround(angle, axis, pivot ?? this.center());
+    }
 
-        // Full path: find the thin axis via OBB and rotate it to +Z.
-        // axes()[2] is the axis of least variance — the thickness / face-normal direction.
-        let thinAxis = this.obbox().axes()[2].copy();
-        if (thinAxis.dot(Vector.from(0, 0, 1)) < 0) thinAxis.reverse();
+    /** Rotate this Mesh so its oriented bounding box lines up with the world axes:
+     *  the OBB's thinnest axis onto +Z first, then its longest axis onto +X.
+     *  Position of the center is kept.
+     */
+    rotateToAxesOBbox(): this
+    {
+        const center = this.center();
+        // axes()[2] = least variance (thickness), axes()[0] = greatest (length)
+        this.rotateVecToVec(this.obbox().axes()[2], [0, 0, 1], center);
+        // NOTE: the OBB is recomputed — its axes turned with the mesh in the step above
+        this.rotateVecToVec(this.obbox().axes()[0], [1, 0, 0], center);
+        return this;
+    }
 
-        const dot = thinAxis.dot(Vector.from(0, 0, 1));
-        let q: { x: number; y: number; z: number; w: number };
-        if (dot >= 1 - 1e-10)
+    /** Rotate this Mesh so the normal of its dominant face direction is parallel to the Z axis.
+     *
+     *  Faces are grouped by normal (opposite normals count as one direction) and the group
+     *  with the largest *total* area wins. Grouping matters here: a tessellated mesh has its
+     *  faces split into many triangles, so the single largest polygon is a poor proxy for the
+     *  face that actually dominates the shape.
+     */
+    rotateToAlignLargestFaceToZ(): this
+    {
+        const QUANT = 1e4;
+        interface NormalGroup { x: number, y: number, z: number, area: number }
+        const groups = new Map<string, NormalGroup>();
+
+        this.polygons().toArray().forEach(poly =>
         {
-            q = { x: 0, y: 0, z: 0, w: 1 };
-        }
-        else if (dot <= -1 + 1e-10)
-        {
-            q = { x: 1, y: 0, z: 0, w: 0 };              // upside-down: flip around X
-        }
-        else
-        {
-            const cr = thinAxis.copy().cross(Vector.from(0, 0, 1));
-            const qw = 1 + dot;
-            const len = Math.hypot(cr.x, cr.y, cr.z, qw) || 1;
-            q = { x: cr.x / len, y: cr.y / len, z: cr.z / len, w: qw / len };
-        }
+            const area = poly.area();
+            if (!area || area < TOLERANCE) { return; }
+            const n = poly.normal().normalize();
+            // Fold onto one hemisphere so a face and its backface share a group
+            const flip = (Math.abs(n.z) > TOLERANCE) ? (n.z < 0)
+                       : (Math.abs(n.y) > TOLERANCE) ? (n.y < 0) : (n.x < 0);
+            const [nx, ny, nz] = flip ? [-n.x, -n.y, -n.z] : [n.x, n.y, n.z];
 
-        this.rotateQuaternion(q);
-        return this.translate(0, 0, -this.bbox().minZ());
+            const key   = `${Math.round(nx * QUANT)},${Math.round(ny * QUANT)},${Math.round(nz * QUANT)}`;
+            const group = groups.get(key);
+            if (group) { group.area += area; }
+            else { groups.set(key, { x: nx, y: ny, z: nz, area }); }
+        });
+
+        if (groups.size === 0) { return this; }
+
+        const dominant = Array.from(groups.values()).sort((a, b) => b.area - a.area)[0];
+        return this.rotateVecToVec([dominant.x, dominant.y, dominant.z], [0, 0, 1], this.center());
+    }
+
+    /** Rotate this Mesh to align it with the world axes as much as possible.
+     *
+     *  Runs in three steps:
+     *    1. `rotateToAxesOBbox()` — get the shape roughly flat on the XY plane
+     *    2. `rotateToAlignLargestFaceToZ()` — make the dominant face parallel to XY
+     *    3. turn around Z so the dominant edge direction lands on the X or Y axis
+     *
+     *  Step 3 only ever turns around Z (by at most a quarter turn), so it can never
+     *  undo the flat alignment of the first two steps.
+     *
+     *  @param o  'vertical' (default) puts the dominant edge direction on the Y axis,
+     *            'horizontal' puts it on the X axis
+     */
+    rotateToOrtho(o: OrientationXY = 'vertical'): this
+    {
+        this.rotateToAxesOBbox();
+        this.rotateToAlignLargestFaceToZ();
+
+        const edges = this.edges().toArray().map(e =>
+        {
+            const d = e.direction();
+            return { x: d.x, y: d.y, z: d.z, length: e.length() };
+        });
+
+        const angle = primaryOrthoXYAngle(edges, o);
+        return (angle === 0) ? this : this.rotateZ(angle, this.center());
+    }
+
+    /** Rotate this Mesh to align as much as possible to the world axes.
+     *  Alias for rotateToOrtho() */
+    autoRotate(o: OrientationXY = 'vertical'): this
+    {
+        return this.rotateToOrtho(o);
     }
 
     /** Flatten a 3D mesh to its bottom-facing polygons projected onto the XY plane.

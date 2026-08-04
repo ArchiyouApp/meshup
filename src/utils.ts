@@ -22,6 +22,131 @@ export function remapAxis(x: number, y: number, z: number, up: 'x' | 'y' | 'z' =
     return [x, y,  z];
 }
 
+//// SCENE DEBUGGING ////
+
+/** Debug label for a Shape's scene membership, used by every Shape.toString() in both
+ *  kernels: the node holding the Shape, or that it is not in the scene at all — usually
+ *  the thing you want to know when a Shape does not show up.
+ *
+ *  NOTE: lives here, not in SceneNode.ts, on purpose. Shape.ts only ever needed SceneNode
+ *  as a *type*, so that import gets erased at runtime; importing a value from it would
+ *  make Shape <-> SceneNode a real cycle and leave `Polygon extends Shape` undefined.
+ *  utils.ts imports nothing, so it is always safe to import from. */
+export function nodeToString(node: { name: string, id(): string } | null | undefined): string
+{
+    return (node) ? `node={ name: '${node.name}', id: '${node.id()}' }` : 'node=<not in scene>';
+}
+
+//// ORTHO ALIGNMENT ////
+
+/** A bare direction with a weight, as fed to primaryOrthoXYAngle() */
+export interface DirWithLength { x: number, y: number, z: number, length: number }
+
+/** Shortest-arc rotation that brings direction `from` onto direction `to`, as an
+ *  axis + angle (degrees) pair that can be handed straight to rotateAround().
+ *
+ *  Degenerate inputs are handled explicitly instead of producing NaN:
+ *    - a zero-length input or already-parallel directions give angle 0
+ *    - anti-parallel directions give 180 degrees around an arbitrary perpendicular axis
+ */
+export function shortestArcAxisAngle(
+    from: { x: number, y: number, z: number },
+    to: { x: number, y: number, z: number },
+): { axis: [number, number, number], angle: number }
+{
+    const NONE = { axis: [0, 0, 1] as [number, number, number], angle: 0 };
+
+    const lf = Math.hypot(from.x, from.y, from.z);
+    const lt = Math.hypot(to.x, to.y, to.z);
+    if (lf < 1e-12 || lt < 1e-12) { return NONE; }
+
+    const f = { x: from.x / lf, y: from.y / lf, z: from.z / lf };
+    const t = { x: to.x / lt,   y: to.y / lt,   z: to.z / lt };
+
+    const dot = Math.max(-1, Math.min(1, f.x * t.x + f.y * t.y + f.z * t.z));
+    if (dot >= 1 - 1e-12) { return NONE; } // already aligned
+
+    if (dot <= -1 + 1e-12)
+    {
+        // Anti-parallel: any perpendicular axis does. Cross with the world axis that
+        // is least aligned with f, so the cross product never collapses to zero.
+        const alt = (Math.abs(f.x) < 0.9) ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+        const cx = f.y * alt.z - f.z * alt.y;
+        const cy = f.z * alt.x - f.x * alt.z;
+        const cz = f.x * alt.y - f.y * alt.x;
+        const l  = Math.hypot(cx, cy, cz);
+        return { axis: [cx / l, cy / l, cz / l], angle: 180 };
+    }
+
+    const cx = f.y * t.z - f.z * t.y;
+    const cy = f.z * t.x - f.x * t.z;
+    const cz = f.x * t.y - f.y * t.x;
+    const l  = Math.hypot(cx, cy, cz);
+
+    return { axis: [cx / l, cy / l, cz / l], angle: deg(Math.acos(dot)) };
+}
+
+/** Determine the dominant in-plane (XY) direction of a set of edges and return the
+ *  rotation around Z (in degrees) that brings it onto the X axis ('horizontal') or
+ *  the Y axis ('vertical') by the shortest possible turn.
+ *
+ *  Edges are grouped by their XY direction, folded into a half plane so that an edge
+ *  and its reverse count as the same line. Each group is scored `count * maxLength`
+ *  (the same simple heuristic as the brep kernel): the direction shared by the most —
+ *  and longest — edges wins. Length is weighted by how much of the edge actually lies
+ *  in the XY plane, so near-vertical edges cannot dominate with a direction that is
+ *  mostly noise.
+ *
+ *  The returned angle is always within [-90, 90): aligning a *line* to an axis never
+ *  needs more than a quarter turn, so the shape is nudged into place rather than flipped.
+ */
+export function primaryOrthoXYAngle(
+    edges: Array<DirWithLength>,
+    orientation: 'horizontal'|'vertical' = 'vertical',
+    tolerance: number = 1e-6,
+): number
+{
+    const QUANT = 1e4; // ~0.006 degrees of direction resolution when grouping
+
+    interface DirGroup { x: number, y: number, count: number, maxLength: number }
+    const groups = new Map<string, DirGroup>();
+
+    edges.forEach(e =>
+    {
+        const xyLen  = Math.hypot(e.x, e.y);
+        const dirLen = Math.hypot(e.x, e.y, e.z);
+        if (xyLen < tolerance || dirLen < tolerance) { return; } // no usable XY direction
+
+        // Fold onto the +X half plane so opposite directions share a group
+        const flip = (Math.abs(e.x) > tolerance) ? (e.x < 0) : (e.y < 0);
+        const ux = (flip ? -e.x : e.x) / xyLen;
+        const uy = (flip ? -e.y : e.y) / xyLen;
+
+        // Only the part of the edge lying in the XY plane counts towards its weight
+        const weight = (e.length || dirLen) * (xyLen / dirLen);
+
+        const key   = `${Math.round(ux * QUANT)},${Math.round(uy * QUANT)}`;
+        const group = groups.get(key);
+        if (group)
+        {
+            group.count += 1;
+            group.maxLength = Math.max(group.maxLength, weight);
+        }
+        else { groups.set(key, { x: ux, y: uy, count: 1, maxLength: weight }); }
+    });
+
+    if (groups.size === 0) { return 0; }
+
+    const primary = Array.from(groups.values())
+                        .sort((a, b) => (b.count * b.maxLength) - (a.count * a.maxLength))[0];
+
+    const current = deg(Math.atan2(primary.y, primary.x));
+    const target  = (orientation === 'horizontal') ? 0 : 90;
+
+    // Wrap into [-90, 90): a direction and its reverse are the same line
+    return ((((target - current) % 180) + 270) % 180) - 90;
+}
+
 //// UUID ////
 
 export function uuid(): string
