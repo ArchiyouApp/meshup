@@ -1202,6 +1202,17 @@ export class Polygon extends Shape
         return new ShapeCollection<Curve>(...loopEdges(this._boundaryVertices()), ...holes);
     }
 
+    /** Turn this Polygon into a plain wireframe: its boundary and hole edges as Curves, no
+     *  hidden-line removal. Same edges as edges(), but this REPLACES the Polygon in the scene. */
+    @sceneReplace
+    wireframe(): ShapeCollection<Curve>
+    {
+        const wires = this.edges();
+        const from = this.name() ?? this._node?.name;
+        if (from) { wires.name(`${from}_wireframe`); }
+        return wires;
+    }
+
     //// EXPORT ////
 
     /** This polygon's outer boundary as a closed Curve. Interior holes are not included.

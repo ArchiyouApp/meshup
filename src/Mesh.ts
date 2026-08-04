@@ -612,6 +612,18 @@ export class Mesh extends Shape
         return collection;
     }
 
+    /** Turn this Mesh into a plain wireframe: its edges as Curves, no hidden-line removal.
+     *  Same edges as edges() (see there for the parameters and grouping), but this REPLACES
+     *  the Mesh in the scene, so `box(100).wireframe()` shows the wireframe, not the box. */
+    @sceneReplace
+    wireframe(featureAngle: number = 10, all: boolean = false): ShapeCollection<Curve>
+    {
+        const wires = this.edges(featureAngle, all);
+        const from = this.name() ?? this._node?.name;
+        if (from) { wires.name(`${from}_wireframe`); }
+        return wires;
+    }
+
     /** Calculate oriented bounding box of current Mesh using PCA */
     obbox(): OBbox
     {
