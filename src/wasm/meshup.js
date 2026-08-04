@@ -4687,8 +4687,13 @@ async function __wbg_init(module_or_path) {
         }
     }
 
+    // PATCHED by buildscripts/build-wasm.ts: the wasm-pack fallback
+    //   module_or_path = new URL('meshup_bg.wasm', import.meta.url)
+    // is removed on purpose. meshup never ships meshup_bg.wasm as a sibling file
+    // (the bytes are inlined as base64 and passed in by src/loader.ts), and the
+    // URL reference made bundlers such as webpack 5 fail with "Module not found".
     if (typeof module_or_path === 'undefined') {
-        module_or_path = new URL('meshup_bg.wasm', import.meta.url);
+        throw new Error('meshup wasm init: no module or path given. Use init()/initAsync() from meshup instead of calling the raw wasm glue.');
     }
     const imports = __wbg_get_imports();
 
