@@ -60,9 +60,47 @@ pub struct EdgeProjectionResult {
     pub silhouette_indices: Vec<u32>,
 }
 
+/// Which hidden-line-removal algorithm to run.
+///
+/// The algorithms are implemented side by side so they can be compared on the
+/// same model; nothing here changes the behaviour of an existing caller.
+///
+/// - [`HlrStrategy::Raycast`] — the original sampling solver in this module.
+///   Visibility is probed at a finite number of points along each edge and the
+///   transitions are located by bisection, so segment endpoints are only
+///   approximate and an occluder narrower than the sample spacing can be missed
+///   entirely. This is the default and is left exactly as it was.
+/// - [`HlrStrategy::Exact`] — the analytic solver in [`crate::mesh::hlr`].
+///   Occlusion is computed as exact parametric intervals, so endpoints land on
+///   the true silhouette crossing and no occluder can slip between samples.
+///
+/// The `'clip'` and `'painter'` strategies are orchestrated per shape on the
+/// TypeScript side and never reach this enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HlrStrategy {
+    /// Sampling + bisection (original behaviour, default).
+    #[default]
+    Raycast,
+    /// Exact parametric interval occlusion.
+    Exact,
+}
+
+impl HlrStrategy {
+    /// Parse a strategy name coming from the JS bridge.
+    ///
+    /// Unknown names fall back to [`HlrStrategy::Raycast`] so an older caller
+    /// or a typo degrades to today's behaviour rather than failing.
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "exact" => HlrStrategy::Exact,
+            _ => HlrStrategy::Raycast,
+        }
+    }
+}
+
 /// Classification of an edge with respect to the current view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EdgeKind {
+pub(crate) enum EdgeKind {
     /// Naked edge of an open mesh (single adjacent face).
     Boundary,
     /// Adjacent faces straddle the view direction — part of the outer contour.
@@ -74,7 +112,7 @@ enum EdgeKind {
 impl EdgeKind {
     /// Edges that contribute to the outer contour of the projection.
     #[inline]
-    fn is_outline(self) -> bool {
+    pub(crate) fn is_outline(self) -> bool {
         matches!(self, EdgeKind::Boundary | EdgeKind::Silhouette)
     }
 }
@@ -132,6 +170,32 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S> {
     /// range these tolerances were tuned for, solved, and scaled back — which makes every
     /// absolute epsilon downstream behave as a relative one.
     const PROJECTION_CANONICAL_EXTENT: Real = 100.0;
+
+    /// Project visible and hidden edges using the requested HLR algorithm.
+    ///
+    /// [`HlrStrategy::Raycast`] delegates to [`Mesh::project_edges`] unchanged,
+    /// so passing it is byte-for-byte identical to calling that method directly.
+    /// [`HlrStrategy::Exact`] runs the analytic solver in [`crate::mesh::hlr`],
+    /// which needs no scale normalisation because it contains no absolute
+    /// sample spacing, and ignores `n_samples`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn project_edges_with_strategy(
+        &self,
+        view_normal: &Vector3<Real>,
+        plane_origin: &Point3<Real>,
+        plane_normal: &Vector3<Real>,
+        feature_angle_deg: Real,
+        n_samples: usize,
+        occluders: &[&Mesh<S>],
+        strategy: HlrStrategy,
+    ) -> EdgeProjectionResult {
+        match strategy {
+            HlrStrategy::Raycast => self.project_edges(
+                view_normal, plane_origin, plane_normal, feature_angle_deg, n_samples, occluders),
+            HlrStrategy::Exact => crate::mesh::hlr::project_edges_exact(
+                self, view_normal, plane_origin, plane_normal, feature_angle_deg, occluders),
+        }
+    }
 
     /// Project visible and hidden edges, normalising scale first (see above).
     pub fn project_edges(
@@ -265,6 +329,41 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S> {
         result
     }
 
+    /// [`Mesh::project_edges_section`] with a selectable HLR algorithm.
+    #[cfg(feature = "sketch")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn project_edges_section_with_strategy(
+        &self,
+        section_normal: &Vector3<Real>,
+        section_offset: Real,
+        view_normal: &Vector3<Real>,
+        plane_origin: &Point3<Real>,
+        plane_normal: &Vector3<Real>,
+        feature_angle_deg: Real,
+        n_samples: usize,
+        occluders: &[&Mesh<S>],
+        strategy: HlrStrategy,
+    ) -> SectionElevationResult<S> {
+        use crate::mesh::plane::Plane;
+        let cut_plane = Plane::from_normal(*section_normal, section_offset);
+        let cut = self.slice(cut_plane);
+        let edge_result = self.project_edges_with_strategy(
+            view_normal,
+            plane_origin,
+            plane_normal,
+            feature_angle_deg,
+            n_samples,
+            occluders,
+            strategy,
+        );
+        SectionElevationResult {
+            cut,
+            visible_polylines: edge_result.visible_polylines,
+            hidden_polylines: edge_result.hidden_polylines,
+            silhouette_indices: edge_result.silhouette_indices,
+        }
+    }
+
     /// Slice the mesh at `section_plane` and project its visible edges.
     ///
     /// Returns the cut `Sketch`, visible edge polylines, and hidden edge
@@ -304,11 +403,11 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S> {
 // ─── internal record ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-struct EdgeRecord {
-    v0: Point3<Real>,
-    v1: Point3<Real>,
+pub(crate) struct EdgeRecord {
+    pub(crate) v0: Point3<Real>,
+    pub(crate) v1: Point3<Real>,
     /// Normals of the faces adjacent to this edge.
-    face_normals: Vec<Vector3<Real>>,
+    pub(crate) face_normals: Vec<Vector3<Real>>,
 }
 
 // Canonical edge key: two quantised vertex triples in lexicographic order.
@@ -339,7 +438,7 @@ fn vkey(p: &Point3<Real>) -> (i64, i64, i64) {
 ///
 /// The polygon's face normal is recorded against every one of its edges so that
 /// `should_keep_edge` can classify silhouette / feature / back-facing edges.
-fn extract_edges<S: Clone + Debug + Send + Sync>(
+pub(crate) fn extract_edges<S: Clone + Debug + Send + Sync>(
     mesh: &Mesh<S>,
 ) -> HashMap<EdgeKey, EdgeRecord> {
     let mut edges: HashMap<EdgeKey, EdgeRecord> = HashMap::new();
@@ -437,7 +536,7 @@ fn normal_sig(face_normals: &[Vector3<Real>]) -> NormalSig {
 /// After CSG/BSP operations, a single logical edge (e.g. a cube edge) may be split into
 /// several collinear segments by the BSP planes of the operand mesh.  This function
 /// stitches them back together so each logical edge appears as one `EdgeRecord`.
-fn merge_collinear_edges(
+pub(crate) fn merge_collinear_edges(
     edges: HashMap<EdgeKey, EdgeRecord>,
 ) -> HashMap<EdgeKey, EdgeRecord> {
     // ── 1. Group edges by (direction, normal_signature) ───────────────────
@@ -588,7 +687,7 @@ fn merge_collinear_edges(
 /// across the full range: increasing it strictly grows the set of edges
 /// classified as coplanar. (The previous `sin(thresh)`-based check folded
 /// values >90° back to their supplement.)
-fn classify_edge(
+pub(crate) fn classify_edge(
     face_normals: &[Vector3<Real>],
     view_dir: &Vector3<Real>,
     feature_thresh: Real,
@@ -643,7 +742,7 @@ fn should_keep_edge(
 
 /// Project `p` orthographically onto the plane `(origin, normal)`.
 #[inline]
-fn project_point(
+pub(crate) fn project_point(
     p: &Point3<Real>,
     origin: &Point3<Real>,
     normal: &Vector3<Real>,
@@ -891,7 +990,7 @@ fn adaptive_min_t_span_for_projected_length(projected_len: Real) -> Real {
 }
 
 #[inline]
-fn normalize_feature_angle_rad(feature_angle_deg: Real) -> Real {
+pub(crate) fn normalize_feature_angle_rad(feature_angle_deg: Real) -> Real {
     let clamped_deg = if feature_angle_deg.is_finite() {
         feature_angle_deg
             .max(EDGE_FEATURE_ANGLE_MIN_DEG)

@@ -16,6 +16,17 @@ pub struct MeshJs {
     pub(crate) inner: Mesh<String>,
 }
 
+/// Resolve the `strategy` string from JS to an HLR algorithm.
+///
+/// Absent or unrecognised means the original sampling solver, so a caller
+/// written before the option existed keeps exactly the behaviour it had.
+fn hlr_strategy(name: Option<&str>) -> crate::mesh::edge_projection::HlrStrategy {
+    match name {
+        Some(n) => crate::mesh::edge_projection::HlrStrategy::from_name(n),
+        None => crate::mesh::edge_projection::HlrStrategy::default(),
+    }
+}
+
 #[wasm_bindgen]
 impl MeshJs {
     #[wasm_bindgen(constructor)]
@@ -1266,6 +1277,9 @@ impl MeshJs {
     /// - `n_samples` – HLR ray samples per edge segment (e.g. `8`).
     /// - `occluders` – additional meshes that can occlude edges of `self`;
     ///   `self` is always included as an occluder.
+    /// - `strategy` – which HLR algorithm to run: `"raycast"` (the sampling
+    ///   solver, and the default when omitted or unrecognised) or `"exact"`
+    ///   (analytic interval clipping). `n_samples` only affects `"raycast"`.
     #[wasm_bindgen(js_name = projectEdges)]
     pub fn project_edges_js(
         &self,
@@ -1275,6 +1289,7 @@ impl MeshJs {
         feature_angle_deg: Real,
         n_samples: usize,
         occluders: Vec<MeshJs>,
+        strategy: Option<String>,
     ) -> crate::wasm::edge_projection_js::EdgeProjectionResultJs {
         let view_normal = Vector3::new(vx, vy, vz);
         let plane_origin = Point3::new(ox, oy, oz);
@@ -1283,15 +1298,23 @@ impl MeshJs {
             .map(|m| m.inner)
             .collect();
         let occ_refs: Vec<&crate::mesh::Mesh<String>> = occ_inner.iter().collect();
-        let result = self.inner.project_edges(
+        let result = self.inner.project_edges_with_strategy(
             &view_normal,
             &plane_origin,
             &plane_normal,
             feature_angle_deg,
             n_samples,
             &occ_refs,
+            hlr_strategy(strategy.as_deref()),
         );
         crate::wasm::edge_projection_js::EdgeProjectionResultJs { inner: result }
+    }
+
+    /// Whether this mesh is convex — the precondition for the per-shape
+    /// drawing strategies. See [`crate::mesh::Mesh::is_convex`].
+    #[wasm_bindgen(js_name = isConvex)]
+    pub fn is_convex_js(&self) -> bool {
+        self.inner.is_convex()
     }
 
     /// Slice at a section plane and return visible/hidden edge projections plus
@@ -1313,6 +1336,7 @@ impl MeshJs {
         feature_angle_deg: Real,
         n_samples: usize,
         occluders: Vec<MeshJs>,
+        strategy: Option<String>,
     ) -> crate::wasm::edge_projection_js::SectionElevationResultJs {
         let section_normal = Vector3::new(snx, sny, snz);
         let view_normal = Vector3::new(vx, vy, vz);
@@ -1322,7 +1346,7 @@ impl MeshJs {
             .map(|m| m.inner)
             .collect();
         let occ_refs: Vec<&crate::mesh::Mesh<String>> = occ_inner.iter().collect();
-        let r = self.inner.project_edges_section(
+        let r = self.inner.project_edges_section_with_strategy(
             &section_normal,
             section_offset,
             &view_normal,
@@ -1331,6 +1355,7 @@ impl MeshJs {
             feature_angle_deg,
             n_samples,
             &occ_refs,
+            hlr_strategy(strategy.as_deref()),
         );
         crate::wasm::edge_projection_js::SectionElevationResultJs {
             visible_polylines: crate::mesh::edge_projection::EdgeProjectionResult {

@@ -9,7 +9,7 @@
  * 
  */
 
-import type { CsgrsModule, Axis, BasePlane, OrientationXY, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions } from './types';
+import type { CsgrsModule, Axis, BasePlane, OrientationXY, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions, HlrStrategy, ProjectionViewOptions } from './types';
 import { isAxis, isBasePlane, isPointLike } from './types';
 
 import { Curve, getCsgrs } from './index';
@@ -32,7 +32,7 @@ import { Selector } from './Selector';
 
 // Settings
 import { TOLERANCE, SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT,
-    SHAPES_CYLINDER_SEGMENTS_RADIAL, EDGE_PROJECTION_DEFAULTS, EDGE_PROJECTION_LIMITS, BASE_PLANE_NAME_TO_PLANE } from './constants';
+    SHAPES_CYLINDER_SEGMENTS_RADIAL, EDGE_PROJECTION_DEFAULTS, EDGE_PROJECTION_LIMITS, HLR_STRATEGY_DEFAULT, BASE_PLANE_NAME_TO_PLANE } from './constants';
 
     
 
@@ -2342,6 +2342,11 @@ export class Mesh extends Shape
      *   - `'hidden'`: occluded edges (only present when `hiddenLines=true`)
      *   - `'silhouette'`: subset of `'visible'` forming the outer contour
      *     (silhouette + open-mesh boundary edges) as classified by the Rust HLR
+     *
+     * @param view Trailing options, chiefly `strategy` — which HLR algorithm to
+     *   run. Defaults to `'raycast'`, the original sampling solver. A single
+     *   mesh has no shapes to order, so the per-shape strategies `'clip'` and
+     *   `'painter'` reduce to `'exact'` here.
      */
     @sceneLayer('iso')
     isometry(
@@ -2350,6 +2355,7 @@ export class Mesh extends Shape
         includeHiddenShapes:boolean=false,
         samples: number = 16,
         featureAngle: number=10,
+        view: ProjectionViewOptions = {},
     ):ShapeCollection<Shape>
     {
         void includeHiddenShapes;
@@ -2366,6 +2372,7 @@ export class Mesh extends Shape
                 planeOrigin: [0, 0, 0],
                 featureAngle: featureAngle,
                 samples: samples,
+                strategy: Mesh._singleMeshStrategy(view.strategy),
             } as ProjectEdgeOptions);
 
         if(!hiddenLines){ iso.removeGroup('hidden'); }
@@ -2380,9 +2387,23 @@ export class Mesh extends Shape
         includeHiddenShapes:boolean=false,
         samples: number = 16,
         featureAngle: number=10,
+        view: ProjectionViewOptions = {},
     ):ShapeCollection<Shape>
     {
-        return this.isometry(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
+        return this.isometry(cam, hiddenLines, includeHiddenShapes, samples, featureAngle, view);
+    }
+
+    /** Map a requested strategy onto one a single mesh can actually run.
+     *
+     *  `'clip'` and `'painter'` are about ordering separate shapes against each
+     *  other. With one mesh there is nothing to order, and what remains of both
+     *  is exact self-occlusion — so they resolve to `'exact'` rather than
+     *  failing. A collection of several meshes handles them properly.
+     */
+    static _singleMeshStrategy(strategy: HlrStrategy | undefined): HlrStrategy
+    {
+        if (!strategy) return HLR_STRATEGY_DEFAULT;
+        return (strategy === 'clip' || strategy === 'painter') ? 'exact' : strategy;
     }
 
     /**
@@ -2427,7 +2448,8 @@ export class Mesh extends Shape
         const occJs = occluders
             .map(m => m.inner()?.clone?.())
             .filter((m): m is MeshJs => m != null);
-        const r = this.inner()?.projectEdges(vx, vy, vz || 0, ox, oy, oz || 0, nx, ny, nz || 0, fa, ns, occJs);
+        const strategy = optionsWithDefaults.strategy ?? HLR_STRATEGY_DEFAULT;
+        const r = this.inner()?.projectEdges(vx, vy, vz || 0, ox, oy, oz || 0, nx, ny, nz || 0, fa, ns, occJs, strategy);
         if (!r)
         {
             console.error(`Mesh::_projectEdges(): Projection failed. Check if the mesh is valid and the options are correct.`);
@@ -2577,6 +2599,7 @@ export class Mesh extends Shape
         hiddenLines: boolean = false,
         samples: number = 16,
         featureAngle: number = 10,
+        view: ProjectionViewOptions = {},
     ): ShapeCollection<Shape>
     {
         const camDirVec = Mesh._resolveViewDirection(from);
@@ -2589,6 +2612,7 @@ export class Mesh extends Shape
                 planeOrigin:   [0, 0, 0],
                 featureAngle:  featureAngle,
                 samples:       samples,
+                strategy:      Mesh._singleMeshStrategy(view.strategy),
             } as ProjectEdgeOptions);
 
         if (!hiddenLines) elev.removeGroup('hidden');
@@ -2624,13 +2648,20 @@ export class Mesh extends Shape
         hiddenLines: boolean = false,
         samples: number = 16,
         featureAngle: number = 10,
+        view: ProjectionViewOptions = {},
     ): ShapeCollection<Shape>
     {
         const sectionNormal = Mesh._resolveViewDirection(normal);
         const pivotPoint    = Point.from(pivot);
 
         const result = this._projectEdgesSection(
-            { pivot: pivotPoint, normal: sectionNormal, featureAngle, samples });
+            {
+                pivot: pivotPoint,
+                normal: sectionNormal,
+                featureAngle,
+                samples,
+                strategy: Mesh._singleMeshStrategy(view.strategy),
+            });
 
         if (!hiddenLines) result.removeGroup('hidden');
 
@@ -2654,6 +2685,7 @@ export class Mesh extends Shape
             normal: Vector,
             featureAngle?: number,
             samples?: number,
+            strategy?: HlrStrategy,
         },
         occluders: ShapeCollection<Mesh> = new ShapeCollection<Mesh>(),
     ): ShapeCollection<Shape>
@@ -2695,7 +2727,7 @@ export class Mesh extends Shape
             view.x, view.y, view.z,
             pivot.x, pivot.y, pivot.z,
             planeN.x, planeN.y, planeN.z,
-            fa, ns, occJs,
+            fa, ns, occJs, options.strategy ?? HLR_STRATEGY_DEFAULT,
         );
         if (!r)
         {

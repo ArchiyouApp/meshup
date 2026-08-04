@@ -62,6 +62,7 @@ pub mod bsp_parallel;
 
 pub mod bvh;
 pub mod edge_projection;
+pub mod hlr;
 pub mod reconstruct;
 
 #[cfg(feature = "chull")]

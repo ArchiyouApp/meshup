@@ -10,7 +10,7 @@
  * 
  */
 
-import type { Axis, BasePlane, PointLike, ProjectEdgeOptions, RaycastHit } from './types';
+import type { Axis, BasePlane, PointLike, ProjectEdgeOptions, RaycastHit, HlrStrategy, ProjectionViewOptions } from './types';
 
 import { Vector } from './Vector';
 import { Vertex } from './Vertex';
@@ -27,7 +27,7 @@ import { colSceneAdd, colSceneLayer, colSceneReplace, sceneCarry } from './scene
 import { MeshJs } from './wasm/meshup';
 import { GLTFBuilder } from './GLTFBuilder';
 
-import { TOLERANCE } from './constants';
+import { TOLERANCE, HLR_STRATEGY_DEFAULT } from './constants';
 
 /** Minimal interface a shape must satisfy to be held in a ShapeCollection. */
 export interface CollectableShape {
@@ -1098,6 +1098,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         planeNormal: Vector,
         featureAngle: number,
         samples: number,
+        strategy: HlrStrategy = HLR_STRATEGY_DEFAULT,
     ): ProjectEdgeOptions
     {
         return {
@@ -1106,6 +1107,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             planeOrigin: [0, 0, 0],
             featureAngle,
             samples,
+            strategy,
         };
     }
 
@@ -1126,6 +1128,241 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         if (silhouette?.length) target.tagGroup('silhouette', silhouette);
     }
 
+    /** Decide which HLR algorithm this projection will actually run.
+     *
+     *  `'clip'` and `'painter'` are exact only for convex bodies that do not
+     *  interpenetrate — convexity is what makes a shape's own line work a plain
+     *  backface question, and disjointness is what gives every overlapping pair
+     *  a well-defined front-to-back order. When the scene does not qualify the
+     *  caller is told, rather than quietly getting a different drawing than the
+     *  one they asked for; pass `fallback: true` to downgrade with a warning.
+     */
+    private static _resolveStrategy(meshes: Mesh[], view: ProjectionViewOptions): HlrStrategy
+    {
+        const strategy = view.strategy ?? HLR_STRATEGY_DEFAULT;
+        if (strategy !== 'clip' && strategy !== 'painter') return strategy;
+
+        const reason = ShapeCollection._perShapeBlocker(meshes);
+        if (!reason) return strategy;
+
+        if (view.fallback)
+        {
+            console.warn(`ShapeCollection: '${strategy}' does not apply here (${reason}) — falling back to '${HLR_STRATEGY_DEFAULT}'.`);
+            return HLR_STRATEGY_DEFAULT;
+        }
+        throw new Error(
+            `ShapeCollection: '${strategy}' projection requires convex, non-interpenetrating shapes (${reason}). `
+            + `Use strategy 'exact' for general geometry, or pass { fallback: true } to downgrade automatically.`);
+    }
+
+    /** Why the per-shape strategies cannot run, or `null` if they can. */
+    private static _perShapeBlocker(meshes: Mesh[]): string | null
+    {
+        for (let i = 0; i < meshes.length; i++)
+        {
+            // Note `isCuboid()` is deliberately NOT used as a shortcut here: it
+            // asks whether the vertices sit within an oriented box and touch its
+            // faces, which a cube with a notch cut out of it also satisfies.
+            // Convexity is the property that matters, so test it directly.
+            if (!meshes[i].inner()?.isConvex?.()) return `shape ${i} is not convex`;
+        }
+
+        for (let i = 0; i < meshes.length; i++)
+        {
+            for (let j = i + 1; j < meshes.length; j++)
+            {
+                if (ShapeCollection._sharesVolume(meshes[i], meshes[j]))
+                {
+                    return `shapes ${i} and ${j} interpenetrate`;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Whether two shapes share interior volume, as opposed to merely touching.
+     *
+     *  Compares axis-aligned bounds and asks for positive overlap on all three
+     *  axes. Two boxes flush against each other overlap on two axes and touch
+     *  on the third, so they pass; two boxes actually driven into one another
+     *  overlap on all three, so they do not.
+     *
+     *  For world-axis-aligned boxes — which is what these strategies are aimed
+     *  at, and most of what Archiyou models are — this is exact. For rotated or
+     *  rounded shapes it is conservative: two shapes whose bounding boxes
+     *  overlap but whose bodies do not will be rejected even though the
+     *  strategy would have drawn them correctly. Rejecting a scene it could
+     *  have drawn is a recoverable annoyance (`fallback: true`, or use
+     *  `'exact'`); accepting one it cannot would silently produce a wrong
+     *  drawing, which is not.
+     */
+    private static _sharesVolume(a: Mesh, b: Mesh): boolean
+    {
+        const ba = a.bbox();
+        const bb = b.bbox();
+        if (!ba || !bb) return false;
+
+        const overlaps = (
+            aMin: number, aMax: number, bMin: number, bMax: number,
+        ) => Math.min(aMax, bMax) - Math.max(aMin, bMin) > TOLERANCE;
+
+        const aMin = ba.min(), aMax = ba.max();
+        const bMin = bb.min(), bMax = bb.max();
+        return overlaps(aMin.x, aMax.x, bMin.x, bMax.x)
+            && overlaps(aMin.y, aMax.y, bMin.y, bMax.y)
+            && overlaps(aMin.z, aMax.z, bMin.z, bMax.z);
+    }
+
+    /** Project each shape separately, with its siblings as occluders.
+     *
+     *  This is the alternative to merging everything into one solid first, and
+     *  it is what the `'clip'` and `'painter'` strategies share:
+     *
+     *  - **No BSP merge.** The merge is the expensive, failure-prone step — it
+     *    is what makes a large grid of boxes fall over — and it throws away
+     *    which shape each edge came from.
+     *  - **Per-shape identity survives**, so the result carries a `shape-N`
+     *    group per source shape and the SVG can be grouped and ordered by them.
+     *  - **Contact edges come out right for free.** Two boxes sharing a face
+     *    each keep their own outline, and the shared face is coplanar with both
+     *    so it hides neither — no nudging geometry toward the camera.
+     *
+     *  Occlusion is the exact solver's, so a sibling that is *behind* a shape
+     *  fails the depth test and clips nothing. That is why no explicit
+     *  front-to-back ordering is needed to decide what hides what; the ordering
+     *  computed here is only for paint order and grouping.
+     */
+    private static _projectPerShape(
+        meshes: Mesh[],
+        viewDir: Vector,
+        planeNormal: Vector,
+        hiddenLines: boolean,
+        featureAngle: number,
+        strategy: HlrStrategy,
+    ): ShapeCollection<any>
+    {
+        const order = ShapeCollection._depthOrder(meshes, viewDir);
+        const painter = strategy === 'painter';
+        const result = new ShapeCollection<any>();
+
+        for (const i of order)
+        {
+            const mesh = meshes[i];
+
+            // `'painter'` computes no inter-shape occlusion at all — that is
+            // the whole point of it. Each shape is projected against nothing
+            // but itself, and the opaque fill of whatever is drawn later
+            // covers what is behind. `'clip'` instead asks the exact solver to
+            // clip this shape against its siblings, which costs more but keeps
+            // the output pure line work.
+            const occluders = painter
+                ? new ShapeCollection<Mesh>()
+                : new ShapeCollection<Mesh>(...meshes.filter((_, j) => j !== i));
+
+            const options = ShapeCollection._makeProjectionOptions(
+                viewDir, planeNormal, featureAngle, 0, 'exact');
+            const projected = mesh._projectEdges(options, occluders);
+
+            if (!hiddenLines) projected.removeGroup('hidden');
+
+            const own = new ShapeCollection<any>();
+
+            // The fill goes in before this shape's own edges so it sits under
+            // them, and after every farther shape so it covers them. Document
+            // order is the paint order, and `order` is back to front.
+            if (painter)
+            {
+                const fill = ShapeCollection._frontFaceOutlines(mesh, viewDir, planeNormal);
+                if (fill.length)
+                {
+                    result.addGroup('fill', fill);
+                    fill.forEach((s: any) => own.add(s));
+                }
+            }
+
+            ShapeCollection._appendProjectionGroups(result, projected);
+
+            // Tag everything this shape contributed so the SVG writer can emit
+            // one group per shape, in the back-to-front order used here.
+            for (const name of ['hidden', 'visible'])
+            {
+                const g = projected.group(name);
+                if (g?.length) g.forEach((s: any) => own.add(s));
+            }
+            if (own.length) result.tagGroup(`shape-${i}`, own);
+        }
+
+        return Mesh._flattenProjectionToScreen(result, planeNormal);
+    }
+
+    /** Closed outlines of the faces of `mesh` that point at the viewer.
+     *
+     *  Painted opaque, these are what hides the shapes behind — so no
+     *  occlusion has to be computed for them. Overlapping front faces of one
+     *  convex body cover exactly its projected silhouette, which means the
+     *  silhouette never has to be assembled as a single polygon: overpainting
+     *  in one colour does it.
+     */
+    private static _frontFaceOutlines(
+        mesh: Mesh,
+        viewDir: Vector,
+        planeNormal: Vector,
+    ): ShapeCollection<any>
+    {
+        const dir = viewDir.copy().normalize();
+        const planeN = planeNormal.copy().normalize();
+        const out = new ShapeCollection<any>();
+
+        mesh.polygons().forEach((poly: any) =>
+        {
+            // Facing the viewer. Faces seen edge-on contribute no area and are
+            // skipped so they cannot become zero-width slivers.
+            if (poly.normal().dot(dir) <= TOLERANCE) return;
+
+            const pts = poly.vertices().toArray().map((v: any) =>
+            {
+                // Same orthographic drop onto the projection plane the edge
+                // projection uses, so fills and line work land together.
+                const d = v.x * planeN.x + v.y * planeN.y + v.z * planeN.z;
+                return [v.x - planeN.x * d, v.y - planeN.y * d, v.z - planeN.z * d];
+            });
+            if (pts.length < 3) return;
+
+            const loop = Curve.Polyline([...pts, pts[0]]);
+            if (loop) out.add(loop);
+        });
+
+        return out;
+    }
+
+    /** Indices of `meshes` ordered back to front along the view direction.
+     *
+     *  Depth is measured at the far corner of each shape's bounding box, so a
+     *  shape is drawn only once everything it could sit in front of is down.
+     *  For disjoint convex bodies under a parallel projection this agrees with
+     *  the true occlusion order wherever the two shapes actually overlap on
+     *  screen, which is the only place paint order is observable.
+     */
+    private static _depthOrder(meshes: Mesh[], viewDir: Vector): number[]
+    {
+        const dir = viewDir.copy().normalize();
+        const depth = meshes.map(m =>
+        {
+            const bbox = m.bbox();
+            if (!bbox) return 0;
+            // Largest projection of any bbox corner onto the view direction:
+            // how close this shape's nearest possible point is to the viewer.
+            const min = bbox.min();
+            const max = bbox.max();
+            return Math.max(min.x * dir.x, max.x * dir.x)
+                 + Math.max(min.y * dir.y, max.y * dir.y)
+                 + Math.max(min.z * dir.z, max.z * dir.z);
+        });
+        return meshes
+            .map((_, i) => i)
+            .sort((a, b) => depth[a] - depth[b]); // farthest first
+    }
+
     private static _projectMergedProjectionWithContactFaces(
         meshes: Mesh[],
         viewDir: Vector,
@@ -1133,6 +1370,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         hiddenLines: boolean,
         samples: number,
         featureAngle: number,
+        strategy: HlrStrategy = HLR_STRATEGY_DEFAULT,
     ): ShapeCollection<any>
     {
         const merged = new ShapeCollection<Mesh>(...meshes).merge() as Mesh;
@@ -1141,6 +1379,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             planeNormal,
             featureAngle,
             samples,
+            strategy,
         );
         const iso = merged._projectEdges(options);
 
@@ -1249,9 +1488,10 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         includeHiddenShapes: boolean = false,
         samples: number = 16,
         featureAngle: number = 10,
+        view: ProjectionViewOptions = {},
     ): ShapeCollection<any>
     {
-        return this._iso(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
+        return this._iso(cam, hiddenLines, includeHiddenShapes, samples, featureAngle, view);
     }
 
     /** Internal isometric projection — skips scene management (no @scene* decorators fire), so
@@ -1264,6 +1504,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         includeHiddenShapes: boolean = false,
         samples: number = 16,
         featureAngle: number=10,
+        view: ProjectionViewOptions = {},
     ): ShapeCollection<any>
     {
         const meshes = this._visibleProjectionMeshes(includeHiddenShapes);
@@ -1273,11 +1514,18 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         }
         if (meshes.length === 1)
         {
-            return meshes[0].isometry(cam, hiddenLines, false, samples, featureAngle);
+            return meshes[0].isometry(cam, hiddenLines, false, samples, featureAngle, view);
         }
 
         const camDirVec = Point.from(cam).toVector().normalize();
         const planeNormal = camDirVec.copy(); // .reverse() removed. Now works. TODO: check why;
+
+        const strategy = ShapeCollection._resolveStrategy(meshes, view);
+        if (strategy === 'clip' || strategy === 'painter')
+        {
+            return ShapeCollection._projectPerShape(
+                meshes, camDirVec, planeNormal, hiddenLines, featureAngle, strategy);
+        }
 
         // Technique: project the merged solid first, then add touching-face
         // contact edges with a second HLR pass. The older per-mesh method
@@ -1291,6 +1539,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             hiddenLines,
             samples,
             featureAngle,
+            strategy,
         );
     }
         
@@ -1303,9 +1552,10 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         includeHiddenShapes: boolean = false,
         samples: number = 16,
         featureAngle: number=10,
+        view: ProjectionViewOptions = {},
     ): ShapeCollection<any>
     {
-        return this._iso(cam, hiddenLines, includeHiddenShapes, samples, featureAngle);
+        return this._iso(cam, hiddenLines, includeHiddenShapes, samples, featureAngle, view);
     }
 
     isoTest(
@@ -1350,9 +1600,10 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         includeHiddenShapes: boolean = false,
         samples: number = 16,
         featureAngle: number = 10,
+        view: ProjectionViewOptions = {},
     ): ShapeCollection<any>
     {
-        return this._elevation(from, hiddenLines, includeHiddenShapes, samples, featureAngle);
+        return this._elevation(from, hiddenLines, includeHiddenShapes, samples, featureAngle, view);
     }
 
     /** Internal elevation projection — skips scene management, like {@link _iso}. */
@@ -1362,6 +1613,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         includeHiddenShapes: boolean = false,
         samples: number = 16,
         featureAngle: number = 10,
+        view: ProjectionViewOptions = {},
     ): ShapeCollection<any>
     {
         const meshes = this._visibleProjectionMeshes(includeHiddenShapes);
@@ -1371,11 +1623,18 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         }
         if (meshes.length === 1)
         {
-            return meshes[0].elevation(from, hiddenLines, samples, featureAngle);
+            return meshes[0].elevation(from, hiddenLines, samples, featureAngle, view);
         }
 
         const viewDir = Mesh._resolveViewDirection(from);
         const planeNormal = viewDir.copy().reverse();
+
+        const strategy = ShapeCollection._resolveStrategy(meshes, view);
+        if (strategy === 'clip' || strategy === 'painter')
+        {
+            return ShapeCollection._projectPerShape(
+                meshes, viewDir, planeNormal, hiddenLines, featureAngle, strategy);
+        }
 
         return ShapeCollection._projectMergedProjectionWithContactFaces(
             meshes,
@@ -1384,6 +1643,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             hiddenLines,
             samples,
             featureAngle,
+            strategy,
         );
     }
 
@@ -1397,6 +1657,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         includeHiddenShapes: boolean = false,
         samples: number = 16,
         featureAngle: number = 10,
+        view: ProjectionViewOptions = {},
     ): ShapeCollection<any>
     {
         const meshes = this._visibleProjectionMeshes(includeHiddenShapes);
@@ -1406,12 +1667,15 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         }
         if (meshes.length === 1)
         {
-            return meshes[0].section(pivot, normal, hiddenLines, samples, featureAngle);
+            return meshes[0].section(pivot, normal, hiddenLines, samples, featureAngle, view);
         }
 
+        // A section cuts the assembly into one solid, so there are no separate
+        // shapes left to order — the per-shape strategies have nothing to do
+        // here and Mesh.section resolves them to 'exact'.
         return new ShapeCollection<Mesh>(...meshes)
             .merge()
-            .section(pivot, normal, hiddenLines, samples, featureAngle);
+            .section(pivot, normal, hiddenLines, samples, featureAngle, view);
     }
 
     //// OUTPUTS ////
@@ -1450,7 +1714,18 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         const curveToGroup = new Map<S, string>();
         this._groups.forEach((groupCol, groupName) =>
         {
-            groupCol.toArray().forEach(shape => curveToGroup.set(shape as S, groupName));
+            // A curve can be in several groups and gets one class, so later
+            // groups win. The per-shape provenance tags the per-shape
+            // strategies add (`shape-0`, `shape-1`, …) are registered last and
+            // would otherwise displace the group that says how to *draw* the
+            // curve — 'fill', 'hidden', 'silhouette'. Provenance is for
+            // grouping and ordering, not styling, so it only fills a gap.
+            const isProvenance = /^shape-\d+$/.test(groupName);
+            groupCol.toArray().forEach(shape =>
+            {
+                if (isProvenance && curveToGroup.has(shape as S)) return;
+                curveToGroup.set(shape as S, groupName);
+            });
         });
 
         const styleOpts = { omitDefaults: true, nonScalingStroke: options?.nonScalingStroke === true };
@@ -1485,6 +1760,11 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             + `.line{fill:none;stroke:black;stroke-width:${+strokeWidth.toFixed(4)};`
             + 'stroke-linecap:round;stroke-linejoin:round}'
             + `.hidden{stroke:#888;stroke-dasharray:${dash}}`
+            // Opaque face fills, emitted only by the 'painter' strategy. They
+            // carry no stroke of their own: they exist to cover the shapes
+            // drawn before them, which is that strategy's entire occlusion
+            // mechanism. Paper-white rather than transparent for that reason.
+            + '.fill{fill:#fff;stroke:none}'
             + '</style>';
         return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}">${style}${paths.join('')}</svg>`;
     }

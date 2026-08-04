@@ -120,13 +120,48 @@ export interface SdfSample
   closestX: number; closestY: number; closestZ: number;
 }
 
-export interface ProjectEdgeOptions 
+/** Which hidden-line-removal algorithm to run.
+ *
+ *  The algorithms live side by side so they can be compared on the same model.
+ *  `'raycast'` is the default and is unchanged from before this option existed.
+ *
+ *  - `'raycast'` — samples visibility at points along each edge and bisects
+ *    where neighbouring samples disagree. Endpoints are approximate, and an
+ *    occluder narrower than the sample spacing is missed entirely.
+ *  - `'exact'` — computes occlusion as exact parametric intervals. Endpoints
+ *    land on the true silhouette crossing and no occluder is too small to find.
+ *    Ignores `samples`.
+ *  - `'clip'` — per shape: backface-cull for its own line work, then clip that
+ *    against the projected silhouettes of the shapes in front of it. No ray
+ *    casting at all. Requires convex, non-interpenetrating shapes.
+ *  - `'painter'` — per shape, drawn back-to-front with opaque faces so nearer
+ *    shapes cover farther ones. No occlusion computation whatsoever. Same shape
+ *    requirements as `'clip'`, and the output carries fills.
+ */
+export type HlrStrategy = 'raycast' | 'exact' | 'clip' | 'painter';
+
+export interface ProjectEdgeOptions
 {
   viewDirection?: PointLike;
   planeOrigin?: PointLike;
   planeNormal?: PointLike; // for elevation and section
   featureAngle?: number; // Minimum crease angle in degrees
-  samples?: number; // HLR ray samples per edge
+  samples?: number; // HLR ray samples per edge — 'raycast' only
+  strategy?: HlrStrategy; // which HLR algorithm to run (default 'raycast')
+}
+
+/** Trailing options accepted by the projection entry points
+ *  ({@link Mesh.isometry}, `elevation`, `section` and their collection
+ *  equivalents) in place of a further positional argument.
+ */
+export interface ProjectionViewOptions
+{
+  /** Which HLR algorithm to run. Default `'raycast'`. */
+  strategy?: HlrStrategy;
+  /** Fall back to `'raycast'` with a warning when a per-shape strategy does
+   *  not apply to this scene, instead of throwing. Default `false`, so a
+   *  strategy that cannot run says so rather than silently changing. */
+  fallback?: boolean;
 }
 
 //// SCENE NODE TYPES ////

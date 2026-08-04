@@ -64,6 +64,18 @@ export const EDGE_PROJECTION_DEFAULTS = {
     featureAngle: 10, // degrees. Max angle between adjacent faces to be considered a "feature edge" and projected.
     samples: 32, // number of rays to cast per edge for hidden-line removal
 }
+/** Every hidden-line-removal algorithm, in the order they were added.
+ *  See {@link HlrStrategy} for what each one does.
+ */
+export const HLR_STRATEGIES = ['raycast', 'exact', 'clip', 'painter'] as const;
+
+/** The algorithm used when none is named. The original sampling solver, so
+ *  callers written before the option existed are unaffected. */
+export const HLR_STRATEGY_DEFAULT = 'raycast';
+
+/** Strategies resolved per shape in TypeScript rather than inside the kernel. */
+export const HLR_PER_SHAPE_STRATEGIES = ['clip', 'painter'] as const;
+
 export const EDGE_PROJECTION_LIMITS = {
     featureAngleMin: 0,
     featureAngleMax: 180,
