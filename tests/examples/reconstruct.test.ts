@@ -3,7 +3,7 @@ import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { save } from '../../src/utils';
 
-const OUTPUT_DIR = './tests/outputs/reconstruct/';
+const OUTPUT_DIR = './tests/examples/outputs/';
 
 beforeAll(async () =>
 {

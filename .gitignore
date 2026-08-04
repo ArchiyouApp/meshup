@@ -11,5 +11,7 @@ src/wasm/package.json
 src/wasm/README.md
 src/wasm/snippets/
 
-# test artifacts: every test writes through OUTPUT_DIR into tests/outputs/
-tests/outputs/
+# test artifacts: every test writes through OUTPUT_DIR into an `outputs/`
+# folder beside the test file itself, so generated files sit next to what makes
+# them rather than in a parallel tree.
+tests/**/outputs/

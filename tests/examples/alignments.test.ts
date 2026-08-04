@@ -9,7 +9,7 @@ import { save } from '../../src/utils';
 import { ShapeCollection  } from '../../src/ShapeCollection';
 
 // from project dir
-const OUTPUT_DIR = './tests/outputs/alignments/';
+const OUTPUT_DIR = './tests/examples/outputs/';
 
 
 beforeAll(async () =>

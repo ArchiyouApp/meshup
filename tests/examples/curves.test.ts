@@ -3,7 +3,7 @@ import { ShapeCollection, initAsync } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { save } from '../../src/utils';
 
-const OUTPUT_DIR = './tests/outputs/curves/';
+const OUTPUT_DIR = './tests/examples/outputs/';
 
 beforeAll(async () => 
 {

@@ -7,7 +7,7 @@ import { SceneNode } from '../../src/SceneNode';
 import { save } from '../../src/utils';
 import { dashPatternToUint16 } from '../../src/GLTFBuilder';
 
-const OUTPUT_DIR = './tests/outputs/scene/';
+const OUTPUT_DIR = './tests/examples/outputs/';
 
 beforeAll(async () =>
 {

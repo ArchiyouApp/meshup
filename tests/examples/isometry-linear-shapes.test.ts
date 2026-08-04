@@ -18,7 +18,7 @@ import { save } from '../../src/utils';
 import { ShapeCollection } from '../../src/ShapeCollection';
 import type { HlrStrategy } from '../../src/types';
 
-const OUTPUT_DIR = './tests/outputs/isometry/linear/';
+const OUTPUT_DIR = './tests/examples/outputs/';
 const ALL_STRATEGIES: HlrStrategy[] = ['raycast', 'exact', 'clip', 'painter'];
 
 /** Colours actually present on the projected curves. */

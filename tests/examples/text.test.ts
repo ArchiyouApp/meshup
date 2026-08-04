@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { initAsync, Sketch, Curve, Mesh, ShapeCollection, HERSHEY_FONTS } from '../../src/index';
 import { save } from '../../src/utils';
 
-const OUTPUT_DIR = './tests/outputs/text/';
+const OUTPUT_DIR = './tests/examples/outputs/';
 const ttf = () => new Uint8Array(readFileSync('./rust/asar.ttf'));
 
 beforeAll(async () =>

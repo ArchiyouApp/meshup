@@ -5,7 +5,7 @@ import { Curve } from '../../src/Curve';
 import { Polygon } from '../../src/Polygon';
 import { save } from '../../src/utils';
 
-const OUTPUT_DIR = './tests/outputs/mesh/';
+const OUTPUT_DIR = './tests/unit/outputs/';
 
 beforeAll(async () =>
 {

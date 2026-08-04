@@ -3,7 +3,7 @@
  *
  * The four algorithms are selectable per call so they can be compared on the
  * same model. This suite pins the behaviour that distinguishes them and writes
- * one SVG per strategy per fixture into tests/outputs/isometry/strategies/ for
+ * one SVG per strategy per fixture into tests/examples/outputs/ for
  * visual diffing.
  *
  * The cases here are the ones that motivated adding the alternatives:
@@ -21,7 +21,7 @@ import { save } from '../../src/utils';
 import { ShapeCollection } from '../../src/ShapeCollection';
 import type { HlrStrategy } from '../../src/types';
 
-const OUTPUT_DIR = './tests/outputs/isometry/strategies/';
+const OUTPUT_DIR = './tests/examples/outputs/';
 
 /** Strategies that work on any geometry. */
 const GENERAL_STRATEGIES: HlrStrategy[] = ['raycast', 'exact'];

@@ -4,7 +4,7 @@ import { Curve } from '../../src/Curve';
 import { save } from '../../src/utils';
 import { TOLERANCE } from '../../src/constants';
 
-const OUTPUT_DIR = './tests/outputs/svg/';
+const OUTPUT_DIR = './tests/examples/outputs/';
 
 beforeAll(async () =>
 {

@@ -5,7 +5,7 @@ import { Polygon } from '../../src/Polygon';
 import { PlaneJs } from '../../src/wasm/meshup';
 import { save } from '../../src/utils';
 
-const SAVE_FOLDER = './tests/outputs/specialops/';
+const SAVE_FOLDER = './tests/examples/outputs/';
 
 beforeAll(async () =>
 {

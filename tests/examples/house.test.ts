@@ -8,7 +8,7 @@ import { Mesh } from '../../src/Mesh';
 import { Sketch } from '../../src/Sketch';
 import { save, rad } from '../../src/utils';
 
-const OUTPUT_DIR = './tests/outputs/house/';
+const OUTPUT_DIR = './tests/examples/outputs/';
 
 beforeAll(async () =>
 {

@@ -4,7 +4,7 @@ import { Curve } from '../../src/Curve';
 import { Sketch } from '../../src/Sketch';
 import { save } from '../../src/utils';
 
-const OUTPUT_DIR = './tests/outputs/sketch/';
+const OUTPUT_DIR = './tests/examples/outputs/';
 
 beforeAll(async () =>
 {

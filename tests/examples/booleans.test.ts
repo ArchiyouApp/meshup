@@ -4,7 +4,7 @@ import { Mesh } from '../../src/Mesh';
 import { Sketch } from '../../src/Sketch';
 import { rad, save } from '../../src/utils';
 
-const OUTPUT_DIR = './tests/outputs/booleans/';
+const OUTPUT_DIR = './tests/examples/outputs/';
 
 beforeAll(async () =>
 {

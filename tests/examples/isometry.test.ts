@@ -4,7 +4,7 @@ import { Mesh } from '../../src/Mesh';
 import { save } from '../../src/utils';
 import { ShapeCollection } from '../../src/ShapeCollection';
 
-const OUTPUT_DIR = './tests/outputs/isometry/';
+const OUTPUT_DIR = './tests/examples/outputs/';
 
 function collectPolylineEndpoints(shape: ShapeCollection<any>): Array<[number, number]>
 {
