@@ -3,7 +3,7 @@ import { ShapeCollection, Vector, initAsync } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { save } from '../../src/utils';
 
-const OUTPUT_DIR = './tests/outputs/offsets/';
+const OUTPUT_DIR = './tests/examples/outputs/';
 
 beforeAll(async () => 
 {
@@ -31,13 +31,22 @@ describe('Example: Offsets', async () =>
         expect(circles.isCompound()).toBe(true);
 
         const deg1 = circles.copy().toDegree1();
-        const circlesOffset = circles.copy().offset(-20);
-        const circleOffsetFallback = circles.copy().offsetFallback(20);
-    
-        await save(OUTPUT_DIR + 'test.offsets.circles.gltf', await new ShapeCollection(circles!, deg1.moveZ(10), circlesOffset!.moveZ(20), circleOffsetFallback!.moveZ(30)
+        // A boolean result carries arcs whose centres came from f64, which hypercurve
+        // declines to offset natively (`RadiusMismatch`). Offset the degree-1 form
+        // explicitly — this is the documented workaround, and it is what the old implicit
+        // behaviour was doing badly: subtype() called this union a 'Circle', so offset()
+        // rebuilt it as a single circle of radius+distance.
+        const circlesOffset = circles.copy().toDegree1().offset(-20);
+        const circlesOffsetOut = circles.copy().toDegree1().offset(20);
+
+        await save(OUTPUT_DIR + 'test.offsets.circles.gltf', await new ShapeCollection(circles!, deg1.moveZ(10), circlesOffset!.moveZ(20), circlesOffsetOut!.moveZ(30)
             /* circles!.copy().offset(20)!.color('yellow')*/).toGLTF());
         //await save(OUTPUT_DIR + 'test.curves.ops.svg', new ShapeCollection<circles, rect, cc, /*un!, unOffsets*/).toSVG());
-    });
+        // Explicit budget: toDegree1().offset() deliberately runs hypercurve's exact offset
+        // over the thousands of line segments a degree-1 circle union becomes. That is the
+        // documented cost of the workaround, not a regression, and it exceeds the 5s default
+        // on a loaded machine.
+    }, 60_000);
 
     it('Positive offset always grows and negative always shrinks a closed curve, regardless of winding direction', () =>
     {
@@ -50,12 +59,6 @@ describe('Example: Offsets', async () =>
         // Same behaviour must hold for a curve wound the other way around
         expect(rectReversed.copy().offset(10)!.area()!).toBeGreaterThan(rectReversed.area()!);
         expect(rectReversed.copy().offset(-10)!.area()!).toBeLessThan(rectReversed.area()!);
-
-        // ...and for the geo-buf based fallback offset method
-        expect(rect.copy().offsetFallback(10)!.area()!).toBeGreaterThan(rect.area()!);
-        expect(rect.copy().offsetFallback(-10)!.area()!).toBeLessThan(rect.area()!);
-        expect(rectReversed.copy().offsetFallback(10)!.area()!).toBeGreaterThan(rectReversed.area()!);
-        expect(rectReversed.copy().offsetFallback(-10)!.area()!).toBeLessThan(rectReversed.area()!);
     });
 
     it('Positive offset always grows and negative always shrinks an open (peaked) polyline', () =>

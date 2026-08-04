@@ -38,6 +38,11 @@ export class Curve3DJs {
   free(): void;
   [Symbol.dispose](): void;
   /**
+   * Close the curve by appending a straight segment from its end back to its start,
+   * preserving every existing span. Returns an equivalent curve when already closed.
+   */
+  closePath(): Curve3DJs;
+  /**
    * Unit tangent at normalised arc-length parameter `t` in `[0, 1]`.
    */
   tangentAt(t: number): Vector3Js;
@@ -75,11 +80,14 @@ export class Curve3DJs {
    */
   static makePolyline(points: Point3Js[], closed: boolean): Curve3DJs;
   /**
-   * Number of native segments.
+   * Number of exact spans.
    */
   segmentCount(): number;
   /**
-   * Defining vertices (segment endpoints) as 3D points.
+   * Defining vertices (span endpoints) as 3D points.
+   *
+   * One point per exact span, plus the final endpoint on an open curve — so an ellipse
+   * yields its four conic span joints, not several hundred sampled points.
    */
   controlPoints(): Point3Js[];
   /**
@@ -87,15 +95,31 @@ export class Curve3DJs {
    */
   paramAtLength(len: number): number;
   /**
-   * Construct a smooth NURBS curve of `degree` (>= 2) interpolating the given
-   * 3D points. Stored as a fine polyline (meshup consumes interpolated curves
-   * tessellated); the curve passes through every input point.
+   * Construct a smooth NURBS curve of `degree` (>= 2) interpolating the given 3D points.
+   *
+   * Stored as the **exact** spline. This used to compute the NURBS and then immediately
+   * discard it for a 1e-5-chord polyline, so a spline arrived in meshup as ~2400
+   * degree-1 segments: `degree()` reported 1, `controlPoints()` returned thousands of
+   * sampled points rather than the solved control net, and every downstream operation
+   * worked on line work.
    */
   static makeInterpolated(points: Point3Js[], degree: number): Curve3DJs;
   /**
    * Rotate the curve by a unit quaternion `(w, x, y, z)` about the origin.
    */
   rotateQuaternion(w: number, x: number, y: number, z: number): Curve3DJs;
+  /**
+   * Per-axis scale about `origin`, exact for **closed** curves.
+   *
+   * A per-axis scale is not a similarity, so hypercurve's `transform_similarity` cannot
+   * express it — but the map it induces *within* the curve's plane is a plain 2D affine,
+   * and `CurveRegion2::transform_affine` accepts one. Scaling a circle by `[2, 1, 1]`
+   * therefore yields an exact **ellipse** of rational conic spans.
+   *
+   * Returns an error for open curves (a region is required) and for a scale that
+   * collapses the plane; the caller falls back to resampling.
+   */
+  scaleNonUniform(sx: number, sy: number, sz: number, origin: Point3Js): Curve3DJs;
   /**
    * Construct an **elliptical arc** from `start_angle` to `end_angle` (radians,
    * in the pre-rotation circle parameter). A full turn yields a closed ellipse.
@@ -120,22 +144,47 @@ export class Curve3DJs {
    */
   area(): number;
   /**
-   * Axis-aligned bounding box of the tessellated curve as
-   * `[minx,miny,minz, maxx,maxy,maxz]`.
+   * World axis-aligned bounding box as `[minx,miny,minz, maxx,maxy,maxz]`.
+   *
+   * Solved exactly from the native geometry rather than min/maxed over a tessellation,
+   * which always fell short on an arc bulge that was not a sample point (a 30°-rotated
+   * 50x25 ellipse under-reported its x extent by ~4e-3).
+   *
+   * For each world axis `e`, `p·e = origin·e + u*(x·e) + v*(y·e)` is a linear functional
+   * of the local coordinates, so its extent is an exact support query in the in-plane
+   * direction `(x·e, y·e)` — see [`hcurve::support_extent`]. A degenerate direction
+   * (world axis perpendicular to the plane) contributes only the origin term.
+   *
+   * A non-coplanar polyline keeps its retained true 3D vertices, so it is measured
+   * directly from those.
    */
   bbox(tol?: number | null): Float64Array;
   /**
    * Native sub-curve between arc-length fractions `t0`, `t1` in `[0, 1]`,
    * preserving line/arc segments exactly (no tessellation). Always open.
+   *
+   * An exact [`Geom::Path`] still goes through a line approximation: the cut points are
+   * given as *arc-length* fractions, and inverting arc length on a rational conic has no
+   * closed form (hypercurve exposes `inverse_length_parameter_region` for polynomial
+   * Bezier spans only). Trimming a conic exactly needs that inversion, not just
+   * `Curve2::subcurve`, which takes a curve parameter.
    */
   trim(t0: number, t1: number): Curve3DJs;
+  /**
+   * The knot vector, when this curve is carried by a single spline span.
+   *
+   * Empty for line/arc geometry and for multi-span paths, which have no single knot
+   * vector. Line/arc curves are re-parameterised by arc length instead.
+   */
+  knots(): Float64Array;
   /**
    * Uniform scale about the world origin (hypercurve supports only uniform,
    * similarity scaling of planar curves).
    */
   scale(s: number): Curve3DJs;
   /**
-   * One `Curve3DJs` per native segment (each an open single-segment curve).
+   * One `Curve3DJs` per exact span (each an open single-span curve). A conic or spline
+   * span comes back as an exact single-span path, not as a chord.
    */
   spans(): Curve3DJs[];
   /**
@@ -143,10 +192,34 @@ export class Curve3DJs {
    */
   closed(): boolean;
   /**
-   * Effective polynomial degree: the max over segments (line = 1, arc = 2).
-   * A native re-architecture of curvo's single-NURBS `degree()`.
+   * Join this curve with `others`, in order, into one connected curve.
+   *
+   * Every span is carried across exactly and gaps are bridged with straight connectors,
+   * so joining an arc to a line keeps the arc. The TypeScript layer used to do this by
+   * concatenating `controlPoints()` and running a polyline through them — and since
+   * `controlPoints()` yields only span *endpoints*, a semicircle became its chord. That
+   * is why `Sketch().lineTo().arcTo().close()` lost its arcs: every `Sketch.end()`
+   * funnels through that join.
+   *
+   * `others` are mapped into this curve's plane by an exact similarity; a non-coplanar
+   * operand is an error.
+   */
+  concat(others: Curve3DJs[]): Curve3DJs;
+  /**
+   * Effective polynomial degree: the max over exact spans (line = 1, arc/conic/quadratic
+   * = 2, cubic and above = 3+). A native re-architecture of curvo's single-NURBS
+   * `degree()`. An ellipse is degree 2 and an interpolated NURBS reports its real degree,
+   * where both used to report 1 from the line approximation.
    */
   degree(): number;
+  /**
+   * Extend the curve by `length` along its endpoint tangent(s).
+   *
+   * `side` is `"start"`, `"end"` or `"both"`. The extension is a straight span appended
+   * to the exact geometry, so the original spans survive — this used to rebuild the whole
+   * curve as a polyline through `controlPoints()`, collapsing any arc to a chord.
+   */
+  extend(length: number, side: string): Curve3DJs;
   /**
    * Fillet (round) interior corners with an arc of the given `radius`.
    * Corners where the radius does not fit are left sharp. Works on both closed
@@ -164,7 +237,32 @@ export class Curve3DJs {
    */
   length(tol?: number | null): number;
   /**
+   * Mirror across the plane through `origin` with unit normal `normal`.
+   *
+   * Costs nothing geometrically. A reflection `R` is affine, so for a planar curve
+   * `R(o + x*u + y*v) = R(o) + R(x)*u + R(y)*v` — the local `(u, v)` coordinates are
+   * unchanged and only the frame moves. A mirrored circle therefore stays two arc spans,
+   * where this used to reflect the tessellated boundary and rebuild a ~500-segment
+   * polyline, permanently destroying the geometry to apply an isometry.
+   *
+   * The reflected frame's normal is recomputed from `x cross y`, which correctly flips:
+   * a reflection reverses orientation.
+   */
+  mirror(normal: Vector3Js, origin: Point3Js): Curve3DJs;
+  /**
    * One-sided offset by `distance`, returning a new curve in the same frame.
+   *
+   * Line/arc geometry is offset natively: hypercurve miters line-line corners and joins
+   * the rest with circular arcs, so `Circle(50).offset(10)` comes back as a circle of
+   * radius 60 — two arc spans — rather than the 128-gon this used to produce by
+   * tessellating the native result away.
+   *
+   * An exact path (conic / Bezier / spline) has no exact parallel — the offset of a
+   * general rational curve is not itself rational — so it uses hypercurve's *certified*
+   * Blend2D parallel, which stays a curve and carries a proven error bound. When
+   * hypercurve declines (an authored corner it will not blend, or a self-intersecting
+   * offset, which it does not trim), this falls back to offsetting a certified
+   * projection, i.e. the previous behaviour.
    */
   offset(distance: number, tol?: number | null): Curve3DJs;
   /**
@@ -190,16 +288,24 @@ export class Curve3DJs {
    */
   reverse(): Curve3DJs;
   /**
-   * Classify the curve by its native segment types:
-   * `Line` | `Arc` | `Circle` | `Rect` | `Polyline` | `Spline`.
+   * Classify the curve by its exact span families:
+   * `Line` | `Arc` | `Circle` | `Rect` | `Polyline` | `Ellipse` | `Spline`.
    */
   subtype(): string;
+  /**
+   * The per-control-point weights, when this curve is carried by a single spline span.
+   * Empty otherwise — a native arc is exact, not a weighted rational control net.
+   */
+  weights(): Float64Array;
   /**
    * Deep copy.
    */
   clone(): Curve3DJs;
   /**
-   * Whether the geometry contains any circular-arc segments (vs. all straight).
+   * Whether the geometry is curved anywhere — a circular arc, or any conic / Bezier /
+   * spline span. Named for the line/arc case it was introduced for; on an exact path it
+   * answers the same underlying question ("is this more than straight line work?"), which
+   * the old line approximation always answered `false` to.
    */
   hasArcs(): boolean;
   /**
@@ -297,6 +403,11 @@ export class MeshJs {
    */
   static fromGLTF(data: Uint8Array, metadata: any): MeshJs;
   intersection(other: MeshJs): MeshJs;
+  /**
+   * Whether this mesh is convex — the precondition for the per-shape
+   * drawing strategies. See [`crate::mesh::Mesh::is_convex`].
+   */
+  isConvex(): boolean;
   toSTLASCII(): string;
   vertexCount(): number;
   static fromPolygons(polygons: PolygonJs[], metadata: any): MeshJs;
@@ -360,8 +471,11 @@ export class MeshJs {
    * - `n_samples` – HLR ray samples per edge segment (e.g. `8`).
    * - `occluders` – additional meshes that can occlude edges of `self`;
    *   `self` is always included as an occluder.
+   * - `strategy` – which HLR algorithm to run: `"raycast"` (the sampling
+   *   solver, and the default when omitted or unrecognised) or `"exact"`
+   *   (analytic interval clipping). `n_samples` only affects `"raycast"`.
    */
-  projectEdges(vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, feature_angle_deg: number, n_samples: number, occluders: MeshJs[]): EdgeProjectionResultJs;
+  projectEdges(vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, feature_angle_deg: number, n_samples: number, occluders: MeshJs[], strategy?: string | null): EdgeProjectionResultJs;
   /**
    * BVH-accelerated first-hit raycast.
    *
@@ -404,6 +518,21 @@ export class MeshJs {
    * `(ox, oy, oz)` is a point on the plane; `(nx, ny, nz)` is its normal.
    */
   distanceToPlane(ox: number, oy: number, oz: number, nx: number, ny: number, nz: number): number;
+  /**
+   * Hidden-line-project free-standing polylines against a set of solids.
+   *
+   * This is the entry point for linear shapes — wireframes, centrelines,
+   * imported linework — which are part of the drawing but belong to no mesh.
+   * They are hidden by the occluders but never occlude anything themselves.
+   *
+   * - `points` – all polyline vertices, flattened as x,y,z triples.
+   * - `counts` – how many *points* each polyline contributes, in order.
+   *
+   * Occlusion is always solved exactly here. The sampling solver never
+   * supported curves at all, so there is no prior behaviour to preserve, and
+   * no reason to approximate what can be computed.
+   */
+  static projectPolylines(points: Float64Array, counts: Uint32Array, vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, occluders: MeshJs[]): EdgeProjectionResultJs;
   transformComponents(m00: number, m01: number, m02: number, m03: number, m10: number, m11: number, m12: number, m13: number, m20: number, m21: number, m22: number, m23: number, m30: number, m31: number, m32: number, m33: number): MeshJs;
   translateComponents(dx: number, dy: number, dz: number): MeshJs;
   distanceToLegacy(other: MeshJs): number;
@@ -437,7 +566,7 @@ export class MeshJs {
    * - `(ox, oy, oz)` / `(nx, ny, nz)` – projection plane origin + normal.
    * - `feature_angle_deg`, `n_samples`, `occluders` – as in `projectEdges`.
    */
-  projectEdgesSection(snx: number, sny: number, snz: number, section_offset: number, vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, feature_angle_deg: number, n_samples: number, occluders: MeshJs[]): SectionElevationResultJs;
+  projectEdgesSection(snx: number, sny: number, snz: number, section_offset: number, vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, feature_angle_deg: number, n_samples: number, occluders: MeshJs[], strategy?: string | null): SectionElevationResultJs;
   containsVertexComponents(x: number, y: number, z: number): boolean;
   filterPolygonsByMetadata(needle: any): MeshJs;
   /**
@@ -680,6 +809,12 @@ export class SketchJs {
   intersection(other: SketchJs): SketchJs;
   static regularNGon(sides: number, radius: number, metadata: any): SketchJs;
   static airfoilNACA4(max_camber: number, camber_position: number, thickness: number, chord: number, samples: number, metadata: any): SketchJs;
+  /**
+   * Fill this sketch with a Hilbert-curve path of the given recursion `order`.
+   *
+   * Unrelated to offsetting — this used to sit behind the `offset` feature gate by
+   * accident, which kept it out of builds that did not enable geo-buf.
+   */
   hilbertCurve(order: number, padding: number): SketchJs;
   static involuteGear(module_: number, teeth: number, pressure_angle_deg: number, clearance: number, backlash: number, segments_per_flank: number, metadata: any): SketchJs;
   /**
@@ -698,13 +833,11 @@ export class SketchJs {
    */
   debugGeometry(): string;
   extrudeVector(dir: Vector3Js): MeshJs;
-  offsetRounded(distance: number): SketchJs;
   static rightTriangle(width: number, height: number, metadata: any): SketchJs;
   toMultiPolygon(): string;
   static circleWithFlat(radius: number, segments: number, flat_dist: number, metadata: any): SketchJs;
   sweepComponents(path: any): MeshJs;
   static roundedRectangle(width: number, height: number, corner_radius: number, corner_segments: number, metadata: any): SketchJs;
-  straightSkeleton(orientation: boolean): SketchJs;
   static circleWithKeyway(radius: number, segments: number, key_width: number, key_depth: number, metadata: any): SketchJs;
   transformComponents(m00: number, m01: number, m02: number, m03: number, m10: number, m11: number, m12: number, m13: number, m20: number, m21: number, m22: number, m23: number, m30: number, m31: number, m32: number, m33: number): SketchJs;
   translateComponents(dx: number, dy: number, dz: number): SketchJs;
@@ -741,7 +874,6 @@ export class SketchJs {
   static bezier(control: any, segments: number, metadata: any): SketchJs;
   center(): SketchJs;
   static circle(radius: number, segments: number, metadata: any): SketchJs;
-  offset(distance: number): SketchJs;
   rotate(rx: number, ry: number, rz: number): SketchJs;
   static square(width: number, metadata: any): SketchJs;
   toSVG(): string;
@@ -832,49 +964,6 @@ export class VertexJs {
 }
 
 /**
- * Tessellate a 3‑point arc through `start`,`mid`,`end` to a flat point array.
- */
-export function hcArc3pt(sx: number, sy: number, mx: number, my: number, ex: number, ey: number, chord_error: number): Float64Array;
-
-/**
- * Boolean between two closed polylines. Returns a JS array of flat rings
- * (`Array<Float64Array>`).
- */
-export function hcBoolean(a: Float64Array, b: Float64Array, op: string, chord_error: number): any;
-
-/**
- * Tessellate a circle (centre `cx,cy`, radius `r`) to a flat ring array.
- */
-export function hcCircle(cx: number, cy: number, r: number, chord_error: number): Float64Array;
-
-/**
- * Intersection points between two open polylines, as a flat point array.
- */
-export function hcIntersect(a: Float64Array, b: Float64Array): Float64Array;
-
-/**
- * Tessellate a NURBS curve (flat control points, weights, knots) to a flat
- * point array.
- */
-export function hcNurbsTessellate(degree: number, control_points: Float64Array, weights: Float64Array, knots: Float64Array, chord_error: number): Float64Array;
-
-/**
- * One‑sided offset of an open/closed polyline by `distance`. Returns a flat
- * point array.
- */
-export function hcOffset(coords: Float64Array, closed: boolean, distance: number, chord_error: number): Float64Array;
-
-/**
- * Signed area of the closed polyline `coords`.
- */
-export function hcSignedArea(coords: Float64Array): number;
-
-/**
- * Tessellate an open/closed polyline through `coords` to a flat point array.
- */
-export function hcTessellatePolyline(coords: Float64Array, closed: boolean, chord_error: number): Float64Array;
-
-/**
  * Import an SVG document into native planar curves. Lines and circular arcs are
  * kept exact; Béziers are flattened to line segments; unsupported path commands
  * (elliptical/rotated arcs, …) are skipped and surfaced via `warnings`.
@@ -918,14 +1007,18 @@ export interface InitOutput {
   readonly curve3djs_boolean: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
   readonly curve3djs_chamfer: (a: number, b: number, c: number, d: number) => [number, number, number];
   readonly curve3djs_clone: (a: number) => number;
+  readonly curve3djs_closePath: (a: number) => [number, number, number];
   readonly curve3djs_closed: (a: number) => number;
+  readonly curve3djs_concat: (a: number, b: number, c: number) => [number, number, number];
   readonly curve3djs_controlPoints: (a: number) => [number, number];
   readonly curve3djs_degree: (a: number) => number;
+  readonly curve3djs_extend: (a: number, b: number, c: number, d: number) => [number, number, number];
   readonly curve3djs_fillet: (a: number, b: number, c: number, d: number) => [number, number, number];
   readonly curve3djs_getOnPlane: (a: number) => [number, number];
   readonly curve3djs_hasArcs: (a: number) => number;
   readonly curve3djs_intersect: (a: number, b: number, c: number, d: number) => [number, number, number, number];
   readonly curve3djs_isPlanar: (a: number) => number;
+  readonly curve3djs_knots: (a: number) => [number, number];
   readonly curve3djs_knotsDomain: (a: number) => [number, number];
   readonly curve3djs_length: (a: number, b: number, c: number) => [number, number, number];
   readonly curve3djs_makeArc: (a: number, b: number, c: number) => [number, number, number];
@@ -935,6 +1028,7 @@ export interface InitOutput {
   readonly curve3djs_makeInterpolated: (a: number, b: number, c: number) => [number, number, number];
   readonly curve3djs_makeLine: (a: number, b: number) => [number, number, number];
   readonly curve3djs_makePolyline: (a: number, b: number, c: number) => [number, number, number];
+  readonly curve3djs_mirror: (a: number, b: number, c: number) => [number, number, number];
   readonly curve3djs_offset: (a: number, b: number, c: number, d: number) => [number, number, number];
   readonly curve3djs_paramAtLength: (a: number, b: number) => [number, number, number];
   readonly curve3djs_paramClosestToPoint: (a: number, b: number) => [number, number, number];
@@ -943,6 +1037,7 @@ export interface InitOutput {
   readonly curve3djs_rotateAxis: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
   readonly curve3djs_rotateQuaternion: (a: number, b: number, c: number, d: number, e: number) => number;
   readonly curve3djs_scale: (a: number, b: number) => [number, number, number];
+  readonly curve3djs_scaleNonUniform: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
   readonly curve3djs_segmentCount: (a: number) => number;
   readonly curve3djs_segmentTessellations: (a: number, b: number, c: number) => [number, number, number];
   readonly curve3djs_spans: (a: number) => [number, number, number, number];
@@ -951,17 +1046,10 @@ export interface InitOutput {
   readonly curve3djs_tessellate: (a: number, b: number, c: number) => [number, number, number, number];
   readonly curve3djs_translate: (a: number, b: number) => number;
   readonly curve3djs_trim: (a: number, b: number, c: number) => [number, number, number];
+  readonly curve3djs_weights: (a: number) => [number, number];
   readonly edgeprojectionresultjs_hiddenPolylines: (a: number) => any;
   readonly edgeprojectionresultjs_silhouetteIndices: (a: number) => any;
   readonly edgeprojectionresultjs_visiblePolylines: (a: number) => any;
-  readonly hcArc3pt: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
-  readonly hcBoolean: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
-  readonly hcCircle: (a: number, b: number, c: number, d: number) => [number, number, number, number];
-  readonly hcIntersect: (a: number, b: number, c: number, d: number) => [number, number, number, number];
-  readonly hcNurbsTessellate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
-  readonly hcOffset: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
-  readonly hcSignedArea: (a: number, b: number) => [number, number, number];
-  readonly hcTessellatePolyline: (a: number, b: number, c: number, d: number) => [number, number, number, number];
   readonly importSvgCurves: (a: number, b: number) => [number, number, number];
   readonly matrix4js_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
   readonly matrix4js_toArray: (a: number) => [number, number];
@@ -1011,6 +1099,7 @@ export interface InitOutput {
   readonly meshjs_intersection: (a: number, b: number) => number;
   readonly meshjs_invalidateBoundingBox: (a: number) => void;
   readonly meshjs_inverse: (a: number) => number;
+  readonly meshjs_isConvex: (a: number) => number;
   readonly meshjs_laplacianSmooth: (a: number, b: number, c: number, d: number) => number;
   readonly meshjs_massProperties: (a: number, b: number) => any;
   readonly meshjs_minkowskiSum: (a: number, b: number) => number;
@@ -1021,8 +1110,9 @@ export interface InitOutput {
   readonly meshjs_polygons: (a: number) => [number, number];
   readonly meshjs_polyhedron: (a: any, b: any, c: any) => [number, number, number];
   readonly meshjs_positions: (a: number) => any;
-  readonly meshjs_projectEdges: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
-  readonly meshjs_projectEdgesSection: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => number;
+  readonly meshjs_projectEdges: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
+  readonly meshjs_projectEdgesSection: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number) => number;
+  readonly meshjs_projectPolylines: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => number;
   readonly meshjs_projectToPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
   readonly meshjs_raycastAll: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
   readonly meshjs_raycastBatchVisibility: (a: number, b: any, c: number, d: number, e: number, f: number) => any;
@@ -1133,8 +1223,6 @@ export interface InitOutput {
   readonly sketchjs_isEmpty: (a: number) => number;
   readonly sketchjs_keyhole: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly sketchjs_new: () => number;
-  readonly sketchjs_offset: (a: number, b: number) => number;
-  readonly sketchjs_offsetRounded: (a: number, b: number) => number;
   readonly sketchjs_pieSlice: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly sketchjs_polygon: (a: any, b: any) => [number, number, number];
   readonly sketchjs_rectangle: (a: number, b: number, c: any) => number;
@@ -1151,7 +1239,6 @@ export interface InitOutput {
   readonly sketchjs_square: (a: number, b: any) => number;
   readonly sketchjs_squircle: (a: number, b: number, c: number, d: any) => number;
   readonly sketchjs_star: (a: number, b: number, c: number, d: any) => number;
-  readonly sketchjs_straightSkeleton: (a: number, b: number) => number;
   readonly sketchjs_supershape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any) => number;
   readonly sketchjs_sweep: (a: number, b: number, c: number) => number;
   readonly sketchjs_sweepComponents: (a: number, b: any) => number;

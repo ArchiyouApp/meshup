@@ -11,7 +11,6 @@
 //! - **chull-io**: convex hull and minkowski sum
 //! - **metaballs**: enables an implementation of [metaballs](https://en.wikipedia.org/wiki/Metaballs)
 //! - **sdf**: signed distance fields ([sdf](https://en.wikipedia.org/wiki/Signed_distance_function)) using [fast-surface-nets](https://crates.io/crates/fast-surface-nets)
-//! - **offset**: use `geo-buf` for offset operations
 //! - **delaunay**: use `geo`s `spade` feature for triangulation
 //!
 //! #### Optional
@@ -36,9 +35,6 @@ pub mod polygon;
 pub mod mesh;
 pub mod hcurve;
 pub mod sketch;
-
-#[cfg(feature = "offset")]
-pub mod toolpath;
 
 pub mod csg;
 pub mod triangulated;

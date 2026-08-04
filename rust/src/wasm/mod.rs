@@ -5,7 +5,6 @@ use wasm_bindgen::prelude::*;
 pub mod bvh_types_js;
 pub mod curve_js;
 pub mod edge_projection_js;
-pub mod hcurve_js;
 pub mod matrix_js;
 pub mod mesh_js;
 pub mod metaballs_js;

@@ -3,10 +3,10 @@
 //! The legacy [`svg`](super::svg) importer builds only polylines and errors on
 //! every curve command. This module instead routes each SVG `<path>`'s data
 //! through hypercurve's curve-aware importer
-//! ([`parse_svg_path_data`]), so **lines and circular arcs stay
-//! exact**. meshup's [`Segment2`] has no Bézier variant, so cubic/quadratic
-//! Béziers are flattened to line segments here. Unsupported path commands
-//! (elliptical or rotated arcs, …) are skipped and reported as warnings.
+//! ([`parse_svg_path_data`]), so **lines, circular arcs, and cubic/quadratic Béziers all
+//! stay exact**. meshup's [`Segment2`] has no Bézier variant, but `CurvePath2` does, so a
+//! Bézier is carried through as an exact path rather than flattened at the import boundary.
+//! Unsupported path commands (rotated arcs, …) are skipped and reported as warnings.
 //!
 //! Shape elements (`<circle>`, `<ellipse>`, `<rect>`, `<polygon>`, `<polyline>`,
 //! `<line>`) are turned into native contours/curve strings directly.
@@ -16,7 +16,7 @@
 
 use crate::hcurve;
 use hypercurve::{
-    Contour2, CurveGeometry2, CurveString2, LineSeg2, Point2, Segment2, parse_svg_path_data,
+    Contour2, CurveGeometry2, CurveString2, Segment2, parse_svg_path_data,
 };
 
 use super::IoError;
@@ -27,10 +27,10 @@ pub enum ImportedCurve {
     Open(CurveString2),
     /// A closed contour.
     Closed(Contour2),
+    /// An exact mixed-family path — an SVG `C`/`Q` Bézier or an `<ellipse>` — which
+    /// `CurveString2`/`Contour2` cannot hold.
+    Path(hypercurve::CurvePath2, bool),
 }
-
-/// Line segments emitted per flattened Bézier.
-const BEZIER_SEGMENTS: usize = 24;
 
 /// Import an SVG document into native planar curves plus a list of warnings for
 /// any skipped/unsupported content.
@@ -69,7 +69,14 @@ pub fn import_svg_curves(doc: &str) -> Result<(Vec<ImportedCurve>, Vec<String>),
                     attr_f64(&attrs, "rx"),
                     attr_f64(&attrs, "ry"),
                 ) {
-                    push_closed(&mut curves, &mut warnings, ellipse_points(cx, cy, rx, ry), "<ellipse>");
+                    match hcurve::ellipse(rx, ry, 0.0, cx, cy) {
+                        // Exact rational-conic ellipse. This used to be sampled at a count
+                        // derived from the raw radius value (`clamp(16, 256)`), so the
+                        // fidelity of an imported ellipse depended on the document's units
+                        // — a small one arrived as a 16-gon.
+                        Ok(path) => curves.push(ImportedCurve::Path(path, true)),
+                        Err(e) => warnings.push(format!("skipped an <ellipse>: {e}")),
+                    }
                 }
             },
 
@@ -140,66 +147,48 @@ fn import_path(d: &str, warnings: &mut Vec<String>) -> Vec<ImportedCurve> {
         .collect()
 }
 
-/// Convert one hypercurve subpath into a native curve, flattening Béziers.
+/// Convert one hypercurve subpath into a native curve.
+///
+/// The parser already hands us an exact [`hypercurve::CurvePath2`], so a `C`/`Q` Bézier is
+/// carried straight through. This used to flatten every Bézier into 24 line segments before
+/// meshup ever saw it — the arc-ness was destroyed at the import boundary, which is why an
+/// imported SVG curve could never report `degree() > 1`.
 fn import_curve_path(
     curve_path: hypercurve::CurvePath2,
     warnings: &mut Vec<String>,
 ) -> Option<ImportedCurve> {
-    let mut segs: Vec<Segment2> = Vec::new();
-    for curve in curve_path.curves() {
-        match curve.geometry() {
-            CurveGeometry2::Line(l) => segs.push(Segment2::Line(l.clone())),
-            CurveGeometry2::CircularArc(a) => segs.push(Segment2::Arc(a.clone())),
-            CurveGeometry2::CubicBezier(b) => {
-                if flatten_bezier(b.start().clone(), |t| b.point_at(t), &mut segs).is_none() {
-                    warnings.push("skipped an SVG <path>: could not flatten a cubic Bézier".into());
-                    return None;
-                }
-            },
-            CurveGeometry2::QuadraticBezier(b) => {
-                if flatten_bezier(b.start().clone(), |t| b.point_at(t), &mut segs).is_none() {
-                    warnings.push("skipped an SVG <path>: could not flatten a quadratic Bézier".into());
-                    return None;
-                }
-            },
-            _ => {
-                warnings.push("skipped an SVG <path> with an unsupported segment type".into());
-                return None;
-            },
-        }
-    }
-
-    // A closed path's segments form a loop (hypercurve appends the closing line);
-    // an open one does not. Let the contour constructor decide.
-    match Contour2::try_new(segs.clone()) {
-        Ok(ct) => Some(ImportedCurve::Closed(ct)),
-        Err(_) => match CurveString2::try_new(segs) {
-            Ok(cs) => Some(ImportedCurve::Open(cs)),
-            Err(_) => {
-                warnings.push("skipped an SVG <path>: could not assemble a curve".into());
-                None
-            },
+    // Line/arc content keeps the native contour/curve-string carriers, which unlock
+    // hypercurve's decided fast paths downstream.
+    let mut segs: Vec<Segment2> = Vec::with_capacity(curve_path.curves().len());
+    let all_line_arc = curve_path.curves().iter().all(|curve| match curve.geometry() {
+        CurveGeometry2::Line(l) => {
+            segs.push(Segment2::Line(l.clone()));
+            true
         },
-    }
-}
+        CurveGeometry2::CircularArc(a) => {
+            segs.push(Segment2::Arc(a.clone()));
+            true
+        },
+        _ => false,
+    });
 
-/// Flatten a Bézier by uniformly sampling its parameterisation into line segments.
-/// `start` must be the curve's first point (== the previous segment's end).
-fn flatten_bezier(
-    start: Point2,
-    eval: impl Fn(hypercurve::Real) -> Point2,
-    segs: &mut Vec<Segment2>,
-) -> Option<()> {
-    let mut prev = start;
-    for k in 1..=BEZIER_SEGMENTS {
-        let t = hcurve::real(k as f64 / BEZIER_SEGMENTS as f64).ok()?;
-        let cur = eval(t);
-        if let Ok(line) = LineSeg2::try_new(prev.clone(), cur.clone()) {
-            segs.push(Segment2::Line(line));
-        }
-        prev = cur;
+    if all_line_arc {
+        // A closed path's segments form a loop (hypercurve appends the closing line);
+        // an open one does not. Let the contour constructor decide.
+        return match Contour2::try_new(segs.clone()) {
+            Ok(ct) => Some(ImportedCurve::Closed(ct)),
+            Err(_) => match CurveString2::try_new(segs) {
+                Ok(cs) => Some(ImportedCurve::Open(cs)),
+                Err(_) => {
+                    warnings.push("skipped an SVG <path>: could not assemble a curve".into());
+                    None
+                },
+            },
+        };
     }
-    Some(())
+
+    let closed = curve_path.start() == curve_path.end();
+    Some(ImportedCurve::Path(curve_path, closed))
 }
 
 fn push_closed(curves: &mut Vec<ImportedCurve>, warnings: &mut Vec<String>, pts: Vec<[f64; 2]>, what: &str) {
@@ -237,16 +226,6 @@ fn parse_points(s: &str) -> Result<Vec<[f64; 2]>, String> {
         return Err("odd number of coordinates".into());
     }
     Ok(nums.chunks(2).map(|c| [c[0], c[1]]).collect())
-}
-
-fn ellipse_points(cx: f64, cy: f64, rx: f64, ry: f64) -> Vec<[f64; 2]> {
-    let n = (rx.max(ry).ceil() as usize).clamp(16, 256);
-    (0..n)
-        .map(|i| {
-            let a = std::f64::consts::TAU * (i as f64) / (n as f64);
-            [cx + rx * a.cos(), cy + ry * a.sin()]
-        })
-        .collect()
 }
 
 /// A (sharp) rectangle outline. Rounded corners are simplified to sharp for now.

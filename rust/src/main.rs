@@ -148,21 +148,9 @@ fn main() {
         circle_2d.to_stl_binary("circle_2d").unwrap(),
     );
 
-    #[cfg(all(feature = "offset", feature = "stl-io"))]
-    {
-        let square_2d = Sketch::square(2.0, None);
-        let grown_2d = square_2d.offset(0.5);
-        let _ = fs::write(
-            "stl/square_2d_grow_0_5.stl",
-            grown_2d.to_stl_ascii("square_2d_grow_0_5"),
-        );
-
-        let shrunk_2d = square_2d.offset(-0.5);
-        let _ = fs::write(
-            "stl/square_2d_shrink_0_5.stl",
-            shrunk_2d.to_stl_ascii("square_2d_shrink_0_5"),
-        );
-    }
+    // NOTE: the Sketch::offset demos lived here. Sketch offsetting was geo-buf-backed and
+    // operated on already-tessellated polygons; it was removed in favour of hypercurve's
+    // native line/arc offset on Curve3DJs.
 
     // star(num_points, outer_radius, inner_radius)
     #[cfg(feature = "stl-io")]
@@ -938,17 +926,7 @@ fn main() {
         );
     }
 
-    // Scene P: Demonstrate offset(distance)
-    #[cfg(all(feature = "offset", feature = "stl-io"))]
-    {
-        let poly_2d = Sketch::polygon(&[[0.0, 0.0], [2.0, 0.0], [1.0, 1.5]], None);
-        let grown = poly_2d.offset(0.2);
-        let scene = grown.extrude(0.1);
-        let _ = fs::write(
-            "stl/scene_offset_grown.stl",
-            scene.to_stl_ascii("scene_offset_grown"),
-        );
-    }
+    // Scene P (offset demo) removed with the geo-buf Sketch offset.
 
     #[cfg(feature = "stl-io")]
     {

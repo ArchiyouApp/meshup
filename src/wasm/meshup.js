@@ -462,6 +462,12 @@ export class Curve3DJs {
         Curve3DJsFinalization.register(obj, obj.__wbg_ptr, obj);
         return obj;
     }
+    static __unwrap(jsValue) {
+        if (!(jsValue instanceof Curve3DJs)) {
+            return 0;
+        }
+        return jsValue.__destroy_into_raw();
+    }
     __destroy_into_raw() {
         const ptr = this.__wbg_ptr;
         this.__wbg_ptr = 0;
@@ -471,6 +477,18 @@ export class Curve3DJs {
     free() {
         const ptr = this.__destroy_into_raw();
         wasm.__wbg_curve3djs_free(ptr, 0);
+    }
+    /**
+     * Close the curve by appending a straight segment from its end back to its start,
+     * preserving every existing span. Returns an equivalent curve when already closed.
+     * @returns {Curve3DJs}
+     */
+    closePath() {
+        const ret = wasm.curve3djs_closePath(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return Curve3DJs.__wrap(ret[0]);
     }
     /**
      * Unit tangent at normalised arc-length parameter `t` in `[0, 1]`.
@@ -588,7 +606,7 @@ export class Curve3DJs {
         return Curve3DJs.__wrap(ret[0]);
     }
     /**
-     * Number of native segments.
+     * Number of exact spans.
      * @returns {number}
      */
     segmentCount() {
@@ -596,7 +614,10 @@ export class Curve3DJs {
         return ret >>> 0;
     }
     /**
-     * Defining vertices (segment endpoints) as 3D points.
+     * Defining vertices (span endpoints) as 3D points.
+     *
+     * One point per exact span, plus the final endpoint on an open curve — so an ellipse
+     * yields its four conic span joints, not several hundred sampled points.
      * @returns {Point3Js[]}
      */
     controlPoints() {
@@ -618,9 +639,13 @@ export class Curve3DJs {
         return ret[0];
     }
     /**
-     * Construct a smooth NURBS curve of `degree` (>= 2) interpolating the given
-     * 3D points. Stored as a fine polyline (meshup consumes interpolated curves
-     * tessellated); the curve passes through every input point.
+     * Construct a smooth NURBS curve of `degree` (>= 2) interpolating the given 3D points.
+     *
+     * Stored as the **exact** spline. This used to compute the NURBS and then immediately
+     * discard it for a 1e-5-chord polyline, so a spline arrived in meshup as ~2400
+     * degree-1 segments: `degree()` reported 1, `controlPoints()` returned thousands of
+     * sampled points rather than the solved control net, and every downstream operation
+     * worked on line work.
      * @param {Point3Js[]} points
      * @param {number} degree
      * @returns {Curve3DJs}
@@ -645,6 +670,30 @@ export class Curve3DJs {
     rotateQuaternion(w, x, y, z) {
         const ret = wasm.curve3djs_rotateQuaternion(this.__wbg_ptr, w, x, y, z);
         return Curve3DJs.__wrap(ret);
+    }
+    /**
+     * Per-axis scale about `origin`, exact for **closed** curves.
+     *
+     * A per-axis scale is not a similarity, so hypercurve's `transform_similarity` cannot
+     * express it — but the map it induces *within* the curve's plane is a plain 2D affine,
+     * and `CurveRegion2::transform_affine` accepts one. Scaling a circle by `[2, 1, 1]`
+     * therefore yields an exact **ellipse** of rational conic spans.
+     *
+     * Returns an error for open curves (a region is required) and for a scale that
+     * collapses the plane; the caller falls back to resampling.
+     * @param {number} sx
+     * @param {number} sy
+     * @param {number} sz
+     * @param {Point3Js} origin
+     * @returns {Curve3DJs}
+     */
+    scaleNonUniform(sx, sy, sz, origin) {
+        _assertClass(origin, Point3Js);
+        const ret = wasm.curve3djs_scaleNonUniform(this.__wbg_ptr, sx, sy, sz, origin.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return Curve3DJs.__wrap(ret[0]);
     }
     /**
      * Construct an **elliptical arc** from `start_angle` to `end_angle` (radians,
@@ -710,8 +759,19 @@ export class Curve3DJs {
         return ret[0];
     }
     /**
-     * Axis-aligned bounding box of the tessellated curve as
-     * `[minx,miny,minz, maxx,maxy,maxz]`.
+     * World axis-aligned bounding box as `[minx,miny,minz, maxx,maxy,maxz]`.
+     *
+     * Solved exactly from the native geometry rather than min/maxed over a tessellation,
+     * which always fell short on an arc bulge that was not a sample point (a 30°-rotated
+     * 50x25 ellipse under-reported its x extent by ~4e-3).
+     *
+     * For each world axis `e`, `p·e = origin·e + u*(x·e) + v*(y·e)` is a linear functional
+     * of the local coordinates, so its extent is an exact support query in the in-plane
+     * direction `(x·e, y·e)` — see [`hcurve::support_extent`]. A degenerate direction
+     * (world axis perpendicular to the plane) contributes only the origin term.
+     *
+     * A non-coplanar polyline keeps its retained true 3D vertices, so it is measured
+     * directly from those.
      * @param {number | null} [tol]
      * @returns {Float64Array}
      */
@@ -727,6 +787,12 @@ export class Curve3DJs {
     /**
      * Native sub-curve between arc-length fractions `t0`, `t1` in `[0, 1]`,
      * preserving line/arc segments exactly (no tessellation). Always open.
+     *
+     * An exact [`Geom::Path`] still goes through a line approximation: the cut points are
+     * given as *arc-length* fractions, and inverting arc length on a rational conic has no
+     * closed form (hypercurve exposes `inverse_length_parameter_region` for polynomial
+     * Bezier spans only). Trimming a conic exactly needs that inversion, not just
+     * `Curve2::subcurve`, which takes a curve parameter.
      * @param {number} t0
      * @param {number} t1
      * @returns {Curve3DJs}
@@ -737,6 +803,19 @@ export class Curve3DJs {
             throw takeFromExternrefTable0(ret[1]);
         }
         return Curve3DJs.__wrap(ret[0]);
+    }
+    /**
+     * The knot vector, when this curve is carried by a single spline span.
+     *
+     * Empty for line/arc geometry and for multi-span paths, which have no single knot
+     * vector. Line/arc curves are re-parameterised by arc length instead.
+     * @returns {Float64Array}
+     */
+    knots() {
+        const ret = wasm.curve3djs_knots(this.__wbg_ptr);
+        var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+        return v1;
     }
     /**
      * Uniform scale about the world origin (hypercurve supports only uniform,
@@ -752,7 +831,8 @@ export class Curve3DJs {
         return Curve3DJs.__wrap(ret[0]);
     }
     /**
-     * One `Curve3DJs` per native segment (each an open single-segment curve).
+     * One `Curve3DJs` per exact span (each an open single-span curve). A conic or spline
+     * span comes back as an exact single-span path, not as a chord.
      * @returns {Curve3DJs[]}
      */
     spans() {
@@ -773,13 +853,58 @@ export class Curve3DJs {
         return ret !== 0;
     }
     /**
-     * Effective polynomial degree: the max over segments (line = 1, arc = 2).
-     * A native re-architecture of curvo's single-NURBS `degree()`.
+     * Join this curve with `others`, in order, into one connected curve.
+     *
+     * Every span is carried across exactly and gaps are bridged with straight connectors,
+     * so joining an arc to a line keeps the arc. The TypeScript layer used to do this by
+     * concatenating `controlPoints()` and running a polyline through them — and since
+     * `controlPoints()` yields only span *endpoints*, a semicircle became its chord. That
+     * is why `Sketch().lineTo().arcTo().close()` lost its arcs: every `Sketch.end()`
+     * funnels through that join.
+     *
+     * `others` are mapped into this curve's plane by an exact similarity; a non-coplanar
+     * operand is an error.
+     * @param {Curve3DJs[]} others
+     * @returns {Curve3DJs}
+     */
+    concat(others) {
+        const ptr0 = passArrayJsValueToWasm0(others, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.curve3djs_concat(this.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return Curve3DJs.__wrap(ret[0]);
+    }
+    /**
+     * Effective polynomial degree: the max over exact spans (line = 1, arc/conic/quadratic
+     * = 2, cubic and above = 3+). A native re-architecture of curvo's single-NURBS
+     * `degree()`. An ellipse is degree 2 and an interpolated NURBS reports its real degree,
+     * where both used to report 1 from the line approximation.
      * @returns {number}
      */
     degree() {
         const ret = wasm.curve3djs_degree(this.__wbg_ptr);
         return ret >>> 0;
+    }
+    /**
+     * Extend the curve by `length` along its endpoint tangent(s).
+     *
+     * `side` is `"start"`, `"end"` or `"both"`. The extension is a straight span appended
+     * to the exact geometry, so the original spans survive — this used to rebuild the whole
+     * curve as a polyline through `controlPoints()`, collapsing any arc to a chord.
+     * @param {number} length
+     * @param {string} side
+     * @returns {Curve3DJs}
+     */
+    extend(length, side) {
+        const ptr0 = passStringToWasm0(side, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.curve3djs_extend(this.__wbg_ptr, length, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return Curve3DJs.__wrap(ret[0]);
     }
     /**
      * Fillet (round) interior corners with an arc of the given `radius`.
@@ -817,7 +942,43 @@ export class Curve3DJs {
         return ret[0];
     }
     /**
+     * Mirror across the plane through `origin` with unit normal `normal`.
+     *
+     * Costs nothing geometrically. A reflection `R` is affine, so for a planar curve
+     * `R(o + x*u + y*v) = R(o) + R(x)*u + R(y)*v` — the local `(u, v)` coordinates are
+     * unchanged and only the frame moves. A mirrored circle therefore stays two arc spans,
+     * where this used to reflect the tessellated boundary and rebuild a ~500-segment
+     * polyline, permanently destroying the geometry to apply an isometry.
+     *
+     * The reflected frame's normal is recomputed from `x cross y`, which correctly flips:
+     * a reflection reverses orientation.
+     * @param {Vector3Js} normal
+     * @param {Point3Js} origin
+     * @returns {Curve3DJs}
+     */
+    mirror(normal, origin) {
+        _assertClass(normal, Vector3Js);
+        _assertClass(origin, Point3Js);
+        const ret = wasm.curve3djs_mirror(this.__wbg_ptr, normal.__wbg_ptr, origin.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return Curve3DJs.__wrap(ret[0]);
+    }
+    /**
      * One-sided offset by `distance`, returning a new curve in the same frame.
+     *
+     * Line/arc geometry is offset natively: hypercurve miters line-line corners and joins
+     * the rest with circular arcs, so `Circle(50).offset(10)` comes back as a circle of
+     * radius 60 — two arc spans — rather than the 128-gon this used to produce by
+     * tessellating the native result away.
+     *
+     * An exact path (conic / Bezier / spline) has no exact parallel — the offset of a
+     * general rational curve is not itself rational — so it uses hypercurve's *certified*
+     * Blend2D parallel, which stays a curve and carries a proven error bound. When
+     * hypercurve declines (an authored corner it will not blend, or a self-intersecting
+     * offset, which it does not trim), this falls back to offsetting a certified
+     * projection, i.e. the previous behaviour.
      * @param {number} distance
      * @param {number | null} [tol]
      * @returns {Curve3DJs}
@@ -885,8 +1046,8 @@ export class Curve3DJs {
         return Curve3DJs.__wrap(ret[0]);
     }
     /**
-     * Classify the curve by its native segment types:
-     * `Line` | `Arc` | `Circle` | `Rect` | `Polyline` | `Spline`.
+     * Classify the curve by its exact span families:
+     * `Line` | `Arc` | `Circle` | `Rect` | `Polyline` | `Ellipse` | `Spline`.
      * @returns {string}
      */
     subtype() {
@@ -902,6 +1063,17 @@ export class Curve3DJs {
         }
     }
     /**
+     * The per-control-point weights, when this curve is carried by a single spline span.
+     * Empty otherwise — a native arc is exact, not a weighted rational control net.
+     * @returns {Float64Array}
+     */
+    weights() {
+        const ret = wasm.curve3djs_weights(this.__wbg_ptr);
+        var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+        return v1;
+    }
+    /**
      * Deep copy.
      * @returns {Curve3DJs}
      */
@@ -910,7 +1082,10 @@ export class Curve3DJs {
         return Curve3DJs.__wrap(ret);
     }
     /**
-     * Whether the geometry contains any circular-arc segments (vs. all straight).
+     * Whether the geometry is curved anywhere — a circular arc, or any conic / Bezier /
+     * spline span. Named for the line/arc case it was introduced for; on an exact path it
+     * answers the same underlying question ("is this more than straight line work?"), which
+     * the old line approximation always answered `false` to.
      * @returns {boolean}
      */
     hasArcs() {
@@ -1325,6 +1500,15 @@ export class MeshJs {
         return MeshJs.__wrap(ret);
     }
     /**
+     * Whether this mesh is convex — the precondition for the per-shape
+     * drawing strategies. See [`crate::mesh::Mesh::is_convex`].
+     * @returns {boolean}
+     */
+    isConvex() {
+        const ret = wasm.meshjs_isConvex(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
      * @returns {string}
      */
     toSTLASCII() {
@@ -1558,6 +1742,9 @@ export class MeshJs {
      * - `n_samples` – HLR ray samples per edge segment (e.g. `8`).
      * - `occluders` – additional meshes that can occlude edges of `self`;
      *   `self` is always included as an occluder.
+     * - `strategy` – which HLR algorithm to run: `"raycast"` (the sampling
+     *   solver, and the default when omitted or unrecognised) or `"exact"`
+     *   (analytic interval clipping). `n_samples` only affects `"raycast"`.
      * @param {number} vx
      * @param {number} vy
      * @param {number} vz
@@ -1570,12 +1757,15 @@ export class MeshJs {
      * @param {number} feature_angle_deg
      * @param {number} n_samples
      * @param {MeshJs[]} occluders
+     * @param {string | null} [strategy]
      * @returns {EdgeProjectionResultJs}
      */
-    projectEdges(vx, vy, vz, ox, oy, oz, nx, ny, nz, feature_angle_deg, n_samples, occluders) {
+    projectEdges(vx, vy, vz, ox, oy, oz, nx, ny, nz, feature_angle_deg, n_samples, occluders, strategy) {
         const ptr0 = passArrayJsValueToWasm0(occluders, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.meshjs_projectEdges(this.__wbg_ptr, vx, vy, vz, ox, oy, oz, nx, ny, nz, feature_angle_deg, n_samples, ptr0, len0);
+        var ptr1 = isLikeNone(strategy) ? 0 : passStringToWasm0(strategy, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len1 = WASM_VECTOR_LEN;
+        const ret = wasm.meshjs_projectEdges(this.__wbg_ptr, vx, vy, vz, ox, oy, oz, nx, ny, nz, feature_angle_deg, n_samples, ptr0, len0, ptr1, len1);
         return EdgeProjectionResultJs.__wrap(ret);
     }
     /**
@@ -1754,6 +1944,43 @@ export class MeshJs {
         return ret;
     }
     /**
+     * Hidden-line-project free-standing polylines against a set of solids.
+     *
+     * This is the entry point for linear shapes — wireframes, centrelines,
+     * imported linework — which are part of the drawing but belong to no mesh.
+     * They are hidden by the occluders but never occlude anything themselves.
+     *
+     * - `points` – all polyline vertices, flattened as x,y,z triples.
+     * - `counts` – how many *points* each polyline contributes, in order.
+     *
+     * Occlusion is always solved exactly here. The sampling solver never
+     * supported curves at all, so there is no prior behaviour to preserve, and
+     * no reason to approximate what can be computed.
+     * @param {Float64Array} points
+     * @param {Uint32Array} counts
+     * @param {number} vx
+     * @param {number} vy
+     * @param {number} vz
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @param {MeshJs[]} occluders
+     * @returns {EdgeProjectionResultJs}
+     */
+    static projectPolylines(points, counts, vx, vy, vz, ox, oy, oz, nx, ny, nz, occluders) {
+        const ptr0 = passArrayF64ToWasm0(points, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray32ToWasm0(counts, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArrayJsValueToWasm0(occluders, wasm.__wbindgen_malloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.meshjs_projectPolylines(ptr0, len0, ptr1, len1, vx, vy, vz, ox, oy, oz, nx, ny, nz, ptr2, len2);
+        return EdgeProjectionResultJs.__wrap(ret);
+    }
+    /**
      * @param {number} m00
      * @param {number} m01
      * @param {number} m02
@@ -1885,12 +2112,15 @@ export class MeshJs {
      * @param {number} feature_angle_deg
      * @param {number} n_samples
      * @param {MeshJs[]} occluders
+     * @param {string | null} [strategy]
      * @returns {SectionElevationResultJs}
      */
-    projectEdgesSection(snx, sny, snz, section_offset, vx, vy, vz, ox, oy, oz, nx, ny, nz, feature_angle_deg, n_samples, occluders) {
+    projectEdgesSection(snx, sny, snz, section_offset, vx, vy, vz, ox, oy, oz, nx, ny, nz, feature_angle_deg, n_samples, occluders, strategy) {
         const ptr0 = passArrayJsValueToWasm0(occluders, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.meshjs_projectEdgesSection(this.__wbg_ptr, snx, sny, snz, section_offset, vx, vy, vz, ox, oy, oz, nx, ny, nz, feature_angle_deg, n_samples, ptr0, len0);
+        var ptr1 = isLikeNone(strategy) ? 0 : passStringToWasm0(strategy, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len1 = WASM_VECTOR_LEN;
+        const ret = wasm.meshjs_projectEdgesSection(this.__wbg_ptr, snx, sny, snz, section_offset, vx, vy, vz, ox, oy, oz, nx, ny, nz, feature_angle_deg, n_samples, ptr0, len0, ptr1, len1);
         return SectionElevationResultJs.__wrap(ret);
     }
     /**
@@ -3043,6 +3273,10 @@ export class SketchJs {
         return SketchJs.__wrap(ret);
     }
     /**
+     * Fill this sketch with a Hilbert-curve path of the given recursion `order`.
+     *
+     * Unrelated to offsetting — this used to sit behind the `offset` feature gate by
+     * accident, which kept it out of builds that did not enable geo-buf.
      * @param {number} order
      * @param {number} padding
      * @returns {SketchJs}
@@ -3102,14 +3336,6 @@ export class SketchJs {
         return MeshJs.__wrap(ret);
     }
     /**
-     * @param {number} distance
-     * @returns {SketchJs}
-     */
-    offsetRounded(distance) {
-        const ret = wasm.sketchjs_offsetRounded(this.__wbg_ptr, distance);
-        return SketchJs.__wrap(ret);
-    }
-    /**
      * @param {number} width
      * @param {number} height
      * @param {any} metadata
@@ -3163,14 +3389,6 @@ export class SketchJs {
      */
     static roundedRectangle(width, height, corner_radius, corner_segments, metadata) {
         const ret = wasm.sketchjs_roundedRectangle(width, height, corner_radius, corner_segments, metadata);
-        return SketchJs.__wrap(ret);
-    }
-    /**
-     * @param {boolean} orientation
-     * @returns {SketchJs}
-     */
-    straightSkeleton(orientation) {
-        const ret = wasm.sketchjs_straightSkeleton(this.__wbg_ptr, orientation);
         return SketchJs.__wrap(ret);
     }
     /**
@@ -3403,14 +3621,6 @@ export class SketchJs {
      */
     static circle(radius, segments, metadata) {
         const ret = wasm.sketchjs_circle(radius, segments, metadata);
-        return SketchJs.__wrap(ret);
-    }
-    /**
-     * @param {number} distance
-     * @returns {SketchJs}
-     */
-    offset(distance) {
-        const ret = wasm.sketchjs_offset(this.__wbg_ptr, distance);
         return SketchJs.__wrap(ret);
     }
     /**
@@ -4022,169 +4232,6 @@ export class VertexJs {
 if (Symbol.dispose) VertexJs.prototype[Symbol.dispose] = VertexJs.prototype.free;
 
 /**
- * Tessellate a 3‑point arc through `start`,`mid`,`end` to a flat point array.
- * @param {number} sx
- * @param {number} sy
- * @param {number} mx
- * @param {number} my
- * @param {number} ex
- * @param {number} ey
- * @param {number} chord_error
- * @returns {Float64Array}
- */
-export function hcArc3pt(sx, sy, mx, my, ex, ey, chord_error) {
-    const ret = wasm.hcArc3pt(sx, sy, mx, my, ex, ey, chord_error);
-    if (ret[3]) {
-        throw takeFromExternrefTable0(ret[2]);
-    }
-    var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
-    return v1;
-}
-
-/**
- * Boolean between two closed polylines. Returns a JS array of flat rings
- * (`Array<Float64Array>`).
- * @param {Float64Array} a
- * @param {Float64Array} b
- * @param {string} op
- * @param {number} chord_error
- * @returns {any}
- */
-export function hcBoolean(a, b, op, chord_error) {
-    const ptr0 = passArrayF64ToWasm0(a, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passArrayF64ToWasm0(b, wasm.__wbindgen_malloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ptr2 = passStringToWasm0(op, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len2 = WASM_VECTOR_LEN;
-    const ret = wasm.hcBoolean(ptr0, len0, ptr1, len1, ptr2, len2, chord_error);
-    if (ret[2]) {
-        throw takeFromExternrefTable0(ret[1]);
-    }
-    return takeFromExternrefTable0(ret[0]);
-}
-
-/**
- * Tessellate a circle (centre `cx,cy`, radius `r`) to a flat ring array.
- * @param {number} cx
- * @param {number} cy
- * @param {number} r
- * @param {number} chord_error
- * @returns {Float64Array}
- */
-export function hcCircle(cx, cy, r, chord_error) {
-    const ret = wasm.hcCircle(cx, cy, r, chord_error);
-    if (ret[3]) {
-        throw takeFromExternrefTable0(ret[2]);
-    }
-    var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
-    return v1;
-}
-
-/**
- * Intersection points between two open polylines, as a flat point array.
- * @param {Float64Array} a
- * @param {Float64Array} b
- * @returns {Float64Array}
- */
-export function hcIntersect(a, b) {
-    const ptr0 = passArrayF64ToWasm0(a, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passArrayF64ToWasm0(b, wasm.__wbindgen_malloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ret = wasm.hcIntersect(ptr0, len0, ptr1, len1);
-    if (ret[3]) {
-        throw takeFromExternrefTable0(ret[2]);
-    }
-    var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
-    return v3;
-}
-
-/**
- * Tessellate a NURBS curve (flat control points, weights, knots) to a flat
- * point array.
- * @param {number} degree
- * @param {Float64Array} control_points
- * @param {Float64Array} weights
- * @param {Float64Array} knots
- * @param {number} chord_error
- * @returns {Float64Array}
- */
-export function hcNurbsTessellate(degree, control_points, weights, knots, chord_error) {
-    const ptr0 = passArrayF64ToWasm0(control_points, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passArrayF64ToWasm0(weights, wasm.__wbindgen_malloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ptr2 = passArrayF64ToWasm0(knots, wasm.__wbindgen_malloc);
-    const len2 = WASM_VECTOR_LEN;
-    const ret = wasm.hcNurbsTessellate(degree, ptr0, len0, ptr1, len1, ptr2, len2, chord_error);
-    if (ret[3]) {
-        throw takeFromExternrefTable0(ret[2]);
-    }
-    var v4 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
-    return v4;
-}
-
-/**
- * One‑sided offset of an open/closed polyline by `distance`. Returns a flat
- * point array.
- * @param {Float64Array} coords
- * @param {boolean} closed
- * @param {number} distance
- * @param {number} chord_error
- * @returns {Float64Array}
- */
-export function hcOffset(coords, closed, distance, chord_error) {
-    const ptr0 = passArrayF64ToWasm0(coords, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.hcOffset(ptr0, len0, closed, distance, chord_error);
-    if (ret[3]) {
-        throw takeFromExternrefTable0(ret[2]);
-    }
-    var v2 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
-    return v2;
-}
-
-/**
- * Signed area of the closed polyline `coords`.
- * @param {Float64Array} coords
- * @returns {number}
- */
-export function hcSignedArea(coords) {
-    const ptr0 = passArrayF64ToWasm0(coords, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.hcSignedArea(ptr0, len0);
-    if (ret[2]) {
-        throw takeFromExternrefTable0(ret[1]);
-    }
-    return ret[0];
-}
-
-/**
- * Tessellate an open/closed polyline through `coords` to a flat point array.
- * @param {Float64Array} coords
- * @param {boolean} closed
- * @param {number} chord_error
- * @returns {Float64Array}
- */
-export function hcTessellatePolyline(coords, closed, chord_error) {
-    const ptr0 = passArrayF64ToWasm0(coords, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.hcTessellatePolyline(ptr0, len0, closed, chord_error);
-    if (ret[3]) {
-        throw takeFromExternrefTable0(ret[2]);
-    }
-    var v2 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
-    return v2;
-}
-
-/**
  * Import an SVG document into native planar curves. Lines and circular arcs are
  * kept exact; Béziers are flattened to line segments; unsupported path commands
  * (elliptical/rotated arcs, …) are skipped and surfaced via `warnings`.
@@ -4327,6 +4374,10 @@ function __wbg_get_imports() {
     }, arguments) };
     imports.wbg.__wbg_curve3djs_new = function(arg0) {
         const ret = Curve3DJs.__wrap(arg0);
+        return ret;
+    };
+    imports.wbg.__wbg_curve3djs_unwrap = function(arg0) {
+        const ret = Curve3DJs.__unwrap(arg0);
         return ret;
     };
     imports.wbg.__wbg_done_62ea16af4ce34b24 = function(arg0) {
@@ -4636,13 +4687,8 @@ async function __wbg_init(module_or_path) {
         }
     }
 
-    // PATCHED by buildscripts/build-wasm.ts: the wasm-pack fallback
-    //   module_or_path = new URL('meshup_bg.wasm', import.meta.url)
-    // is removed on purpose. meshup never ships meshup_bg.wasm as a sibling file
-    // (the bytes are inlined as base64 and passed in by src/loader.ts), and the
-    // URL reference made bundlers such as webpack 5 fail with "Module not found".
     if (typeof module_or_path === 'undefined') {
-        throw new Error('meshup wasm init: no module or path given. Use init()/initAsync() from meshup instead of calling the raw wasm glue.');
+        module_or_path = new URL('meshup_bg.wasm', import.meta.url);
     }
     const imports = __wbg_get_imports();
 

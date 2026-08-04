@@ -11,6 +11,7 @@ import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
+import { Polygon } from '../../src/Polygon';
 import { Vector } from '../../src/Vector';
 import { primaryOrthoXYAngle, shortestArcAxisAngle } from '../../src/utils';
 
@@ -199,6 +200,40 @@ describe('Mesh.rotateToOrtho()', () =>
         const bb = m.bbox();
         expect(bb.width()).toBeCloseTo(200, 1);
         expect(bb.depth()).toBeCloseTo(100, 1);
+    });
+});
+
+describe('Polygon.rotateToOrtho()', () =>
+{
+    const rect = () => Polygon.from([[0, 0, 0], [200, 0, 0], [200, 100, 0], [0, 100, 0]]);
+
+    it('aligns a rectangle rotated around Z back to the axes', () =>
+    {
+        const p = rect().rotateZ(37);
+        p.rotateToOrtho('horizontal');
+        const bb = p.bbox()!;
+        expect(bb.width()).toBeCloseTo(200, 1);
+        expect(bb.depth()).toBeCloseTo(100, 1);
+        expect(bb.height()).toBeCloseTo(0, 3);
+    });
+
+    it('puts the dominant direction on Y when vertical', () =>
+    {
+        const p = rect().rotateZ(37);
+        p.rotateToOrtho('vertical');
+        const bb = p.bbox()!;
+        expect(bb.width()).toBeCloseTo(100, 1);
+        expect(bb.depth()).toBeCloseTo(200, 1);
+    });
+
+    it('lays a tilted rectangle flat and aligns it', () =>
+    {
+        const p = rect().rotateX(30).rotateZ(25);
+        p.rotateToOrtho('horizontal');
+        const bb = p.bbox()!;
+        expect(bb.height()).toBeCloseTo(0, 2);
+        expect(bb.width()).toBeCloseTo(200, 0);
+        expect(bb.depth()).toBeCloseTo(100, 0);
     });
 });
 

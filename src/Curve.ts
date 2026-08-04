@@ -686,20 +686,33 @@ export class Curve extends Shape
             throw new Error('Curve.Compound(): Supply a non-empty array of Curves.');
         }
 
-        // Concatenate the curves' control points into one polyline (native geometry
-        // is segment-based; a joined path is a polyline through all vertices).
-        const pts: Point[] = [];
-        for(const c of curves)
+        // Join the exact spans; gaps are bridged with straight connectors by the kernel.
+        // This used to concatenate controlPoints() into one polyline, which — because
+        // controlPoints() yields span endpoints — replaced every arc with its chord.
+        const [first, ...rest] = curves;
+        if(rest.length === 0){ return first.copy(); }
+        try
         {
-            for(const p of c.controlPoints())
+            return Curve.fromCsgrs(first.inner().concat(rest.map(c => c.inner())));
+        }
+        catch (e)
+        {
+            // Non-coplanar operands have no common plane to join in; fall back to a
+            // polyline through the spans' endpoints, as before.
+            console.warn(`Curve.Compound(): native join failed ("${e}"); falling back to a polyline.`);
+            const pts: Point[] = [];
+            for(const c of curves)
             {
-                if(pts.length === 0 || pts[pts.length - 1].distance(p) > Curve.ZERO_LENGTH_TOLERANCE)
+                for(const p of c.controlPoints())
                 {
-                    pts.push(p);
+                    if(pts.length === 0 || pts[pts.length - 1].distance(p) > Curve.ZERO_LENGTH_TOLERANCE)
+                    {
+                        pts.push(p);
+                    }
                 }
             }
+            return Curve.Polyline(pts.map(p => [p.x, p.y, p.z] as [number, number, number]));
         }
-        return Curve.Polyline(pts.map(p => [p.x, p.y, p.z] as [number, number, number]));
     }
 
 
@@ -736,11 +749,16 @@ export class Curve extends Shape
         return this.controlPoints();
     }
 
-    /** Native curves are re-parameterised by arc length; there is no explicit knot
-     *  vector, so this returns the parameter domain endpoints `[0, 1]`. */
+    /** The spline's knot vector.
+     *
+     *  A curve carried by a single NURBS span (e.g. from {@link Curve.Interpolated})
+     *  returns its real knot vector. Line/arc geometry has no explicit knot vector — it is
+     *  re-parameterised by arc length — so that falls back to the parameter domain `[0, 1]`.
+     */
     knots(): Array<number>
     {
-        return Array.from(this.inner().knotsDomain());
+        const k = Array.from(this.inner().knots());
+        return k.length ? k : Array.from(this.inner().knotsDomain());
     }
 
     knotsDomain():Array<number>|undefined
@@ -748,11 +766,14 @@ export class Curve extends Shape
         return Array.from(this.inner().knotsDomain());
     }
 
-    /** Native segment geometry carries no per-control-point weights (arcs are exact,
-     *  not rational NURBS); returns an empty array. */
+    /** The spline's per-control-point weights.
+     *
+     *  A curve carried by a single NURBS span returns its real weights. Native line/arc
+     *  geometry carries none (an arc is exact, not a weighted rational control net), so
+     *  that returns an empty array. */
     weights(): Array<number>
     {
-        return [];
+        return Array.from(this.inner().weights());
     }
 
     spans(): ShapeCollection<Curve>
@@ -784,10 +805,20 @@ export class Curve extends Shape
         return this.getOnPlane() !== null;
     }
 
-    /** Whether this curve is a single straight segment (all sampled points collinear). */
+    /** Whether this curve is straight (all defining vertices collinear).
+     *
+     *  Answered from native geometry, never from a tessellation: an arc-bearing curve is
+     *  straight by definition never, and for line-only geometry the defining vertices ARE
+     *  the curve, so testing them is exact as well as O(segments) instead of O(samples).
+     */
     isStraight(tolerance: number = 1e-6): boolean
     {
-        const pts = this.tessellate();
+        // A single native line span is the answer outright.
+        if (this.subtype() === 'Line') { return true; }
+        // Any arc span makes the curve curved, whatever its vertices look like.
+        if (this.inner().hasArcs()) { return false; }
+
+        const pts = this.controlPoints();
         if (pts.length < 2) { return false; }
 
         const a = pts[0];
@@ -827,8 +858,12 @@ export class Curve extends Shape
             return false;
         }
 
-        // Project each tessellated point onto the plane's in-plane axes → 2D (u, v)
-        let pts: Array<[number, number]> = this.tessellate().map(p =>
+        // Project onto the plane's in-plane axes → 2D (u, v). For line-only geometry the
+        // defining vertices ARE the curve, so use those: the crossing test is exact and the
+        // O(n²) pair loop runs over a handful of segments instead of hundreds of samples.
+        // Arc-bearing curves still need a tessellation to see a bulge crossing.
+        const source = this.inner().hasArcs() ? this.tessellate() : this.controlPoints();
+        let pts: Array<[number, number]> = source.map(p =>
         {
             const v = p.toVector();
             return [v.dot(plane.x), v.dot(plane.y)] as [number, number];
@@ -1418,6 +1453,10 @@ export class Curve extends Shape
      */
     isCuboid(tolerance: number = 0.5): boolean
     {
+        // An arc span can never lie on an OBB face, so bail before obbox() — otherwise a
+        // circle is tessellated to hundreds of points twice over only to be rejected.
+        if (this.inner().hasArcs()) { return false; }
+
         const obb = this.obbox();
         if (obb.is1D()) return false;
         const halfExtents = obb.halfExtents();
@@ -1860,19 +1899,36 @@ export class Curve extends Shape
     {
         const [sx, sy, sz] = (typeof factor === 'number') ? [factor, factor, factor] : [Point.from(factor).x, Point.from(factor).y, Point.from(factor).z];
         const o = origin ? Point.from(origin) : this.center();
-        // hypercurve only supports uniform (similarity) scaling of native geometry;
-        // for a per-axis scale, resample the boundary and rebuild as a polyline.
         const uniform = Math.abs(sx - sy) < 1e-9 && Math.abs(sy - sz) < 1e-9;
-        this.translate([-o.x, -o.y, -o.z]);
         if (uniform)
         {
+            // A uniform scale IS a similarity, which hypercurve applies natively.
+            this.translate([-o.x, -o.y, -o.z]);
             this.update(this.inner().scale(sx));
+            this.translate([o.x, o.y, o.z]);
+            return this;
         }
-        else
+
+        // A per-axis scale is not a similarity, but the map it induces within the curve's
+        // plane is a plain 2D affine — and hypercurve accepts one of those on a region. So
+        // a closed curve scales exactly: a scaled circle becomes a real ellipse rather than
+        // resampled line work. Open curves have no region to lift to (transform_affine is
+        // CurveRegion2-only), so they keep the resampling fallback.
+        if (this.isClosed())
         {
-            const pts = this.tessellate().map(p => [p.x * sx, p.y * sy, p.z * sz] as [number, number, number]);
-            this.update(Curve.Polyline(pts));
+            try
+            {
+                return this.update(Curve.fromCsgrs(
+                    this.inner().scaleNonUniform(sx, sy, sz, o.toPoint3Js())));
+            }
+            catch (e)
+            {
+                console.warn(`Curve::scale(): exact non-uniform scale unavailable ("${e}"); resampling.`);
+            }
         }
+        this.translate([-o.x, -o.y, -o.z]);
+        const pts = this.tessellate().map(p => [p.x * sx, p.y * sy, p.z * sz] as [number, number, number]);
+        this.update(Curve.Polyline(pts));
         this.translate([o.x, o.y, o.z]);
         return this;
     }
@@ -1899,17 +1955,10 @@ export class Curve extends Shape
                             ? Point.from(pos)
                             : this.bbox()?.center() ?? new Point([0, 0, 0]);
 
-        // Reflect a single point: P' = P - 2·dot(P−Q, n)·n
-        const mirrorPoint = (p: Point): Point =>
-        {
-            const dot2 = 2 * ((p.x - planePos.x) * n.x + (p.y - planePos.y) * n.y + (p.z - planePos.z) * n.z);
-            return new Point([p.x - dot2 * n.x, p.y - dot2 * n.y, p.z - dot2 * n.z]);
-        };
-
-        // Reflect the tessellated boundary and rebuild as a polyline (native geometry
-        // is segment-based; a reflected curve is re-sampled rather than rebuilt span-wise).
-        const pts = this.tessellate().map(p => mirrorPoint(p));
-        this.update(Curve.Polyline(pts.map(p => [p.x, p.y, p.z] as [number, number, number])));
+        // A reflection is an isometry of the curve's plane, so only the plane moves — the
+        // geometry in it is untouched and a mirrored circle stays a circle. This used to
+        // reflect the tessellated boundary and rebuild a ~500-segment polyline.
+        this.update(Curve.fromCsgrs(this.inner().mirror(n.toVector3Js(), planePos.toPoint3Js())));
         this._holes = this._holes.map(h => h.mirror(dir, pos));
         return this;
     }
@@ -1963,7 +2012,23 @@ export class Curve extends Shape
             return new Point(p.x - dot * n.x, p.y - dot * n.y, p.z - dot * n.z);
         };
 
-        // Project the tessellated boundary onto the plane and rebuild as a polyline.
+        // When the curve's own plane is parallel to the target, the projection is a rigid
+        // translation along the normal — the in-plane geometry is untouched, so a circle
+        // stays a circle. (This includes projecting an XY curve onto XY, which used to
+        // resample the whole thing to achieve nothing.)
+        const own = this.normal();
+        if (own && Math.abs(Math.abs(own.normalize().dot(n)) - 1) < 1e-9)
+        {
+            const start = this.start();
+            const signed = (start.x - origin.x) * n.x + (start.y - origin.y) * n.y + (start.z - origin.z) * n.z;
+            this.translate(-signed * n.x, -signed * n.y, -signed * n.z);
+            this._holes = this._holes.map(h => h.projectOnto(plane));
+            return this;
+        }
+
+        // An oblique projection compresses one in-plane direction, so it is not a
+        // similarity. hypercurve's only general affine is on CurveRegion2, which needs a
+        // closed curve; anything else resamples.
         const pts = this.tessellate().map(p => projectPoint(p));
         this.update(Curve.Polyline(pts.map(p => [p.x, p.y, p.z] as [number, number, number])));
         this._holes = this._holes.map(h => h.projectOnto(plane));
@@ -2059,11 +2124,17 @@ export class Curve extends Shape
     close(): this
     {
         if (this.isClosed()) return this;
-        const pts = this.controlPoints().map(p => [p.x, p.y, p.z] as [number, number, number]);
-        if (pts.length < 2) return this;
-        pts.push([pts[0][0], pts[0][1], pts[0][2]]); // close the ring
-        this.update(Curve.Polyline(pts));
-        return this;
+        // Append a closing segment to the exact geometry. Rebuilding from controlPoints()
+        // (as this used to) turned a closed arc into a two-chord degenerate ring.
+        try
+        {
+            return this.update(Curve.fromCsgrs(this.inner().closePath()));
+        }
+        catch (e)
+        {
+            console.warn(`Curve::close(): native close failed ("${e}"); leaving curve open.`);
+            return this;
+        }
     }
 
     /** The corner points of this Curve, indexed exactly as the kernel indexes them:
@@ -2199,24 +2270,22 @@ export class Curve extends Shape
      *  tangent(s). Rebuilds as a polyline through the extended vertices. */
     extend(length: number, side: 'start'|'end'|'both' = 'end'): this
     {
-        const pts = this.controlPoints().map(p => [p.x, p.y, p.z] as [number, number, number]);
-        if (pts.length < 2) return this;
-        if (side === 'end' || side === 'both')
+        // Append a straight span along the endpoint tangent, keeping the exact geometry.
+        // This used to rebuild the whole curve as a polyline through controlPoints(), which
+        // collapsed any arc to a chord just to add a straight tail.
+        try
         {
-            const t = this.inner().tangentAt(1);
-            const e = pts[pts.length - 1];
-            pts.push([e[0] + t.x * length, e[1] + t.y * length, e[2] + t.z * length]);
+            const extended = Curve.fromCsgrs(this.inner().extend(length, side));
+            // An extension runs along the endpoint tangent, so on a straight end segment the
+            // old endpoint stops being a corner: merge it away rather than leave an extra
+            // segment. (Arc-bearing curves are left alone by mergeColinearLines.)
+            return this.update(extended.mergeColinearLines());
         }
-        if (side === 'start' || side === 'both')
+        catch (e)
         {
-            const t = this.inner().tangentAt(0);
-            const s = pts[0];
-            pts.unshift([s[0] - t.x * length, s[1] - t.y * length, s[2] - t.z * length]);
+            console.warn(`Curve::extend(): native extend failed ("${e}"); curve unchanged.`);
+            return this;
         }
-        // An extension runs along the endpoint tangent, so on a straight end segment the old
-        // endpoint stops being a corner: merge it away rather than leave an extra segment.
-        this.update(Curve.Polyline(pts).mergeColinearLines());
-        return this;
     }
 
     grid(cx:number=2, cy:number=2, cz:number=1, spacing:number|PointLike=2):ShapeCollection<Curve>
@@ -2378,16 +2447,9 @@ export class Curve extends Shape
         if(!this.isPlanar()){ throw new Error(`Curve::offset(): Cannot offset a non-planar curve!`);}
         void cornerType; // hypercurve offset uses miter/arc joins; corner style not selectable
 
-        // Fast path for circles: offsetting a circle just changes its radius.
-        if(this.subtype() === 'Circle')
-        {
-            const center = this.center();
-            const normal = this.normal() ?? undefined;
-            const radius = center.distance(this.start());
-            const newRadius = radius + distance;
-            if(newRadius <= 0) { return null; }
-            return this.update(Curve.Circle(newRadius, center, normal));
-        }
+        // NOTE: there used to be a fast path here that rebuilt a circle at radius + distance,
+        // because the native offset returned a tessellated ring. The native offset now
+        // preserves arcs, so an offset circle comes back as an exact circle on its own.
 
         // Single straight open line: offsetting is a perpendicular translate within the line's
         // plane, but the native offset picks its side from the curve's internal winding — which
@@ -2430,22 +2492,27 @@ export class Curve extends Shape
         }
     }
 
-    /** Sign such that a positive `distance` grows a closed curve and negative shrinks
-     *  it (independent of winding). Probes a tiny +offset and compares enclosed area. */
+    /** Sign such that a positive `distance` grows a closed curve and negative shrinks it,
+     *  independent of winding.
+     *
+     *  meshup's convention is grow/shrink; hypercurve offsets a fixed side ("left of travel
+     *  direction"), so which side that is depends on the curve's winding. For a closed
+     *  curve the winding IS the sign of the enclosed signed area, so one kernel call
+     *  answers it — this used to run two extra probe offsets and compare the results,
+     *  making every `offset()` cost three offsets.
+     *
+     *  Open curves have no winding to read, so they keep the bbox probe.
+     */
     private _offsetGrowSign(): number
     {
-        // meshup convention: +distance always grows the curve, −distance shrinks it,
-        // regardless of winding. hypercurve offsets a fixed side, so probe which sign
-        // enlarges the shape and align to it. Closed curves compare enclosed area;
-        // open curves compare the bounding-box size (a fixed-side offset of an open
-        // path still moves it inward or outward of its own bbox).
         try
         {
             if(this.isClosed())
             {
-                const a0 = Math.abs(this.area() ?? 0);
-                const a1 = Math.abs(Curve.fromCsgrs(this.inner().offset(1e-3)).area() ?? 0);
-                return (a1 >= a0) ? 1 : -1;
+                // Traversing a positively-wound (CCW) boundary keeps the interior on the
+                // left, so a left offset moves inward — negate to make +distance grow.
+                const signedArea = this.inner().area();
+                return (signedArea > 0) ? -1 : 1;
             }
             const size = (c: Curve): number => {
                 const b = c.bbox();
@@ -2457,14 +2524,6 @@ export class Curve extends Shape
         }
         catch { return 1; }
     }
-
-    /** Fallback offset — the native hypercurve offset now handles all planar cases,
-     *  so this delegates to {@link offset}. */
-    offsetFallback(distance: number): Curve|null
-    {
-        return this.offset(distance);
-    }
-    
 
     /** Trim the curve to a sub-curve between parameters t0 and t1.
      *  Returns an array of Curves (typically one for inside trim).
@@ -2792,16 +2851,19 @@ export class Curve extends Shape
      *  concatenating their spans and closing end→start with the cutter chord. */
     private _closedRegionFromArc(arcCurves: Array<Curve>): Curve|null
     {
-        const pts: Point[] = [];
-        for(const c of arcCurves)
+        if(arcCurves.length === 0) return null;
+        // Join the exact spans and close. Building this from controlPoints() replaced each
+        // boundary arc with its chord, so cutting a circle in half produced a zero-area
+        // "region" — and the caller decides which side to keep by comparing those areas.
+        try
         {
-            for(const p of c.controlPoints())
-            {
-                if(pts.length === 0 || pts[pts.length - 1].distance(p) > Curve.ZERO_LENGTH_TOLERANCE) { pts.push(p); }
-            }
+            return Curve.Compound(arcCurves).close();
         }
-        if(pts.length < 2) return null;
-        return Curve.Polyline(pts.map(p => [p.x, p.y, p.z] as [number, number, number])).close();
+        catch (e)
+        {
+            console.warn(`Curve::_closedRegionFromArc(): join failed ("${e}").`);
+            return null;
+        }
     }
 
     /** Split this (open) Curve at its intersection point(s) with other and keep
@@ -2965,10 +3027,7 @@ export class Curve extends Shape
             const meshInner = (mesh as any)._mesh;
             if(!meshInner){ throw new Error('Mesh has no inner WASM object'); }
 
-            // Tessellate here and hand the mesh a plain polyline. The old path called
-            // MeshJs.intersectCurve, which was typed for the curvo NurbsCurve3DJs and so
-            // always threw once curves became hypercurve-backed — the catch below turned
-            // that into a silent empty result.
+            // Tessellate here and hand the mesh a plain polyline.
             const pts = mesh.inner()?.intersectPolyline(this.inner().tessellate(tolerance ?? 1e-4));
 
             return (pts || []).map((p: any) => Point.from(p));

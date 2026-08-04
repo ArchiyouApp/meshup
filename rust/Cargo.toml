@@ -40,8 +40,6 @@ hypercurve = { path = "hypercurve" }
 #alum = "0.6.1"
 robust = { version = "1.1.0", default-features = false, features = ["no_std"] }
 geo = { version = "0.31.0", default-features = false, features = ["use-serde"] }
-geo-buf = { path = "geo-buf", optional = true }
-# Local fork of geo-buf 0.1.0 patched to use geo 0.31 (resolves i_overlay conflict).
 #geo-booleanop = "0.3.2" # alternative boolean implementation has fewer dependencies
 chull = { version = "0.2.4", optional = true }
 spade = { version = "2.15.0", optional = true }
@@ -182,9 +180,6 @@ metaballs = [
 sdf = [
   "fast-surface-nets",
 ]
-offset = [
-  "dep:geo-buf",
-]
 delaunay = [
   "spade",
   "geo/spade",
@@ -207,7 +202,6 @@ wasm = [
   "serde",
   "console_error_panic_hook",
   "getrandom",
-  "offset",
   "truetype-text",
   "hershey-text",
 ]

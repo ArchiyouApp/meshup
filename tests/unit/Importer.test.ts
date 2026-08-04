@@ -119,14 +119,18 @@ describe('Importer: SVG', () =>
         expect((curves[0].inner() as any).hasArcs()).toBe(true);
     });
 
-    it('imports a path with cubic Béziers (flattened to line segments)', () =>
+    it('imports a path with cubic Béziers as exact spans', () =>
     {
         const svg = `<svg xmlns="http://www.w3.org/2000/svg"><path d="M10,10 C 20,20 40,20 50,10 L 50,40 Z"/></svg>`;
         const curves = Importer.fromSVG(svg).toArray();
         expect(curves.length).toBe(1);
         expect(curves[0].isClosed()).toBe(true);
-        // A flattened cubic yields several segments (not just the 2 lines).
-        expect((curves[0].inner() as any).segmentCount()).toBeGreaterThan(3);
+        // The cubic survives import: one Bézier span plus the two lines, not a fan of
+        // chords. This used to assert `> 3` because the importer flattened every Bézier
+        // into 24 line segments before meshup ever saw it.
+        expect((curves[0].inner() as any).segmentCount()).toBe(3);
+        expect(curves[0].degree()).toBe(3);
+        expect(curves[0].subtype()).toBe('Spline');
     });
 
     it('imports a circle element as a native closed curve', () =>

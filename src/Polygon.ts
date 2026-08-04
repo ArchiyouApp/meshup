@@ -5,9 +5,9 @@
  *  and a TypeScript-level extrude method.
  */
 
-import type { PointLike, Axis } from './types';
+import type { PointLike, Axis, OrientationXY } from './types';
 import { isPointLike, isAxis } from './types';
-import { rad } from './utils';
+import { rad, shortestArcAxisAngle, primaryOrthoXYAngle } from './utils';
 import { TOLERANCE } from './constants';
 import { Shape } from './Shape';
 import { Point } from './Point';
@@ -359,6 +359,59 @@ export class Polygon extends Shape
             [bb.min.x, bb.min.y, bb.min.z],
             [bb.max.x, bb.max.y, bb.max.z]
         )._fromShape(this);
+    }
+
+    /** Rotate this Polygon so vector `from` points along `to`, around `pivot` (default: center) */
+    rotateVecToVec(from: PointLike, to: PointLike, pivot?: PointLike): this
+    {
+        const { axis, angle } = shortestArcAxisAngle(Vector.from(from as any), Vector.from(to as any));
+        if (angle === 0) { return this; }
+        return this.rotateAround(angle, axis, pivot ?? this.center());
+    }
+
+    /** Rotate this Polygon so its oriented bounding box lines up with the world axes:
+     *  the OBB's thinnest axis onto +Z first, then its longest axis onto +X.
+     *  A Polygon is planar, so its thinnest axis is the plane normal: this lays it flat on
+     *  the XY plane (without moving it there — use layflat() for that).
+     *  Position of the center is kept. */
+    rotateToAxesOBbox(): this
+    {
+        const center = this.center();
+        // axes()[2] = least variance (the plane normal), axes()[0] = greatest
+        this.rotateVecToVec(this.obbox().axes()[2], [0, 0, 1], center);
+        // NOTE: the OBB is recomputed — its axes turned with the polygon in the step above
+        this.rotateVecToVec(this.obbox().axes()[0], [1, 0, 0], center);
+        return this;
+    }
+
+    /** Rotate this Polygon to align it with the world axes as much as possible.
+     *
+     *  First `rotateToAxesOBbox()` lays the polygon flat on the XY plane, then it is turned
+     *  around Z so its dominant edge direction lands on the X or Y axis. The second step only
+     *  ever turns around Z (by at most a quarter turn), so it can never undo the first.
+     *
+     *  @param o  'vertical' (default) puts the dominant edge direction on the Y axis,
+     *            'horizontal' puts it on the X axis
+     */
+    rotateToOrtho(o: OrientationXY = 'vertical'): this
+    {
+        this.rotateToAxesOBbox();
+
+        const edges = this.edges().toArray().map(e =>
+        {
+            const d = e.direction();
+            return { x: d.x, y: d.y, z: d.z, length: e.length() };
+        });
+
+        const angle = primaryOrthoXYAngle(edges, o);
+        return (angle === 0) ? this : this.rotateZ(angle, this.center());
+    }
+
+    /** Rotate this Polygon to align as much as possible to the world axes.
+     *  Alias for rotateToOrtho() */
+    autoRotate(o: OrientationXY = 'vertical'): this
+    {
+        return this.rotateToOrtho(o);
     }
 
     /** Oriented bounding box of this polygon: the tightest (minimum-area) box around it.

@@ -29,8 +29,6 @@ pub mod image;
 #[cfg(feature = "metaballs")]
 pub mod metaballs;
 
-#[cfg(feature = "offset")]
-pub mod offset;
 
 #[cfg(feature = "truetype-text")]
 pub mod truetype;

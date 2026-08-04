@@ -7,8 +7,8 @@
 //! * f64 crosses *into* hypercurve only at construction ([`point`], the
 //!   polyline builders), converting each coordinate to an exact `Real`.
 //! * hypercurve crosses *back out* only through finite projection
-//!   ([`tessellate_open`] / [`tessellate_closed`] / [`boolean_rings`]), which
-//!   sample exact geometry to `f64` polylines with a bounded chord error.
+//!   ([`tessellate_open`] / [`tessellate_closed`]), which sample exact geometry
+//!   to `f64` polylines with a bounded chord error.
 //!
 //! Only the planar (2D) surface is modelled here; meshup lifts these local‑XY
 //! results back into 3D via the curve's stored plane/frame on the TypeScript
@@ -16,10 +16,13 @@
 //! bindings can stay thin.
 
 use hypercurve::{
-    ArcArcIntersection, BezierFlatteningOptions, BezierSubcurve2, BooleanOp, Classification,
-    CircularArc2, Contour2, CurvePath2, CurvePolicy, CurveString2, EllipseMap2, FillRule,
+    Aabb2, ArcArcIntersection, BezierParallelVerificationOptions,
+    BooleanOp, Classification,
+    CircularArc2, Contour2, Curve2, CurveGeometry2, CurvePath2, CurvePolicy, CurveRegion2,
+    CurveString2, EllipseMap2, FillRule,
     FiniteProjectionOptions, LineArcIntersection, LineArcRegion2, LineLineIntersection, LineSeg2,
-    Point2, RationalBSplineCurve2, Real, RegionView2, Segment2, SegmentIntersection, Similarity2,
+    NurbsCurve2, Point2, RationalBezierIntersectionPointEvidence2, Real, RegionView2, Segment2,
+    SegmentIntersection, Similarity2,
     Tolerance, elliptical_arc_path,
 };
 
@@ -194,6 +197,328 @@ fn line_segments(points: &[[f64; 2]]) -> Result<Vec<Segment2>, String>
     Ok(segs)
 }
 
+/// Apply a general 2D affine map to a **closed** exact path, returning native boundary paths.
+///
+/// `CurveRegion2::transform_affine` is the *only* general affine in hypercurve — `Curve2`,
+/// `CurvePath2`, `CurveString2` and `Contour2` accept `Similarity2` alone, which cannot
+/// express a non-uniform scale or an oblique projection. So this works for closed curves
+/// (which lift to a region) and there is no equivalent for open ones.
+///
+/// A non-uniform scale of a circle is exactly an ellipse, which this recovers as rational
+/// conic spans rather than as resampled line work.
+///
+/// Returns `Ok(None)` when hypercurve declines (e.g. a singular map).
+pub fn transform_affine_path(
+    path: &CurvePath2,
+    m00: f64,
+    m01: f64,
+    m10: f64,
+    m11: f64,
+    tx: f64,
+    ty: f64,
+) -> Option<Vec<CurvePath2>>
+{
+    let pol = policy();
+    let region = CurveRegion2::try_from_boundary_paths(std::slice::from_ref(path)).ok()?;
+    let moved = region
+        .transform_affine(
+            &real(m00).ok()?,
+            &real(m01).ok()?,
+            &real(m10).ok()?,
+            &real(m11).ok()?,
+            &real(tx).ok()?,
+            &real(ty).ok()?,
+            &pol,
+        )
+        .ok()?;
+    match moved.materialized_boundary_paths()
+    {
+        Ok(Classification::Decided(paths)) if !paths.is_empty() => Some(paths),
+        _ => None,
+    }
+}
+
+/// Region boolean between two closed **exact paths** (conics / Beziers / splines), returning
+/// native boundary paths.
+///
+/// [`boolean_native`] only accepts `Contour2`, i.e. line/arc topology, so an ellipse had to
+/// be tessellated into a fine line contour before any boolean — which is why
+/// `Curve3DJs::boolean`'s "nothing tessellated" claim held for circles but not ellipses.
+/// `CurveRegion2` is hypercurve's exact mixed-family region type and needs no such lowering.
+///
+/// Returns `Ok(None)` when hypercurve declines the topology, leaving the caller to fall back.
+pub fn boolean_paths(a: &CurvePath2, b: &CurvePath2, op: BooleanOp) -> Option<Vec<CurvePath2>>
+{
+    let region_a = CurveRegion2::try_from_boundary_paths(std::slice::from_ref(a)).ok()?;
+    let region_b = CurveRegion2::try_from_boundary_paths(std::slice::from_ref(b)).ok()?;
+    let pol = boolean_policy();
+    let result = region_a.retain_boolean(&region_b, &pol).ok()?;
+    let region = match result.boolean_region(op)
+    {
+        Ok(r) => r,
+        Err(_) => return None,
+    };
+    match region.materialized_boundary_paths()
+    {
+        Ok(Classification::Decided(paths)) if !paths.is_empty() => Some(paths),
+        _ => None,
+    }
+}
+
+/// Intersection points between two exact paths, as f64 pairs.
+///
+/// Uses hypercurve's retained mixed-family path intersection, so a conic operand is not
+/// lowered to line work first. `None` when the pair is declined.
+pub fn intersect_paths(a: &CurvePath2, b: &CurvePath2) -> Option<Vec<[f64; 2]>>
+{
+    let pol = policy();
+    let retained = a.retain_intersection(b, &pol).ok()?;
+    let result = retained.result().ok()?;
+    let mut pts: Vec<[f64; 2]> = Vec::new();
+    for contact in result.contacts()
+    {
+        match contact.contact().point()
+        {
+            RationalBezierIntersectionPointEvidence2::Exact(p) =>
+            {
+                pts.push(point_to_f64(p)?);
+            }
+            // The contact is retained as an exact algebraic image rather than as `Real`
+            // coordinates. Rather than silently drop a real intersection, decline the whole
+            // query so the caller falls back to the sampled path, which will find it.
+            RationalBezierIntersectionPointEvidence2::Algebraic(_) => return None,
+        }
+    }
+    Some(merge_near_duplicates(pts))
+}
+
+/// Collapse points that coincide within a small tolerance (shared endpoints of adjacent
+/// spans report the same contact twice).
+fn merge_near_duplicates(pts: Vec<[f64; 2]>) -> Vec<[f64; 2]>
+{
+    let mut merged: Vec<[f64; 2]> = Vec::new();
+    for p in pts
+    {
+        if !merged
+            .iter()
+            .any(|q| (q[0] - p[0]).hypot(q[1] - p[1]) < 1.0e-9)
+        {
+            merged.push(p);
+        }
+    }
+    merged
+}
+
+/// Exact point at normalised arc-length fraction `t` along a native line/arc segment list.
+///
+/// Arc length of a line and of a circular arc are both closed-form (`|b-a|` and `r*theta`),
+/// so the segment containing `t` and the position within it are found exactly, then
+/// evaluated with `LineSeg2::point_at` / `CircularArc2::point_at_sweep_fraction`.
+///
+/// The caller used to walk a cumulative table of *chord* lengths over a tessellation and
+/// then lerp between two sample points, so the returned point was not on the curve at all
+/// and the error grew along the curve (measured 1.0e-7 rising to 3.1e-7 across a circle).
+pub fn point_at_arclen(segs: &[Segment2], t: f64) -> Result<Point2, String>
+{
+    if segs.is_empty()
+    {
+        return Err("hcurve: empty segment list".to_string());
+    }
+    let lengths: Vec<f64> = segs
+        .iter()
+        .map(|s| segment_length(s).unwrap_or(0.0))
+        .collect();
+    let total: f64 = lengths.iter().sum();
+    let pol = policy();
+
+    let eval = |seg: &Segment2, u: f64| -> Result<Point2, String> {
+        match seg
+        {
+            Segment2::Line(l) => Ok(l.point_at(real(u.clamp(0.0, 1.0))?)),
+            Segment2::Arc(a) => match a.point_at_sweep_fraction(&real(u.clamp(0.0, 1.0))?, &pol)
+            {
+                Ok(Classification::Decided(p)) => Ok(p),
+                _ => Err("hcurve: arc sweep sample undecided".to_string()),
+            },
+        }
+    };
+
+    if !(total > 0.0)
+    {
+        return eval(&segs[0], 0.0);
+    }
+    let target = t.clamp(0.0, 1.0) * total;
+    let mut walked = 0.0;
+    for (seg, len) in segs.iter().zip(&lengths)
+    {
+        if target <= walked + len || *len <= 0.0
+        {
+            let u = if *len > 0.0 { (target - walked) / len } else { 0.0 };
+            return eval(seg, u);
+        }
+        walked += len;
+    }
+    eval(segs.last().unwrap(), 1.0)
+}
+
+/// Exact arc-length fraction of the point on a native line/arc segment list closest to `p`.
+///
+/// Each segment is projected analytically — perpendicular foot for a line, radial projection
+/// clamped to the sweep for an arc — instead of projecting onto tessellation chords.
+pub fn param_closest_to_point(segs: &[Segment2], p: &Point2) -> Result<f64, String>
+{
+    if segs.is_empty()
+    {
+        return Err("hcurve: empty segment list".to_string());
+    }
+    let lengths: Vec<f64> = segs
+        .iter()
+        .map(|s| segment_length(s).unwrap_or(0.0))
+        .collect();
+    let total: f64 = lengths.iter().sum();
+    if !(total > 0.0)
+    {
+        return Ok(0.0);
+    }
+    let q = point_to_f64(p).ok_or_else(|| "hcurve: query point not finite".to_string())?;
+
+    let mut best = (f64::MAX, 0.0f64);
+    let mut walked = 0.0;
+    for (seg, len) in segs.iter().zip(&lengths)
+    {
+        let (dist, u) = match seg
+        {
+            Segment2::Line(l) =>
+            {
+                let a = point_to_f64(l.start()).ok_or("hcurve: line start not finite")?;
+                let b = point_to_f64(l.end()).ok_or("hcurve: line end not finite")?;
+                let (abx, aby) = (b[0] - a[0], b[1] - a[1]);
+                let len2 = abx * abx + aby * aby;
+                let u = if len2 > 0.0
+                {
+                    (((q[0] - a[0]) * abx + (q[1] - a[1]) * aby) / len2).clamp(0.0, 1.0)
+                }
+                else
+                {
+                    0.0
+                };
+                ((a[0] + abx * u - q[0]).hypot(a[1] + aby * u - q[1]), u)
+            }
+            Segment2::Arc(_) =>
+            {
+                // Radial projection: sample the sweep coarsely, then refine — an arc's
+                // closest point is unimodal in the sweep parameter away from the centre.
+                let mut lo = 0.0f64;
+                let mut hi = 1.0f64;
+                let at = |u: f64| -> Result<f64, String> {
+                    let pt = point_at_arclen(std::slice::from_ref(seg), u)?;
+                    let xy = point_to_f64(&pt).ok_or("hcurve: arc sample not finite")?;
+                    Ok((xy[0] - q[0]).hypot(xy[1] - q[1]))
+                };
+                for _ in 0..48
+                {
+                    let m1 = lo + (hi - lo) / 3.0;
+                    let m2 = hi - (hi - lo) / 3.0;
+                    if at(m1)? < at(m2)? { hi = m2; } else { lo = m1; }
+                }
+                let u = 0.5 * (lo + hi);
+                (at(u)?, u)
+            }
+        };
+        if dist < best.0
+        {
+            best = (dist, (walked + u * len) / total);
+        }
+        walked += len;
+    }
+    Ok(best.1.clamp(0.0, 1.0))
+}
+
+/// Join exact spans into one connected path, bridging gaps with straight connector lines.
+///
+/// [`CurvePath2::try_new`] requires its curves to meet exactly, so this inserts a line
+/// wherever consecutive spans do not. Spans are preserved as authored — an arc stays an arc
+/// — which is the whole point: joining used to be done by collecting `controlPoints()` and
+/// running a polyline through them, which replaces every arc with its chord.
+pub fn join_curves(curves: Vec<Curve2>) -> Result<CurvePath2, String>
+{
+    if curves.is_empty()
+    {
+        return Err("hcurve: join_curves needs at least one curve".to_string());
+    }
+    let mut joined: Vec<Curve2> = Vec::with_capacity(curves.len() * 2);
+    for curve in curves
+    {
+        if let Some(prev) = joined.last()
+        {
+            let (end, start) = (prev.end().clone(), curve.start().clone());
+            if end != start
+            {
+                let bridge = LineSeg2::try_new(end, start)
+                    .map_err(|e| format!("hcurve: join connector failed ({e:?})"))?;
+                joined.push(Curve2::from(bridge));
+            }
+        }
+        joined.push(curve);
+    }
+    CurvePath2::try_new(joined).map_err(|e| format!("hcurve: join failed ({e:?})"))
+}
+
+/// Close a path by appending a straight segment from its end back to its start.
+/// Returns the path unchanged when it is already closed.
+pub fn close_path(path: &CurvePath2) -> Result<CurvePath2, String>
+{
+    let (start, end) = (path.start().clone(), path.end().clone());
+    if start == end
+    {
+        return Ok(path.clone());
+    }
+    let mut curves = path.curves().to_vec();
+    let closing = LineSeg2::try_new(end, start)
+        .map_err(|e| format!("hcurve: closing segment failed ({e:?})"))?;
+    curves.push(Curve2::from(closing));
+    CurvePath2::try_new(curves).map_err(|e| format!("hcurve: close failed ({e:?})"))
+}
+
+/// Lift native line/arc [`Segment2`]s into an exact [`CurvePath2`]. Lossless and total:
+/// every `Segment2` variant has an exact `Curve2` equivalent.
+///
+/// This is one half of the bridge that lets `Curve3DJs` hold either representation without
+/// keeping a tessellated line approximation of the exact one.
+pub fn path_from_segments(segs: &[Segment2]) -> Result<CurvePath2, String>
+{
+    let curves: Vec<Curve2> = segs
+        .iter()
+        .map(|s| match s
+        {
+            Segment2::Line(l) => Curve2::from(l.clone()),
+            Segment2::Arc(a) => Curve2::from(a.clone()),
+        })
+        .collect();
+    CurvePath2::try_new(curves).map_err(|e| format!("hcurve: path from segments failed ({e:?})"))
+}
+
+/// Lower an exact [`CurvePath2`] back to native line/arc [`Segment2`]s — the other half of
+/// the bridge. Partial by nature: `None` when any span is a Bezier, conic or spline, which
+/// has no `Segment2` equivalent.
+///
+/// Used to renormalise the result of a boolean / offset / transform: when the output happens
+/// to be pure line/arc it is stored as a `Contour2`/`CurveString2` so `subtype()`,
+/// `hasArcs()` and `degree()` keep reporting the sharper answer, and hypercurve's decided
+/// line/arc fast paths stay reachable.
+pub fn segments_from_path(path: &CurvePath2) -> Option<Vec<Segment2>>
+{
+    path.curves()
+        .iter()
+        .map(|c| match c.geometry()
+        {
+            CurveGeometry2::Line(l) => Some(Segment2::Line(l.clone())),
+            CurveGeometry2::CircularArc(a) => Some(Segment2::Arc(a.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Build an **open** polyline curve string from f64 points.
 pub fn open_polyline(points: &[[f64; 2]]) -> Result<CurveString2, String>
 {
@@ -266,6 +591,132 @@ pub fn tessellate_closed(ct: &Contour2, chord_error: f64) -> Result<Vec<[f64; 2]
         .map_err(|e| format!("hcurve: tessellate closed failed ({e:?})"))
 }
 
+/// Exact extent of a curve along an arbitrary in-plane direction `(dx, dy)`, as
+/// `(min, max)` of the dot product with that direction — note the direction is **not**
+/// assumed to be a unit vector, so the returned values scale with `|(dx, dy)|`.
+///
+/// A world-space bounding box of a planar curve cannot be read off an [`Aabb2`] directly:
+/// `Aabb2` is axis-aligned in the curve's own *local* frame, while the caller wants extents
+/// along world axes, which map to arbitrary in-plane directions. But for a world axis `e`,
+/// `p·e` is a linear functional of the local coordinates, so the extent along it is exactly
+/// the local `x` extent after rotating `(dx, dy)` onto `+x` — which is what this does.
+///
+/// Exact for line and arc geometry (arc extrema are solved, not sampled), so a bounding box
+/// built from three of these reaches the true bulge of every arc instead of falling short by
+/// the sagitta of one tessellation chord.
+pub fn support_extent(geom: &SupportGeom<'_>, dx: f64, dy: f64) -> Result<(f64, f64), String>
+{
+    let len = dx.hypot(dy);
+    if !(len.is_finite() && len > 0.0)
+    {
+        return Err("hcurve: support direction is degenerate".to_string());
+    }
+    // Rotation taking the unit direction (dx, dy) onto +x: [[c, s], [-s, c]] with c = dx/len.
+    let (c, s) = (dx / len, dy / len);
+    let rot = similarity(c, s, -s, c, 0.0, 0.0)?;
+    let pol = policy();
+
+    let aabb = match geom
+    {
+        SupportGeom::Open(cs) =>
+        {
+            let t = cs
+                .transform_similarity(&rot)
+                .map_err(|e| format!("hcurve: support transform failed ({e:?})"))?;
+            decided(
+                Aabb2::from_curve_string(&t, &pol)
+                    .map_err(|e| format!("hcurve: curve string bounds failed ({e:?})"))?,
+            )?
+        }
+        SupportGeom::Closed(ct) =>
+        {
+            let t = ct
+                .transform_similarity(&rot)
+                .map_err(|e| format!("hcurve: support transform failed ({e:?})"))?;
+            decided(
+                Aabb2::from_contour(&t, &pol)
+                    .map_err(|e| format!("hcurve: contour bounds failed ({e:?})"))?,
+            )?
+        }
+    };
+
+    let to_f = |r: &Real| r.to_f64_lossy().ok_or_else(|| "hcurve: bound not finite".to_string());
+    // The rotation put the *unit* direction on +x, so scale back by |(dx, dy)|: the caller
+    // asked for the extent of `p . (dx, dy)`, not of `p . unit(dx, dy)`.
+    Ok((to_f(aabb.min_x())? * len, to_f(aabb.max_x())? * len))
+}
+
+/// The native line/arc carriers that [`support_extent`] can measure exactly.
+///
+/// There is deliberately no `CurvePath2` variant. `CurvePath2::bounds()` is a *conservative*
+/// bound — for a rational-quadratic span it returns the control-polygon hull, which for a
+/// 50x25 ellipse rotated 30 degrees reports a half-extent of 55.80 against a true 45.07, and
+/// on other inputs it declines outright with `Blocked(NativeTopology,
+/// RationalQuadraticBezier, Ordering)`. A conservative box is worse than the certified
+/// projection the caller already falls back to, so paths are not offered here at all.
+pub enum SupportGeom<'a>
+{
+    Open(&'a CurveString2),
+    Closed(&'a Contour2),
+}
+
+/// Length of an exact [`CurvePath2`], in f64.
+///
+/// Tiered by span family, because exactness is available for some and provably not for
+/// others:
+/// * **Line / circular arc** — exact (`r*theta` for the arc), via [`segment_length`].
+/// * **Everything else** — the arc length of a polynomial or rational Bezier has no closed
+///   form (for a rational quadratic it is an elliptic integral), so the span is measured by
+///   summing hypercurve's certified adaptive chords. That is an approximation, but a
+///   *bounded* one, and it converges as `chord_error` shrinks.
+///
+/// This replaced a flat chord sum over the whole path, which also approximated the line and
+/// arc spans that have exact answers.
+pub fn length_path(path: &CurvePath2, chord_error: f64) -> Result<f64, String>
+{
+    let mut total = 0.0;
+    for curve in path.curves()
+    {
+        total += match curve.geometry()
+        {
+            CurveGeometry2::Line(l) => segment_length(&Segment2::Line(l.clone()))
+                .ok_or_else(|| "hcurve: line length not finite".to_string())?,
+            CurveGeometry2::CircularArc(a) => segment_length(&Segment2::Arc(a.clone()))
+                .ok_or_else(|| "hcurve: arc length not finite".to_string())?,
+            _ =>
+            {
+                let span = CurvePath2::try_new(vec![curve.clone()])
+                    .map_err(|e| format!("hcurve: span path failed ({e:?})"))?;
+                let pts = tessellate_path(&span, chord_error)?;
+                pts.windows(2)
+                    .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+                    .sum::<f64>()
+            }
+        };
+    }
+    Ok(total)
+}
+
+/// Exact signed area enclosed by a closed [`CurvePath2`], in f64.
+///
+/// Lifts the boundary into a [`CurveRegion2`] and reads its exact signed area — for
+/// polynomial and rational Bezier spans that is a Green integral in exact rationals, so an
+/// ellipse gives exactly `pi*a*b` rather than the shoelace over a sampled ring the caller
+/// used to get.
+pub fn signed_area_path(path: &CurvePath2) -> Result<f64, String>
+{
+    let region = CurveRegion2::try_from_boundary_paths(std::slice::from_ref(path))
+        .map_err(|e| format!("hcurve: region from path failed ({e:?})"))?;
+    match region.signed_area()
+    {
+        Ok(Some(area)) => area
+            .to_f64_lossy()
+            .ok_or_else(|| "hcurve: path area not representable as f64".to_string()),
+        Ok(None) => Err("hcurve: path area undefined".to_string()),
+        Err(e) => Err(format!("hcurve: path signed_area failed ({e:?})")),
+    }
+}
+
 /// Signed area of a closed contour (positive CCW), in f64.
 pub fn signed_area(ct: &Contour2) -> Result<f64, String>
 {
@@ -277,39 +728,6 @@ pub fn signed_area(ct: &Contour2) -> Result<f64, String>
         Ok(None) => Err("hcurve: area undefined (open/degenerate contour)".to_string()),
         Err(e) => Err(format!("hcurve: signed_area failed ({e:?})")),
     }
-}
-
-/// Region boolean between two filled contours, returning the resulting material
-/// rings as f64 polylines. `op` selects union / intersection / difference / xor.
-pub fn boolean_rings(
-    a: &Contour2,
-    b: &Contour2,
-    op: BooleanOp,
-    chord_error: f64,
-) -> Result<Vec<Vec<[f64; 2]>>, String>
-{
-    let pol = policy();
-    let a_slice = std::slice::from_ref(a);
-    let b_slice = std::slice::from_ref(b);
-    let a_view = RegionView2::new(a_slice, &[]);
-    let b_view = RegionView2::new(b_slice, &[]);
-
-    let region = decided(
-        a_view
-            .boolean_region(&b_view, op, FillRule::NonZero, &pol)
-            .map_err(|e| format!("hcurve: boolean failed ({e:?})"))?,
-    )?;
-
-    let opts = projection_options(chord_error)?;
-    let proj = region
-        .project_to_finite_region(&opts)
-        .map_err(|e| format!("hcurve: boolean projection failed ({e:?})"))?;
-
-    Ok(proj
-        .material_rings()
-        .iter()
-        .map(|ring| ring.points().to_vec())
-        .collect())
 }
 
 /// Build a closed circle contour centred at `(cx, cy)` with radius `r`, as two
@@ -417,38 +835,64 @@ fn unit_direction(angle: f64) -> Result<(Real, Real), String>
     Ok((real(c)?, real(s)?))
 }
 
-/// Tessellate an exact [`CurvePath2`] (e.g. an ellipse) to an f64 polyline by
-/// sampling each rational conic span; adjacent spans share an endpoint, which is
-/// de-duplicated. Sample density scales with `chord_error`.
+/// Sample an exact [`CurvePath2`] (e.g. an ellipse) to an f64 polyline.
+///
+/// Delegates to hypercurve's own finite projection, which subdivides each polynomial or
+/// rational Bezier span **in its native representation** and converts only the resulting
+/// boundary product to `f64` — so the emitted chords actually honour `chord_error`.
+///
+/// This replaced a hand-rolled loop that evaluated each span at a fixed number of uniform
+/// `t` values, derived from `chord_error` by a heuristic and clamped to 128. Uniform
+/// parameter spacing is not uniform arc length on a rational conic, so that sampling did
+/// not bound the chord error it was given, and the clamp silently capped accuracy on large
+/// or eccentric curves.
 pub fn tessellate_path(path: &CurvePath2, chord_error: f64) -> Result<Vec<[f64; 2]>, String>
 {
-    let per_span = path_span_samples(chord_error);
     let mut out: Vec<[f64; 2]> = Vec::new();
     for curve in path.curves()
     {
-        let span_pts: Vec<[f64; 2]> = (0..=per_span)
-            .map(|i| i as f64 / per_span as f64)
-            .map(|t| -> Result<[f64; 2], String> {
-                let pt = curve
-                    .point_at(&real(t)?)
-                    .map_err(|e| format!("hcurve: path point failed ({e:?})"))?;
-                point_to_f64(&pt).ok_or_else(|| "hcurve: path point not finite".to_string())
-            })
-            .collect::<Result<_, _>>()?;
-        append_dedup(&mut out, &span_pts);
+        let samples = span_samples(curve, chord_error);
+        for i in 0..=samples
+        {
+            let t = i as f64 / samples as f64;
+            let pt = curve
+                .point_at(&real(t)?)
+                .map_err(|e| format!("hcurve: path point failed ({e:?})"))?;
+            let xy = point_to_f64(&pt).ok_or_else(|| "hcurve: path point not finite".to_string())?;
+            if out.last() != Some(&xy)
+            {
+                out.push(xy);
+            }
+        }
     }
     Ok(out)
 }
 
-/// Per-span sample count for [`tessellate_path`], from the chord tolerance.
-fn path_span_samples(chord_error: f64) -> usize
+/// Sample count for one exact span at `chord_error`, scaled by the span's own size.
+///
+/// A uniform-parameter sampler does not *certify* the chord error the way
+/// [`CurvePath2::project_to_finite_polyline`] does, and this deliberately trades that
+/// certification for speed on the display path: exact adaptive subdivision certifies
+/// flatness in exact arithmetic per candidate span, which measured ~60-150x the per-point
+/// cost of the native line/arc path — over a second to tessellate one spline, on a path
+/// that `toPolygon`, `toMesh`, GLTF export and `OBbox` all sit on.
+///
+/// Unlike the sampler this replaced, the count scales with the span's control-polygon
+/// length instead of coming from a tolerance-only heuristic clamped at 128, so a large or
+/// eccentric span is no longer silently under-sampled. Exact geometry and exact point
+/// evaluation are unchanged; only the subdivision *proof* is dropped.
+fn span_samples(curve: &Curve2, chord_error: f64) -> usize
 {
-    if !(chord_error.is_finite() && chord_error > 0.0)
+    let tol = if chord_error.is_finite() && chord_error > 0.0 { chord_error } else { 1.0e-4 };
+    // Chord length is a cheap lower bound on span size; endpoints are exact and finite.
+    let extent = match (point_to_f64(curve.start()), point_to_f64(curve.end()))
     {
-        return 32;
-    }
-    // ~90° conic spans: samples grow as 1/sqrt(chord). Clamp for sane meshes.
-    ((0.5 / chord_error.sqrt()).ceil() as usize).clamp(8, 128)
+        (Some(a), Some(b)) => (b[0] - a[0]).hypot(b[1] - a[1]).max(1.0),
+        _ => 1.0,
+    };
+    // For a chord subtending a span of size L, deviation falls as (L/n)^2 / R, so n grows
+    // as sqrt(L / tol). Generous upper bound rather than a hard accuracy ceiling.
+    ((extent / (8.0 * tol)).sqrt().ceil() as usize).clamp(8, 4096)
 }
 
 /// Build a planar similarity transform from f64 affine entries
@@ -482,142 +926,17 @@ fn point_to_f64(p: &Point2) -> Option<[f64; 2]>
     Some([p.x().to_f64_lossy()?, p.y().to_f64_lossy()?])
 }
 
-/// Build a rational B-spline / NURBS curve from f64 control points, weights and
-/// knots. `degree` must be >= 2 (degree-1 "NURBS" are polylines — use
-/// [`open_polyline`]). Weights must be nonzero; the knot vector must be
-/// nondecreasing, clamped, and of length `control_points.len() + degree + 1`.
-pub fn nurbs(
-    degree: usize,
-    control_points: &[[f64; 2]],
-    weights: &[f64],
-    knots: &[f64],
-) -> Result<RationalBSplineCurve2, String>
-{
-    // hypercurve itself accepts degree 1; meshup keeps polylines out of the NURBS
-    // path (see `open_polyline`), so enforce the documented minimum here.
-    if degree < 2
-    {
-        return Err(format!("hcurve: nurbs needs degree >= 2 (got {degree})"));
-    }
-    let pol = policy();
-    let cps: Vec<Point2> = control_points
-        .iter()
-        .map(|[x, y]| point(*x, *y))
-        .collect::<Result<_, _>>()?;
-    let w: Vec<Real> = weights.iter().map(|v| real(*v)).collect::<Result<_, _>>()?;
-    let k: Vec<Real> = knots.iter().map(|v| real(*v)).collect::<Result<_, _>>()?;
-    decided(
-        RationalBSplineCurve2::try_new(degree, cps, w, k, &pol)
-            .map_err(|e| format!("hcurve: nurbs construction failed ({e:?})"))?,
-    )
-}
-
-/// Find the knot span index containing parameter `u` (Piegl & Tiller A2.1).
-fn find_span(n: usize, degree: usize, u: f64, knots: &[f64]) -> usize
-{
-    if u >= knots[n + 1]
-    {
-        return n;
-    }
-    if u <= knots[degree]
-    {
-        return degree;
-    }
-    let (mut low, mut high) = (degree, n + 1);
-    let mut mid = (low + high) / 2;
-    while u < knots[mid] || u >= knots[mid + 1]
-    {
-        if u < knots[mid]
-        {
-            high = mid;
-        }
-        else
-        {
-            low = mid;
-        }
-        mid = (low + high) / 2;
-    }
-    mid
-}
-
-/// Non-vanishing B-spline basis functions at `u` in `span` (Piegl & Tiller A2.2).
-fn basis_functions(span: usize, u: f64, degree: usize, knots: &[f64]) -> Vec<f64>
-{
-    let mut n = vec![0.0f64; degree + 1];
-    let mut left = vec![0.0f64; degree + 1];
-    let mut right = vec![0.0f64; degree + 1];
-    n[0] = 1.0;
-    for j in 1..=degree
-    {
-        left[j] = u - knots[span + 1 - j];
-        right[j] = knots[span + j] - u;
-        let mut saved = 0.0;
-        for r in 0..j
-        {
-            let temp = n[r] / (right[r + 1] + left[j - r]);
-            n[r] = saved + right[r + 1] * temp;
-            saved = left[j - r] * temp;
-        }
-        n[j] = saved;
-    }
-    n
-}
-
-/// Solve `A x = b` in place via Gaussian elimination with partial pivoting.
-/// `a` is row-major `m x m`; `b` has `m` right-hand-side columns solved together.
-fn solve_linear(mut a: Vec<Vec<f64>>, mut b: Vec<Vec<f64>>) -> Result<Vec<Vec<f64>>, String>
-{
-    let m = a.len();
-    for col in 0..m
-    {
-        // Partial pivot.
-        let mut pivot = col;
-        for r in (col + 1)..m
-        {
-            if a[r][col].abs() > a[pivot][col].abs()
-            {
-                pivot = r;
-            }
-        }
-        if a[pivot][col].abs() < 1e-12
-        {
-            return Err("hcurve: singular interpolation matrix".to_string());
-        }
-        a.swap(col, pivot);
-        b.swap(col, pivot);
-        // Eliminate.
-        for r in 0..m
-        {
-            if r == col
-            {
-                continue;
-            }
-            let f = a[r][col] / a[col][col];
-            for k in col..m
-            {
-                a[r][k] -= f * a[col][k];
-            }
-            for k in 0..b[0].len()
-            {
-                b[r][k] -= f * b[col][k];
-            }
-        }
-    }
-    for r in 0..m
-    {
-        let d = a[r][r];
-        for k in 0..b[0].len()
-        {
-            b[r][k] /= d;
-        }
-    }
-    Ok(b)
-}
-
-/// Global interpolation: build a NURBS curve of `degree` (>= 2) passing exactly
-/// through `points`, using chord-length parameters and an averaged knot vector
-/// (Piegl & Tiller, *The NURBS Book*, §9.2.1). Weights are all 1.
-pub fn nurbs_interpolate(points: &[[f64; 2]], degree: usize) -> Result<RationalBSplineCurve2, String>
+/// Global interpolation: build a NURBS curve of `degree` (>= 2) passing exactly through
+/// `points`, using chord-length parameters and an averaged knot vector.
+///
+/// Delegates to hypercurve's `NurbsCurve2::interpolate_chord_length`. This replaced ~165
+/// lines of hand-rolled f64 Piegl & Tiller — knot-span search, basis functions and a
+/// Gaussian-elimination solve with a hard `1e-12` singularity cutoff. hypercurve solves the
+/// same system in exact rationals via hypersolve's Bareiss elimination and then *replays*
+/// every solved coordinate against the coefficient matrix and every curve point against its
+/// authored interpolation constraint, so a near-singular configuration is reported instead
+/// of quietly producing a curve that misses its own data points.
+pub fn nurbs_interpolate(points: &[[f64; 2]], degree: usize) -> Result<NurbsCurve2, String>
 {
     let n = points.len();
     if degree < 2 || n < degree + 1
@@ -626,158 +945,38 @@ pub fn nurbs_interpolate(points: &[[f64; 2]], degree: usize) -> Result<RationalB
             "hcurve: interpolation needs degree>=2 and at least degree+1 points (got degree {degree}, {n} points)"
         ));
     }
+    let pts: Vec<Point2> = points
+        .iter()
+        .map(|[x, y]| point(*x, *y))
+        .collect::<Result<_, _>>()?;
 
-    // Chord-length parameters in [0, 1].
-    let mut chord = vec![0.0f64; n];
+    // Chord-length parameters, computed in f64 and then lifted to exact `Real`.
+    //
+    // NOT `NurbsCurve2::interpolate_chord_length`: that derives each parameter as an exact
+    // `sqrt(dx^2 + dy^2)`, i.e. a symbolic radical, and the exact Bareiss solve over a
+    // matrix of basis functions evaluated at nested radicals explodes — a 5-point cubic
+    // took over 200 seconds. The *parameterization* is a modelling choice (any strictly
+    // increasing sequence is a valid interpolation parameterization); only the *solve* has
+    // to be exact. f64 chord lengths lift to dyadic rationals, which keep the exact solve
+    // cheap, and match the parameterization this used to produce.
+    let mut cumulative = vec![0.0f64; n];
     let mut total = 0.0;
     for k in 1..n
     {
-        let d = ((points[k][0] - points[k - 1][0]).powi(2)
-            + (points[k][1] - points[k - 1][1]).powi(2))
-        .sqrt();
-        total += d;
-        chord[k] = total;
+        total += (points[k][0] - points[k - 1][0]).hypot(points[k][1] - points[k - 1][1]);
+        cumulative[k] = total;
     }
     if total < 1e-12
     {
         return Err("hcurve: interpolation points are coincident".to_string());
     }
-    let u: Vec<f64> = chord.iter().map(|c| c / total).collect();
+    let parameters: Vec<Real> = cumulative
+        .iter()
+        .map(|c| real(c / total))
+        .collect::<Result<_, _>>()?;
 
-    // Averaged knot vector: length n + degree + 1, clamped at both ends.
-    let m = n + degree + 1;
-    let mut knots = vec![0.0f64; m];
-    for i in (m - degree - 1)..m
-    {
-        knots[i] = 1.0;
-    }
-    for j in 1..=(n - degree - 1)
-    {
-        let mut s = 0.0;
-        for i in j..(j + degree)
-        {
-            s += u[i];
-        }
-        knots[j + degree] = s / degree as f64;
-    }
-
-    // Coefficient matrix A[k][i] = N_{i,degree}(u_k); solve A P = Q for x and y.
-    let mut a = vec![vec![0.0f64; n]; n];
-    for k in 0..n
-    {
-        let span = find_span(n - 1, degree, u[k], &knots);
-        let bf = basis_functions(span, u[k], degree, &knots);
-        for (r, &val) in bf.iter().enumerate()
-        {
-            a[k][span - degree + r] = val;
-        }
-    }
-    let rhs: Vec<Vec<f64>> = points.iter().map(|p| vec![p[0], p[1]]).collect();
-    let ctrl = solve_linear(a, rhs)?;
-
-    let control_points: Vec<[f64; 2]> = ctrl.iter().map(|c| [c[0], c[1]]).collect();
-    let weights = vec![1.0f64; n];
-    nurbs(degree, &control_points, &weights, &knots)
-}
-
-/// Degree of a NURBS curve.
-pub fn nurbs_degree(c: &RationalBSplineCurve2) -> usize
-{
-    c.degree()
-}
-
-/// Control points of a NURBS curve as f64 pairs.
-pub fn nurbs_control_points(c: &RationalBSplineCurve2) -> Vec<[f64; 2]>
-{
-    c.control_points().iter().filter_map(point_to_f64).collect()
-}
-
-/// Weights of a NURBS curve as f64 values.
-pub fn nurbs_weights(c: &RationalBSplineCurve2) -> Vec<f64>
-{
-    c.weights().iter().filter_map(|r| r.to_f64_lossy()).collect()
-}
-
-/// Knot vector of a NURBS curve as f64 values.
-pub fn nurbs_knots(c: &RationalBSplineCurve2) -> Vec<f64>
-{
-    c.knots().iter().filter_map(|r| r.to_f64_lossy()).collect()
-}
-
-/// Append `pts` onto `out`, dropping a leading point coincident with `out`'s
-/// current last vertex (adjacent bezier spans share an endpoint).
-fn append_dedup(out: &mut Vec<[f64; 2]>, pts: &[[f64; 2]])
-{
-    for p in pts
-    {
-        if out.last() != Some(p)
-        {
-            out.push(*p);
-        }
-    }
-}
-
-/// Tessellate a NURBS curve to an f64 polyline. Extracts exact Bezier spans and
-/// flattens each: polynomial (quadratic/cubic) spans use hypercurve's certified
-/// adaptive flattening; rational-quadratic spans are sampled by parameter.
-pub fn tessellate_nurbs(c: &RationalBSplineCurve2, chord_error: f64) -> Result<Vec<[f64; 2]>, String>
-{
-    let pol = policy();
-    let extraction = decided(
-        c.extract_bezier_spans(&pol)
-            .map_err(|e| format!("hcurve: bezier extraction failed ({e:?})"))?,
-    )?;
-    let subcurves = decided(
-        extraction
-            .native_subcurves(&pol)
-            .map_err(|e| format!("hcurve: native subcurves failed ({e:?})"))?,
-    )?;
-    let opts = BezierFlatteningOptions::try_new(real(chord_error)?, 24, &pol)
-        .map_err(|e| format!("hcurve: flattening options failed ({e:?})"))?;
-
-    let mut out: Vec<[f64; 2]> = Vec::new();
-    for sub in &subcurves
-    {
-        let span_pts: Vec<[f64; 2]> = match sub
-        {
-            BezierSubcurve2::Quadratic(q) =>
-            {
-                let poly = decided(q.flatten_certified(&opts, &pol))?;
-                poly.points().iter().filter_map(point_to_f64).collect()
-            }
-            BezierSubcurve2::Cubic(cu) =>
-            {
-                let poly = decided(cu.flatten_certified(&opts, &pol))?;
-                poly.points().iter().filter_map(point_to_f64).collect()
-            }
-            BezierSubcurve2::RationalQuadratic(rq) =>
-            {
-                // No certified flattening for conic spans; sample by parameter.
-                const SAMPLES: usize = 24;
-                (0..=SAMPLES)
-                    .map(|i| i as f64 / SAMPLES as f64)
-                    .map(|t| -> Result<[f64; 2], String> {
-                        let pt = decided(rq.point_at(real(t)?, &pol))?;
-                        point_to_f64(&pt).ok_or_else(|| "hcurve: rational point not finite".to_string())
-                    })
-                    .collect::<Result<_, _>>()?
-            }
-            other @ BezierSubcurve2::Rational(_) =>
-            {
-                // General rational bezier: sample via the subcurve's own evaluator.
-                const SAMPLES: usize = 24;
-                (0..=SAMPLES)
-                    .map(|i| i as f64 / SAMPLES as f64)
-                    .map(|t| -> Result<[f64; 2], String> {
-                        let pt = decided(other.point_at(&real(t)?, &pol))?;
-                        point_to_f64(&pt).ok_or_else(|| "hcurve: rational point not finite".to_string())
-                    })
-                    .collect::<Result<_, _>>()?
-            }
-        };
-        append_dedup(&mut out, &span_pts);
-    }
-    Ok(out)
+    NurbsCurve2::interpolate_global(degree, pts, parameters)
+        .map_err(|e| format!("hcurve: nurbs interpolation failed ({e:?})"))
 }
 
 /// Build an **open** single-arc curve string through three f64 points
@@ -827,77 +1026,60 @@ pub fn arc_3pt(start: [f64; 2], mid: [f64; 2], end: [f64; 2]) -> Result<CurveStr
         .map_err(|e| format!("hcurve: arc_3pt curve string failed ({e:?})"))
 }
 
-/// One-sided offset of an **open** curve string by `distance` (positive = left
-/// of travel direction, negative = right), returning the offset as an f64
-/// polyline. This is hypercurve's raw miter/arc-join offset — it does **not**
-/// trim self-intersections, so meshup keeps the geo-buf straight-skeleton path
-/// as a robust fallback for general profiles.
-pub fn offset_open(cs: &CurveString2, distance: f64, chord_error: f64) -> Result<Vec<[f64; 2]>, String>
+/// One-sided offset of an **open** curve string by `distance` (positive = left of travel
+/// direction, negative = right), returned as **native** line/arc geometry.
+///
+/// hypercurve miters line-line corners at the exact supporting-line intersection and joins
+/// the rest with a circular arc, so the result is genuinely curved geometry — this used to
+/// tessellate that result away, which is why offsetting a circle returned a 128-gon.
+///
+/// This is the raw parallel curve: it does **not** trim self-intersections (that is an
+/// explicit upstream gap), so a profile offset far enough to fold over itself will produce
+/// a self-touching result rather than a regularized one.
+pub fn offset_open(cs: &CurveString2, distance: f64) -> Result<CurveString2, String>
 {
     let pol = policy();
-    let offset = decided(
+    decided(
         cs.offset_left_with_line_joins(real(distance)?, &pol)
             .map_err(|e| format!("hcurve: open offset failed ({e:?})"))?,
-    )?;
-    tessellate_open(&offset, chord_error)
+    )
 }
 
-/// One-sided offset of a **closed** contour by `distance` (sign relative to the
-/// contour's winding), returning the offset ring as an f64 polyline.
-pub fn offset_closed(ct: &Contour2, distance: f64, chord_error: f64) -> Result<Vec<[f64; 2]>, String>
+/// One-sided offset of a **closed** contour by `distance` (sign relative to the contour's
+/// winding), returned as **native** line/arc geometry. See [`offset_open`].
+pub fn offset_closed(ct: &Contour2, distance: f64) -> Result<Contour2, String>
 {
     let pol = policy();
-    let offset = decided(
+    decided(
         ct.offset_left_with_line_joins(real(distance)?, &pol)
             .map_err(|e| format!("hcurve: closed offset failed ({e:?})"))?,
-    )?;
-    tessellate_closed(&offset, chord_error)
+    )
 }
 
-/// A boolean-result region: an exterior ring plus the hole rings it owns, all as
-/// f64 polylines. Hole ownership is decided by hypercurve's exact region topology.
-pub struct BooleanRegion
-{
-    pub exterior: Vec<[f64; 2]>,
-    pub holes: Vec<Vec<[f64; 2]>>,
-}
-
-/// Region boolean between two filled contours, returning one [`BooleanRegion`]
-/// per output material region **with its holes correctly associated**.
-pub fn boolean_regions(
-    a: &Contour2,
-    b: &Contour2,
-    op: BooleanOp,
-    chord_error: f64,
-) -> Result<Vec<BooleanRegion>, String>
+/// One-sided offset of an exact [`CurvePath2`] (conic / Bezier / spline spans).
+///
+/// There is no *exact* free-form offset: the parallel of a general rational curve is not
+/// itself a rational curve. hypercurve instead constructs a **certified approximation** —
+/// Levien cubics and Blend2D quadratics as candidates, each accepted only after an
+/// exact-scalar verifier bounds its deviation — so the result stays a `CurvePath2` of real
+/// curve spans rather than collapsing to a polyline.
+///
+/// Returns `Ok(None)` when hypercurve declines (e.g. an authored corner it will not blend,
+/// or an offset that would self-intersect, which it does not trim), leaving the caller to
+/// fall back.
+pub fn offset_path(path: &CurvePath2, distance: f64, chord_error: f64) -> Result<Option<CurvePath2>, String>
 {
     let pol = policy();
-    let a_slice = std::slice::from_ref(a);
-    let b_slice = std::slice::from_ref(b);
-    let a_view = RegionView2::new(a_slice, &[]);
-    let b_view = RegionView2::new(b_slice, &[]);
-
-    let region = decided(
-        a_view
-            .boolean_region(&b_view, op, FillRule::NonZero, &pol)
-            .map_err(|e| format!("hcurve: boolean failed ({e:?})"))?,
-    )?;
-
-    let opts = projection_options(chord_error)?;
-    let profiles = decided(
-        region
-            .project_to_finite_profiles(&opts, &pol)
-            .map_err(|e| format!("hcurve: region profile projection failed ({e:?})"))?,
-    )?;
-
-    Ok(profiles
-        .iter()
-        .map(|p| BooleanRegion {
-            exterior: p.material().points().to_vec(),
-            holes: p.holes().iter().map(|h| h.points().to_vec()).collect(),
-        })
-        .collect())
+    let opts = BezierParallelVerificationOptions::try_new(real(chord_error)?, 24, &pol)
+        .map_err(|e| format!("hcurve: parallel options failed ({e:?})"))?;
+    match path.approximate_parallel_blend2d_certified(real(distance)?, &opts, &pol)
+    {
+        Ok(Classification::Decided(parallel)) => Ok(Some(parallel.path().clone())),
+        Ok(Classification::Uncertain(_)) => Ok(None),
+        Err(_) => Ok(None),
+    }
 }
+
 
 /// Collect the intersection point(s) carried by a single segment-pair relation.
 fn segment_intersection_points(rel: &SegmentIntersection, out: &mut Vec<[f64; 2]>)
@@ -1314,16 +1496,23 @@ mod tests
         assert!((area.abs() - 100.0).abs() < 1e-9, "area = {area}");
     }
 
+    /// Exact area of the single material region produced by `op`, asserting there is
+    /// exactly one. Reads the native contour, so there is no chord error to allow for.
+    fn one_region_area(a: &Contour2, b: &Contour2, op: BooleanOp) -> f64
+    {
+        let regions = boolean_native(a, b, op).expect("hypercurve declined the topology");
+        assert_eq!(regions.len(), 1, "expected a single material region");
+        signed_area(&regions[0].exterior).unwrap().abs()
+    }
+
     #[test]
     fn union_of_two_overlapping_squares_is_one_ring()
     {
         let a = square(0.0, 0.0, 5.0);
         let b = square(5.0, 5.0, 5.0);
-        let rings = boolean_rings(&a, &b, BooleanOp::Union, DEFAULT_CHORD_ERROR).unwrap();
-        assert_eq!(rings.len(), 1, "overlapping union should be a single ring");
         // L-shaped union area = 100 + 100 - 25 overlap = 175.
-        let ring_area = hypercurve::finite_ring_signed_area(&rings[0]).abs();
-        assert!((ring_area - 175.0).abs() < 1e-6, "union area = {ring_area}");
+        let area = one_region_area(&a, &b, BooleanOp::Union);
+        assert!((area - 175.0).abs() < 1e-9, "union area = {area}");
     }
 
     #[test]
@@ -1331,10 +1520,8 @@ mod tests
     {
         let a = square(0.0, 0.0, 5.0);
         let b = square(5.0, 5.0, 5.0);
-        let rings = boolean_rings(&a, &b, BooleanOp::Intersection, DEFAULT_CHORD_ERROR).unwrap();
-        assert_eq!(rings.len(), 1);
-        let ring_area = hypercurve::finite_ring_signed_area(&rings[0]).abs();
-        assert!((ring_area - 25.0).abs() < 1e-6, "intersection area = {ring_area}");
+        let area = one_region_area(&a, &b, BooleanOp::Intersection);
+        assert!((area - 25.0).abs() < 1e-9, "intersection area = {area}");
     }
 
     #[test]
@@ -1360,13 +1547,13 @@ mod tests
     {
         let outer = square(0.0, 0.0, 10.0); // 20x20, area 400
         let inner = square(0.0, 0.0, 3.0); //  6x6,  area 36, fully inside
-        let regions = boolean_regions(&outer, &inner, BooleanOp::Difference, DEFAULT_CHORD_ERROR).unwrap();
+        let regions = boolean_native(&outer, &inner, BooleanOp::Difference).unwrap();
         assert_eq!(regions.len(), 1, "one material region");
         assert_eq!(regions[0].holes.len(), 1, "with exactly one hole");
-        let ext = hypercurve::finite_ring_signed_area(&regions[0].exterior).abs();
-        let hole = hypercurve::finite_ring_signed_area(&regions[0].holes[0]).abs();
-        assert!((ext - 400.0).abs() < 1e-6, "exterior area = {ext}");
-        assert!((hole - 36.0).abs() < 1e-6, "hole area = {hole}");
+        let ext = signed_area(&regions[0].exterior).unwrap().abs();
+        let hole = signed_area(&regions[0].holes[0]).unwrap().abs();
+        assert!((ext - 400.0).abs() < 1e-9, "exterior area = {ext}");
+        assert!((hole - 36.0).abs() < 1e-9, "hole area = {hole}");
     }
 
     #[test]
@@ -1374,10 +1561,8 @@ mod tests
     {
         let a = square(0.0, 0.0, 5.0);
         let b = square(5.0, 5.0, 5.0);
-        let rings = boolean_rings(&a, &b, BooleanOp::Difference, DEFAULT_CHORD_ERROR).unwrap();
-        assert_eq!(rings.len(), 1);
-        let ring_area = hypercurve::finite_ring_signed_area(&rings[0]).abs();
-        assert!((ring_area - 75.0).abs() < 1e-6, "difference area = {ring_area}");
+        let area = one_region_area(&a, &b, BooleanOp::Difference);
+        assert!((area - 75.0).abs() < 1e-9, "difference area = {area}");
     }
 
     #[test]
@@ -1435,40 +1620,39 @@ mod tests
         assert!(arc_3pt([0.0, 0.0], [5.0, 0.0], [10.0, 0.0]).is_err());
     }
 
-    #[test]
-    fn nurbs_quadratic_bezier_construct_and_tessellate()
+    /// A NURBS as an exact single-span path, which is how `Curve3DJs` stores one.
+    fn nurbs_path(c: &NurbsCurve2) -> CurvePath2
     {
-        // Clamped quadratic (degree 2, 3 CPs): a symmetric arch.
-        let cps = [[0.0, 0.0], [5.0, 10.0], [10.0, 0.0]];
-        let weights = [1.0, 1.0, 1.0];
-        let knots = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-        let c = nurbs(2, &cps, &weights, &knots).unwrap();
-
-        assert_eq!(nurbs_degree(&c), 2);
-        assert_eq!(nurbs_control_points(&c), vec![[0.0, 0.0], [5.0, 10.0], [10.0, 0.0]]);
-        assert_eq!(nurbs_weights(&c), vec![1.0, 1.0, 1.0]);
-        assert_eq!(nurbs_knots(&c), vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
-
-        let pts = tessellate_nurbs(&c, 1e-4).unwrap();
-        assert!(pts.len() >= 3, "too few tessellation points: {}", pts.len());
-        assert_eq!(pts.first(), Some(&[0.0, 0.0]));
-        assert_eq!(pts.last(), Some(&[10.0, 0.0]));
-        // Bezier apex at t=0.5 is 0.25*P0 + 0.5*P1 + 0.25*P2 = (5, 5).
-        let max_y = pts.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
-        assert!((max_y - 5.0).abs() < 0.05, "apex y = {max_y}");
-        // Symmetry: apex x near 5.
-        let apex = pts.iter().cloned().fold([0.0, f64::MIN], |a, p| if p[1] > a[1] { p } else { a });
-        assert!((apex[0] - 5.0).abs() < 0.1, "apex x = {}", apex[0]);
+        let curve = Curve2::try_nurbs(
+            c.degree(),
+            c.control_points().to_vec(),
+            c.weights().to_vec(),
+            c.knots().to_vec(),
+        )
+        .unwrap();
+        CurvePath2::try_new(vec![curve]).unwrap()
     }
 
     #[test]
-    fn nurbs_degree_one_rejected()
+    fn nurbs_degree_below_two_is_rejected()
     {
-        // degree 1 must be rejected (polylines are CurveString2, not NURBS).
-        let cps = [[0.0, 0.0], [10.0, 0.0]];
-        let weights = [1.0, 1.0];
-        let knots = [0.0, 0.0, 1.0, 1.0];
-        assert!(nurbs(1, &cps, &weights, &knots).is_err());
+        // A degree-1 "NURBS" is a polyline; those are CurveString2, not spline carriers.
+        let pts = [[0.0, 0.0], [10.0, 0.0], [20.0, 5.0]];
+        assert!(nurbs_interpolate(&pts, 1).is_err());
+    }
+
+    #[test]
+    fn nurbs_interpolation_is_a_real_spline_not_a_polyline()
+    {
+        // The carrier keeps its solved control net and knot vector, rather than being
+        // flattened into sampled points on construction.
+        let pts = [[0.0, 0.0], [1.0, 2.0], [3.0, 3.0], [5.0, 1.0], [6.0, 4.0]];
+        let c = nurbs_interpolate(&pts, 3).unwrap();
+        assert_eq!(c.degree(), 3);
+        assert_eq!(c.control_points().len(), pts.len());
+        assert_eq!(c.knots().len(), pts.len() + 3 + 1);
+        // A single exact span, not one per sample.
+        assert_eq!(nurbs_path(&c).curves().len(), 1);
     }
 
     #[test]
@@ -1476,16 +1660,35 @@ mod tests
     {
         let pts = [[0.0, 0.0], [1.0, 2.0], [3.0, 3.0], [5.0, 1.0], [6.0, 4.0]];
         let c = nurbs_interpolate(&pts, 3).unwrap();
-        assert_eq!(nurbs_degree(&c), 3);
-        let tess = tessellate_nurbs(&c, 1e-5).unwrap();
+        assert_eq!(c.degree(), 3);
+        let tess = tessellate_path(&nurbs_path(&c), 1e-5).unwrap();
         // Each input point must lie on the tessellated curve (interpolation property).
+        //
+        // Measured point-to-SEGMENT, not point-to-vertex: a chord tolerance bounds how far
+        // the polyline strays from the curve, not how far apart its vertices are, so a point
+        // exactly on the curve can still sit well away from the nearest sample.
+        let dist_to_polyline = |q: &[f64; 2]| {
+            tess.windows(2)
+                .map(|w| {
+                    let (a, b) = (w[0], w[1]);
+                    let (abx, aby) = (b[0] - a[0], b[1] - a[1]);
+                    let len2 = abx * abx + aby * aby;
+                    let t = if len2 <= 0.0
+                    {
+                        0.0
+                    }
+                    else
+                    {
+                        (((q[0] - a[0]) * abx + (q[1] - a[1]) * aby) / len2).clamp(0.0, 1.0)
+                    };
+                    (a[0] + abx * t - q[0]).hypot(a[1] + aby * t - q[1])
+                })
+                .fold(f64::MAX, f64::min)
+        };
         for q in &pts
         {
-            let min_d = tess
-                .iter()
-                .map(|p| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt())
-                .fold(f64::MAX, f64::min);
-            assert!(min_d < 1e-2, "point {q:?} not interpolated (min dist {min_d})");
+            let min_d = dist_to_polyline(q);
+            assert!(min_d < 1e-4, "point {q:?} not interpolated (min dist {min_d})");
         }
         // Endpoints are interpolated exactly (clamped).
         assert!((tess.first().unwrap()[0] - 0.0).abs() < 1e-6);
@@ -1516,11 +1719,31 @@ mod tests
     {
         // Segment along +x; left (+distance) is +y.
         let line = open_polyline(&[[0.0, 0.0], [10.0, 0.0]]).unwrap();
-        let off = offset_open(&line, 2.0, DEFAULT_CHORD_ERROR).unwrap();
-        assert!(off.iter().all(|p| (p[1] - 2.0).abs() < 1e-9), "offset = {off:?}");
+        let off = offset_open(&line, 2.0).unwrap();
+        let pts = tessellate_open(&off, DEFAULT_CHORD_ERROR).unwrap();
+        assert!(pts.iter().all(|p| (p[1] - 2.0).abs() < 1e-9), "offset = {pts:?}");
         // Right side (negative) -> y = -3.
-        let off_r = offset_open(&line, -3.0, DEFAULT_CHORD_ERROR).unwrap();
-        assert!(off_r.iter().all(|p| (p[1] + 3.0).abs() < 1e-9), "offset_r = {off_r:?}");
+        let off_r = offset_open(&line, -3.0).unwrap();
+        let pts_r = tessellate_open(&off_r, DEFAULT_CHORD_ERROR).unwrap();
+        assert!(pts_r.iter().all(|p| (p[1] + 3.0).abs() < 1e-9), "offset_r = {pts_r:?}");
+    }
+
+    #[test]
+    fn offset_of_a_circle_is_a_circle_not_a_polygon()
+    {
+        // The whole point of returning native geometry: an offset circle stays two arc
+        // spans with an exact radius, instead of becoming a many-sided ring.
+        let c = circle(0.0, 0.0, 4.0).unwrap();
+        let off = offset_closed(&c, 1.0).unwrap();
+        assert_eq!(off.segments().len(), 2, "offset circle should stay two arc spans");
+        assert!(off.segments().iter().all(|s| matches!(s, Segment2::Arc(_))));
+        // Radius 4 offset by 1 is radius 3 or 5 depending on winding; both are exact.
+        let area = signed_area(&off).unwrap().abs();
+        let (a3, a5) = (std::f64::consts::PI * 9.0, std::f64::consts::PI * 25.0);
+        assert!(
+            (area - a3).abs() < 1e-9 || (area - a5).abs() < 1e-9,
+            "offset circle area = {area}"
+        );
     }
 
     #[test]
@@ -1529,8 +1752,8 @@ mod tests
         let sq = square(0.0, 0.0, 5.0); // 10x10, area 100
         // Offset by 1 (one side of the CCW boundary) — area should change by a
         // predictable amount and stay a valid ring.
-        let ring = offset_closed(&sq, 1.0, DEFAULT_CHORD_ERROR).unwrap();
-        let area = hypercurve::finite_ring_signed_area(&ring).abs();
+        let ring = offset_closed(&sq, 1.0).unwrap();
+        let area = signed_area(&ring).unwrap().abs();
         // A ±1 offset of a 10x10 square gives an 8x8 (64) or 12x12 (144) square.
         assert!(
             (area - 64.0).abs() < 1e-6 || (area - 144.0).abs() < 1e-6,

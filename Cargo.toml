@@ -2,7 +2,6 @@
 [workspace]
 members = [
     "./rust",
-    "./rust/geo-buf",
 ]
 exclude = [
     "./rust/hypercurve",

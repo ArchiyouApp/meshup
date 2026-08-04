@@ -1626,9 +1626,8 @@ export class Mesh extends Shape
 
         try 
         {
-            // Sampling happens in the kernel (see Curve._intersectionPointsMesh), so the
-            // chord tolerance is defined once rather than duplicated on both sides.
-            const pts = this.inner()?.intersectCurve(curve.inner(), tolerance);
+            // Tessellate here and hand the mesh a plain polyline.
+            const pts = this.inner()?.intersectPolyline(curve.inner().tessellate(tolerance ?? 1e-4));
 
             return (pts || []).map(p => Point.from(p));
         }

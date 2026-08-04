@@ -435,29 +435,10 @@ impl SketchJs {
         MeshJs { inner: mesh }
     }
 
-    // Offset Operations (if offset feature is enabled)
-    #[cfg(feature = "offset")]
-    #[wasm_bindgen(js_name = offset)]
-    pub fn offset(&self, distance: Real) -> Self {
-        Self {
-            inner: self.inner.offset(distance),
-        }
-    }
-
-    #[cfg(feature = "offset")]
-    #[wasm_bindgen(js_name = offsetRounded)]
-    pub fn offset_rounded(&self, distance: Real) -> Self {
-        Self {
-            inner: self.inner.offset_rounded(distance),
-        }
-    }
-
-    #[cfg(feature = "offset")]
-    #[wasm_bindgen(js_name=straightSkeleton)]
-    pub fn straight_skeleton(&self, orientation: bool) -> SketchJs {
-        let sketch = self.inner.straight_skeleton(orientation);
-        Self { inner: sketch }
-    }
+    // NOTE: SketchJs had geo-buf-backed `offset`, `offsetRounded` and `straightSkeleton`
+    // bindings. They operated on already-tessellated `geo` polygons and had no TypeScript
+    // callers — every offset in meshup routes through Curve3DJs/hypercurve, which offsets
+    // native line/arc geometry. They were removed along with the `geo-buf` dependency.
 
     // Bounding Box
     #[wasm_bindgen(js_name = boundingBox)]
@@ -831,7 +812,10 @@ impl SketchJs {
         }
     }
 
-    #[cfg(feature = "offset")]
+    /// Fill this sketch with a Hilbert-curve path of the given recursion `order`.
+    ///
+    /// Unrelated to offsetting — this used to sit behind the `offset` feature gate by
+    /// accident, which kept it out of builds that did not enable geo-buf.
     #[wasm_bindgen(js_name = hilbertCurve)]
     pub fn hilbert_curve(&self, order: usize, padding: Real) -> Self {
         Self {
