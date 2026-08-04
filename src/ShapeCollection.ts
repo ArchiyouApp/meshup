@@ -11,6 +11,8 @@
  */
 
 import type { Axis, BasePlane, PointLike, ProjectEdgeOptions, RaycastHit, HlrStrategy, ProjectionViewOptions } from './types';
+import { resolveIsometryArgs, DEFAULT_ISOMETRY_CAM } from './projectionOptions';
+import type { IsometryOptions } from './projectionOptions';
 
 import { Vector } from './Vector';
 import { Vertex } from './Vertex';
@@ -1643,17 +1645,17 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     //// ISOMETRY ////
 
     /** Isometric projection of the collection, added to the active scene layer. */
+    isometry(cam?: PointLike, method?: HlrStrategy, options?: IsometryOptions): ShapeCollection<any>;
+    /** @deprecated Positional form. Kept working for saved scripts; prefer
+     *  `isometry(cam, method, { ... })`. */
+    isometry(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
+             samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<any>;
     @colSceneAdd
-    isometry(
-        cam: PointLike = [-1, -1, 1],
-        hiddenLines: boolean = false,
-        includeHiddenShapes: boolean = false,
-        samples: number = 16,
-        featureAngle: number = 10,
-        view: ProjectionViewOptions = {},
-    ): ShapeCollection<any>
+    isometry(cam: PointLike = DEFAULT_ISOMETRY_CAM, ...args: any[]): ShapeCollection<any>
     {
-        return this._iso(cam, hiddenLines, includeHiddenShapes, samples, featureAngle, view);
+        const o = resolveIsometryArgs(args);
+        return this._iso(cam, o.hiddenLines, o.includeHiddenShapes, o.samples, o.featureAngle,
+            { strategy: o.method, fallback: o.fallback });
     }
 
     /** Internal isometric projection — skips scene management (no @scene* decorators fire), so
@@ -1710,17 +1712,16 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         
 
     /** Isometric projection of the collection, added to a dedicated 'iso' scene layer. */
+    iso(cam?: PointLike, method?: HlrStrategy, options?: IsometryOptions): ShapeCollection<any>;
+    /** @deprecated Positional form — see {@link isometry}. */
+    iso(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
+        samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<any>;
     @colSceneLayer('iso')
-    iso(
-        cam: PointLike = [-1, -1, 1],
-        hiddenLines: boolean = false,
-        includeHiddenShapes: boolean = false,
-        samples: number = 16,
-        featureAngle: number=10,
-        view: ProjectionViewOptions = {},
-    ): ShapeCollection<any>
+    iso(cam: PointLike = DEFAULT_ISOMETRY_CAM, ...args: any[]): ShapeCollection<any>
     {
-        return this._iso(cam, hiddenLines, includeHiddenShapes, samples, featureAngle, view);
+        const o = resolveIsometryArgs(args);
+        return this._iso(cam, o.hiddenLines, o.includeHiddenShapes, o.samples, o.featureAngle,
+            { strategy: o.method, fallback: o.fallback });
     }
 
     isoTest(

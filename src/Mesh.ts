@@ -10,6 +10,8 @@
  */
 
 import type { CsgrsModule, Axis, BasePlane, OrientationXY, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions, HlrStrategy, ProjectionViewOptions } from './types';
+import { resolveIsometryArgs, DEFAULT_ISOMETRY_CAM } from './projectionOptions';
+import type { IsometryOptions } from './projectionOptions';
 import { isAxis, isBasePlane, isPointLike } from './types';
 
 import { Curve, getCsgrs } from './index';
@@ -1624,11 +1626,9 @@ export class Mesh extends Shape
 
         try 
         {
-            // Tessellate here and hand the mesh a plain polyline. The old path called
-            // MeshJs.intersectCurve, which was typed for the curvo NurbsCurve3DJs and so
-            // always threw once curves became hypercurve-backed — the catch below turned
-            // that into a silent empty result.
-            const pts = this.inner()?.intersectPolyline(curve.inner().tessellate(tolerance ?? 1e-4));
+            // Sampling happens in the kernel (see Curve._intersectionPointsMesh), so the
+            // chord tolerance is defined once rather than duplicated on both sides.
+            const pts = this.inner()?.intersectCurve(curve.inner(), tolerance);
 
             return (pts || []).map(p => Point.from(p));
         }
@@ -2348,21 +2348,20 @@ export class Mesh extends Shape
      *   mesh has no shapes to order, so the per-shape strategies `'clip'` and
      *   `'painter'` reduce to `'exact'` here.
      */
+    isometry(cam?: PointLike, method?: HlrStrategy, options?: IsometryOptions): ShapeCollection<Shape>;
+    /** @deprecated Positional form. Kept working for saved scripts; prefer
+     *  `isometry(cam, method, { ... })`. */
+    isometry(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
+             samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<Shape>;
     @sceneLayer('iso')
-    isometry(
-        cam:PointLike = [-1,-1,1],
-        hiddenLines:boolean=false,
-        includeHiddenShapes:boolean=false,
-        samples: number = 16,
-        featureAngle: number=10,
-        view: ProjectionViewOptions = {},
-    ):ShapeCollection<Shape>
+    isometry(cam: PointLike = DEFAULT_ISOMETRY_CAM, ...args: any[]): ShapeCollection<Shape>
     {
-        void includeHiddenShapes;
+        const o = resolveIsometryArgs(args);
+
         // from cam position to origin
         const camDirVec = (isPointLike(cam))
                         ? Point.from(cam).toVector().normalize()
-                        : Vector.from([-1,-1,1]).normalize();
+                        : Vector.from(DEFAULT_ISOMETRY_CAM as number[]).normalize();
         const planeNormal = camDirVec.copy().reverse();
 
         const iso = this._projectEdges(
@@ -2370,27 +2369,24 @@ export class Mesh extends Shape
                 viewDirection: camDirVec.toArray(),
                 planeNormal: planeNormal.toArray(),
                 planeOrigin: [0, 0, 0],
-                featureAngle: featureAngle,
-                samples: samples,
-                strategy: Mesh._singleMeshStrategy(view.strategy),
+                featureAngle: o.featureAngle,
+                samples: o.samples,
+                strategy: Mesh._singleMeshStrategy(o.method),
             } as ProjectEdgeOptions);
 
-        if(!hiddenLines){ iso.removeGroup('hidden'); }
+        if(!o.hiddenLines){ iso.removeGroup('hidden'); }
 
         return Mesh._flattenProjectionToScreen(iso, planeNormal);
     }
 
     /** Shorthand alias for {@link isometry}. */
-    iso(
-        cam:PointLike = [-1,-1,1],
-        hiddenLines:boolean=false,
-        includeHiddenShapes:boolean=false,
-        samples: number = 16,
-        featureAngle: number=10,
-        view: ProjectionViewOptions = {},
-    ):ShapeCollection<Shape>
+    iso(cam?: PointLike, method?: HlrStrategy, options?: IsometryOptions): ShapeCollection<Shape>;
+    /** @deprecated Positional form — see {@link isometry}. */
+    iso(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
+        samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<Shape>;
+    iso(cam: PointLike = DEFAULT_ISOMETRY_CAM, ...args: any[]): ShapeCollection<Shape>
     {
-        return this.isometry(cam, hiddenLines, includeHiddenShapes, samples, featureAngle, view);
+        return (this.isometry as any)(cam, ...args);
     }
 
     /** Map a requested strategy onto one a single mesh can actually run.

@@ -25,8 +25,10 @@ import { Vector3Js, VertexJs, Point3Js, PolygonJs, SketchJs, Curve3DJs } from ".
 import { ShapeCollection, getCsgrs, Mesh } from './index';
 import { Shape } from './Shape';
 import type { SceneNode } from './SceneNode';
-import { sceneReplace, sceneAdd, sceneUpdate, sceneCarry, sceneReplaceOrKeep } from './sceneDecorators';
-import type { CsgrsModule, PointLike, Axis, BasePlane, CurveCornerSelection, OrientationXY } from './types';
+import { sceneReplace, sceneAdd, sceneUpdate, sceneCarry, sceneReplaceOrKeep, sceneLayer } from './sceneDecorators';
+import type { CsgrsModule, PointLike, Axis, BasePlane, CurveCornerSelection, OrientationXY, HlrStrategy } from './types';
+import { resolveIsometryArgs, DEFAULT_ISOMETRY_CAM } from './projectionOptions';
+import type { IsometryOptions } from './projectionOptions';
 import { isPointLike, isBasePlane } from './types'
 import { Point } from './Point';
 import { Vector } from './Vector';
@@ -3345,6 +3347,52 @@ export class Curve extends Shape
     alpha(a: number): this { return this.opacity(a); }
 
     /** Set stroke dash pattern. Defaults to [2, 2] when called with no arguments. */
+    //// PROJECTION ////
+
+    /** Isometric projection of this Curve.
+     *
+     *  A Curve is line work already, so there is nothing to remove hidden lines
+     *  *from* — but it is geometry in the drawing, and it projects onto the same
+     *  screen plane as everything else. Projecting one on its own gives the
+     *  flattened, screen-oriented result you would get from a collection
+     *  containing only it.
+     *
+     *  To have a solid hide part of this curve, put both in a
+     *  {@link ShapeCollection} and project that: the collection is what knows
+     *  about the occluders. See `ShapeCollection.isometry`.
+     *
+     *  @param cam Direction from the origin toward the viewer. Default `[-1,-1,1]`.
+     *  @param method Which hidden-line algorithm the projection runs. Only
+     *    matters when there are solids to hide things; kept for signature
+     *    parity with {@link Mesh.isometry}.
+     *  @param options Projection settings — see `IsometryOptions`.
+     */
+    isometry(cam?: PointLike, method?: HlrStrategy, options?: IsometryOptions): ShapeCollection<any>;
+    /** @deprecated Positional form. Kept working for saved scripts; prefer
+     *  `isometry(cam, method, { ... })`. */
+    isometry(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
+             samples?: number, featureAngle?: number, view?: any): ShapeCollection<any>;
+    @sceneLayer('iso')
+    isometry(cam: PointLike = DEFAULT_ISOMETRY_CAM, ...args: any[]): ShapeCollection<any>
+    {
+        // Undecorated `_iso`: this method already carries @sceneLayer, and
+        // running both would add the projection to the scene twice.
+        const o = resolveIsometryArgs(args);
+        return new ShapeCollection<any>(this._copy())._iso(
+            cam, o.hiddenLines, o.includeHiddenShapes, o.samples, o.featureAngle,
+            { strategy: o.method, fallback: o.fallback });
+    }
+
+    /** Shorthand alias for {@link isometry}. */
+    iso(cam?: PointLike, method?: HlrStrategy, options?: IsometryOptions): ShapeCollection<any>;
+    /** @deprecated Positional form — see {@link isometry}. */
+    iso(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
+        samples?: number, featureAngle?: number, view?: any): ShapeCollection<any>;
+    iso(cam: PointLike = DEFAULT_ISOMETRY_CAM, ...args: any[]): ShapeCollection<any>
+    {
+        return (this.isometry as any)(cam, ...args);
+    }
+
     dashed(dash: number[] = [2, 2]): this
     {
         this.style.strokeDash = dash;
