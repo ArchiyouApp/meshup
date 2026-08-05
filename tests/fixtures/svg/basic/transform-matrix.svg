@@ -1,0 +1,6 @@
+<!-- matrix(a b c d e f) is x' = a*x + c*y + e, y' = b*x + d*y + f.
+     Here: a quarter turn (a=0 b=1 c=-1 d=0) then a shift to (50, 10).
+     The 20-long horizontal line becomes 20-long vertical. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <line x1="0" y1="0" x2="20" y2="0" transform="matrix(0 1 -1 0 50 10)"/>
+</svg>

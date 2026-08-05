@@ -1,0 +1,5 @@
+<!-- Rounded rectangle with rx only; ry defaults to rx per the SVG spec.
+     4 sides + 4 quarter-turn arcs = 8 segments, bbox still 60 x 40. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <rect x="10" y="20" width="60" height="40" rx="8"/>
+</svg>

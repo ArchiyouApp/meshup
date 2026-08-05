@@ -1527,6 +1527,14 @@ pub fn intersect_open(a: &CurveString2, b: &CurveString2) -> Result<Vec<[f64; 2]
 /// Exact length of a single native segment: a straight segment via its exact
 /// squared length, a circular arc via `radius · swept-angle`. `None` if a scalar
 /// is not finitely representable.
+///
+/// The arc's sweep comes from [`arc_params`], which reads it from the endpoints and the
+/// arc's own orientation flag. An earlier version instead asked for a representative point
+/// on the arc and summed the two half-angles either side of it. That needs the midpoint to
+/// be *decidable* in exact arithmetic, and for arcs built from ordinary decimal coordinates
+/// — an SVG `a` command in an icon, say — it often is not: `representative_point` returned
+/// `Uncertain` and the length was reported as non-finite. Every rounded shape imported from
+/// a real file then failed `length()`, and with it `trim()` and every arc-length query.
 pub fn segment_length(seg: &Segment2) -> Option<f64>
 {
     match seg
@@ -1534,29 +1542,8 @@ pub fn segment_length(seg: &Segment2) -> Option<f64>
         Segment2::Line(l) => l.length_squared().to_f64_lossy().map(f64::sqrt),
         Segment2::Arc(a) =>
         {
-            let pol = policy();
-            let r2 = a.radius_squared().to_f64_lossy()?;
-            if r2 <= 0.0
-            {
-                return Some(0.0);
-            }
-            let mid = match a.representative_point(&pol).ok()?
-            {
-                Classification::Decided(p) => p,
-                Classification::Uncertain(_) => return None,
-            };
-            let c = a.center();
-            let (cx, cy) = (c.x().to_f64_lossy()?, c.y().to_f64_lossy()?);
-            let vec = |p: &Point2| -> Option<(f64, f64)> {
-                Some((p.x().to_f64_lossy()? - cx, p.y().to_f64_lossy()? - cy))
-            };
-            let u = vec(a.start())?;
-            let m = (mid.x().to_f64_lossy()? - cx, mid.y().to_f64_lossy()? - cy);
-            let w = vec(a.end())?;
-            // Sweep = angle(start,mid) + angle(mid,end); each half <= pi, so the
-            // unsigned acos is exact for the swept portion (mid is the arc midpoint).
-            let ang = |a: (f64, f64), b: (f64, f64)| ((a.0 * b.0 + a.1 * b.1) / r2).clamp(-1.0, 1.0).acos();
-            Some(r2.sqrt() * (ang(u, m) + ang(m, w)))
+            let p = arc_params(a)?;
+            Some(p.radius * p.sweep.abs())
         }
     }
 }
@@ -2291,5 +2278,37 @@ mod tests
             panic!("unequal radii need elliptical corners");
         };
         assert!(p.curves().len() >= 8, "got {} spans", p.curves().len());
+    }
+
+    /// A rounded corner as an SVG icon actually writes one: an `a` command between two
+    /// decimal endpoints. The arc's midpoint is not decidable in exact arithmetic for
+    /// inputs like these, so a length that needed one reported non-finite and took
+    /// `length()`, `trim()` and every arc-length query down with it.
+    #[test]
+    fn segment_length_survives_an_arc_from_ordinary_decimal_coordinates()
+    {
+        // Straight out of feather's triangle.svg: "a2 2 0 0 0 1.71 3".
+        let seg = Segment2::from_bulge(
+            point(1.82, 18.0).unwrap(),
+            point(3.53, 21.0).unwrap(),
+            real((std::f64::consts::FRAC_PI_2 / 4.0).tan()).unwrap(),
+        )
+        .unwrap();
+        let len = segment_length(&seg).expect("arc length must be finite");
+        assert!(len.is_finite() && len > 0.0, "len = {len}");
+
+        // A quarter turn, so length = r * pi/2 and the chord is r * sqrt(2).
+        let chord = (3.53_f64 - 1.82).hypot(21.0 - 18.0);
+        let r = chord / std::f64::consts::SQRT_2;
+        assert!((len - r * std::f64::consts::FRAC_PI_2).abs() < 1e-9, "len = {len}");
+    }
+
+    /// The length of a full circle is the one arc length whose answer is not in doubt.
+    #[test]
+    fn segment_length_of_two_half_circles_is_the_circumference()
+    {
+        let ct = circle(3.0, -4.0, 12.5).unwrap();
+        let total: f64 = ct.segments().iter().map(|s| segment_length(s).unwrap()).sum();
+        assert!((total - 2.0 * std::f64::consts::PI * 12.5).abs() < 1e-9, "total = {total}");
     }
 }

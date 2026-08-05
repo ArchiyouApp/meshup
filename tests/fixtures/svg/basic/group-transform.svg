@@ -1,0 +1,9 @@
+<!-- A 10 x 10 square moved by a group transform, then by a nested one, then
+     by its own. Total offset (100 + 5 + 1, 50 + 2). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+  <g transform="translate(100,50)">
+    <g transform="translate(5,0)">
+      <rect x="0" y="0" width="10" height="10" transform="translate(1,2)"/>
+    </g>
+  </g>
+</svg>

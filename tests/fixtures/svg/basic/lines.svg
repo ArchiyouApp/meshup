@@ -1,0 +1,6 @@
+<!-- Three separate <line> elements. 3 open curves, 1 segment each. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <line x1="0" y1="0" x2="100" y2="0"/>
+  <line x1="0" y1="20" x2="60" y2="20"/>
+  <line x1="0" y1="40" x2="0" y2="90"/>
+</svg>
