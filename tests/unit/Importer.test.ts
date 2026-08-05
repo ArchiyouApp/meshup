@@ -396,10 +396,13 @@ describe('Importer: DXF (2D curves)', () =>
         expect(curves.length).toBe(1);
         expect(curves[0]).toBeInstanceOf(Curve);
         expect(curves[0].isClosed()).toBe(true);
+        // The tolerance used to be 1 decimal because the importer inscribed a 48-gon,
+        // which falls short of the true diameter. The contour is exact now.
+        expect(curves[0].hasArcs()).toBe(true);
         const bb = curves[0].bbox()!;
-        expect(bb.width()).toBeCloseTo(10, 1);   // X = diameter
-        expect(bb.depth()).toBeCloseTo(10, 1);   // Y = diameter
-        expect(bb.height()).toBeCloseTo(0, 3);   // flat on XY
+        expect(bb.width()).toBeCloseTo(10, 6);   // X = diameter
+        expect(bb.depth()).toBeCloseTo(10, 6);   // Y = diameter
+        expect(bb.height()).toBeCloseTo(0, 6);   // flat on XY
     });
 
     it('Importer.load auto-detects DXF and returns curves', () =>

@@ -197,15 +197,6 @@ impl SketchJs {
         Ok(Self { inner: sketch })
     }
 
-    /// Import 2-D geometry from DXF as a Sketch (curves). See `Sketch::from_dxf`.
-    #[wasm_bindgen(js_name = fromDXF)]
-    pub fn from_dxf(dxf_data: &[u8], metadata: JsValue) -> Result<SketchJs, JsValue> {
-        let meta = js_metadata_to_string(metadata).unwrap_or(None);
-        let sketch = Sketch::from_dxf(dxf_data, meta)
-            .map_err(|e| JsValue::from_str(&format!("DXF import error: {e}")))?;
-        Ok(SketchJs { inner: sketch })
-    }
-
     #[wasm_bindgen(js_name = toSVG)]
     pub fn to_svg(&self) -> String {
         self.inner.to_svg()

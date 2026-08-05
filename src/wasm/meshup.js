@@ -268,6 +268,10 @@ const Curve3DJsFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_curve3djs_free(ptr >>> 0, 1));
 
+const CurveImportJsFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_curveimportjs_free(ptr >>> 0, 1));
+
 const EdgeProjectionResultJsFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_edgeprojectionresultjs_free(ptr >>> 0, 1));
@@ -307,10 +311,6 @@ const SectionElevationResultJsFinalization = (typeof FinalizationRegistry === 'u
 const SketchJsFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_sketchjs_free(ptr >>> 0, 1));
-
-const SvgImportJsFinalization = (typeof FinalizationRegistry === 'undefined')
-    ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_svgimportjs_free(ptr >>> 0, 1));
 
 const Vector3JsFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
@@ -1202,6 +1202,51 @@ export class Curve3DJs {
     }
 }
 if (Symbol.dispose) Curve3DJs.prototype[Symbol.dispose] = Curve3DJs.prototype.free;
+
+/**
+ * The result of importing a document into native curves: the `Curve3DJs` list plus any
+ * non-fatal warnings (unsupported or skipped content).
+ */
+export class CurveImportJs {
+    static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(CurveImportJs.prototype);
+        obj.__wbg_ptr = ptr;
+        CurveImportJsFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        CurveImportJsFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_curveimportjs_free(ptr, 0);
+    }
+    /**
+     * Move the imported curves out (call once). Leaves the result empty.
+     * @returns {Curve3DJs[]}
+     */
+    takeCurves() {
+        const ret = wasm.curveimportjs_takeCurves(this.__wbg_ptr);
+        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * Non-fatal warnings gathered during import (skipped elements/commands).
+     * @returns {string[]}
+     */
+    get warnings() {
+        const ret = wasm.curveimportjs_warnings(this.__wbg_ptr);
+        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+}
+if (Symbol.dispose) CurveImportJs.prototype[Symbol.dispose] = CurveImportJs.prototype.free;
 
 /**
  * Edge projection result returned to JavaScript.
@@ -3775,21 +3820,6 @@ export class SketchJs {
         return SketchJs.__wrap(ret);
     }
     /**
-     * Import 2-D geometry from DXF as a Sketch (curves). See `Sketch::from_dxf`.
-     * @param {Uint8Array} dxf_data
-     * @param {any} metadata
-     * @returns {SketchJs}
-     */
-    static fromDXF(dxf_data, metadata) {
-        const ptr0 = passArray8ToWasm0(dxf_data, wasm.__wbindgen_malloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.sketchjs_fromDXF(ptr0, len0, metadata);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return SketchJs.__wrap(ret[0]);
-    }
-    /**
      * @param {string} geo_json
      * @param {any} metadata
      * @returns {SketchJs}
@@ -3927,51 +3957,6 @@ export class SketchJs {
     }
 }
 if (Symbol.dispose) SketchJs.prototype[Symbol.dispose] = SketchJs.prototype.free;
-
-/**
- * The result of importing an SVG document into native curves: the `Curve3DJs`
- * list plus any non-fatal warnings (unsupported/skipped elements).
- */
-export class SvgImportJs {
-    static __wrap(ptr) {
-        ptr = ptr >>> 0;
-        const obj = Object.create(SvgImportJs.prototype);
-        obj.__wbg_ptr = ptr;
-        SvgImportJsFinalization.register(obj, obj.__wbg_ptr, obj);
-        return obj;
-    }
-    __destroy_into_raw() {
-        const ptr = this.__wbg_ptr;
-        this.__wbg_ptr = 0;
-        SvgImportJsFinalization.unregister(this);
-        return ptr;
-    }
-    free() {
-        const ptr = this.__destroy_into_raw();
-        wasm.__wbg_svgimportjs_free(ptr, 0);
-    }
-    /**
-     * Move the imported curves out (call once). Leaves the result empty.
-     * @returns {Curve3DJs[]}
-     */
-    takeCurves() {
-        const ret = wasm.svgimportjs_takeCurves(this.__wbg_ptr);
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * Non-fatal warnings gathered during import (skipped elements/commands).
-     * @returns {string[]}
-     */
-    get warnings() {
-        const ret = wasm.svgimportjs_warnings(this.__wbg_ptr);
-        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-}
-if (Symbol.dispose) SvgImportJs.prototype[Symbol.dispose] = SvgImportJs.prototype.free;
 
 export class Vector3Js {
     static __wrap(ptr) {
@@ -4261,12 +4246,32 @@ export class VertexJs {
 if (Symbol.dispose) VertexJs.prototype[Symbol.dispose] = VertexJs.prototype.free;
 
 /**
+ * Import a DXF drawing into native planar curves.
+ *
+ * LWPOLYLINE and POLYLINE bulges become real arcs, ARC and CIRCLE are exact rather than
+ * sampled, and ELLIPSE, SPLINE and INSERT (resolved against the block table) are read
+ * instead of dropped. Entity types with no curve meaning are counted and reported via
+ * `warnings`. 2D content only — `MeshJs.fromDXF` still handles 3D.
+ * @param {Uint8Array} bytes
+ * @returns {CurveImportJs}
+ */
+export function importDxfCurves(bytes) {
+    const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.importDxfCurves(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return CurveImportJs.__wrap(ret[0]);
+}
+
+/**
  * Import an SVG document into native planar curves. Lines, circular arcs and Béziers are
  * all kept exact — a `C` command arrives as a `CubicBezier2` span, not as chords.
  * Unsupported path commands (elliptical arcs with rx ≠ ry) are skipped and surfaced via
  * `warnings`. Coordinates are SVG-space (y-down) at z = 0.
  * @param {string} doc
- * @returns {SvgImportJs}
+ * @returns {CurveImportJs}
  */
 export function importSvgCurves(doc) {
     const ptr0 = passStringToWasm0(doc, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -4275,7 +4280,7 @@ export function importSvgCurves(doc) {
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
-    return SvgImportJs.__wrap(ret[0]);
+    return CurveImportJs.__wrap(ret[0]);
 }
 
 export function init_panic_hook() {

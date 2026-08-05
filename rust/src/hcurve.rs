@@ -997,6 +997,113 @@ pub fn conic_mid(conic: &RationalQuadraticBezier2) -> Option<[f64; 2]>
     }
 }
 
+/// A rectangle with rounded corners, exactly.
+///
+/// `rx`/`ry` follow the SVG `<rect>` rules: each defaults to the other when only one is
+/// given, and both are clamped to half the corresponding side. Equal radii give four
+/// circular quarter-turns as a native [`Contour2`] (bulge `tan(45 deg) = sqrt(2) - 1`);
+/// unequal radii need elliptical corners, so the result is a mixed-family path.
+///
+/// Returns `Ok(Err(..))`-shaped output as an enum rather than two functions because the
+/// caller wants "the rectangle", not "which carrier it landed in".
+pub enum RoundedRect
+{
+    /// Sharp, or circular corners: native line/arc geometry.
+    Native(Contour2),
+    /// Elliptical corners: conic spans.
+    Path(CurvePath2),
+}
+
+pub fn rounded_rect(x: f64, y: f64, w: f64, h: f64, rx: f64, ry: f64)
+    -> Result<RoundedRect, String>
+{
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0)
+    {
+        return Err(format!("hcurve: invalid rect size {w}x{h}"));
+    }
+    let rx = rx.clamp(0.0, w / 2.0);
+    let ry = ry.clamp(0.0, h / 2.0);
+
+    if rx <= 0.0 || ry <= 0.0
+    {
+        return closed_contour(&[[x, y], [x + w, y], [x + w, y + h], [x, y + h]])
+            .map(RoundedRect::Native);
+    }
+
+    // The outline as eight points: each straight run's ends, and each corner's ends.
+    // Walking in SVG's y-down space, which is the maths-positive direction.
+    //
+    //        p0 ──── p1
+    //      p7          p2
+    //      |            |
+    //      p6          p3
+    //        p5 ──── p4
+    let pts = [
+        [x + rx, y],
+        [x + w - rx, y],
+        [x + w, y + ry],
+        [x + w, y + h - ry],
+        [x + w - rx, y + h],
+        [x + rx, y + h],
+        [x, y + h - ry],
+        [x, y + ry],
+    ];
+    // Corner centres, in the order the corners are reached.
+    let centres =
+        [[x + w - rx, y + ry], [x + w - rx, y + h - ry], [x + rx, y + h - ry], [x + rx, y + ry]];
+    // Each corner sweeps a quarter turn counter-clockwise in the ellipse's own parameter.
+    let quarter = std::f64::consts::FRAC_PI_2;
+    let sweeps = [(-quarter, 0.0), (0.0, quarter), (quarter, 2.0 * quarter),
+        (2.0 * quarter, 3.0 * quarter)];
+
+    if (rx - ry).abs() <= 1.0e-12
+    {
+        // Circular corners: a quarter turn is bulge = tan(90 deg / 4).
+        let bulge = real(std::f64::consts::SQRT_2 - 1.0)?;
+        let mut segs: Vec<Segment2> = Vec::with_capacity(8);
+        for i in 0..4
+        {
+            // The straight run into corner i, skipped when the radius eats the whole side.
+            let (a, b) = (pts[i * 2], pts[i * 2 + 1]);
+            if a != b
+            {
+                segs.push(Segment2::Line(
+                    LineSeg2::try_new(point(a[0], a[1])?, point(b[0], b[1])?)
+                        .map_err(|e| format!("hcurve: rounded rect edge failed ({e:?})"))?,
+                ));
+            }
+            let c = pts[(i * 2 + 2) % 8];
+            segs.push(
+                Segment2::from_bulge(point(b[0], b[1])?, point(c[0], c[1])?, bulge.clone())
+                    .map_err(|e| format!("hcurve: rounded rect corner failed ({e:?})"))?,
+            );
+        }
+        return Contour2::try_new(segs)
+            .map(RoundedRect::Native)
+            .map_err(|e| format!("hcurve: rounded rect contour failed ({e:?})"));
+    }
+
+    // Elliptical corners: each is a quarter of an axis-aligned rx-by-ry ellipse.
+    let mut curves: Vec<Curve2> = Vec::new();
+    for i in 0..4
+    {
+        let (a, b) = (pts[i * 2], pts[i * 2 + 1]);
+        if a != b
+        {
+            let seg = LineSeg2::try_new(point(a[0], a[1])?, point(b[0], b[1])?)
+                .map_err(|e| format!("hcurve: rounded rect edge failed ({e:?})"))?;
+            curves.push(Curve2::from(seg));
+        }
+        let (s0, s1) = sweeps[i];
+        let arc = elliptical_arc(rx, ry, 0.0, centres[i][0], centres[i][1], s0, s1)?;
+        curves.extend(arc.curves().iter().cloned());
+    }
+
+    CurvePath2::try_new(curves)
+        .map(RoundedRect::Path)
+        .map_err(|e| format!("hcurve: rounded rect path failed ({e:?})"))
+}
+
 /// Build an exact **full ellipse** as a closed [`CurvePath2`] of rational
 /// quadratic conic spans. Semi-axes `rx` (major direction) and `ry` (minor
 /// direction), rotated `rotation` radians about `(cx, cy)`.
@@ -2140,5 +2247,49 @@ mod tests
             assert!((p.center[0] - 3.0).abs() < 1e-12 && (p.center[1] + 4.0).abs() < 1e-12);
             assert!((p.sweep - std::f64::consts::PI).abs() < 1e-9, "sweep = {}", p.sweep);
         }
+    }
+
+    #[test]
+    fn rounded_rect_has_four_sides_and_four_corners()
+    {
+        let RoundedRect::Native(ct) = rounded_rect(0.0, 0.0, 100.0, 50.0, 10.0, 10.0).unwrap()
+        else {
+            panic!("equal radii should stay native line/arc");
+        };
+        assert_eq!(ct.segments().len(), 8, "4 sides + 4 corners");
+        let arcs = ct.segments().iter().filter(|s| matches!(s, Segment2::Arc(_))).count();
+        assert_eq!(arcs, 4);
+        for seg in ct.segments()
+        {
+            if let Segment2::Arc(a) = seg
+            {
+                let p = arc_params(a).expect("corner params");
+                assert!((p.radius - 10.0).abs() < 1e-9, "corner radius {}", p.radius);
+                assert!((p.sweep.abs() - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+                    "corner sweep {}", p.sweep);
+            }
+        }
+    }
+
+    /// A radius that eats a whole side leaves no straight run there, and the contour must
+    /// still close rather than carry a zero-length segment.
+    #[test]
+    fn rounded_rect_handles_a_radius_of_half_the_side()
+    {
+        let RoundedRect::Native(ct) = rounded_rect(0.0, 0.0, 20.0, 20.0, 10.0, 10.0).unwrap()
+        else {
+            panic!("equal radii should stay native");
+        };
+        assert_eq!(ct.segments().len(), 4, "a circle-cornered square of pure arcs");
+    }
+
+    #[test]
+    fn rounded_rect_with_unequal_radii_is_a_conic_path()
+    {
+        let RoundedRect::Path(p) = rounded_rect(0.0, 0.0, 100.0, 50.0, 20.0, 10.0).unwrap()
+        else {
+            panic!("unequal radii need elliptical corners");
+        };
+        assert!(p.curves().len() >= 8, "got {} spans", p.curves().len());
     }
 }

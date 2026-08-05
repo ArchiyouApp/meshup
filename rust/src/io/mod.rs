@@ -1,3 +1,6 @@
+#[cfg(any(feature = "svg-io", feature = "dxf-io"))]
+pub mod curves;
+
 #[cfg(feature = "svg-io")]
 pub mod svg;
 
@@ -9,6 +12,9 @@ mod stl;
 
 #[cfg(feature = "dxf-io")]
 mod dxf;
+
+#[cfg(feature = "dxf-io")]
+pub mod dxf_curves;
 
 #[cfg(feature = "obj-io")]
 mod obj;

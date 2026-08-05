@@ -2251,21 +2251,21 @@ fn parse_op(op: &str) -> Result<BooleanOp, JsValue>
     }
 }
 
-//// SVG IMPORT ////
+//// CURVE IMPORT (SVG / DXF) ////
 
-/// The result of importing an SVG document into native curves: the `Curve3DJs`
-/// list plus any non-fatal warnings (unsupported/skipped elements).
-#[cfg(feature = "svg-io")]
+/// The result of importing a document into native curves: the `Curve3DJs` list plus any
+/// non-fatal warnings (unsupported or skipped content).
+#[cfg(any(feature = "svg-io", feature = "dxf-io"))]
 #[wasm_bindgen]
-pub struct SvgImportJs
+pub struct CurveImportJs
 {
     curves: Vec<Curve3DJs>,
     warnings: Vec<String>,
 }
 
-#[cfg(feature = "svg-io")]
+#[cfg(any(feature = "svg-io", feature = "dxf-io"))]
 #[wasm_bindgen]
-impl SvgImportJs
+impl CurveImportJs
 {
     /// Move the imported curves out (call once). Leaves the result empty.
     #[wasm_bindgen(js_name = takeCurves)]
@@ -2282,31 +2282,53 @@ impl SvgImportJs
     }
 }
 
+/// Lift imported planar curves into `Curve3DJs` on the XY plane at z = 0.
+#[cfg(any(feature = "svg-io", feature = "dxf-io"))]
+fn imported_to_curves(imported: Vec<crate::io::curves::ImportedCurve>) -> Vec<Curve3DJs>
+{
+    use crate::io::curves::ImportedCurve;
+
+    let frame = Frame::from_center_normal(Point3::origin(), Vector3::z());
+    imported
+        .into_iter()
+        .map(|c| match c
+        {
+            ImportedCurve::Open(cs) => Curve3DJs::from_open(frame.clone(), cs),
+            ImportedCurve::Closed(ct) => Curve3DJs::from_closed(frame.clone(), ct),
+            // A Bezier, an <ellipse> or a DXF ELLIPSE/SPLINE arrives as an exact path and
+            // stays one.
+            ImportedCurve::Path(path, closed) =>
+            {
+                Curve3DJs::from_path_normalized(frame.clone(), path, closed)
+            }
+        })
+        .collect()
+}
+
 /// Import an SVG document into native planar curves. Lines, circular arcs and Béziers are
 /// all kept exact — a `C` command arrives as a `CubicBezier2` span, not as chords.
 /// Unsupported path commands (elliptical arcs with rx ≠ ry) are skipped and surfaced via
 /// `warnings`. Coordinates are SVG-space (y-down) at z = 0.
 #[cfg(feature = "svg-io")]
 #[wasm_bindgen(js_name = importSvgCurves)]
-pub fn import_svg_curves(doc: &str) -> Result<SvgImportJs, JsValue>
+pub fn import_svg_curves(doc: &str) -> Result<CurveImportJs, JsValue>
 {
-    use crate::io::svg_curves::{ImportedCurve, import_svg_curves as import_doc};
+    let (imported, warnings) = crate::io::svg_curves::import_svg_curves(doc)
+        .map_err(|e| err(format!("SVG import failed: {e:?}")))?;
+    Ok(CurveImportJs { curves: imported_to_curves(imported), warnings })
+}
 
-    let (imported, warnings) = import_doc(doc).map_err(|e| err(format!("SVG import failed: {e:?}")))?;
-    // All imported geometry lives in the XY plane (z = 0), SVG coords.
-    let frame = Frame::from_center_normal(Point3::origin(), Vector3::z());
-    let curves = imported
-        .into_iter()
-        .map(|c| match c
-        {
-            ImportedCurve::Open(cs) => Curve3DJs::from_open(frame.clone(), cs),
-            ImportedCurve::Closed(ct) => Curve3DJs::from_closed(frame.clone(), ct),
-            // An SVG Bezier or <ellipse> arrives as an exact path and stays one.
-            ImportedCurve::Path(path, closed) =>
-            {
-                Curve3DJs::from_path_normalized(frame.clone(), path, closed)
-            }
-        })
-        .collect();
-    Ok(SvgImportJs { curves, warnings })
+/// Import a DXF drawing into native planar curves.
+///
+/// LWPOLYLINE and POLYLINE bulges become real arcs, ARC and CIRCLE are exact rather than
+/// sampled, and ELLIPSE, SPLINE and INSERT (resolved against the block table) are read
+/// instead of dropped. Entity types with no curve meaning are counted and reported via
+/// `warnings`. 2D content only — `MeshJs.fromDXF` still handles 3D.
+#[cfg(feature = "dxf-io")]
+#[wasm_bindgen(js_name = importDxfCurves)]
+pub fn import_dxf_curves(bytes: &[u8]) -> Result<CurveImportJs, JsValue>
+{
+    let (imported, warnings) = crate::io::dxf_curves::import_dxf_curves(bytes)
+        .map_err(|e| err(format!("DXF import failed: {e:?}")))?;
+    Ok(CurveImportJs { curves: imported_to_curves(imported), warnings })
 }

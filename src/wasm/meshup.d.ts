@@ -364,6 +364,20 @@ export class Curve3DJs {
   translate(offset: Vector3Js): Curve3DJs;
 }
 
+export class CurveImportJs {
+  private constructor();
+  free(): void;
+  [Symbol.dispose](): void;
+  /**
+   * Move the imported curves out (call once). Leaves the result empty.
+   */
+  takeCurves(): Curve3DJs[];
+  /**
+   * Non-fatal warnings gathered during import (skipped elements/commands).
+   */
+  readonly warnings: string[];
+}
+
 export class EdgeProjectionResultJs {
   private constructor();
   free(): void;
@@ -914,10 +928,6 @@ export class SketchJs {
   static polygon(points: any, metadata: any): SketchJs;
   revolve(angle_degrees: number, segments: number): MeshJs;
   static crescent(outer_r: number, inner_r: number, offset: number, segments: number, metadata: any): SketchJs;
-  /**
-   * Import 2-D geometry from DXF as a Sketch (curves). See `Sketch::from_dxf`.
-   */
-  static fromDXF(dxf_data: Uint8Array, metadata: any): SketchJs;
   static fromGeo(geo_json: string, metadata: any): SketchJs;
   static fromSVG(svg_data: string, metadata: any): SketchJs;
   isEmpty(): boolean;
@@ -931,20 +941,6 @@ export class SketchJs {
   transform(mat: Matrix4Js): SketchJs;
   translate(offset: Vector3Js): SketchJs;
   static trapezoid(top_width: number, bottom_width: number, height: number, top_offset: number, metadata: any): SketchJs;
-}
-
-export class SvgImportJs {
-  private constructor();
-  free(): void;
-  [Symbol.dispose](): void;
-  /**
-   * Move the imported curves out (call once). Leaves the result empty.
-   */
-  takeCurves(): Curve3DJs[];
-  /**
-   * Non-fatal warnings gathered during import (skipped elements/commands).
-   */
-  readonly warnings: string[];
 }
 
 export class Vector3Js {
@@ -993,12 +989,22 @@ export class VertexJs {
 }
 
 /**
+ * Import a DXF drawing into native planar curves.
+ *
+ * LWPOLYLINE and POLYLINE bulges become real arcs, ARC and CIRCLE are exact rather than
+ * sampled, and ELLIPSE, SPLINE and INSERT (resolved against the block table) are read
+ * instead of dropped. Entity types with no curve meaning are counted and reported via
+ * `warnings`. 2D content only — `MeshJs.fromDXF` still handles 3D.
+ */
+export function importDxfCurves(bytes: Uint8Array): CurveImportJs;
+
+/**
  * Import an SVG document into native planar curves. Lines, circular arcs and Béziers are
  * all kept exact — a `C` command arrives as a `CubicBezier2` span, not as chords.
  * Unsupported path commands (elliptical arcs with rx ≠ ry) are skipped and surfaced via
  * `warnings`. Coordinates are SVG-space (y-down) at z = 0.
  */
-export function importSvgCurves(doc: string): SvgImportJs;
+export function importSvgCurves(doc: string): CurveImportJs;
 
 export function init_panic_hook(): void;
 
@@ -1009,6 +1015,7 @@ export interface InitOutput {
   readonly __wbg_booleanregion3djs_free: (a: number, b: number) => void;
   readonly __wbg_closestpointresultjs_free: (a: number, b: number) => void;
   readonly __wbg_curve3djs_free: (a: number, b: number) => void;
+  readonly __wbg_curveimportjs_free: (a: number, b: number) => void;
   readonly __wbg_edgeprojectionresultjs_free: (a: number, b: number) => void;
   readonly __wbg_matrix4js_free: (a: number, b: number) => void;
   readonly __wbg_meshjs_free: (a: number, b: number) => void;
@@ -1018,7 +1025,6 @@ export interface InitOutput {
   readonly __wbg_sdfsamplejs_free: (a: number, b: number) => void;
   readonly __wbg_sectionelevationresultjs_free: (a: number, b: number) => void;
   readonly __wbg_sketchjs_free: (a: number, b: number) => void;
-  readonly __wbg_svgimportjs_free: (a: number, b: number) => void;
   readonly __wbg_vertexjs_free: (a: number, b: number) => void;
   readonly booleanregion3djs_exterior: (a: number) => number;
   readonly booleanregion3djs_holeCount: (a: number) => number;
@@ -1077,9 +1083,12 @@ export interface InitOutput {
   readonly curve3djs_translate: (a: number, b: number) => number;
   readonly curve3djs_trim: (a: number, b: number, c: number) => [number, number, number];
   readonly curve3djs_weights: (a: number) => [number, number];
+  readonly curveimportjs_takeCurves: (a: number) => [number, number];
+  readonly curveimportjs_warnings: (a: number) => [number, number];
   readonly edgeprojectionresultjs_hiddenPolylines: (a: number) => any;
   readonly edgeprojectionresultjs_silhouetteIndices: (a: number) => any;
   readonly edgeprojectionresultjs_visiblePolylines: (a: number) => any;
+  readonly importDxfCurves: (a: number, b: number) => [number, number, number];
   readonly importSvgCurves: (a: number, b: number) => [number, number, number];
   readonly matrix4js_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
   readonly matrix4js_toArray: (a: number) => [number, number];
@@ -1239,7 +1248,6 @@ export interface InitOutput {
   readonly sketchjs_extrude: (a: number, b: number) => number;
   readonly sketchjs_extrudeVector: (a: number, b: number) => number;
   readonly sketchjs_extrudeVectorComponents: (a: number, b: number, c: number, d: number) => number;
-  readonly sketchjs_fromDXF: (a: number, b: number, c: any) => [number, number, number];
   readonly sketchjs_fromGeo: (a: number, b: number, c: any) => [number, number, number];
   readonly sketchjs_fromHershey: (a: number, b: number, c: number, d: number, e: number, f: number, g: any) => number;
   readonly sketchjs_fromMesh: (a: number) => number;
@@ -1284,8 +1292,6 @@ export interface InitOutput {
   readonly sketchjs_trapezoid: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly sketchjs_union: (a: number, b: number) => number;
   readonly sketchjs_xor: (a: number, b: number) => number;
-  readonly svgimportjs_takeCurves: (a: number) => [number, number];
-  readonly svgimportjs_warnings: (a: number) => [number, number];
   readonly vector3js_abs: (a: number) => number;
   readonly vector3js_add: (a: number, b: number) => number;
   readonly vector3js_angle: (a: number, b: number) => number;

@@ -14,8 +14,9 @@
  *                 standard-GeoJSON → geo-native shim; see _geometryToGeoNative)
  *    - OBJ      → ShapeCollection<Mesh>    via MeshJs.fromOBJ
  *    - STL      → ShapeCollection<Mesh>    via MeshJs.fromSTL (binary + ASCII)
- *    - DXF      → ShapeCollection<Curve>   via SketchJs.fromDXF (2-D curves;
- *                 use Mesh.fromDXF for DXF solids as a mesh)
+ *    - DXF      → ShapeCollection<Curve>   via importDxfCurves (2-D curves, exact:
+ *                 bulges, arcs, ellipses and splines all survive; INSERTs are resolved
+ *                 against the block table. Use Mesh.fromDXF for DXF solids as a mesh)
  *    - glTF/GLB → ShapeCollection<Mesh>    via MeshJs.fromGLTF (merged mesh;
  *                 materials/hierarchy flattened, Y-up→Z-up)
  *    - AMF      → ShapeCollection<Mesh>    via MeshJs.fromAMF (plain or zipped)
@@ -178,26 +179,38 @@ export class Importer
         return new ShapeCollection<Mesh>(Mesh.fromSTL(Importer._toBytes(data)));
     }
 
-    /** Import a DXF drawing as 2-D curves. LINE/ARC/open polylines → open
-     *  curves; CIRCLE/closed polylines → closed curves. For DXF solids as a
-     *  mesh, use {@link Mesh.fromDXF} instead. */
-    static fromDXF(data: string | Uint8Array | ArrayBuffer, opts: ImportOptions = {}): ShapeCollection<Curve>
+    /** Import a DXF drawing as 2-D curves, exactly.
+     *
+     *  LWPOLYLINE and POLYLINE bulges become real arcs, ARC and CIRCLE keep their own
+     *  centre and radius instead of being sampled, and ELLIPSE, SPLINE and INSERT (resolved
+     *  against the block table, with its placement, rotation, scale and any row/column
+     *  array applied) are read rather than discarded. Entity types with no curve meaning
+     *  are counted and reported through console warnings.
+     *
+     *  For DXF solids as a mesh, use {@link Mesh.fromDXF} instead. */
+    static fromDXF(data: string | Uint8Array | ArrayBuffer, _opts: ImportOptions = {}): ShapeCollection<Curve>
     {
         const bytes = Importer._toBytes(data);
         if(bytes.length === 0){ throw new Error('Importer.fromDXF(): empty DXF data.'); }
 
-        const SketchJsCls = getCsgrs().SketchJs as any;
-        let sketch: SketchJs | undefined;
+        let result: any;
         try
         {
-            sketch = SketchJsCls.fromDXF(bytes, opts.name ? { name: opts.name } : null);
-            return Curve.fromSketchJs(sketch!);
+            result = (getCsgrs() as any).importDxfCurves(bytes);
         }
         catch(e)
         {
             throw new Error(`Importer.fromDXF(): DXF import failed: ${(e as Error)?.message ?? e}`);
         }
-        finally { (sketch as any)?.free?.(); }
+
+        (result.warnings ?? []).forEach((w: string) => console.warn(`Importer.fromDXF(): ${w}`));
+
+        const out = new ShapeCollection<Curve>();
+        for(const c of result.takeCurves())
+        {
+            out.add(Curve.fromCurve3D(c));
+        }
+        return out;
     }
 
     /** Import a glTF 2.0 model (.glb or .gltf) as a merged Mesh. */

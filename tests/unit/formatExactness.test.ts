@@ -7,11 +7,11 @@
  * is not "less precise output": it is output that silently loses geometry the kernel is
  * holding exactly.
  *
- * Each `it.fails` below pins one such defect. Flip it to `it` in the stage that fixes it —
- * a passing `it.fails` fails the suite, so none of these can be quietly left behind.
+ * Every case below started as a failing `it.fails` pinning one such defect, and was flipped
+ * as its stage landed. They stay as regression cover for the specific way each one broke.
  */
 
-import { beforeAll, describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect, vi } from 'vitest';
 import { Curve, Importer, initAsync } from '../../src/index';
 
 beforeAll(async () =>
@@ -145,7 +145,7 @@ describe('DXF import preserves exact geometry', () =>
     // A LWPOLYLINE vertex carries a `bulge` (group 42): the tangent of a quarter of the
     // arc's included angle. It maps 1:1 onto Segment2::from_bulge, which hypercurve
     // already exposes and hcurve::circle already uses. Today it is simply never read.
-    it.fails('reads LWPOLYLINE bulges as native arcs', () =>
+    it('reads LWPOLYLINE bulges as native arcs', () =>
     {
         // A 20x20 square whose first edge bulges into a half circle (bulge 1 = 180°).
         const dxf = `0
@@ -190,7 +190,7 @@ EOF
 
     // ARC/CIRCLE are sampled at a fixed 48 chords regardless of radius or sweep, so a
     // 1° arc gets 48 segments and a 3-metre circle also gets 48.
-    it.fails('reads an ARC entity as one exact arc span', () =>
+    it('reads an ARC entity as one exact arc span', () =>
     {
         const dxf = `0
 SECTION
@@ -225,7 +225,7 @@ EOF
     });
 
     // ELLIPSE and SPLINE hit a catch-all `_ => {}` arm: dropped, with no warning at all.
-    it.fails('imports an ELLIPSE entity instead of dropping it', () =>
+    it('imports an ELLIPSE entity instead of dropping it', () =>
     {
         const dxf = `0
 SECTION
@@ -268,7 +268,7 @@ EOF
     // The exact circle is two half-arcs, so its bbox is the true diameter rather than the
     // inscribed 48-gon's. The existing DXF circle test uses toBeCloseTo(10, 1) precisely
     // because of that shortfall.
-    it.fails('imports a CIRCLE at full radius, not as an inscribed polygon', () =>
+    it('imports a CIRCLE at full radius, not as an inscribed polygon', () =>
     {
         const dxf = `0
 SECTION
@@ -294,5 +294,152 @@ EOF
         const curve = Importer.load(dxf).toArray()[0] as Curve;
         expect((curve.inner() as any).hasArcs()).toBe(true);
         expect(curve.bbox()!.width()).toBeCloseTo(10, 6);
+    });
+});
+
+/** A minimal ASCII DXF wrapping the given ENTITIES body. */
+function dxfDoc(entities: string, blocks = ''): string
+{
+    const b = blocks ? `0\nSECTION\n2\nBLOCKS\n${blocks}0\nENDSEC\n` : '';
+    return `0\nSECTION\n2\nENTITIES\n${entities}0\nENDSEC\n${b}0\nEOF\n`;
+}
+
+describe('DXF import: entities that used to be dropped', () =>
+{
+    it('reads a SPLINE as a real NURBS', () =>
+    {
+        // Degree 3, 4 control points, 8 knots — a single clamped Bézier-like span.
+        const dxf = dxfDoc(
+            `0\nSPLINE\n8\n0\n70\n8\n71\n3\n72\n8\n73\n4\n74\n0\n`
+            + `40\n0.0\n40\n0.0\n40\n0.0\n40\n0.0\n40\n1.0\n40\n1.0\n40\n1.0\n40\n1.0\n`
+            + `10\n0.0\n20\n0.0\n30\n0.0\n`
+            + `10\n10.0\n20\n20.0\n30\n0.0\n`
+            + `10\n30.0\n20\n-20.0\n30\n0.0\n`
+            + `10\n40.0\n20\n0.0\n30\n0.0\n`);
+        const curve = Importer.load(dxf).toArray()[0] as Curve;
+        expect(curve).toBeInstanceOf(Curve);
+        expect(curve.degree()).toBe(3);
+        expect(curve.segmentCount()).toBe(1);
+        const [s] = curve.spanParams();
+        expect(s.kind).toBe('spline');
+    });
+
+    it('refuses a SPLINE whose knots and control points disagree', () =>
+    {
+        // 3 knots for 4 control points at degree 3, where 8 are required.
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try
+        {
+            const dxf = dxfDoc(
+                `0\nSPLINE\n8\n0\n70\n8\n71\n3\n72\n3\n73\n4\n74\n0\n`
+                + `40\n0.0\n40\n0.5\n40\n1.0\n`
+                + `10\n0.0\n20\n0.0\n30\n0.0\n10\n10.0\n20\n20.0\n30\n0.0\n`
+                + `10\n30.0\n20\n-20.0\n30\n0.0\n10\n40.0\n20\n0.0\n30\n0.0\n`);
+            expect(Importer.load(dxf).toArray().length).toBe(0);
+            expect(warn).toHaveBeenCalledWith(expect.stringMatching(/SPLINE|knots/i));
+        }
+        finally { warn.mockRestore(); }
+    });
+
+    it('resolves an INSERT against the block table, including its array', () =>
+    {
+        // One block holding a 2x2 square, inserted as a 2x3 array at 100 apart.
+        const block = `0\nBLOCK\n8\n0\n2\nSQ\n70\n0\n10\n0.0\n20\n0.0\n30\n0.0\n3\nSQ\n1\n\n`
+            + `0\nLWPOLYLINE\n8\n0\n90\n4\n70\n1\n`
+            + `10\n0.0\n20\n0.0\n10\n2.0\n20\n0.0\n10\n2.0\n20\n2.0\n10\n0.0\n20\n2.0\n`
+            + `0\nENDBLK\n8\n0\n`;
+        const dxf = dxfDoc(
+            `0\nINSERT\n8\n0\n2\nSQ\n10\n10.0\n20\n5.0\n30\n0.0\n`
+            + `70\n2\n71\n3\n44\n100.0\n45\n50.0\n`,
+            block);
+
+        const curves = Importer.load(dxf).toArray() as Curve[];
+        expect(curves.length).toBe(6);            // 2 columns x 3 rows
+        // Placed at the insert point, not left at the block origin.
+        const xs = curves.map(c => c.bbox()!.min().x).sort((a, b) => a - b);
+        expect(xs[0]).toBeCloseTo(10, 6);
+        expect(xs[xs.length - 1]).toBeCloseTo(110, 6);
+        curves.forEach(c => expect(c.bbox()!.width()).toBeCloseTo(2, 6));
+    });
+
+    it('counts what it skipped instead of dropping it in silence', () =>
+    {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try
+        {
+            const dxf = dxfDoc(`0\nTEXT\n8\n0\n10\n0.0\n20\n0.0\n30\n0.0\n40\n2.5\n1\nhi\n`);
+            Importer.load(dxf);
+            expect(warn).toHaveBeenCalledWith(expect.stringMatching(/skipped.*TEXT/i));
+        }
+        finally { warn.mockRestore(); }
+    });
+});
+
+describe('SVG import: placement and partial recovery', () =>
+{
+    it('applies a group transform to its contents', () =>
+    {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg">`
+            + `<g transform="translate(10,20)"><rect x="0" y="0" width="30" height="40"/></g></svg>`;
+        const bb = (Importer.fromSVG(svg).toArray()[0] as Curve).bbox()!;
+        expect(bb.min().x).toBeCloseTo(10, 9);
+        expect(bb.min().y).toBeCloseTo(20, 9);
+        expect(bb.width()).toBeCloseTo(30, 9);
+    });
+
+    it('composes nested group transforms with an element transform', () =>
+    {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg">`
+            + `<g transform="translate(100,0)"><g transform="translate(0,50)">`
+            + `<rect x="0" y="0" width="10" height="10" transform="translate(1,2)"/>`
+            + `</g></g></svg>`;
+        const bb = (Importer.fromSVG(svg).toArray()[0] as Curve).bbox()!;
+        expect(bb.min().x).toBeCloseTo(101, 9);
+        expect(bb.min().y).toBeCloseTo(52, 9);
+    });
+
+    it('rotates about a point', () =>
+    {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg">`
+            + `<line x1="0" y1="0" x2="10" y2="0" transform="rotate(90 0 0)"/></svg>`;
+        const bb = (Importer.fromSVG(svg).toArray()[0] as Curve).bbox()!;
+        expect(bb.width()).toBeCloseTo(0, 9);
+        expect(bb.depth()).toBeCloseTo(10, 9);
+    });
+
+    it('rounds a rect with rx/ry instead of squaring the corners', () =>
+    {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg">`
+            + `<rect x="0" y="0" width="100" height="50" rx="10"/></svg>`;
+        const c = Importer.fromSVG(svg).toArray()[0] as Curve;
+        expect(c.hasArcs()).toBe(true);
+        expect(c.segmentCount()).toBe(8);        // 4 sides + 4 corners
+        expect(c.isClosed()).toBe(true);
+        const bb = c.bbox()!;
+        expect(bb.width()).toBeCloseTo(100, 9);
+        expect(bb.depth()).toBeCloseTo(50, 9);
+        // Quarter-turn corners.
+        c.spanParams().filter(s => s.kind === 'arc').forEach(s =>
+        {
+            if (s.kind !== 'arc') { return; }
+            expect(s.radius).toBeCloseTo(10, 9);
+        });
+    });
+
+    it('keeps the good subpaths when one of them cannot be parsed', () =>
+    {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try
+        {
+            // The second subpath has an elliptical arc, which hypercurve declines. The
+            // whole element used to be discarded on account of it.
+            const svg = `<svg xmlns="http://www.w3.org/2000/svg">`
+                + `<path d="M0,0 L10,0 L10,10 Z M50,50 A30,15 0 0 1 90,50"/></svg>`;
+            const curves = Importer.fromSVG(svg).toArray() as Curve[];
+            expect(curves.length).toBe(1);
+            expect(curves[0].bbox()!.width()).toBeCloseTo(10, 9);
+            expect(warn).toHaveBeenCalledWith(expect.stringMatching(/subpath/i));
+        }
+        finally { warn.mockRestore(); }
     });
 });
