@@ -870,8 +870,16 @@ export class Curve extends Shape
             {
                 // Both spans run the same way around the same ellipse, so the merged arc
                 // simply ends where this one does.
+                //
+                // The end parameter is stated as start + sweep rather than copied from the
+                // span. Parameters come from atan2, so a full turn would arrive back at its
+                // own start value and describe a zero-length arc — a whole ellipse written
+                // to DXF as `41=0 42=0` is an empty entity.
+                const sweep = Curve._mergedSweep(prev.ellipse, span.ellipse);
+                const endParam = prev.ellipse.startParam
+                    + (prev.ellipse.ccw ? sweep : -sweep);
                 out[out.length - 1] = { ...prev, end: span.end, mid: span.mid,
-                    ellipse: { ...prev.ellipse, endParam: span.ellipse.endParam } };
+                    ellipse: { ...prev.ellipse, endParam } };
                 continue;
             }
             out.push(span);
@@ -888,8 +896,10 @@ export class Curve extends Shape
                 && Curve._sameEllipse(first.ellipse, last.ellipse)
                 && Curve._mergedSweep(last.ellipse, first.ellipse) <= maxSweep + 1e-9)
             {
+                const sweep = Curve._mergedSweep(last.ellipse, first.ellipse);
+                const endParam = last.ellipse.startParam + (last.ellipse.ccw ? sweep : -sweep);
                 out[0] = { ...last, end: first.end, mid: first.mid,
-                    ellipse: { ...last.ellipse, endParam: first.ellipse.endParam } };
+                    ellipse: { ...last.ellipse, endParam } };
                 out.pop();
             }
         }
