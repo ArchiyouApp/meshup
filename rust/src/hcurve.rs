@@ -18,7 +18,8 @@
 use hypercurve::{
     Aabb2, ArcArcIntersection, BezierParallelVerificationOptions,
     BooleanOp, Classification,
-    CircularArc2, Contour2, Curve2, CurveGeometry2, CurvePath2, CurvePolicy, CurveRegion2,
+    CircularArc2, Contour2, Curve2, CurveFamily2, CurveGeometry2, CurvePath2, CurvePolicy,
+    CurveRegion2,
     CurveString2, EllipseMap2, FillRule,
     FiniteProjectionOptions, LineArcIntersection, LineArcRegion2, LineLineIntersection, LineSeg2,
     NurbsCurve2, Point2, RationalBezierIntersectionPointEvidence2, Real, RegionView2, Segment2,
@@ -404,25 +405,68 @@ pub fn param_closest_to_point(segs: &[Segment2], p: &Point2) -> Result<f64, Stri
                 };
                 ((a[0] + abx * u - q[0]).hypot(a[1] + aby * u - q[1]), u)
             }
-            Segment2::Arc(_) =>
+            Segment2::Arc(a) =>
             {
-                // Radial projection: sample the sweep coarsely, then refine — an arc's
-                // closest point is unimodal in the sweep parameter away from the centre.
-                let mut lo = 0.0f64;
-                let mut hi = 1.0f64;
-                let at = |u: f64| -> Result<f64, String> {
-                    let pt = point_at_arclen(std::slice::from_ref(seg), u)?;
-                    let xy = point_to_f64(&pt).ok_or("hcurve: arc sample not finite")?;
-                    Ok((xy[0] - q[0]).hypot(xy[1] - q[1]))
+                // Closed-form radial projection. The closest point on a circle to `q` lies
+                // on the ray from the centre through `q`, so the sweep fraction follows
+                // from three angles — no search.
+                //
+                // This replaced a 48-iteration ternary search that called back into exact
+                // arc evaluation twice per step: 96 exact evaluations per arc, per query,
+                // measured at 3.6 ms against 0.08 ms for the line case. `paramClosestToPoint`
+                // backs `distance()`, `cutoffBy()` and mesh intersection, so that cost was
+                // paid throughout an assembly.
+                //
+                // f64 trigonometry is deliberate: hypercurve's `sweep_fraction` needs a
+                // point certified as lying exactly on the arc, which a projected f64 point
+                // never is. Precision here still far exceeds the sampling it replaces.
+                const TAU: f64 = std::f64::consts::TAU;
+                let c = point_to_f64(a.center()).ok_or("hcurve: arc centre not finite")?;
+                let s = point_to_f64(a.start()).ok_or("hcurve: arc start not finite")?;
+                let e = point_to_f64(a.end()).ok_or("hcurve: arc end not finite")?;
+                let r = a
+                    .radius_squared()
+                    .to_f64_lossy()
+                    .ok_or("hcurve: arc radius not finite")?
+                    .sqrt();
+
+                let angle_of = |p: [f64; 2]| (p[1] - c[1]).atan2(p[0] - c[0]);
+                let cw = a.is_clockwise();
+                let start_angle = angle_of(s);
+                // Sweep travelled from start to end in traversal order, in (0, 2*pi].
+                // A full circle has start == end, which lands on exactly 2*pi.
+                let mut total = if cw { start_angle - angle_of(e) } else { angle_of(e) - start_angle };
+                while total <= 0.0 { total += TAU; }
+
+                let (vx, vy) = (q[0] - c[0], q[1] - c[1]);
+                let vlen = vx.hypot(vy);
+                let endpoint_pick = || {
+                    let ds = (s[0] - q[0]).hypot(s[1] - q[1]);
+                    let de = (e[0] - q[0]).hypot(e[1] - q[1]);
+                    if ds <= de { (ds, 0.0) } else { (de, 1.0) }
                 };
-                for _ in 0..48
+
+                if vlen <= 1.0e-12
                 {
-                    let m1 = lo + (hi - lo) / 3.0;
-                    let m2 = hi - (hi - lo) / 3.0;
-                    if at(m1)? < at(m2)? { hi = m2; } else { lo = m1; }
+                    // `q` is the centre: every point on the arc is equidistant.
+                    (r, 0.0)
                 }
-                let u = 0.5 * (lo + hi);
-                (at(u)?, u)
+                else
+                {
+                    let mut swept = if cw { start_angle - vy.atan2(vx) } else { vy.atan2(vx) - start_angle };
+                    while swept < 0.0 { swept += TAU; }
+                    let u = swept / total;
+                    if u <= 1.0
+                    {
+                        // The radial foot is inside the sweep, so it is the closest point
+                        // and its distance is just the radial offset.
+                        ((vlen - r).abs(), u)
+                    }
+                    else
+                    {
+                        endpoint_pick()
+                    }
+                }
             }
         };
         if dist < best.0
@@ -868,7 +912,7 @@ pub fn tessellate_path(path: &CurvePath2, chord_error: f64) -> Result<Vec<[f64; 
     Ok(out)
 }
 
-/// Sample count for one exact span at `chord_error`, scaled by the span's own size.
+/// Sample count for one exact span, at a chord error taken **relative to the span**.
 ///
 /// A uniform-parameter sampler does not *certify* the chord error the way
 /// [`CurvePath2::project_to_finite_polyline`] does, and this deliberately trades that
@@ -877,22 +921,42 @@ pub fn tessellate_path(path: &CurvePath2, chord_error: f64) -> Result<Vec<[f64; 
 /// cost of the native line/arc path — over a second to tessellate one spline, on a path
 /// that `toPolygon`, `toMesh`, GLTF export and `OBbox` all sit on.
 ///
-/// Unlike the sampler this replaced, the count scales with the span's control-polygon
-/// length instead of coming from a tolerance-only heuristic clamped at 128, so a large or
-/// eccentric span is no longer silently under-sampled. Exact geometry and exact point
-/// evaluation are unchanged; only the subdivision *proof* is dropped.
+/// `chord_error` is read as a **fraction of the span's own size**, not as an absolute
+/// distance. It arrives here as a bare number with no unit attached, and the same model is
+/// authored in metres by one script and millimetres by another: read absolutely,
+/// `DEFAULT_CHORD_ERROR` (1e-4) asks for 0.1 mm accuracy on the first and 0.1 *micron* on
+/// the second. That is what an earlier revision of this function did, and on a house
+/// measured in millimetres it turned one 2500 mm span into `sqrt(2500 / 8e-4)` = 1768
+/// chords — feeding mesh CSG geometry ~50x denser than it needs and costing the house
+/// script 10x its runtime, for accuracy far below what any display or mesh can show.
+///
+/// Reading it relatively makes the count depend on the curve's shape rather than on the
+/// units it happens to be measured in, and keeps a caller that asks for something finer
+/// (`Curve.perpendicularPointTo` samples at 1e-4, `tessellate(1e-5)`) getting it.
+/// Exact geometry and exact point evaluation are unchanged; only the subdivision *proof*
+/// is dropped.
 fn span_samples(curve: &Curve2, chord_error: f64) -> usize
 {
-    let tol = if chord_error.is_finite() && chord_error > 0.0 { chord_error } else { 1.0e-4 };
-    // Chord length is a cheap lower bound on span size; endpoints are exact and finite.
-    let extent = match (point_to_f64(curve.start()), point_to_f64(curve.end()))
+    // A straight span is its own chord: every interior sample lands on the line it already
+    // describes, so subdividing one only inflates the polyline. This is not an optimisation
+    // of an approximation — two points are the exact answer.
+    if matches!(curve.family(), CurveFamily2::Line)
     {
-        (Some(a), Some(b)) => (b[0] - a[0]).hypot(b[1] - a[1]).max(1.0),
-        _ => 1.0,
-    };
-    // For a chord subtending a span of size L, deviation falls as (L/n)^2 / R, so n grows
-    // as sqrt(L / tol). Generous upper bound rather than a hard accuracy ceiling.
-    ((extent / (8.0 * tol)).sqrt().ceil() as usize).clamp(8, 4096)
+        return 1;
+    }
+    let tol = if chord_error.is_finite() && chord_error > 0.0 { chord_error } else { 1.0e-4 };
+    // For a chord over 1/n of a span, deviation falls as (L/n)^2 / R, so holding it to a
+    // fixed fraction of L makes n depend only on the tolerance — which is the point: the
+    // span's size cancels, so the count cannot run away with the model's units.
+    //
+    // The constant is calibrated to `0.5 / sqrt(tol)`: the density of the tolerance-only
+    // heuristic this replaced, and therefore the density every fixture and threshold in the
+    // suite is written against. It is a heuristic, not a bound — the (L/n)^2 / R estimate
+    // assumes a span no more sharply curved than its own extent, and a tighter one deviates
+    // proportionally more. Callers needing a *certified* chord error use the projection path
+    // (`tessellate_open` / `tessellate_closed`) instead. The clamp is a backstop against a
+    // pathological tolerance, not an accuracy ceiling: 1e-5 yields 158 samples, 1e-6 yields 500.
+    ((1.0 / (4.0 * tol)).sqrt().ceil() as usize).clamp(8, 512)
 }
 
 /// Build a planar similarity transform from f64 affine entries

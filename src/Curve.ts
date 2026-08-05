@@ -42,10 +42,19 @@ import { GLTFBuilder } from './GLTFBuilder';
 import { Selector } from './Selector';
 
 
-/** Chord tolerance used when locating perpendicular feet. Matches the kernel's own DEFAULT_CHORD
- *  (see wasm/curve_js.rs) so the sampled polyline is the one pointAtParam() interpolates over,
- *  rather than the coarser TESSELATION_TOLERANCE used for display tessellation. */
-const PERPENDICULAR_CHORD_TOLERANCE = 1e-4;
+/** Chord tolerance used when locating perpendicular feet.
+ *
+ *  Much finer than the kernel's display tolerance, because this search needs more from the
+ *  polyline than looking right: a candidate foot is accepted only when the connector meets the
+ *  *segment direction* within PERPENDICULAR_ANGLE_TOLERANCE (~1°), and a chord's direction
+ *  differs from the curve's true tangent by roughly the angle the curve turns across it. Sample
+ *  a curve too coarsely and every genuine foot is thrown out as if it were a corner — the chord
+ *  it was found on simply does not point where the curve does. At this tolerance the kernel
+ *  lays ~500 samples along a span, turning well under a degree per chord.
+ *
+ *  Note the kernel reads a chord tolerance as a fraction of the span, not as a distance in
+ *  model units, so this stays meaningful whether a script works in metres or millimetres. */
+const PERPENDICULAR_CHORD_TOLERANCE = 1e-6;
 
 /** How far off a right angle a connector may be (~1°) and still count as perpendicular. Wide
  *  enough to absorb the chord tolerance above, narrow enough to reject corners. */

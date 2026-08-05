@@ -185,14 +185,26 @@ describe('Curve3DJs (hypercurve-backed planar 3D curve)', () =>
         // numbers rather than reusing the Point3Js objects afterwards.
         const curve = wasm.Curve3DJs.makeInterpolated(coords.map(([x, y, z]) => P(x, y, z)), 3);
         const tess = curve.tessellate(1e-5);
-        for (const [qx, qy, qz] of coords)
+        // Measured point-to-SEGMENT, not to the nearest vertex. A chord tolerance bounds how
+        // far the polyline strays from the curve, not how closely its vertices happen to land
+        // on any particular on-curve point — nearest-vertex only looks right when the sampler
+        // is dense enough for a vertex to fall next to each input by luck, and it fails an
+        // interpolating curve that is exact. Same reasoning as exactness.test.ts.
+        const distToSeg = (q: number[], a: any, b: any): number =>
+        {
+            const abx = b.x - a.x, aby = b.y - a.y, abz = b.z - a.z;
+            const len2 = abx * abx + aby * aby + abz * abz;
+            const t = len2 === 0 ? 0
+                : Math.max(0, Math.min(1, ((q[0] - a.x) * abx + (q[1] - a.y) * aby + (q[2] - a.z) * abz) / len2));
+            return Math.hypot(a.x + abx * t - q[0], a.y + aby * t - q[1], a.z + abz * t - q[2]);
+        };
+        for (const q of coords)
         {
             let min = Infinity;
-            for (const p of tess)
-            {
-                min = Math.min(min, Math.hypot(p.x - qx, p.y - qy, p.z - qz));
-            }
-            expect(min).toBeLessThan(2e-2); // nearest stored polyline vertex to an on-curve input
+            for (let i = 0; i < tess.length - 1; i++) { min = Math.min(min, distToSeg(q, tess[i], tess[i + 1])); }
+            // A curve that did NOT interpolate would miss by something on the order of the
+            // data spacing (units), not by a chord tolerance.
+            expect(min).toBeLessThan(2e-2);
         }
     });
 });

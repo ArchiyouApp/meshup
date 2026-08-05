@@ -19,6 +19,19 @@ use wasm_bindgen::prelude::*;
 
 const DEFAULT_CHORD: f64 = hcurve::DEFAULT_CHORD_ERROR;
 
+/// Chord error for the polylines that back **parameter inversion** on a [`Geom::Path`]
+/// (`pointAt`, `paramAtLength`, `paramClosestToPoint`, and everything layered on them —
+/// `tangentAt`, `Curve.distance`, `Curve.closestPoints`, `Curve.perpendicularPointTo`).
+///
+/// Deliberately far finer than [`DEFAULT_CHORD`]. That one sizes a polyline meant to be
+/// *looked at*, where a chord under a pixel is indistinguishable from the curve and extra
+/// vertices cost triangles in every downstream mesh. Inversion is the opposite trade: the
+/// table is transient, nothing downstream carries its vertex count, and its spacing sets
+/// how far the answer can be from the true parameter — a coarse table hands back a point
+/// and a tangent from the wrong place on the curve. Only [`Geom::Path`] pays it at all;
+/// line/arc geometry inverts in closed form and never builds a table.
+const INVERSION_CHORD: f64 = 1.0e-6;
+
 /// An orthonormal planar frame in 3D: `world = origin + x·u + y·v`.
 #[derive(Clone, Debug)]
 struct Frame
@@ -489,7 +502,7 @@ impl Curve3DJs
                 return Ok(self.frame.to_world(seg_local(&local)));
             }
         }
-        let (pts, cum) = self.arc_length_table(DEFAULT_CHORD).map_err(err)?;
+        let (pts, cum) = self.arc_length_table(INVERSION_CHORD).map_err(err)?;
         if pts.is_empty()
         {
             return Err(JsValue::from_str("Curve3DJs: empty curve"));
@@ -983,7 +996,7 @@ impl Curve3DJs
     #[wasm_bindgen(js_name = paramAtLength)]
     pub fn param_at_length(&self, len: f64) -> Result<f64, JsValue>
     {
-        let (_, cum) = self.arc_length_table(DEFAULT_CHORD).map_err(err)?;
+        let (_, cum) = self.arc_length_table(INVERSION_CHORD).map_err(err)?;
         let total = cum.last().copied().unwrap_or(0.0);
         if total <= 0.0
         {
@@ -1031,7 +1044,7 @@ impl Curve3DJs
                 return hcurve::param_closest_to_point(segs, &q).map_err(err);
             }
         }
-        let (pts, cum) = self.arc_length_table(DEFAULT_CHORD).map_err(err)?;
+        let (pts, cum) = self.arc_length_table(INVERSION_CHORD).map_err(err)?;
         let total = cum.last().copied().unwrap_or(0.0);
         if pts.len() < 2 || total <= 0.0
         {
