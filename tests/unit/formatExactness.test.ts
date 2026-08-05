@@ -31,7 +31,7 @@ describe('SVG export preserves exact spans', () =>
     // DEFECT A — toSVGElem()'s span switch has no 'Ellipse' case, so a rational-conic
     // span falls into `default:` and is written as tessellated `L` chords. SVG has had a
     // native elliptical-arc command since forever; there is nothing to approximate.
-    it.fails('writes an ellipse as an A command, not as chords', () =>
+    it('writes an ellipse as an A command, not as chords', () =>
     {
         const svg = Curve.Ellipse(50, 25).toSVGElem();
         const cmds = commandsOf(svg);
@@ -47,7 +47,7 @@ describe('SVG export preserves exact spans', () =>
     // wrapper then rewrites to [0,1]), while degree() still says 3. _bsplineToBezierSegments
     // computes numSegments = (2-1)/3 = 0.333, and `Array.from({ length: 0.333 })` is [] —
     // so the loop that emits the C command runs zero times. No warning, no fallback.
-    it.fails('does not silently drop a cubic Bézier span', () =>
+    it('does not silently drop a cubic Bézier span', () =>
     {
         const src = `<svg xmlns="http://www.w3.org/2000/svg"><path d="M10,10 C 20,20 40,20 50,10 L 50,40 Z"/></svg>`;
         const curve = Importer.fromSVG(src).toArray()[0] as Curve;
@@ -63,12 +63,76 @@ describe('SVG export preserves exact spans', () =>
 
     // The arc writer re-derives the circle from three tessellation samples via a
     // circumcircle, so its radius carries chord error instead of the kernel's exact value.
-    it.fails('writes an arc radius exactly, not via a circumcircle of samples', () =>
+    it('writes an arc radius exactly, not via a circumcircle of samples', () =>
     {
         const r = 37.5;
         const arc = Curve.EllipticalArc(r, r, 0, 90);
         const rx = /A\s*([0-9.eE+-]+)/.exec(/d="([^"]*)"/.exec(arc.toSVGElem())?.[1] ?? '')?.[1];
         expect(Number(rx)).toBeCloseTo(r, 9);
+    });
+});
+
+describe('SVG export writes the right arc, not just an arc', () =>
+{
+    /** The `A` commands of a path element, as parsed argument lists. */
+    function arcsOf(svgElem: string): number[][]
+    {
+        const d = /d="([^"]*)"/.exec(svgElem)?.[1] ?? '';
+        return [...d.matchAll(/A\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+([01])\s+([01])\s+(-?[\d.]+)\s+(-?[\d.]+)/g)]
+            .map(m => m.slice(1).map(Number));
+    }
+
+    it('writes the semi-axes and rotation of a tilted ellipse', () =>
+    {
+        // rotation is in DEGREES here, matching Curve.Ellipse's own argument.
+        const arcs = arcsOf(Curve.Ellipse(50, 25, [0, 0, 0], 30).toSVGElem());
+        expect(arcs.length).toBeGreaterThan(0);
+        arcs.forEach(([rx, ry, rot]) =>
+        {
+            expect(rx).toBeCloseTo(50, 6);
+            expect(ry).toBeCloseTo(25, 6);
+            // Negated, because SVG's y axis points down and the export mirrors every point
+            // on the way out — the axis direction is mirrored with them.
+            expect(rot).toBeCloseTo(-30, 6);
+        });
+    });
+
+    it('splits a full ellipse into two arcs rather than one degenerate one', () =>
+    {
+        const elem = Curve.Ellipse(50, 25).toSVGElem();
+        const arcs = arcsOf(elem);
+        // An `A` whose endpoint equals its start point draws nothing at all, so a whole
+        // ellipse cannot be one command however tempting the arithmetic looks.
+        expect(arcs.length).toBe(2);
+        const d = /d="([^"]*)"/.exec(elem)?.[1] ?? '';
+        const start = /M(-?[\d.]+) (-?[\d.]+)/.exec(d)!.slice(1).map(Number);
+        const firstEnd = arcs[0].slice(5);
+        expect(Math.hypot(firstEnd[0] - start[0], firstEnd[1] - start[1])).toBeGreaterThan(1);
+        // Both halves agree about a flag that describes the same arc either way at
+        // exactly half a turn.
+        expect(arcs[0][3]).toBe(arcs[1][3]);
+        expect(arcs[0][4]).toBe(arcs[1][4]);
+    });
+
+    it('keeps a circle as <circle> but refuses to call a lens one', () =>
+    {
+        expect(Curve.Circle(37.5).toSVGElem()).toContain('<circle');
+
+        // Two arcs of different centres. subtype() calls this "Circle" — anything closed
+        // and made only of arcs gets that name — so the writer has to check the spans.
+        const lens = Curve.Circle(50).intersection(Curve.Circle(50, [60, 0, 0])) as Curve;
+        expect(lens).toBeInstanceOf(Curve);
+        expect(lens.subtype()).toBe('Circle');       // guard the premise
+        expect(lens.toSVGElem()).not.toContain('<circle');
+    });
+
+    it('takes an arc radius from the kernel, not from a bounding box', () =>
+    {
+        // A quarter circle's bbox is smaller than its diameter, so a bbox-derived radius
+        // would come out wrong here in a way a full circle would hide.
+        const [arc] = arcsOf(Curve.EllipticalArc(80, 80, 0, 90).toSVGElem());
+        expect(arc[0]).toBeCloseTo(80, 9);
+        expect(arc[1]).toBeCloseTo(80, 9);
     });
 });
 

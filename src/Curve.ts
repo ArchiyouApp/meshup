@@ -848,9 +848,16 @@ export class Curve extends Shape
      *
      *  Spans that are not conics, and conics whose ellipse could not be reconstructed,
      *  pass through untouched.
+     *
+     *  @param opts.maxSweep  Largest arc, in radians, a merged conic span may cover.
+     *         Formats differ in what a single primitive can say: DXF's `ELLIPSE` carries a
+     *         full turn happily, while an SVG `A` cannot — its endpoints would coincide and
+     *         renderers drop the command — so the SVG writer passes `Math.PI` and gets two
+     *         half-ellipses instead of one degenerate arc. Defaults to no limit.
      */
-    exportSpans(): Array<SpanParams>
+    exportSpans(opts: { maxSweep?: number } = {}): Array<SpanParams>
     {
+        const maxSweep = opts.maxSweep ?? Infinity;
         const spans = this.spanParams();
         const out: Array<SpanParams> = [];
 
@@ -858,7 +865,8 @@ export class Curve extends Shape
         {
             const prev = out[out.length - 1];
             if (span.kind === 'conic' && span.ellipse && prev?.kind === 'conic' && prev.ellipse
-                && Curve._sameEllipse(prev.ellipse, span.ellipse))
+                && Curve._sameEllipse(prev.ellipse, span.ellipse)
+                && Curve._mergedSweep(prev.ellipse, span.ellipse) <= maxSweep + 1e-9)
             {
                 // Both spans run the same way around the same ellipse, so the merged arc
                 // simply ends where this one does.
@@ -869,13 +877,16 @@ export class Curve extends Shape
             out.push(span);
         }
 
-        // A closed curve's spans wrap, so the last may continue into the first.
+        // A closed curve's spans wrap, so the last may continue into the first. Subject to
+        // the same cap: without it a full ellipse capped to two half-turns above would be
+        // folded straight back into one, which is what this option exists to prevent.
         if (out.length > 1 && this.isClosed())
         {
             const [first] = out;
             const last = out[out.length - 1];
             if (first.kind === 'conic' && first.ellipse && last.kind === 'conic' && last.ellipse
-                && Curve._sameEllipse(first.ellipse, last.ellipse))
+                && Curve._sameEllipse(first.ellipse, last.ellipse)
+                && Curve._mergedSweep(last.ellipse, first.ellipse) <= maxSweep + 1e-9)
             {
                 out[0] = { ...last, end: first.end, mid: first.mid,
                     ellipse: { ...last.ellipse, endParam: first.ellipse.endParam } };
@@ -883,6 +894,23 @@ export class Curve extends Shape
             }
         }
         return out;
+    }
+
+    /** Arc covered, in radians, by merging conic span `b` onto the end of span `a`. */
+    private static _mergedSweep(a: SpanEllipse, b: SpanEllipse): number
+    {
+        const turn = Math.PI * 2;
+        // Wraps into (0, 2*PI], not [0, 2*PI): a span is never degenerate, so coincident
+        // ends mean a full turn, not a zero one. Mapping that to 0 made a whole ellipse
+        // look like the smallest possible arc and slip past every sweep limit.
+        const wrap = (x: number) =>
+        {
+            const r = ((x % turn) + turn) % turn;
+            return r <= 1e-12 ? turn : r;
+        };
+        // Parameters always increase counter-clockwise; `ccw` says whether the span is
+        // travelled that way.
+        return a.ccw ? wrap(b.endParam - a.startParam) : wrap(a.startParam - b.endParam);
     }
 
     /** Whether two conic spans lie on the same ellipse and run the same way round it. */
@@ -3690,89 +3718,164 @@ export class Curve extends Shape
     toSVGElem(cssClass?: string, styleOpts?: { nonScalingStroke?: boolean; omitDefaults?: boolean }): string
     {
         const fmt = (n: number) => +n.toFixed(6);
-        const to2D = (p: { x: number; y: number; z: number }): [number, number] => [p.x, -p.y];
+        // SVG's y axis points down, so every model point is mirrored on the way out. That
+        // flip reverses handedness, which is why the arc writers below decide their sweep
+        // flag from the projected points rather than from the span's own `ccw`.
+        const to2D = (p: SpanPoint): [number, number] => [p[0], -p[1]];
         const classAttr = cssClass ? ` class="${cssClass}"` : '';
 
-        if (this.subtype() === 'Circle')
+        // Half a turn at most per span: an SVG `A` whose endpoints coincide is dropped by
+        // renderers, so a full ellipse has to leave as two arcs rather than one.
+        const spans = this.exportSpans({ maxSweep: Math.PI });
+
+        // A whole circle is better said as <circle> than as a path of two arcs. Decided
+        // from the spans, not from subtype(): that calls any closed arcs-only contour a
+        // "Circle", so a two-arc lens would take this path and be drawn as a circle.
+        const circle = Curve._asCircle(spans, this.isClosed());
+        if (circle)
         {
-            const bb = this.bbox();
-            if (bb)
-            {
-                const cx = fmt((bb.min().x + bb.max().x) / 2);
-                const cy = fmt(-((bb.min().y + bb.max().y) / 2));
-                const r  = fmt((bb.max().x - bb.min().x) / 2);
-                return `<circle cx="${cx}" cy="${cy}" r="${r}"${classAttr} ${this.style.toSvgAttrs(true, styleOpts)}/>`;
-            }
+            const [cx, cy] = to2D(circle.center);
+            return `<circle cx="${fmt(cx)}" cy="${fmt(cy)}" r="${fmt(circle.radius)}"${classAttr} `
+                + `${this.style.toSvgAttrs(true, styleOpts)}/>`;
         }
 
         const pathParts: string[] = [];
-        const spans = this._getSvgSpans();
+        const L = (p: SpanPoint) => { const [x, y] = to2D(p); pathParts.push(`L${fmt(x)} ${fmt(y)}`); };
 
-        spans.forEach((spanRaw, si) =>
+        /** `A rx ry rot large-arc sweep x y`, with both flags read off the projection. */
+        const arcTo = (rx: number, ry: number, rotDeg: number, from: SpanPoint, mid: SpanPoint,
+                       to: SpanPoint, largeArc: boolean): void =>
         {
-            const spanCurve = spanRaw;
-            const cps = spanCurve.controlPoints();
-            const curveType = spanCurve.subtype();
+            const [ax, ay] = to2D(from);
+            const [mx, my] = to2D(mid);
+            const [bx, by] = to2D(to);
+            // Orientation of the projected start->mid->end turn. Robust to a curve plane
+            // whose normal points at -Z, which no in-plane flag can tell you about.
+            const cross = (mx - ax) * (by - my) - (my - ay) * (bx - mx);
+            const sweepFlag = cross > 0 ? 1 : 0;
+            pathParts.push(`A${fmt(rx)} ${fmt(ry)} ${fmt(rotDeg)} ${largeArc ? 1 : 0} ${sweepFlag} `
+                + `${fmt(bx)} ${fmt(by)}`);
+        };
 
+        /** Last resort for a span no path command can express.
+         *
+         *  Only reachable for geometry the kernel itself flagged as undescribable (a
+         *  parabolic or hyperbolic conic, a spline whose knot vector does not match its
+         *  control net). A chord is crude, but it is visible and finite — the point is
+         *  that a span never contributes *nothing*, which is exactly how a cubic Bézier
+         *  used to disappear from an exported path without a word. */
+        const chordTo = (span: SpanParams): void =>
+        {
+            console.warn(`Curve::toSVGElem(): span of kind '${span.kind}' cannot be written `
+                + `as a path command; approximating it with a straight chord.`);
+            L(span.end);
+        };
+
+        spans.forEach((span, si) =>
+        {
             if (si === 0)
             {
-                const [sx, sy] = to2D(cps[0]);
+                const [sx, sy] = to2D(span.start);
                 pathParts.push(`M${fmt(sx)} ${fmt(sy)}`);
             }
 
-            switch (curveType)
+            switch (span.kind)
             {
-                case 'Line':
-                case 'Polyline':
-                case 'Rect':
-                {
-                    cps.slice(1).forEach(cp =>
-                    {
-                        const [x, y] = to2D(cp);
-                        pathParts.push(`L${fmt(x)} ${fmt(y)}`);
-                    });
+                case 'line':
+                    L(span.end);
                     break;
-                }
-                case 'Arc':
-                case 'Circle':
-                {
-                    _appendArcSvg(spanRaw, to2D, fmt, pathParts);
-                    break;
-                }
-                case 'Spline':
-                {
-                    const deg = spanRaw.degree() ?? 1;
-                    const weights = Array.from(spanRaw.weights());
-                    const bezierSegs = _bsplineToBezierSegments(
-                        spanRaw.controlPoints(), Array.from(spanRaw.knots()), weights, deg);
 
-                    if (deg === 2)
+                case 'arc':
+                {
+                    // Exact centre and radius from the kernel — not a circumcircle fitted
+                    // to three tessellation samples, which carried the chord error of a
+                    // polyline the curve never needed to build.
+                    const full = Math.abs(Math.abs(span.sweep) - Math.PI * 2) < 1e-9;
+                    if (full)
                     {
-                        bezierSegs.forEach(seg =>
-                        {
-                            const [, cp1, end] = seg.map(to2D);
-                            pathParts.push(`Q${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(end[0])} ${fmt(end[1])}`);
-                        });
+                        // No single A command can close a full turn: its endpoints would
+                        // coincide and the arc would be dropped. Split at the midpoint.
+                        arcTo(span.radius, span.radius, 0, span.start, span.start, span.mid, true);
+                        arcTo(span.radius, span.radius, 0, span.mid, span.mid, span.end, true);
                     }
                     else
                     {
-                        bezierSegs.forEach(seg =>
-                        {
-                            const [, cp1, cp2, end] = seg.map(to2D);
-                            pathParts.push(`C${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(cp2[0])} ${fmt(cp2[1])} ${fmt(end[0])} ${fmt(end[1])}`);
-                        });
+                        arcTo(span.radius, span.radius, 0, span.start, span.mid, span.end,
+                            Math.abs(span.sweep) > Math.PI);
                     }
                     break;
                 }
-                default:
+
+                case 'conic':
                 {
-                    spanCurve.tessellate().slice(1).forEach(pt =>
+                    const e = span.ellipse;
+                    if (!e) { chordTo(span); break; }
+                    const rx = Math.hypot(e.majorAxis[0], e.majorAxis[1], e.majorAxis[2]);
+                    const ry = rx * e.ratio;
+                    // Measured after the y-flip: the flip mirrors the axis direction too,
+                    // so a tilted ellipse would otherwise come out reflected.
+                    const [mjx, mjy] = to2D(e.majorAxis);
+                    const rot = Math.atan2(mjy, mjx) * 180 / Math.PI;
+
+                    let sweep = e.ccw ? e.endParam - e.startParam : e.startParam - e.endParam;
+                    sweep = ((sweep % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+                    // maxSweep above caps merged spans at half a turn, so no span can reach
+                    // here with coincident endpoints. The tolerance keeps the two halves of
+                    // a split ellipse from disagreeing about a flag that, at exactly half a
+                    // turn, describes the same arc either way.
+                    arcTo(rx, ry, rot, span.start, span.mid, span.end, sweep > Math.PI + 1e-9);
+                    break;
+                }
+
+                case 'quadratic':
+                {
+                    const [c1] = [to2D(span.control)];
+                    const [ex, ey] = to2D(span.end);
+                    pathParts.push(`Q${fmt(c1[0])} ${fmt(c1[1])} ${fmt(ex)} ${fmt(ey)}`);
+                    break;
+                }
+
+                case 'cubic':
+                {
+                    // Straight from the span's own control points. This used to route
+                    // through the B-spline decomposition, which had no knot vector to work
+                    // with and silently emitted nothing at all.
+                    const c1 = to2D(span.control1);
+                    const c2 = to2D(span.control2);
+                    const [ex, ey] = to2D(span.end);
+                    pathParts.push(`C${fmt(c1[0])} ${fmt(c1[1])} ${fmt(c2[0])} ${fmt(c2[1])} `
+                        + `${fmt(ex)} ${fmt(ey)}`);
+                    break;
+                }
+
+                case 'spline':
+                {
+                    const pts = span.controlPoints.map(p => ({ x: p[0], y: p[1], z: p[2] }));
+                    const segs = _bsplineToBezierSegments(pts, span.knots, span.weights, span.degree);
+                    if (segs.length === 0) { chordTo(span); break; }
+
+                    const at = (p: { x: number; y: number; z: number }): [number, number] =>
+                        to2D([p.x, p.y, p.z]);
+                    segs.forEach(seg =>
                     {
-                        const [x, y] = to2D(pt);
-                        pathParts.push(`L${fmt(x)} ${fmt(y)}`);
+                        if (span.degree === 2)
+                        {
+                            const [, cp1, end] = seg.map(at);
+                            pathParts.push(`Q${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(end[0])} ${fmt(end[1])}`);
+                        }
+                        else
+                        {
+                            const [, cp1, cp2, end] = seg.map(at);
+                            pathParts.push(`C${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(cp2[0])} ${fmt(cp2[1])} `
+                                + `${fmt(end[0])} ${fmt(end[1])}`);
+                        }
                     });
                     break;
                 }
+
+                default:
+                    chordTo(span);
+                    break;
             }
         });
 
@@ -3780,6 +3883,33 @@ export class Curve extends Shape
 
         const d = pathParts.join(' ');
         return `<path d="${d}"${classAttr} ${this.style.toSvgAttrs(this.isClosed(), styleOpts)}/>`;
+    }
+
+    /** The circle these spans describe, or null if they describe anything else.
+     *
+     *  Every span must be an arc on one common centre and radius, and together they must
+     *  close a full turn. A two-arc lens fails on the centres; a semicircular cap fails on
+     *  the total sweep. */
+    private static _asCircle(spans: Array<SpanParams>, closed: boolean)
+        : { center: SpanPoint, radius: number } | null
+    {
+        if (!closed || spans.length === 0) { return null; }
+        const first = spans[0];
+        if (first.kind !== 'arc') { return null; }
+
+        let total = 0;
+        for (const s of spans)
+        {
+            if (s.kind !== 'arc') { return null; }
+            if (Math.abs(s.radius - first.radius) > first.radius * 1e-9) { return null; }
+            const d = Math.hypot(s.center[0] - first.center[0], s.center[1] - first.center[1],
+                s.center[2] - first.center[2]);
+            if (d > first.radius * 1e-9) { return null; }
+            total += s.sweep;
+        }
+        return Math.abs(Math.abs(total) - Math.PI * 2) < 1e-9
+            ? { center: first.center, radius: first.radius }
+            : null;
     }
 
     /** Export this curve as a self-contained GLTF JSON string (LINE_STRIP). */
@@ -3874,6 +4004,19 @@ function _bsplineToBezierSegments(
     // After full knot insertion, each Bezier segment spans (p+1) control points
     // with overlap at boundary points.
     const numSegments = (pts.length - 1) / p;
+
+    // A whole number is not optional here, it is what "decomposed into Bezier segments"
+    // means. When it was not one — degree 3 over 2 control points gives 0.333 —
+    // Array.from({ length: 0.333 }) quietly produced an empty list, so the span emitted no
+    // path commands at all and a cubic Bezier vanished from the exported file. Failing
+    // loudly and letting the caller fall back is the only acceptable outcome.
+    if (!Number.isInteger(numSegments) || numSegments < 1)
+    {
+        console.warn(`Curve: cannot decompose a degree-${p} spline over ${pts.length} control `
+            + `points into Bezier segments (${numSegments} of them); the knot vector and control `
+            + `net disagree. Falling back to an approximation.`);
+        return [];
+    }
 
     return Array.from({ length: numSegments }, (_, i) =>
         Array.from({ length: p + 1 }, (_, j) =>
