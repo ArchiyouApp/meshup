@@ -81,6 +81,77 @@ export function isBasePlane(obj: any): obj is BasePlane {
   return ['xy', 'yz', 'xz', 'front', 'back', 'left', 'right', 'top', 'bottom'].includes(obj);
 }
 
+//// EXACT SPAN PARAMETERS ////
+
+/** A world-space 3D point as a plain triple, the form `Curve3DJs.spanParams()` returns. */
+export type SpanPoint = [number, number, number];
+
+/** The ellipse a conic span lies on, in world space.
+ *
+ *  `majorAxis` is the centre-to-major-axis-endpoint **vector**, not a length — DXF's
+ *  `ELLIPSE` entity wants it that way (groups 11/21/31), and it carries the rotation an
+ *  SVG `A` command needs at the same time. `startParam`/`endParam` are eccentric
+ *  anomalies in that frame, ordered so a counter-clockwise sweep from the first reaches
+ *  the second along the actual span. */
+export interface SpanEllipse
+{
+    center: SpanPoint;
+    majorAxis: SpanPoint;
+    ratio: number;
+    startParam: number;
+    endParam: number;
+    ccw: boolean;
+}
+
+/** One exact span of a Curve, described by the parameters a file format needs.
+ *
+ *  Returned by {@link Curve.spanParams}. See that method for why the other accessors
+ *  (`subtype()`, `controlPoints()`, `knots()`) cannot answer this question.
+ */
+export type SpanParams =
+    | { kind: 'line'; start: SpanPoint; end: SpanPoint }
+    | {
+        kind: 'arc';
+        start: SpanPoint;
+        /** Exact on-curve midpoint — with the endpoints it settles world orientation,
+         *  which `ccw` alone cannot: `ccw` is measured in the curve's own plane, and a
+         *  plane's normal may point at -Z. */
+        mid: SpanPoint;
+        end: SpanPoint;
+        center: SpanPoint;
+        radius: number;
+        ccw: boolean;
+        /** Signed radians, positive counter-clockwise in the curve's plane. */
+        sweep: number;
+        /** `tan(sweep / 4)` — a DXF LWPOLYLINE vertex bulge, ready to write. */
+        bulge: number;
+    }
+    | { kind: 'quadratic'; start: SpanPoint; control: SpanPoint; end: SpanPoint }
+    | { kind: 'cubic'; start: SpanPoint; control1: SpanPoint; control2: SpanPoint; end: SpanPoint }
+    | {
+        kind: 'conic';
+        start: SpanPoint;
+        mid: SpanPoint;
+        end: SpanPoint;
+        control: SpanPoint;
+        /** Normalised middle weight: < 1 ellipse, 1 parabola, > 1 hyperbola. */
+        weight: number;
+        /** Absent for a parabola or hyperbola, and when the reconstruction failed its own
+         *  accuracy check. Write the rational quadratic or tessellate — never an ellipse. */
+        ellipse?: SpanEllipse;
+    }
+    | {
+        kind: 'spline';
+        degree: number;
+        controlPoints: SpanPoint[];
+        knots: number[];
+        weights: number[];
+        rational: boolean;
+        start: SpanPoint;
+        end: SpanPoint;
+    }
+    | { kind: 'unsupported'; reason: string; start: SpanPoint; end: SpanPoint };
+
 //// OUTPUT TYPES ////
 
 export interface GLTFBuffer 

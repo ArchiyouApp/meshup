@@ -61,6 +61,28 @@ export class Curve3DJs {
    */
   rotateAxis(angle: number, ax: number, ay: number, az: number): Curve3DJs;
   /**
+   * Every exact span, described by the parameters a file format needs to write it.
+   *
+   * One entry per span, in order, matching [`Self::segment_count`]. Each is a plain JS
+   * object tagged by `kind`, carrying world-space 3D points and — for arcs and conics —
+   * the centre, radius, sweep and axes that define the underlying circle or ellipse.
+   *
+   * This exists because the other accessors answer questions a *writer* cannot use.
+   * `subtype()` names the whole curve, not a span, and has no name for "lines and arcs
+   * mixed"; `controlPoints()` returns span endpoints, which is an arc's chord; `knots()`
+   * and `weights()` are empty unless the curve is one single NURBS span. Given only
+   * those, an exporter has to guess — and both of meshup's exporters guessed wrong, one
+   * re-deriving an arc's circle from three tessellated samples and the other writing a
+   * malformed SPLINE for any curve with a fillet in it.
+   *
+   * Deliberately plain data rather than a list of exported objects: a `Vec` of
+   * `#[wasm_bindgen]` structs would hand back N handles for the caller to `free()` on
+   * every export, and this crate has already been bitten by wasm-bindgen ownership
+   * (see `Curve3DJs::concat`, which must take its operand by reference, and
+   * `tests/unit/wasmOwnership.test.ts`). Plain objects own nothing.
+   */
+  spanParams(): any;
+  /**
    * The curve's plane as three vectors `[normal, localX, localY]`.
    */
   getOnPlane(): Vector3Js[];
@@ -971,10 +993,10 @@ export class VertexJs {
 }
 
 /**
- * Import an SVG document into native planar curves. Lines and circular arcs are
- * kept exact; Béziers are flattened to line segments; unsupported path commands
- * (elliptical/rotated arcs, …) are skipped and surfaced via `warnings`.
- * Coordinates are SVG-space (y-down) at z = 0.
+ * Import an SVG document into native planar curves. Lines, circular arcs and Béziers are
+ * all kept exact — a `C` command arrives as a `CubicBezier2` span, not as chords.
+ * Unsupported path commands (elliptical arcs with rx ≠ ry) are skipped and surfaced via
+ * `warnings`. Coordinates are SVG-space (y-down) at z = 0.
  */
 export function importSvgCurves(doc: string): SvgImportJs;
 
@@ -1047,6 +1069,7 @@ export interface InitOutput {
   readonly curve3djs_scaleNonUniform: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
   readonly curve3djs_segmentCount: (a: number) => number;
   readonly curve3djs_segmentTessellations: (a: number, b: number, c: number) => [number, number, number];
+  readonly curve3djs_spanParams: (a: number) => [number, number, number];
   readonly curve3djs_spans: (a: number) => [number, number, number, number];
   readonly curve3djs_subtype: (a: number) => [number, number];
   readonly curve3djs_tangentAt: (a: number, b: number) => [number, number, number];

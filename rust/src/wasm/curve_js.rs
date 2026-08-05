@@ -341,6 +341,153 @@ impl Curve3DJs
         }
     }
 
+    /// A local 2D point lifted into world space.
+    fn w3(&self, xy: [f64; 2]) -> [f64; 3]
+    {
+        let p = self.frame.to_world(xy);
+        [p.x as f64, p.y as f64, p.z as f64]
+    }
+
+    /// A `Point2` lifted straight into world space.
+    fn w3p(&self, p: &Point2) -> [f64; 3]
+    {
+        self.w3(seg_local(p))
+    }
+
+    /// Describe one exact span for a format writer. See [`Self::span_params`].
+    fn span_params_of(&self, curve: &Curve2) -> SpanParamsJs
+    {
+        self.span_params_raw(curve).validated()
+    }
+
+    fn span_params_raw(&self, curve: &Curve2) -> SpanParamsJs
+    {
+        let (start, end) = (self.w3p(curve.start()), self.w3p(curve.end()));
+        let pts = |ps: &[Point2]| -> Vec<[f64; 3]> { ps.iter().map(|p| self.w3p(p)).collect() };
+        let reals = |rs: &[hypercurve::Real]| -> Vec<f64> {
+            rs.iter().map(|r| r.to_f64_lossy().unwrap_or(0.0)).collect()
+        };
+        let unsupported = |reason: &str| SpanParamsJs::Unsupported {
+            reason: reason.to_string(),
+            start,
+            end,
+        };
+
+        match curve.geometry()
+        {
+            CurveGeometry2::Line(_) => SpanParamsJs::Line { start, end },
+
+            CurveGeometry2::CircularArc(arc) => match hcurve::arc_params(arc)
+            {
+                Some(a) => SpanParamsJs::Arc {
+                    start: self.w3(a.start),
+                    mid: self.w3(a.mid),
+                    end: self.w3(a.end),
+                    center: self.w3(a.center),
+                    radius: a.radius,
+                    ccw: a.ccw,
+                    sweep: a.sweep,
+                    bulge: a.bulge,
+                },
+                None => unsupported("arc parameters are not finite"),
+            },
+
+            CurveGeometry2::QuadraticBezier(q) =>
+            {
+                let [_, c, _] = q.control_points();
+                SpanParamsJs::Quadratic { start, control: self.w3p(c), end }
+            }
+
+            CurveGeometry2::CubicBezier(c) =>
+            {
+                let [_, c1, c2, _] = c.control_points();
+                SpanParamsJs::Cubic {
+                    start,
+                    control1: self.w3p(c1),
+                    control2: self.w3p(c2),
+                    end,
+                }
+            }
+
+            CurveGeometry2::RationalQuadraticBezier(conic) =>
+            {
+                let [_, ctrl, _] = conic.control_points();
+                let [w0, w1, w2] = conic.weights();
+                // Normalised so the reported weight is the shape invariant (< 1 ellipse,
+                // 1 parabola, > 1 hyperbola) rather than an artefact of how the net was
+                // scaled when it was built.
+                let weight = match (
+                    w0.to_f64_lossy(),
+                    w1.to_f64_lossy(),
+                    w2.to_f64_lossy(),
+                )
+                {
+                    (Some(a), Some(b), Some(c)) if a > 0.0 && c > 0.0 => b / (a * c).sqrt(),
+                    _ => f64::NAN,
+                };
+                let mid = hcurve::conic_mid(conic)
+                    .map_or([f64::NAN; 3], |m| self.w3(m));
+                let ellipse = hcurve::conic_ellipse_params(conic).map(|e| EllipseParamsJs {
+                    center: self.w3(e.center),
+                    // A direction, so it is lifted through the frame's axes without the
+                    // origin — `w3` would translate it into a position.
+                    major_axis: {
+                        let v = self.frame.x * (e.major[0] as Real)
+                            + self.frame.y * (e.major[1] as Real);
+                        [v.x as f64, v.y as f64, v.z as f64]
+                    },
+                    ratio: e.ratio,
+                    start_param: e.start_param,
+                    end_param: e.end_param,
+                    ccw: e.ccw,
+                });
+                SpanParamsJs::Conic { start, mid, end, control: self.w3p(ctrl), weight, ellipse }
+            }
+
+            CurveGeometry2::Nurbs(n) => SpanParamsJs::Spline {
+                degree: n.degree(),
+                control_points: pts(n.control_points()),
+                knots: reals(n.knots()),
+                weights: reals(n.weights()),
+                rational: n.weights().iter().any(|w| {
+                    w.to_f64_lossy().is_none_or(|v| (v - 1.0).abs() > 1.0e-12)
+                }),
+                start,
+                end,
+            },
+
+            CurveGeometry2::PolynomialBSpline(s) => SpanParamsJs::Spline {
+                degree: s.degree(),
+                control_points: pts(s.control_points()),
+                knots: reals(s.knots()),
+                weights: vec![1.0; s.control_points().len()],
+                rational: false,
+                start,
+                end,
+            },
+
+            // A Bezier is a spline whose knot vector is entirely at its ends; spelling
+            // that out lets one `spline` case in the caller cover both.
+            CurveGeometry2::RationalBezier(b) =>
+            {
+                let d = b.degree();
+                let mut knots = vec![0.0; d + 1];
+                knots.extend(std::iter::repeat_n(1.0, d + 1));
+                SpanParamsJs::Spline {
+                    degree: d,
+                    control_points: pts(b.control_points()),
+                    knots,
+                    weights: reals(b.weights()),
+                    rational: b.weights().iter().any(|w| {
+                        w.to_f64_lossy().is_none_or(|v| (v - 1.0).abs() > 1.0e-12)
+                    }),
+                    start,
+                    end,
+                }
+            }
+        }
+    }
+
     /// This curve's boundary as an exact closed path, or `None` if it is not closed.
     fn closed_path(&self) -> Option<CurvePath2>
     {
@@ -530,6 +677,121 @@ impl Curve3DJs
 fn seg_local(p: &hypercurve::Point2) -> [f64; 2]
 {
     [p.x().to_f64_lossy().unwrap_or(0.0), p.y().to_f64_lossy().unwrap_or(0.0)]
+}
+
+/// The ellipse an exact conic span lies on, in world space. See [`hcurve::EllipseParams`].
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EllipseParamsJs
+{
+    center: [f64; 3],
+    /// Centre-to-major-axis-endpoint **vector**, not a length: DXF's `ELLIPSE` groups
+    /// 11/21/31 want it this way, and it carries the rotation for SVG's `A` at the same time.
+    major_axis: [f64; 3],
+    ratio: f64,
+    start_param: f64,
+    end_param: f64,
+    ccw: bool,
+}
+
+/// One exact span, described for a format writer. See [`Curve3DJs::span_params`].
+///
+/// `RationalBezier` and `PolynomialBSpline` fold into `Spline` (a Bezier's clamped knot
+/// vector is synthesised), so the eight `CurveGeometry2` families reach TypeScript as six
+/// kinds plus `Unsupported`, which exists so a writer always has something safe to do.
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+enum SpanParamsJs
+{
+    Line
+    {
+        start: [f64; 3], end: [f64; 3]
+    },
+    Arc
+    {
+        start: [f64; 3],
+        /// The exact on-curve midpoint. A frame's normal can point at -Z
+        /// (`Frame::from_points` picks whatever the input plane gives), so `ccw` is
+        /// measured in the curve's own plane and is not always world CCW. Three exact
+        /// points settle the world orientation without re-deriving the circle.
+        mid: [f64; 3],
+        end: [f64; 3],
+        center: [f64; 3],
+        radius: f64,
+        ccw: bool,
+        /// Signed, radians; positive counter-clockwise in the curve's plane.
+        sweep: f64,
+        /// `tan(sweep / 4)` — a DXF LWPOLYLINE vertex bulge, ready to write.
+        bulge: f64,
+    },
+    Quadratic
+    {
+        start: [f64; 3], control: [f64; 3], end: [f64; 3]
+    },
+    Cubic
+    {
+        start: [f64; 3],
+        control1: [f64; 3],
+        control2: [f64; 3],
+        end: [f64; 3],
+    },
+    Conic
+    {
+        start: [f64; 3],
+        mid: [f64; 3],
+        end: [f64; 3],
+        control: [f64; 3],
+        weight: f64,
+        /// `None` when the span is a parabola or hyperbola, or when the reconstruction
+        /// failed its own accuracy check — write it as a rational quadratic or tessellate
+        /// it, but never as an ellipse.
+        ellipse: Option<EllipseParamsJs>,
+    },
+    Spline
+    {
+        degree: usize,
+        control_points: Vec<[f64; 3]>,
+        knots: Vec<f64>,
+        weights: Vec<f64>,
+        rational: bool,
+        start: [f64; 3],
+        end: [f64; 3],
+    },
+    Unsupported
+    {
+        reason: String, start: [f64; 3], end: [f64; 3]
+    },
+}
+
+impl SpanParamsJs
+{
+    /// Reject a spline whose knot vector does not match its control net.
+    ///
+    /// A clamped B-spline of degree `d` over `n` control points has exactly `n + d + 1`
+    /// knots. Emitting one that does not is precisely how a filleted rectangle used to
+    /// leave meshup as DXF — `71=2, 72=2, 73=8`, two knots where eleven were required —
+    /// so the invariant is enforced at the source rather than in each writer. A span that
+    /// fails it degrades to `Unsupported`, which every writer already tessellates.
+    fn validated(self) -> Self
+    {
+        if let Self::Spline { ref control_points, degree, ref knots, ref start, ref end, .. } = self
+        {
+            let expected = control_points.len() + degree + 1;
+            if knots.len() != expected || control_points.len() <= degree
+            {
+                return Self::Unsupported {
+                    reason: format!(
+                        "spline has {} knots for {} control points at degree {degree} (expected {expected})",
+                        knots.len(),
+                        control_points.len()
+                    ),
+                    start: *start,
+                    end: *end,
+                };
+            }
+        }
+        self
+    }
 }
 
 #[wasm_bindgen]
@@ -1193,6 +1455,34 @@ impl Curve3DJs
             Geom::Closed(ct) => ct.segments().len(),
             Geom::Path(pg) => pg.path.curves().len(),
         }
+    }
+
+    /// Every exact span, described by the parameters a file format needs to write it.
+    ///
+    /// One entry per span, in order, matching [`Self::segment_count`]. Each is a plain JS
+    /// object tagged by `kind`, carrying world-space 3D points and — for arcs and conics —
+    /// the centre, radius, sweep and axes that define the underlying circle or ellipse.
+    ///
+    /// This exists because the other accessors answer questions a *writer* cannot use.
+    /// `subtype()` names the whole curve, not a span, and has no name for "lines and arcs
+    /// mixed"; `controlPoints()` returns span endpoints, which is an arc's chord; `knots()`
+    /// and `weights()` are empty unless the curve is one single NURBS span. Given only
+    /// those, an exporter has to guess — and both of meshup's exporters guessed wrong, one
+    /// re-deriving an arc's circle from three tessellated samples and the other writing a
+    /// malformed SPLINE for any curve with a fillet in it.
+    ///
+    /// Deliberately plain data rather than a list of exported objects: a `Vec` of
+    /// `#[wasm_bindgen]` structs would hand back N handles for the caller to `free()` on
+    /// every export, and this crate has already been bitten by wasm-bindgen ownership
+    /// (see `Curve3DJs::concat`, which must take its operand by reference, and
+    /// `tests/unit/wasmOwnership.test.ts`). Plain objects own nothing.
+    #[wasm_bindgen(js_name = spanParams)]
+    pub fn span_params(&self) -> Result<JsValue, JsValue>
+    {
+        let spans = self.exact_spans().map_err(err)?;
+        let out: Vec<SpanParamsJs> = spans.iter().map(|c| self.span_params_of(c)).collect();
+        serde_wasm_bindgen::to_value(&out)
+            .map_err(|e| JsValue::from_str(&format!("Curve3DJs::spanParams(): {e}")))
     }
 
     /// Effective polynomial degree: the max over exact spans (line = 1, arc/conic/quadratic
@@ -1992,10 +2282,10 @@ impl SvgImportJs
     }
 }
 
-/// Import an SVG document into native planar curves. Lines and circular arcs are
-/// kept exact; Béziers are flattened to line segments; unsupported path commands
-/// (elliptical/rotated arcs, …) are skipped and surfaced via `warnings`.
-/// Coordinates are SVG-space (y-down) at z = 0.
+/// Import an SVG document into native planar curves. Lines, circular arcs and Béziers are
+/// all kept exact — a `C` command arrives as a `CubicBezier2` span, not as chords.
+/// Unsupported path commands (elliptical arcs with rx ≠ ry) are skipped and surfaced via
+/// `warnings`. Coordinates are SVG-space (y-down) at z = 0.
 #[cfg(feature = "svg-io")]
 #[wasm_bindgen(js_name = importSvgCurves)]
 pub fn import_svg_curves(doc: &str) -> Result<SvgImportJs, JsValue>

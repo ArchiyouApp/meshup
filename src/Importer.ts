@@ -82,10 +82,11 @@ export class Importer
     //// SVG ////
 
     /** Import an SVG document into a `ShapeCollection<Curve>` (XY plane, z=0).
-     *  Parses via hypercurve: `<path>` lines and circular arcs stay exact, Béziers
-     *  are flattened to line segments, and `<circle>/<ellipse>/<rect>/<polygon>/
-     *  <polyline>/<line>` become native curves. Unsupported path commands
-     *  (elliptical/rotated arcs, …) are skipped and reported via console warnings.
+     *  Parses via hypercurve, exactly: `<path>` lines, circular arcs and Béziers all keep
+     *  their own geometry, and `<circle>/<ellipse>/<rect>/<polygon>/<polyline>/<line>`
+     *  become native curves — an imported cubic reports `degree() === 3`, not a fan of
+     *  chords. Unsupported path commands (elliptical arcs with rx ≠ ry) are skipped and
+     *  reported via console warnings.
      *  Coordinates are kept in SVG space (y-down); no y-flip. */
     static fromSVG(svg: string, _opts: ImportOptions = {}): ShapeCollection<Curve>
     {

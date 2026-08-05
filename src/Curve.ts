@@ -26,7 +26,8 @@ import { ShapeCollection, getCsgrs, Mesh } from './index';
 import { Shape } from './Shape';
 import type { SceneNode } from './SceneNode';
 import { sceneReplace, sceneAdd, sceneUpdate, sceneCarry, sceneReplaceOrKeep, sceneLayer } from './sceneDecorators';
-import type { CsgrsModule, PointLike, Axis, BasePlane, CurveCornerSelection, OrientationXY, HlrStrategy } from './types';
+import type { CsgrsModule, PointLike, Axis, BasePlane, CurveCornerSelection, OrientationXY, HlrStrategy,
+    SpanParams, SpanEllipse, SpanPoint } from './types';
 import { resolveIsometryArgs, DEFAULT_ISOMETRY_CAM } from './projectionOptions';
 import type { IsometryOptions } from './projectionOptions';
 import { isPointLike, isBasePlane } from './types'
@@ -803,6 +804,98 @@ export class Curve extends Shape
         return new ShapeCollection<Curve>(
             this.inner().spans().map(span => Curve.fromCsgrs(span))
         );
+    }
+
+    /** Whether this curve is curved anywhere — a circular arc, or any conic, Bézier or
+     *  spline span. False for pure line work. */
+    hasArcs(): boolean
+    {
+        return this.inner().hasArcs();
+    }
+
+    /** Number of exact spans. */
+    segmentCount(): number
+    {
+        return this.inner().segmentCount();
+    }
+
+    /** Every exact span, described by the parameters a file format needs to write it.
+     *
+     *  One entry per span, in order, matching {@link segmentCount}. Each is tagged by
+     *  `kind`, and arcs and conics carry the centre, radius, sweep and axes of the circle
+     *  or ellipse they lie on.
+     *
+     *  Use this, not the other accessors, when writing a file. They answer coarser
+     *  questions: {@link subtype} names the whole curve and has no name for "lines and
+     *  arcs mixed"; {@link controlPoints} returns span endpoints, which for an arc is its
+     *  chord; {@link knots} and {@link weights} are empty unless the whole curve is one
+     *  NURBS span. Writers built on those had to guess, and guessed wrong — an arc's
+     *  radius was re-derived from a circumcircle of tessellation samples, and a filleted
+     *  rectangle was written as a malformed DXF SPLINE built from its chords.
+     */
+    spanParams(): Array<SpanParams>
+    {
+        return this.inner().spanParams() as Array<SpanParams>;
+    }
+
+    /** {@link spanParams}, with consecutive conic spans of the same ellipse merged.
+     *
+     *  hypercurve splits an ellipse into spans of at most 90° so every conic weight stays
+     *  positive, so a full ellipse arrives as four spans of one shape. A format that has
+     *  an ellipse primitive (DXF `ELLIPSE`, SVG `A`) wants that back as one entity, and
+     *  both writers want it identically — hence one implementation here rather than two
+     *  that drift.
+     *
+     *  Spans that are not conics, and conics whose ellipse could not be reconstructed,
+     *  pass through untouched.
+     */
+    exportSpans(): Array<SpanParams>
+    {
+        const spans = this.spanParams();
+        const out: Array<SpanParams> = [];
+
+        for (const span of spans)
+        {
+            const prev = out[out.length - 1];
+            if (span.kind === 'conic' && span.ellipse && prev?.kind === 'conic' && prev.ellipse
+                && Curve._sameEllipse(prev.ellipse, span.ellipse))
+            {
+                // Both spans run the same way around the same ellipse, so the merged arc
+                // simply ends where this one does.
+                out[out.length - 1] = { ...prev, end: span.end, mid: span.mid,
+                    ellipse: { ...prev.ellipse, endParam: span.ellipse.endParam } };
+                continue;
+            }
+            out.push(span);
+        }
+
+        // A closed curve's spans wrap, so the last may continue into the first.
+        if (out.length > 1 && this.isClosed())
+        {
+            const [first] = out;
+            const last = out[out.length - 1];
+            if (first.kind === 'conic' && first.ellipse && last.kind === 'conic' && last.ellipse
+                && Curve._sameEllipse(first.ellipse, last.ellipse))
+            {
+                out[0] = { ...last, end: first.end, mid: first.mid,
+                    ellipse: { ...last.ellipse, endParam: first.ellipse.endParam } };
+                out.pop();
+            }
+        }
+        return out;
+    }
+
+    /** Whether two conic spans lie on the same ellipse and run the same way round it. */
+    private static _sameEllipse(a: SpanEllipse, b: SpanEllipse): boolean
+    {
+        if (a.ccw !== b.ccw) { return false; }
+        // Relative to the ellipse's own size, so the test means the same thing on a 2 mm
+        // fillet and a 20 m arc.
+        const scale = Math.hypot(a.majorAxis[0], a.majorAxis[1], a.majorAxis[2]) || 1;
+        const near = (p: SpanPoint, q: SpanPoint) =>
+            Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) <= scale * 1e-9;
+        return near(a.center, b.center) && near(a.majorAxis, b.majorAxis)
+            && Math.abs(a.ratio - b.ratio) <= 1e-9;
     }
 
 

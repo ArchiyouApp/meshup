@@ -544,6 +544,35 @@ export class Curve3DJs {
         return Curve3DJs.__wrap(ret[0]);
     }
     /**
+     * Every exact span, described by the parameters a file format needs to write it.
+     *
+     * One entry per span, in order, matching [`Self::segment_count`]. Each is a plain JS
+     * object tagged by `kind`, carrying world-space 3D points and — for arcs and conics —
+     * the centre, radius, sweep and axes that define the underlying circle or ellipse.
+     *
+     * This exists because the other accessors answer questions a *writer* cannot use.
+     * `subtype()` names the whole curve, not a span, and has no name for "lines and arcs
+     * mixed"; `controlPoints()` returns span endpoints, which is an arc's chord; `knots()`
+     * and `weights()` are empty unless the curve is one single NURBS span. Given only
+     * those, an exporter has to guess — and both of meshup's exporters guessed wrong, one
+     * re-deriving an arc's circle from three tessellated samples and the other writing a
+     * malformed SPLINE for any curve with a fillet in it.
+     *
+     * Deliberately plain data rather than a list of exported objects: a `Vec` of
+     * `#[wasm_bindgen]` structs would hand back N handles for the caller to `free()` on
+     * every export, and this crate has already been bitten by wasm-bindgen ownership
+     * (see `Curve3DJs::concat`, which must take its operand by reference, and
+     * `tests/unit/wasmOwnership.test.ts`). Plain objects own nothing.
+     * @returns {any}
+     */
+    spanParams() {
+        const ret = wasm.curve3djs_spanParams(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
      * The curve's plane as three vectors `[normal, localX, localY]`.
      * @returns {Vector3Js[]}
      */
@@ -4232,10 +4261,10 @@ export class VertexJs {
 if (Symbol.dispose) VertexJs.prototype[Symbol.dispose] = VertexJs.prototype.free;
 
 /**
- * Import an SVG document into native planar curves. Lines and circular arcs are
- * kept exact; Béziers are flattened to line segments; unsupported path commands
- * (elliptical/rotated arcs, …) are skipped and surfaced via `warnings`.
- * Coordinates are SVG-space (y-down) at z = 0.
+ * Import an SVG document into native planar curves. Lines, circular arcs and Béziers are
+ * all kept exact — a `C` command arrives as a `CubicBezier2` span, not as chords.
+ * Unsupported path commands (elliptical arcs with rx ≠ ry) are skipped and surfaced via
+ * `warnings`. Coordinates are SVG-space (y-down) at z = 0.
  * @param {string} doc
  * @returns {SvgImportJs}
  */
@@ -4295,6 +4324,13 @@ function __wbg_get_imports() {
     imports.wbg.__wbg_Number_2d1dcfcf4ec51736 = function(arg0) {
         const ret = Number(arg0);
         return ret;
+    };
+    imports.wbg.__wbg_String_8f0eb39a4a4c2f66 = function(arg0, arg1) {
+        const ret = String(arg1);
+        const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
+        getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
     };
     imports.wbg.__wbg___wbindgen_bigint_get_as_i64_6e32f5e6aff02e1d = function(arg0, arg1) {
         const v = arg1;
@@ -4578,10 +4614,16 @@ function __wbg_get_imports() {
         const ret = RaycastHitJs.__wrap(arg0);
         return ret;
     };
+    imports.wbg.__wbg_set_3f1d0b984ed272ed = function(arg0, arg1, arg2) {
+        arg0[arg1] = arg2;
+    };
     imports.wbg.__wbg_set_781438a03c0c3c81 = function() { return handleError(function (arg0, arg1, arg2) {
         const ret = Reflect.set(arg0, arg1, arg2);
         return ret;
     }, arguments) };
+    imports.wbg.__wbg_set_7df433eea03a5c14 = function(arg0, arg1, arg2) {
+        arg0[arg1 >>> 0] = arg2;
+    };
     imports.wbg.__wbg_stack_0ed75d68575b0f3c = function(arg0, arg1) {
         const ret = arg1.stack;
         const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);

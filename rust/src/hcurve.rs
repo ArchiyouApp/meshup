@@ -22,7 +22,8 @@ use hypercurve::{
     CurveRegion2,
     CurveString2, EllipseMap2, FillRule,
     FiniteProjectionOptions, LineArcIntersection, LineArcRegion2, LineLineIntersection, LineSeg2,
-    NurbsCurve2, Point2, RationalBezierIntersectionPointEvidence2, Real, RegionView2, Segment2,
+    NurbsCurve2, Point2, RationalBezierIntersectionPointEvidence2, RationalQuadraticBezier2, Real,
+    RegionView2, Segment2,
     SegmentIntersection, Similarity2,
     Tolerance, elliptical_arc_path,
 };
@@ -792,6 +793,208 @@ pub fn circle(cx: f64, cy: f64, r: f64) -> Result<Contour2, String>
     let bottom = Segment2::from_bulge(left, right, bulge)
         .map_err(|e| format!("hcurve: circle bottom arc failed ({e:?})"))?;
     Contour2::try_new(vec![top, bottom]).map_err(|e| format!("hcurve: circle contour failed ({e:?})"))
+}
+
+/// The exact circle behind one [`CircularArc2`], in f64.
+///
+/// `sweep` is signed: positive counter-clockwise, and `bulge` is the DXF/LWPOLYLINE
+/// bulge for the span (`tan(sweep / 4)`), so the same struct answers both "write me a
+/// DXF ARC" and "write me a polyline vertex".
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArcParams
+{
+    pub center: [f64; 2],
+    pub radius: f64,
+    pub start: [f64; 2],
+    pub mid: [f64; 2],
+    pub end: [f64; 2],
+    pub ccw: bool,
+    pub sweep: f64,
+    pub bulge: f64,
+}
+
+/// The exact ellipse behind one rational-quadratic span, in f64.
+///
+/// `major` is the centre-to-major-axis-endpoint **vector** and `ratio` the minor/major
+/// ratio — the form DXF's `ELLIPSE` wants (groups 11/21/31 and 40). `start_param` and
+/// `end_param` are eccentric anomalies measured in that frame, ordered so that sweeping
+/// counter-clockwise from `start_param` traverses the actual span.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EllipseParams
+{
+    pub center: [f64; 2],
+    pub major: [f64; 2],
+    pub ratio: f64,
+    pub start_param: f64,
+    pub end_param: f64,
+    pub ccw: bool,
+}
+
+/// Recover an arc's centre, radius and signed sweep.
+///
+/// `CircularArc2` retains all of this exactly; the only lossy step is the final
+/// conversion to f64, which is what any file format is written in anyway. That is worth
+/// stating because both exporters used to *re-derive* the circle from three tessellated
+/// samples through a circumcircle, so the radius they wrote carried chord error from a
+/// polyline the kernel had never needed to build.
+pub fn arc_params(arc: &CircularArc2) -> Option<ArcParams>
+{
+    let center = point_to_f64(arc.center())?;
+    let start = point_to_f64(arc.start())?;
+    let end = point_to_f64(arc.end())?;
+    let radius = arc.radius_squared().to_f64_lossy()?.sqrt();
+    if !(radius.is_finite() && radius > 0.0)
+    {
+        return None;
+    }
+
+    let angle_of = |p: [f64; 2]| (p[1] - center[1]).atan2(p[0] - center[0]);
+    let ccw = !arc.is_clockwise();
+    let (a0, a1) = (angle_of(start), angle_of(end));
+    // Both endpoints on the same ray means a full turn, not a zero-length arc: an arc
+    // span is never degenerate, so wrap into (0, TAU] rather than [0, TAU).
+    let mut span = if ccw { a1 - a0 } else { a0 - a1 };
+    while span <= 0.0
+    {
+        span += std::f64::consts::TAU;
+    }
+    let sweep = if ccw { span } else { -span };
+
+    let half = a0 + sweep / 2.0;
+    let mid = [center[0] + radius * half.cos(), center[1] + radius * half.sin()];
+
+    Some(ArcParams { center, radius, start, mid, end, ccw, sweep, bulge: (sweep / 4.0).tan() })
+}
+
+/// Recover the ellipse a rational-quadratic span lies on, or `None` when the span is not
+/// an elliptical arc or the reconstruction cannot be trusted.
+///
+/// hypercurve keeps a conic as a weighted three-point control net and nothing more:
+/// [`EllipseMap2`] is a bare `[Real; 4]` handed to `elliptical_arc_path` at construction
+/// and never retained, and `RationalQuadraticBezier2` exposes only its control points and
+/// weights. So the ellipse has to be *derived*, not read back.
+///
+/// Deriving beats retaining provenance here. A conic span reaches a curve from at least
+/// four directions — `Curve.Ellipse`, an imported SVG `<ellipse>`, a non-uniform scale of
+/// a circle, and path booleans — and retained parameters would then have to be composed
+/// or invalidated at every translate, rotate, mirror, scale, trim, offset and boolean.
+/// One missed invalidation writes geometry that is silently wrong into a user's file.
+/// A derivation has no state that can go stale.
+///
+/// With the net normalised to unit end weights (`w = w1 / sqrt(w0·w2)`), the span is an
+/// ellipse iff `0 < w < 1`, and the centre is closed-form:
+///
+/// ```text
+/// C = (P0 + P2 - 2w²·P1) / (2 - 2w²)
+/// ```
+///
+/// Writing `A0 = P0 - C` and `cos Δ = 2w² - 1` for the half-sweep, the columns
+/// `[A0 | (A2 - cos Δ·A0) / sin Δ]` are the image of an orthonormal pair under the map
+/// that takes the unit circle to this ellipse, so `S = M·Mᵀ` is that map's metric — and
+/// being a product with its own transpose, `S` is independent of which orthonormal pair
+/// was chosen. Its eigenvectors give the axis directions and its eigenvalues the squared
+/// semi-axes.
+pub fn conic_ellipse_params(conic: &RationalQuadraticBezier2) -> Option<EllipseParams>
+{
+    let [p0, p1, p2] = conic.control_points();
+    let [w0, w1, w2] = conic.weights();
+    let (p0, p1, p2) = (point_to_f64(p0)?, point_to_f64(p1)?, point_to_f64(p2)?);
+    let (w0, w1, w2) = (w0.to_f64_lossy()?, w1.to_f64_lossy()?, w2.to_f64_lossy()?);
+
+    if !(w0 > 0.0 && w2 > 0.0)
+    {
+        return None;
+    }
+    let w = w1 / (w0 * w2).sqrt();
+    // w == 1 is a parabola and w > 1 a hyperbola; neither has a centre.
+    if !(w.is_finite() && w > 0.0 && w < 1.0 - 1.0e-12)
+    {
+        return None;
+    }
+
+    let ww = w * w;
+    let denom = 2.0 - 2.0 * ww;
+    let center = [
+        (p0[0] + p2[0] - 2.0 * ww * p1[0]) / denom,
+        (p0[1] + p2[1] - 2.0 * ww * p1[1]) / denom,
+    ];
+
+    let a0 = [p0[0] - center[0], p0[1] - center[1]];
+    let a2 = [p2[0] - center[0], p2[1] - center[1]];
+    let cos_d = 2.0 * ww - 1.0;
+    let sin_d = (1.0 - cos_d * cos_d).sqrt();
+    if !(sin_d.is_finite() && sin_d > 1.0e-12)
+    {
+        return None;
+    }
+    let v = [(a2[0] - cos_d * a0[0]) / sin_d, (a2[1] - cos_d * a0[1]) / sin_d];
+
+    // S = M·Mᵀ for M = [a0 | v].
+    let s00 = a0[0] * a0[0] + v[0] * v[0];
+    let s01 = a0[0] * a0[1] + v[0] * v[1];
+    let s11 = a0[1] * a0[1] + v[1] * v[1];
+    let theta = 0.5 * (2.0 * s01).atan2(s00 - s11);
+    let mean = (s00 + s11) / 2.0;
+    let dev = (((s00 - s11) / 2.0).powi(2) + s01 * s01).sqrt();
+    let (a_sq, b_sq) = (mean + dev, mean - dev);
+    if !(a_sq.is_finite() && b_sq > 0.0)
+    {
+        return None;
+    }
+    let (a, b) = (a_sq.sqrt(), b_sq.sqrt());
+
+    let (ct, st) = (theta.cos(), theta.sin());
+    // Eccentric anomaly of a point, in the ellipse's own frame.
+    let param_of = |p: [f64; 2]| -> f64 {
+        let d = [p[0] - center[0], p[1] - center[1]];
+        ((d[0] * -st + d[1] * ct) / b).atan2((d[0] * ct + d[1] * st) / a)
+    };
+
+    // Independent check: the span's exact midpoint is not used anywhere above, so it is a
+    // real test of the reconstruction rather than a restatement of it. Anything that does
+    // not land on the ellipse means the caller must fall back to tessellating, never write
+    // an ELLIPSE or an SVG `A` that misses the geometry it claims to describe.
+    let mid = conic_mid(conic)?;
+    let dm = [mid[0] - center[0], mid[1] - center[1]];
+    let (u_m, v_m) = ((dm[0] * ct + dm[1] * st) / a, (dm[0] * -st + dm[1] * ct) / b);
+    if ((u_m * u_m + v_m * v_m) - 1.0).abs() > 1.0e-9
+    {
+        return None;
+    }
+
+    let (t0, t2, tm) = (param_of(p0), param_of(p2), param_of(mid));
+    // The span runs whichever way passes through its own midpoint.
+    let wrap = |x: f64| -> f64 {
+        let mut r = x % std::f64::consts::TAU;
+        if r < 0.0
+        {
+            r += std::f64::consts::TAU;
+        }
+        r
+    };
+    let ccw = wrap(tm - t0) < wrap(t2 - t0);
+    let (start_param, end_param) = if ccw { (t0, t2) } else { (t2, t0) };
+
+    Some(EllipseParams {
+        center,
+        major: [a * ct, a * st],
+        ratio: b / a,
+        start_param,
+        end_param,
+        ccw,
+    })
+}
+
+/// The exact point halfway along a conic span, in f64.
+pub fn conic_mid(conic: &RationalQuadraticBezier2) -> Option<[f64; 2]>
+{
+    let half = real(0.5).ok()?;
+    let pol = policy();
+    match conic.point_at(half, &pol)
+    {
+        Classification::Decided(p) => point_to_f64(&p),
+        _ => None,
+    }
 }
 
 /// Build an exact **full ellipse** as a closed [`CurvePath2`] of rational
@@ -1840,5 +2043,102 @@ mod tests
         let xs: Vec<f64> = { let mut v: Vec<f64> = hits.iter().map(|p| p[0]).collect(); v.sort_by(|a, b| a.partial_cmp(b).unwrap()); v };
         assert!((xs[0] + 4.0).abs() < 1e-9 && (xs[1] - 4.0).abs() < 1e-9, "xs = {xs:?}");
         let _ = circ_pts;
+    }
+
+    /// Every conic span of one ellipse must recover the *same* ellipse — the spans are
+    /// built in an arbitrary pre-image frame, so this is what proves the derivation is
+    /// frame-independent rather than accidentally right for the axis-aligned case.
+    #[test]
+    fn conic_ellipse_params_recovers_the_ellipse_from_every_span()
+    {
+        for rot in [0.0, std::f64::consts::FRAC_PI_6, std::f64::consts::FRAC_PI_2]
+        {
+            let path = ellipse(3.0, 1.5, rot, 7.0, -2.0).unwrap();
+            let mut seen = 0;
+            for curve in path.curves()
+            {
+                let CurveGeometry2::RationalQuadraticBezier(conic) = curve.geometry() else {
+                    panic!("ellipse span is not a conic: {:?}", curve.family());
+                };
+                let e = conic_ellipse_params(conic)
+                    .unwrap_or_else(|| panic!("no ellipse params for span {seen} at rot {rot}"));
+
+                assert!((e.center[0] - 7.0).abs() < 1e-9, "cx = {}", e.center[0]);
+                assert!((e.center[1] + 2.0).abs() < 1e-9, "cy = {}", e.center[1]);
+                let a = e.major[0].hypot(e.major[1]);
+                assert!((a - 3.0).abs() < 1e-9, "semi-major = {a}");
+                assert!((a * e.ratio - 1.5).abs() < 1e-9, "semi-minor = {}", a * e.ratio);
+                // The major axis direction is defined up to sign.
+                let ang = e.major[1].atan2(e.major[0]);
+                let d = (ang - rot).rem_euclid(std::f64::consts::PI);
+                assert!(d < 1e-9 || (std::f64::consts::PI - d) < 1e-9, "axis angle {ang} vs {rot}");
+                seen += 1;
+            }
+            assert!(seen >= 4, "expected >= 4 conic spans, got {seen}");
+        }
+    }
+
+    /// A circle scaled non-uniformly is the other way conics enter a curve, and it goes
+    /// through `transform_affine` rather than `elliptical_arc_path` — a genuinely
+    /// different construction, so it is worth deriving from too.
+    #[test]
+    fn conic_ellipse_params_handles_a_non_uniformly_scaled_circle()
+    {
+        let circle_path = path_from_segments(circle(0.0, 0.0, 10.0).unwrap().segments()).unwrap();
+        let scaled = transform_affine_path(&circle_path, 2.0, 0.0, 0.0, 0.5, 0.0, 0.0).unwrap();
+        let mut seen = 0;
+        for path in &scaled
+        {
+            for curve in path.curves()
+            {
+                if let CurveGeometry2::RationalQuadraticBezier(conic) = curve.geometry()
+                {
+                    let e = conic_ellipse_params(conic).expect("scaled circle span");
+                    let a = e.major[0].hypot(e.major[1]);
+                    assert!((a - 20.0).abs() < 1e-9, "semi-major = {a}");
+                    assert!((a * e.ratio - 5.0).abs() < 1e-9, "semi-minor = {}", a * e.ratio);
+                    seen += 1;
+                }
+            }
+        }
+        assert!(seen > 0, "non-uniform scale produced no conic spans");
+    }
+
+    #[test]
+    fn arc_params_round_trips_the_bulge_it_was_built_from()
+    {
+        for b in [0.2_f64, 0.5, 1.0, -0.3]
+        {
+            let seg = Segment2::from_bulge(point(0.0, 0.0).unwrap(), point(10.0, 0.0).unwrap(),
+                real(b).unwrap()).unwrap();
+            let Segment2::Arc(arc) = seg else { panic!("bulge {b} did not give an arc") };
+            let p = arc_params(&arc).expect("arc params");
+            assert!((p.bulge - b).abs() < 1e-9, "bulge {} vs {b}", p.bulge);
+            assert_eq!(p.ccw, b > 0.0, "orientation for bulge {b}");
+            // Sagitta is |bulge| * half-chord, by the definition bulge = tan(theta/4).
+            //
+            // The sign is the part worth pinning: a positive (counter-clockwise) bulge on
+            // a left-to-right chord sags to -y, because the centre sits above and the arc
+            // runs along the bottom of that circle. `circle()` above depends on exactly
+            // this — it builds its *bottom* semicircle as left->right with bulge +1.
+            assert!((p.mid[0] - 5.0).abs() < 1e-9, "mid x = {}", p.mid[0]);
+            assert!((p.mid[1] + b * 5.0).abs() < 1e-9, "mid = {:?} for bulge {b}", p.mid);
+        }
+    }
+
+    /// A half circle is two 180-degree arcs; each must report a full pi of sweep and a
+    /// radius equal to the circle's, not to something re-derived from samples.
+    #[test]
+    fn arc_params_reads_a_circle_exactly()
+    {
+        let ct = circle(3.0, -4.0, 12.5).unwrap();
+        for seg in ct.segments()
+        {
+            let Segment2::Arc(arc) = seg else { panic!("circle segment is not an arc") };
+            let p = arc_params(arc).expect("arc params");
+            assert!((p.radius - 12.5).abs() < 1e-12, "radius = {}", p.radius);
+            assert!((p.center[0] - 3.0).abs() < 1e-12 && (p.center[1] + 4.0).abs() < 1e-12);
+            assert!((p.sweep - std::f64::consts::PI).abs() < 1e-9, "sweep = {}", p.sweep);
+        }
     }
 }
