@@ -12,20 +12,95 @@ use std::io::Write;
 use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 use base64::Engine;
 
+/// Resolve every buffer the document declares into raw bytes.
+///
+/// The `gltf` crate does this itself in `import_slice`, but that lives behind its
+/// `import` feature — which pulls in the whole `image` crate (JPEG, PNG, TIFF, WebP,
+/// OpenEXR, GIF, …) just to decode textures we immediately throw away. That was ~1.3 MB
+/// of the wasm binary. meshup reads geometry only, so buffers are resolved here and the
+/// image decoders stay out of the build.
+///
+/// Supported sources are the GLB binary chunk and base64 `data:` URIs — the same set
+/// `from_gltf` documents. External buffer files are rejected with a clear message.
+fn resolve_buffers(
+    doc: &gltf::Document,
+    blob: Option<Vec<u8>>,
+) -> Result<Vec<Vec<u8>>, String> {
+    let mut blob = blob;
+    let mut out: Vec<Vec<u8>> = Vec::new();
+
+    for buffer in doc.buffers() {
+        let mut bytes = match buffer.source() {
+            // The GLB BIN chunk. Only one buffer may claim it.
+            gltf::buffer::Source::Bin => blob.take().ok_or_else(|| {
+                "glTF: a buffer refers to the GLB binary chunk, but the file has none"
+                    .to_string()
+            })?,
+            gltf::buffer::Source::Uri(uri) => decode_data_uri(uri)?,
+        };
+
+        // The stored payload may be padded up to the next 4-byte boundary, but it must
+        // never be shorter than the declared length — readers index into it blindly.
+        if bytes.len() < buffer.length() {
+            return Err(format!(
+                "glTF: buffer {} holds {} bytes but the document declares {}",
+                buffer.index(),
+                bytes.len(),
+                buffer.length()
+            ));
+        }
+        bytes.truncate(buffer.length());
+        out.push(bytes);
+    }
+
+    Ok(out)
+}
+
+/// Decode one embedded `data:[<mime>][;base64],<payload>` buffer URI.
+fn decode_data_uri(uri: &str) -> Result<Vec<u8>, String> {
+    let rest = uri.strip_prefix("data:").ok_or_else(|| {
+        format!(
+            "glTF: external buffer file '{uri}' is unsupported — \
+             pass a self-contained .glb or a base64-embedded .gltf"
+        )
+    })?;
+    let payload = rest.split_once(";base64,").map(|(_mime, p)| p).ok_or_else(|| {
+        "glTF: only base64-encoded data: URIs are supported for embedded buffers".to_string()
+    })?;
+    BASE64_ENGINE
+        .decode(payload)
+        .map_err(|e| format!("glTF: embedded buffer is not valid base64: {e}"))
+}
+
 impl<S: Clone + Send + Sync + Debug> crate::mesh::Mesh<S> {
     /// Import a glTF 2.0 model (`.glb` or `.gltf`) as a single **merged** Mesh.
     ///
     /// Every mesh primitive across the scene is read, transformed by its node's
-    /// world transform, converted from glTF Y-up to meshup Z-up, and merged into
+    /// world transform, mapped from `file_up` onto meshup's Z-up, and merged into
     /// one Mesh. Materials and the node hierarchy are flattened. Draco/Meshopt
     /// compression and external-buffer files are unsupported — pass a
     /// self-contained `.glb` or a base64-embedded `.gltf`.
-    pub fn from_gltf(data: &[u8], metadata: Option<S>) -> Result<crate::mesh::Mesh<S>, String> {
+    ///
+    /// `file_up` is **which axis is up inside the file**, and it has to be told because
+    /// the answer is not always the spec's:
+    ///   - [`UpAxis::Y`] — a conforming glTF, i.e. anything Blender/three.js wrote.
+    ///   - [`UpAxis::Z`] — what meshup's own exporter writes. The Archiyou stack keeps
+    ///     the kernel's native Z-up all the way to a Z-up viewer, so those files carry
+    ///     Z-up coordinates under a format that nominally says Y-up.
+    ///
+    /// Passing the wrong one lands the model on its side; nothing in a glTF file
+    /// distinguishes the two, which is why this is a parameter and not a guess.
+    pub fn from_gltf(
+        data: &[u8],
+        metadata: Option<S>,
+        file_up: UpAxis,
+    ) -> Result<crate::mesh::Mesh<S>, String> {
         use crate::polygon::Polygon;
         use nalgebra::{Matrix4, Vector4};
 
-        let (doc, buffers, _images) =
-            gltf::import_slice(data).map_err(|e| format!("glTF parse error: {e:?}"))?;
+        let gltf::Gltf { document: doc, blob } =
+            gltf::Gltf::from_slice(data).map_err(|e| format!("glTF parse error: {e:?}"))?;
+        let buffers = resolve_buffers(&doc, blob)?;
 
         let mut polygons: Vec<Polygon<S>> = Vec::new();
 
@@ -49,7 +124,7 @@ impl<S: Clone + Send + Sync + Debug> crate::mesh::Mesh<S> {
 
             if let Some(mesh) = node.mesh() {
                 for prim in mesh.primitives() {
-                    let reader = prim.reader(|b| buffers.get(b.index()).map(|d| &d.0[..]));
+                    let reader = prim.reader(|b| buffers.get(b.index()).map(|d| &d[..]));
                     let positions: Vec<[f32; 3]> = match reader.read_positions() {
                         Some(it) => it.collect(),
                         None => continue,
@@ -66,11 +141,11 @@ impl<S: Clone + Send + Sync + Debug> crate::mesh::Mesh<S> {
                         for &idx in tri {
                             let pi = idx as usize;
                             let Some(p) = positions.get(pi) else { continue };
-                            // world transform (homogeneous), then glTF Y-up → Z-up
+                            // world transform (homogeneous), then file axes → meshup Z-up
                             let hp = world
                                 * Vector4::new(p[0] as Real, p[1] as Real, p[2] as Real, 1.0);
                             let (x, y, z) = (hp.x / hp.w, hp.y / hp.w, hp.z / hp.w);
-                            let pos = Point3::new(x, -z, y);
+                            let pos = to_meshup_point(Point3::new(x, y, z), file_up);
 
                             let n = normals
                                 .as_ref()
@@ -81,7 +156,7 @@ impl<S: Clone + Send + Sync + Debug> crate::mesh::Mesh<S> {
                                     wn.try_normalize(1e-9).unwrap_or_else(Vector3::zeros)
                                 })
                                 .unwrap_or_else(Vector3::zeros);
-                            let normal = Vector3::new(n.x, -n.z, n.y);
+                            let normal = to_meshup_normal(n, file_up);
 
                             verts.push(Vertex::new(pos, normal));
                         }
@@ -140,6 +215,33 @@ fn transform_normal(normal: Vector3<Real>, up_axis: UpAxis) -> Vector3<Real> {
             // X-up to Y-up: (x, y, z) → (y, x, z)
             Vector3::new(normal.y, normal.x, normal.z)
         }
+    }
+}
+
+/// Inverse of [`transform_point`]: map a point read out of a glTF file, whose up axis is
+/// `file_up`, onto meshup's Z-up world. `from_gltf` is only a true inverse of `to_gltf`
+/// when both are handed the same axis, so these two must be edited as a pair.
+fn to_meshup_point(point: Point3<Real>, file_up: UpAxis) -> Point3<Real> {
+    match file_up {
+        UpAxis::Y => {
+            // Y-up to Z-up: (x, y, z) → (x, -z, y)
+            Point3::new(point.x, -point.z, point.y)
+        }
+        // Already Z-up — what meshup's own exporter writes.
+        UpAxis::Z => point,
+        UpAxis::X => {
+            // X-up to Z-up: (x, y, z) → (y, x, z)
+            Point3::new(point.y, point.x, point.z)
+        }
+    }
+}
+
+/// Inverse of [`transform_normal`] — see [`to_meshup_point`].
+fn to_meshup_normal(normal: Vector3<Real>, file_up: UpAxis) -> Vector3<Real> {
+    match file_up {
+        UpAxis::Y => Vector3::new(normal.x, -normal.z, normal.y),
+        UpAxis::Z => normal,
+        UpAxis::X => Vector3::new(normal.y, normal.x, normal.z),
     }
 }
 

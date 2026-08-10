@@ -64,14 +64,20 @@ fast-surface-nets = { version = "0.2.1", optional = true }
 contour_tracing = { version = "1.0.12", features = ["array"], optional = true }
 either = "1.15"
 base64 = { version = "0.22", optional = true }
-gltf = { version = "1.4", optional = true, default-features = false, features = ["import", "utils"] }
+# NOTE: no "import" feature. It exists to resolve buffers *and decode textures*, so it
+# depends on `image` — every codec (JPEG/PNG/TIFF/WebP/OpenEXR/GIF), ~1.3 MB of wasm — to
+# produce images `from_gltf` discards. `io/gltf.rs` resolves buffers itself instead.
+gltf = { version = "1.4", optional = true, default-features = false, features = ["utils"] }
 # doc
 #doc-image-embed = "0.2" # fork of https://crates.io/crates/embed-doc-image - should be upstreamed.
 
 # io/load
 # core2 = { version = "0.4.0", default_features = false, features = ["alloc"] } # no-std, still throws errors
 core2 = { version = "0.4", features = ["alloc"] }
-dxf = { version = "0.6", optional = true }
+# 0.6.1 is a size floor, not a whim: 0.6.0 depends on `image` with its default features,
+# which builds every decoder (JPEG/TIFF/WebP/OpenEXR/…) into the wasm to read a DXF's BMP
+# thumbnail preview. 0.6.1 narrowed that to `default-features = false, features = ["bmp"]`.
+dxf = { version = "0.6.1", optional = true }
 stl_io = { version = "0.8", optional = true }
 image = { version = "0.25", optional = true }
 svg = { version = "0.18", optional = true }
@@ -193,6 +199,14 @@ bevymesh = [
   "dep:bevy_asset",
   "dep:wgpu-types"
 ]
+# The feature set of the shipped wasm module. buildscripts/build-wasm.ts builds with
+# `--no-default-features --features wasm`, so this list — not `default` — decides what
+# ends up in the binary users download. Keep it to what src/wasm/ actually binds.
+#
+# Deliberately NOT here: "image-io". It builds `Sketch::from_image`, which no wasm
+# binding exposes, and drags in the `image` crate's full codec set (~1.3 MB of wasm).
+# Note that "svg-io" used to arrive only as a transitive dep of "image-io" — it is
+# required by curve_js.rs and is now listed on its own.
 wasm = [
   "uuid",
   "wasm-bindgen",
@@ -202,6 +216,25 @@ wasm = [
   "serde",
   "console_error_panic_hook",
   "getrandom",
+  # geometry kernels
+  "f64",
+  "bmesh",
+  "mesh",
+  "sketch",
+  "chull-io",
+  "metaballs",
+  "sdf",
+  "delaunay",
+  # file formats
+  "stl-io",
+  "dxf-io",
+  "obj-io",
+  "ply-io",
+  "amf-io",
+  "threemf-io",
+  "gltf-io",
+  "svg-io",
+  # text
   "truetype-text",
   "hershey-text",
 ]

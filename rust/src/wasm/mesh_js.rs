@@ -673,10 +673,19 @@ impl MeshJs {
     }
 
     /// Import a **glTF 2.0** model (`.glb` or `.gltf`) as a single merged Mesh.
+    ///
+    /// `up_axis` names the up axis **inside the file**: "Y" for a conforming glTF (what
+    /// Blender and three.js write), "Z" for what meshup's own exporter writes. Unknown
+    /// values fall back to "Z" so this stays the mirror image of `toGLTF`.
     #[wasm_bindgen(js_name = fromGLTF)]
-    pub fn from_gltf_js(data: &[u8], metadata: JsValue) -> Result<MeshJs, JsValue> {
+    pub fn from_gltf_js(data: &[u8], metadata: JsValue, up_axis: &str) -> Result<MeshJs, JsValue> {
         let meta = js_metadata_to_string(metadata).unwrap_or(None);
-        let mesh = Mesh::from_gltf(data, meta)
+        let axis = match up_axis.to_uppercase().as_str() {
+            "Y" => UpAxis::Y,
+            "X" => UpAxis::X,
+            _ => UpAxis::Z,
+        };
+        let mesh = Mesh::from_gltf(data, meta, axis)
             .map_err(|e| JsValue::from_str(&format!("glTF import error: {e}")))?;
         Ok(MeshJs { inner: mesh })
     }

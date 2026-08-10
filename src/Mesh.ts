@@ -326,19 +326,28 @@ export class Mesh extends Shape
     }
 
     /** Import a glTF 2.0 model (.glb or .gltf) as a single merged Mesh.
-     *  Materials + node hierarchy are flattened; converts glTF Y-up → Z-up.
-     *  Self-contained .glb / base64 .gltf only (no Draco / external buffers). */
-    static fromGLTF(data: string|Uint8Array|ArrayBuffer, metadata: any = null): Mesh
+     *  Materials + node hierarchy are flattened.
+     *  Self-contained .glb / base64 .gltf only (no Draco / external buffers).
+     *
+     *  `up` is the up axis **inside the file**, and it mirrors {@link Mesh.toGLTF}'s
+     *  parameter so that `Mesh.fromGLTF(await m.toGLB())` returns `m` unrotated:
+     *   - `'z'` (default) — what meshup writes. The Archiyou stack carries the kernel's
+     *     native Z-up through to a Z-up viewer, so those files hold Z-up coordinates.
+     *   - `'y'` — a conforming glTF, i.e. anything Blender / three.js produced.
+     *
+     *  Nothing in a glTF distinguishes the two, so a file from elsewhere needs
+     *  `Mesh.fromGLTF(data, null, 'y')` or it arrives lying on its side. */
+    static fromGLTF(data: string|Uint8Array|ArrayBuffer, metadata: any = null, up: Axis = 'z'): Mesh
     {
         const bytes = Mesh._toBytes(data);
         if(bytes.length === 0){ throw new Error('Mesh.fromGLTF(): empty glTF data.'); }
-        return this.from((getCsgrs().MeshJs as any).fromGLTF(bytes, metadata));
+        return this.from((getCsgrs().MeshJs as any).fromGLTF(bytes, metadata, up));
     }
 
     /** Import a binary glTF (.glb). Alias for {@link Mesh.fromGLTF}. */
-    static fromGLB(data: Uint8Array|ArrayBuffer, metadata: any = null): Mesh
+    static fromGLB(data: Uint8Array|ArrayBuffer, metadata: any = null, up: Axis = 'z'): Mesh
     {
-        return this.fromGLTF(data, metadata);
+        return this.fromGLTF(data, metadata, up);
     }
 
     /** Import an AMF model (plain XML or zipped) as a merged Mesh. */

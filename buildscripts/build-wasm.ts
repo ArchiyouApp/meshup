@@ -26,7 +26,11 @@ console.log(`**** 🦀 Building Rust to WASM ****
 // 1. Build Rust using wasm-pack (skip built-in wasm-opt; we run it manually below)
 // RUSTFLAGS: enable wasm exception-handling so panic="unwind" works on wasm32.
 // This allows std::panic::catch_unwind to catch boolmesh panics gracefully.
-execSync(`wasm-pack build --release --no-opt --target web --out-dir ${WASM_DIR} --features wasm`, {
+// --no-default-features: the `wasm` feature in rust/Cargo.toml lists exactly what the
+// bindings need. Building with the crate defaults on top pulled in `image-io`, whose
+// codec set (JPEG/PNG/TIFF/WebP/OpenEXR) no binding can reach — dead weight in a binary
+// every consumer downloads.
+execSync(`wasm-pack build --release --no-opt --target web --out-dir ${WASM_DIR} --no-default-features --features wasm`, {
     cwd: RUST_DIR, 
     env: { ...process.env, RUSTFLAGS: "-C target-feature=+exception-handling" },
     stdio: 'inherit' 

@@ -44,17 +44,54 @@ pnpm add @archiyou/meshup
 # or: npm install @archiyou/meshup / yarn add @archiyou/meshup
 ```
 
-This package bundles its WASM binary as a base64 string in the JS output, so it has **no
-separate `.wasm` file to fetch or configure** — it works the same way in Node, browsers,
-and bundlers (Vite/webpack/esbuild) without special asset config.
+**Nothing to configure.** `init()` finds the WASM kernel itself, in two steps:
+
+1. **The `.wasm` file** shipped next to the module. Browsers stream and compile it while it
+   downloads, which is both smaller on the wire and faster than the base64 route. Bundlers
+   (Vite/Rollup/webpack 5) see the `new URL('./wasm/meshup_bg.wasm', import.meta.url)` in
+   the loader and emit the binary as a hashed asset automatically.
+2. **A base64 copy inlined in the JS**, used whenever the file cannot be fetched — Node,
+   `file://` pages, offline, CORS/CSP restrictions, or a host that doesn't serve the asset.
+   This is why the package still works from a bare `<script type="module">` with no MIME
+   type or asset-copying setup.
+
+The base64 copy sits behind a dynamic import, so it lands in its own lazy chunk and is only
+downloaded if step 1 fails.
 
 **ESM only.** There is no CommonJS build: `require('@archiyou/meshup')` will not work on
-Node versions without `require(esm)`. Requires **Node >= 20.19**.
+Node versions without `require(esm)`. The loader uses `import.meta.url`, so transpiling
+`@archiyou/meshup/src/*` to CommonJS will not work either. Requires **Node >= 20.19**.
 
-**Size.** Embedding the kernel makes the bundle large: `dist/index.js` is ~9.4 MB
-(a ~6.9 MB WASM binary, +33% for base64). That is the trade-off for zero-config loading in
-every environment. It is one module with no code splitting, so expect the full cost on
-first load; serve it compressed and load it lazily (e.g. in a Web Worker) in browser apps.
+**Size.** The kernel is ~5.9 MB, or ~7.8 MB as base64. Browsers that get step 1 pay the
+former, once, streamed. Everyone else pays the latter as parsed JavaScript. `dist/index.js`
+itself is ~0.7 MB. Serve compressed and load lazily (e.g. in a Web Worker) either way.
+
+### Pointing meshup at the kernel yourself
+
+`init()` accepts anything wasm-bindgen does — a URL, a `Response`, raw bytes or a compiled
+`WebAssembly.Module`. Supplying one **disables the fallback**: a wrong source fails loudly
+instead of quietly costing a 7.8 MB base64 download.
+
+```ts
+await init({ wasm: 'https://cdn.example.com/meshup_bg.wasm' }); // your own hosting
+
+// Node: skip the base64 decode by reading the file directly
+import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+const wasmPath = createRequire(import.meta.url).resolve('@archiyou/meshup/package.json')
+  .replace(/package\.json$/, 'dist/wasm/meshup_bg.wasm');
+await init({ wasm: await readFile(wasmPath) });
+```
+
+**Vite users:** if you install meshup from npm (rather than linking it in a workspace),
+Vite's dependency pre-bundling copies the module into `node_modules/.vite/deps/` and the
+`.wasm` no longer sits beside it, so dev mode logs a 404 and falls back to base64. Builds
+are unaffected. To keep the file path in dev too:
+
+```ts
+// vite.config.ts
+export default { optimizeDeps: { exclude: ['@archiyou/meshup'] } };
+```
 
 ## Usage
 
@@ -97,8 +134,9 @@ writeFileSync('sphere.glb', await mesh.toGLB());
 </script>
 ```
 
-Because the WASM is embedded as base64, this works directly from a `<script type="module">`
-or any bundler without configuring `.wasm` MIME types or asset copying.
+A CDN like esm.sh serves the `.wasm` alongside the JS, so this streams the binary. Where it
+can't be fetched, the embedded base64 takes over — either way there is no `.wasm` MIME type
+or asset copying to configure.
 
 ### Curves and sketches
 

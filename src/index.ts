@@ -12,6 +12,7 @@
  */
 
 import { loadAsync } from './loader'; // Loader for the WASM module
+import type { InitOptions } from './loader';
 import type { CsgrsModule } from './types';
 
 // Global state
@@ -28,12 +29,16 @@ export function getCsgrs(): CsgrsModule
 
 //// INIT FUNCTIONS ////
 
-export async function init(): Promise<void> 
+/** Load the WASM kernel. Without arguments meshup finds it itself: the
+ *  ./wasm/meshup_bg.wasm file next to the module when that is fetchable
+ *  (browsers), the inlined base64 otherwise (Node, published tarballs).
+ *  Pass `{ wasm }` to point it somewhere specific — see InitOptions. */
+export async function init(options?: InitOptions): Promise<void>
 {
     if (!_csgrs)
     {
         const t = performance.now();
-        _csgrs = await loadAsync();
+        _csgrs = await loadAsync(options);
         console.info(`Meshup WASM loaded successfully in ${Math.round(performance.now() - t)} ms.`);
     }
     else
@@ -43,9 +48,9 @@ export async function init(): Promise<void>
 }
 
 /** @alias: init (backward compatibility) */
-export async function initAsync(): Promise<void>
+export async function initAsync(options?: InitOptions): Promise<void>
 {
-    await init();
+    await init(options);
 }
 
 export function isInitialized(): boolean 
@@ -58,6 +63,7 @@ export function isInitialized(): boolean
     TODO: All other classes too?
 */
 
+export type { InitOptions, WasmSource } from './loader';
 export type { PointLike } from './types';
 export { Point } from './Point';
 export { Vector } from './Vector';

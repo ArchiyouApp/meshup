@@ -17,6 +17,7 @@
     "dist",
     "src/**/*.ts",
     "src/wasm/meshup.js",
+    "src/wasm/meshup_bg.wasm",
     "src/wasm/LICENSE",
     "LICENSE",
     "NOTICE",

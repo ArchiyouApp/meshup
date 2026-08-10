@@ -443,8 +443,12 @@ export class MeshJs {
   boundingBox(): any;
   /**
    * Import a **glTF 2.0** model (`.glb` or `.gltf`) as a single merged Mesh.
+   *
+   * `up_axis` names the up axis **inside the file**: "Y" for a conforming glTF (what
+   * Blender and three.js write), "Z" for what meshup's own exporter writes. Unknown
+   * values fall back to "Z" so this stays the mirror image of `toGLTF`.
    */
-  static fromGLTF(data: Uint8Array, metadata: any): MeshJs;
+  static fromGLTF(data: Uint8Array, metadata: any, up_axis: string): MeshJs;
   intersection(other: MeshJs): MeshJs;
   /**
    * Whether this mesh is convex — the precondition for the per-shape
@@ -1120,7 +1124,7 @@ export interface InitOutput {
   readonly meshjs_from3MF: (a: number, b: number, c: any) => [number, number, number];
   readonly meshjs_fromAMF: (a: number, b: number, c: any) => [number, number, number];
   readonly meshjs_fromDXF: (a: number, b: number, c: any) => [number, number, number];
-  readonly meshjs_fromGLTF: (a: number, b: number, c: any) => [number, number, number];
+  readonly meshjs_fromGLTF: (a: number, b: number, c: any, d: number, e: number) => [number, number, number];
   readonly meshjs_fromOBJ: (a: number, b: number, c: any) => [number, number, number];
   readonly meshjs_fromPointsWithHoles: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly meshjs_fromPolygons: (a: number, b: number, c: any) => number;

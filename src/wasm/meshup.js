@@ -1551,14 +1551,21 @@ export class MeshJs {
     }
     /**
      * Import a **glTF 2.0** model (`.glb` or `.gltf`) as a single merged Mesh.
+     *
+     * `up_axis` names the up axis **inside the file**: "Y" for a conforming glTF (what
+     * Blender and three.js write), "Z" for what meshup's own exporter writes. Unknown
+     * values fall back to "Z" so this stays the mirror image of `toGLTF`.
      * @param {Uint8Array} data
      * @param {any} metadata
+     * @param {string} up_axis
      * @returns {MeshJs}
      */
-    static fromGLTF(data, metadata) {
+    static fromGLTF(data, metadata, up_axis) {
         const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.meshjs_fromGLTF(ptr0, len0, metadata);
+        const ptr1 = passStringToWasm0(up_axis, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.meshjs_fromGLTF(ptr0, len0, metadata, ptr1, len1);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }

@@ -43,7 +43,9 @@ jobs:
         run: pnpm build
 
       # Guards the published file list: a stray nested .gitignore silently drops
-      # src/wasm/, and the 6.9 MB meshup_bg.wasm must not ship.
+      # src/wasm/, and meshup_bg.wasm must ship in BOTH src/wasm/ and dist/wasm/ —
+      # consumer bundlers resolve the loader's `new URL(...)` at build time, so a
+      # missing binary breaks their build, not just ours.
       - name: Check pack
         run: pnpm check:pack
 
@@ -59,8 +61,15 @@ jobs:
           npm install --no-audit --no-fund "$TARBALL"
           cat > smoke.mjs <<'EOF'
           import { init, isInitialized, Mesh } from '@archiyou/meshup';
+          import { readFile } from 'node:fs/promises';
+          // The default path: in Node the loader skips the .wasm file (import.meta.url
+          // is a file: URL, which fetch() cannot read) and uses the inlined base64.
           await init();
           if (!isInitialized()) { throw new Error('meshup did not initialize'); }
+          // The shipped sibling binary is what browser bundlers resolve out of the
+          // loader's `new URL(...)` at BUILD time, so prove it is present and valid.
+          // (init() is a singleton, so this is compiled directly rather than re-inited.)
+          await WebAssembly.compile(await readFile('node_modules/@archiyou/meshup/dist/wasm/meshup_bg.wasm'));
           const box = Mesh.Cube(10);
           const glb = await box.toGLB();
           if (!(glb?.byteLength > 0)) { throw new Error('toGLB() produced no bytes'); }

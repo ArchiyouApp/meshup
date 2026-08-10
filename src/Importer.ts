@@ -28,6 +28,7 @@
 
 import { getCsgrs, ShapeCollection, Curve, Mesh } from './index';
 import type { SketchJs } from './wasm/meshup';
+import type { Axis } from './types';
 
 export type ImportFormat =
     | 'svg' | 'geojson' | 'dxf'                         // 2D
@@ -39,6 +40,10 @@ export interface ImportOptions
     format?: ImportFormat;
     /** Optional source name (e.g. the file name) — reserved for metadata. */
     name?: string;
+    /** glTF only: the up axis **inside the file**. Defaults to `'z'`, which is what
+     *  meshup itself writes; pass `'y'` for a conforming glTF from Blender/three.js,
+     *  or the model arrives lying on its side. See {@link Mesh.fromGLTF}. */
+    up?: Axis;
 }
 
 /** Formats detectable/routable but not yet implemented (pending Rust importers). */
@@ -213,10 +218,11 @@ export class Importer
         return out;
     }
 
-    /** Import a glTF 2.0 model (.glb or .gltf) as a merged Mesh. */
-    static fromGLTF(data: string | Uint8Array | ArrayBuffer, _opts: ImportOptions = {}): ShapeCollection<Mesh>
+    /** Import a glTF 2.0 model (.glb or .gltf) as a merged Mesh.
+     *  Pass `opts.up = 'y'` for a file written by another tool — see {@link Mesh.fromGLTF}. */
+    static fromGLTF(data: string | Uint8Array | ArrayBuffer, opts: ImportOptions = {}): ShapeCollection<Mesh>
     {
-        return new ShapeCollection<Mesh>(Mesh.fromGLTF(Importer._toBytes(data)));
+        return new ShapeCollection<Mesh>(Mesh.fromGLTF(Importer._toBytes(data), null, opts.up ?? 'z'));
     }
 
     /** Import an AMF model (plain XML or zipped) as a merged Mesh. */

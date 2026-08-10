@@ -8,6 +8,24 @@ versions may contain breaking changes.
 
 ### Changed
 
+- **The WASM kernel is loaded from a file when it can be, base64 only as a fallback.**
+  `init()` now tries `./wasm/meshup_bg.wasm` next to the module first — browsers stream and
+  compile it while it downloads — and falls back to the inlined base64 when that is not
+  fetchable (Node, `file://`, offline, CORS/CSP, hosts that don't serve the asset). The
+  fallback is behind a dynamic import, so it now lives in its own lazy chunk: `dist/index.js`
+  drops from ~8.5 MB to ~0.7 MB and the 7.8 MB blob is only downloaded when it is actually
+  needed. `meshup_bg.wasm` therefore ships in the tarball now (in `src/wasm/` and
+  `dist/wasm/`), where it previously did not.
+
+  Node behaviour is unchanged: `import.meta.url` is a `file:` URL there and `fetch()` cannot
+  read those, so the loader's protocol guard goes straight to base64.
+
+- **`init()` / `initAsync()` accept an options object.** `init({ wasm })` takes a URL, a
+  `Response`, raw bytes or a compiled `WebAssembly.Module`. Supplying one disables the
+  fallback — a wrong source fails loudly instead of silently costing a 7.8 MB download. Node
+  callers can use it to skip the base64 decode entirely:
+  `init({ wasm: await readFile(wasmPath) })`. Calling `init()` bare is unchanged.
+
 - **`Curve.mirror()` costs nothing and keeps the geometry.** A reflection is affine, so for
   a planar curve `R(o + x*u + y*v) = R(o) + R(x)*u + R(y)*v` — the local coordinates are
   unchanged and only the frame moves. A mirrored circle stays two arc spans. This used to
