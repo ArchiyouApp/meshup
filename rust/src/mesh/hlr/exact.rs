@@ -564,10 +564,28 @@ fn emit(
     };
     let is_outline = kind.is_outline();
 
+    // Dropping a runt below is only half the cleanup. Where the runt sat at
+    // `t = 0` or `t = 1` its neighbour begins at the biased crossing rather
+    // than at the vertex, so the piece we do keep stops `DEPTH_BIAS_REL` of the
+    // scene extent short of where the edge really ends — enough to leave the
+    // endpoint unshared, which shows up as an open path on export. Snap the
+    // survivor back out to the end.
+    //
+    // The reach is `min_span`, the same threshold that decides a piece is not
+    // real line work, so this can only move an endpoint across a distance no
+    // drawing could show.
+    let snap = |lo: Real, hi: Real| -> (Real, Real) {
+        (
+            if lo < min_span { 0.0 } else { lo },
+            if hi > 1.0 - min_span { 1.0 } else { hi },
+        )
+    };
+
     for (lo, hi) in occluded.complement() {
         if hi - lo < min_span {
             continue; // bias artefact at a touching vertex, not real line work
         }
+        let (lo, hi) = snap(lo, hi);
         if is_outline {
             result
                 .silhouette_indices
@@ -581,6 +599,7 @@ fn emit(
         if hi - lo < min_span {
             continue;
         }
+        let (lo, hi) = snap(lo, hi);
         result
             .hidden_polylines
             .push(vec![point_at(lo), point_at(hi)]);
@@ -766,6 +785,43 @@ mod tests {
         let r = project_edges_exact(&cube, &view, &origin, &view, 15.0, &[]);
         for pl in r.visible_polylines.iter().chain(r.hidden_polylines.iter()) {
             assert_eq!(pl.len(), 2, "expected a plain segment, got {} points", pl.len());
+        }
+    }
+
+    /// **The reported bug.**
+    ///
+    /// `DEPTH_BIAS_REL` finds the occlusion crossing a hair inside a shared
+    /// vertex rather than exactly at it, so each of a cube's three hidden edges
+    /// stopped `4.71e-8 * extent` short of the corner it shares with the visible
+    /// edges around it. `min_span` deleted the runt visible fragment that left
+    /// behind, but nothing pulled the hidden piece back out to the vertex, so
+    /// those three endpoints coincided with nothing and exported as open paths.
+    #[test]
+    fn hidden_edges_reach_the_vertices_they_share() {
+        let (view, origin) = iso_view();
+        // Relative, so the assertion holds at every scale the solver claims.
+        for size in [1.0, 100.0, 10_000.0] {
+            let cube = centred_cube(size);
+            let r = project_edges_exact(&cube, &view, &origin, &view, 15.0, &[]);
+
+            let ends: Vec<Point3<Real>> = r
+                .visible_polylines
+                .iter()
+                .chain(r.hidden_polylines.iter())
+                .flat_map(|pl| [pl[0], pl[pl.len() - 1]])
+                .collect();
+
+            // Every edge of a cube meets another at both ends, so no projected
+            // endpoint may stand alone. The tolerance sits two orders below the
+            // bug and four above the solver's own noise (~1e-15 relative).
+            let tol = 1e-9 * size;
+            for (i, p) in ends.iter().enumerate() {
+                let shared = ends
+                    .iter()
+                    .enumerate()
+                    .any(|(j, q)| j != i && (p - q).norm() < tol);
+                assert!(shared, "orphan endpoint {p:?} at size {size}");
+            }
         }
     }
 

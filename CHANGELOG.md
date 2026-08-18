@@ -4,9 +4,21 @@ All notable changes to `@archiyou/meshup` are documented here.
 This project follows [semantic versioning](https://semver.org/); while on 0.x, minor
 versions may contain breaking changes.
 
-## Unreleased
+## 0.1.0 — 2026-08-18
+
+First published release. Previously the package was private to the Archiyou monorepo and
+was never installable from npm.
 
 ### Changed
+
+- **`isometry()` solves hidden lines exactly by default.** The default strategy moved from
+  `'raycast'`, which probes visibility at a finite number of points along each edge, to
+  `'exact'`, which solves occlusion as parametric intervals. Output is markedly cleaner: a
+  straight edge comes back as a plain two-point segment instead of a polyline carrying every
+  probe position, and an occluder narrower than the probe spacing can no longer be missed.
+  `samples` is a raycast-only knob and has no meaning for the exact solver — pass
+  `'raycast'` explicitly to keep the old behaviour. The other strategies (`'clip'`,
+  `'painter'`) are unchanged.
 
 - **The WASM kernel is loaded from a file when it can be, base64 only as a fallback.**
   `init()` now tries `./wasm/meshup_bg.wasm` next to the module first — browsers stream and
@@ -276,6 +288,17 @@ versions may contain breaking changes.
 
 ### Fixed
 
+- **Exact hidden-line removal left the endpoints of fully hidden edges detached.** Because
+  `DEPTH_BIAS_REL` finds an occlusion crossing a hair *inside* a shared vertex rather than
+  exactly at it, each hidden edge of a solid began at the biased crossing instead of at the
+  corner — `4.71e-8` of the scene extent short, scaling with the model. The runt visible
+  fragment beside it was already discarded as an artefact, but nothing pulled the surviving
+  hidden piece back out to the vertex, so those endpoints coincided with nothing and
+  exported as open paths in SVG and DXF. A cube produced three such orphans. Retained
+  pieces are now snapped to the edge ends, over the same `min_span` reach that decides a
+  piece is not real line work, so the correction can never move an endpoint by a distance a
+  drawing could show.
+
 - **`OBbox.fromCurve()` counted coincident tessellation points twice, tilting the box.**
   A closed curve tessellates with its start point repeated at the end (and a compound curve
   repeats every shared segment endpoint); weighting those points double skews the covariance
@@ -309,11 +332,6 @@ versions may contain breaking changes.
   positions — the constructor, `Polygon.from(points)` and `offset()` — so `Polygon` shapes
   rendered flat grey too. They now carry the plane normal as well. `_applyVertexTransform()`
   (translate/rotate/scale/mirror) already mapped normals itself and is unchanged.
-
-## 0.1.0
-
-First published release. Previously the package was private to the Archiyou monorepo and
-was never installable from npm.
 
 ### Packaging
 

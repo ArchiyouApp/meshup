@@ -233,7 +233,9 @@ describe('Example: Isometric projection with hidden lines', async () =>
         const runSamples = (s: number) =>
         {
             const t0 = performance.now();
-            const v = make().iso([-1, -1, 1], false, false, s, 5).group('visible');
+            const v = make().iso([-1, -1, 1], 'raycast',
+                { hiddenLines: false, includeHiddenShapes: false, samples: s, featureAngle: 5 })
+                .group('visible');
             return { dt: performance.now() - t0, visible: v?.length ?? 0 };
         };
         const lo = runSamples(8);     // expected: few polylines, low time

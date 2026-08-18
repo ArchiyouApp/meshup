@@ -128,7 +128,7 @@ describe('bbox()/obbox() shapes join the measured shape\'s scene', () =>
 
         const flat = Curve.Rect(100, 50);
         root.addShape(flat);
-        const rect = flat.bbox().rect();
+        const rect = flat.bbox()!.rect();
         expect(root.shapes().toArray()).toContain(rect);
     });
 

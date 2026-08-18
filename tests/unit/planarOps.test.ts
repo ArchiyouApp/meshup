@@ -201,7 +201,7 @@ describe('Vertex.extrude()', () =>
     {
         const solid = new Vertex([0, 0, 0])
             .extrude(10, [1, 0, 0])   // → Curve (line along x)
-            .extrude(10, [0, 1, 0])   // → Polygon (flat quad on XY)
+            .extrude(10, [0, 1, 0])!  // → Polygon (flat quad on XY)
             .extrude(10, [0, 0, 1]);  // → Mesh (solid box)
 
         expect(solid).toBeInstanceOf(Mesh);

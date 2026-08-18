@@ -228,8 +228,8 @@ describe('Bbox.shape()', () =>
         const shape = bbox.shape() as Curve;
         expect(shape).toBeInstanceOf(Curve);
         expect(shape.isClosed()).toBe(true);
-        expect(shape.bbox().min().toArray()).toEqual([0, 0, 5]);
-        expect(shape.bbox().max().toArray()).toEqual([10, 20, 5]);
+        expect(shape.bbox()!.min().toArray()).toEqual([0, 0, 5]);
+        expect(shape.bbox()!.max().toArray()).toEqual([10, 20, 5]);
     });
 
     it('1D bbox gives a line Curve along its one axis', () =>

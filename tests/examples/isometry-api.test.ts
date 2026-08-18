@@ -61,11 +61,11 @@ describe('isometry(cam, method, options)', () =>
         expect(shape(viaObject)).toBe(shape(viaPair));
     });
 
-    it('defaults to the raycast method and no hidden lines', () =>
+    it('defaults to the exact method and no hidden lines', () =>
     {
         const bare = Mesh.Box(100, 100, 100).isometry();
         const spelled = Mesh.Box(100, 100, 100)
-            .isometry([-1, -1, 1], 'raycast', { hiddenLines: false });
+            .isometry([-1, -1, 1], 'exact', { hiddenLines: false });
         expect(shape(bare)).toBe(shape(spelled));
         expect(bare.group('hidden')?.length ?? 0).toBe(0);
     });
@@ -102,7 +102,7 @@ describe('isometry: the legacy positional form still works', () =>
         //                                     hidden, includeHidden, samples, angle
         const legacy = Mesh.Box(100, 100, 100).isometry([-1, -1, 1], true, false, 16, 10);
         const current = Mesh.Box(100, 100, 100)
-            .isometry([-1, -1, 1], 'raycast', { hiddenLines: true, samples: 16, featureAngle: 10 });
+            .isometry([-1, -1, 1], 'exact', { hiddenLines: true, samples: 16, featureAngle: 10 });
         expect(shape(legacy)).toBe(shape(current));
     });
 
@@ -112,7 +112,7 @@ describe('isometry: the legacy positional form still works', () =>
             Mesh.Box(20, 20, 20), Mesh.Box(20, 20, 20).move(60, 0, 0));
 
         const legacy = build().isometry([-1, -1, 1], false, false, 16, 10);
-        const current = build().isometry([-1, -1, 1], 'raycast',
+        const current = build().isometry([-1, -1, 1], 'exact',
             { hiddenLines: false, samples: 16, featureAngle: 10 });
         expect(shape(legacy)).toBe(shape(current));
     });
