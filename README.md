@@ -1,37 +1,46 @@
 # Meshup (`@archiyou/meshup`)
 
 A general-purpose 3D mesh/curve modeling library for TypeScript, powered by a Rust/WASM
-kernel (currently a fork of [csgrs](https://github.com/timschmidt/csgrs), but rebasing soon). It combines CSG
+kernel (a fork of [csgrs](https://github.com/timschmidt/csgrs), vendored in `rust/`). It combines CSG
 (constructive solid geometry), quasi-CAD curve/sketch tooling, and mesh utilities behind a
 fluent, chainable JS API — built as the modeling kernel for
 [Archiyou](https://archiyou.com) Script CAD, but usable standalone in Node or the browser.
 
-> **Status: 0.1.0, early.** This is the first published release. It is used in production by
-> Archiyou, but the API is still evolving and breaking changes will land in 0.x minors.
-> Read [Known limitations](#known-limitations) before adopting it, and pin an exact version.
+> **Status: 0.1.0, pre-release.** Not on npm yet — the changelog's top section is still
+> `Unreleased`, so for now the package is consumed from source/a workspace link. It is used
+> in production by Archiyou, but the API is still evolving and breaking changes will land in
+> 0.x minors. Read [Known limitations](#known-limitations) before adopting it, and once it is
+> published, pin an exact version.
 
 ## Features
 
 - **Shapes**: `Mesh` (solids: cube, sphere, cylinder, custom polygons/points, SDF) and
   `Curve` (2D/3D: lines, polylines, arcs, circles, ellipses/elliptical arcs, rectangles,
   interpolated splines, compounds) as first-class, chainable objects.
-- **CSG booleans**: `union`, `difference`/`subtract`, `intersection` on meshes; robust 2D
-  boolean ops on curves (with automatic fallback for degenerate/self-intersecting input).
+- **CSG booleans**: `union`, `difference`/`subtract`, `intersection` on meshes; exact 2D
+  boolean ops on curves — arcs and lines are preserved rather than tessellated. Curve
+  booleans require both curves to be closed and coplanar; a failure warns and returns
+  `null` (there is no tessellated fallback).
 - **Corner operations**: `fillet`/`chamfer` on every corner or only selected ones
   (`curve.fillet(5, 0)`, `curve.fillet(5, [10, 10, 0])`, `curve.fillet(5, 'vertex<<->[0,0,0]')`).
 - **Edges & selection**: `mesh.edges()` returns deduplicated model edges grouped into
-  `boundary` / `crease` / `flat`, and the `Selector` can query them (`'edge|z'`,
-  `'edge<<->[0,0,0]'`).
+  `boundary` / `crease` / `flat`, and `mesh.select()` / `collection.select()` can query them
+  (`'edge|z'`, `'edge<<->[0,0,0]'`).
 - **Transforms & alignment**: move/rotate/mirror/scale, `alignByPoints`, `rotateSwing`,
   bounding boxes (`Bbox`, oriented `OBbox`), replication (`replicate`, `row`, grids).
 - **Sketch & text**: 2D sketch primitives, TrueType and Hershey stroke-font text
   (`Sketch.textOutline/textSolid/textStroke`).
+- **2D projection & drawings**: `ShapeCollection.isometry()`, `elevation()` and `section()`
+  turn 3D models into line work, with switchable hidden-line removal (`'exact'` (default),
+  `'raycast'`, `'clip'`, `'painter'`) — `isometry([-1,-1,1], 'exact', { hiddenLines: true })`.
 - **Styling**: per-shape `Style` (color, opacity, stroke width/dash/cap/join, point
   markers, PBR materials) that flows through to exported geometry.
 - **Scene graph**: `SceneNode` hierarchy with layers, named lookup (`find`/`findAll`),
   active-layer tracking, and cascading style.
-- **glTF/GLB export**: `GLTFBuilder`/`SceneNode.toGLTF()`/`toGLB()`, including custom
-  extensions for line style, point style, and edge visibility.
+- **Export**: glTF/GLB via `GLTFBuilder`/`SceneNode.toGLTF()`/`toGLB()`, including custom
+  extensions for line style, point style, and edge visibility; SVG for 2D line work
+  (`ShapeCollection.toSVG()`, `SceneNode.toSVG()`); STL via
+  `Mesh.toSTLBinary()`/`toSTLAscii()`.
 - **Import**: `Importer`/static `from*` factories for SVG, GeoJSON, DXF (2D curves), and
   OBJ, STL, glTF/GLB, AMF, 3MF (meshes) — auto-detected via `Importer.load()`.
 - **n-gon reconstruction**: boolean results are rebuilt into clean n-gon faces rather than
@@ -43,6 +52,10 @@ fluent, chainable JS API — built as the modeling kernel for
 pnpm add @archiyou/meshup
 # or: npm install @archiyou/meshup / yarn add @archiyou/meshup
 ```
+
+> Not published yet — until the first release lands on npm, use a workspace link or a git
+> dependency. The instructions below (and the `esm.sh` example) describe the published
+> package.
 
 **Nothing to configure.** `init()` finds the WASM kernel itself, in two steps:
 
@@ -199,8 +212,9 @@ Honest list as of 0.1.0 — these are real and not yet fixed:
 
 The Rust kernel lives in `rust/` (a fork of csgrs). It pulls in five git submodules —
 `rust/hypercurve`, `rust/hyperreal`, `rust/hypersolve`, `rust/hyperlattice`,
-`rust/hyperlimit` — which the root `Cargo.toml` wires up via `[patch.crates-io]`, so a
-non-recursive clone cannot build the WASM.
+`rust/hyperlimit`. `hypercurve` is a path dependency of the `rust/` crate; the other four
+are wired up by the root `Cargo.toml` via `[patch.crates-io]`. Either way a non-recursive
+clone cannot build the WASM.
 
 Both generated artifacts (`src/wasm/` and the base64 blob `src/meshup-js-binary.ts`) are
 committed, so **you only need the Rust toolchain if you change Rust code**.

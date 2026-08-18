@@ -2352,9 +2352,10 @@ export class Mesh extends Shape
      *     (silhouette + open-mesh boundary edges) as classified by the Rust HLR
      *
      * @param view Trailing options, chiefly `strategy` — which HLR algorithm to
-     *   run. Defaults to `'raycast'`, the original sampling solver. A single
-     *   mesh has no shapes to order, so the per-shape strategies `'clip'` and
-     *   `'painter'` reduce to `'exact'` here.
+     *   run. Defaults to `'exact'` (see `ISOMETRY_HLR_STRATEGY_DEFAULT`);
+     *   `'raycast'` is the original sampling solver. A single mesh has no shapes
+     *   to order, so the per-shape strategies `'clip'` and `'painter'` reduce to
+     *   `'exact'` here.
      */
     isometry(cam?: PointLike, method?: HlrStrategy, options?: IsometryOptions): ShapeCollection<Shape>;
     /** @deprecated Positional form. Kept working for saved scripts; prefer
