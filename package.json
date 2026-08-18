@@ -1,6 +1,6 @@
 {
   "name": "@archiyou/meshup",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "General purpose 3D mesh library with various modeling techniques (CSG, 2D, quasi-CAD) and target applications (3D printing, craft, CNC) in Typescript and powered by Rust (CSGRS). ",
   "type": "module",
   "main": "./dist/index.js",
