@@ -31,7 +31,7 @@
     "lint": "tsc --noEmit -p tsconfig.lint.json",
     "check:wasm-integrity": "tsx buildscripts/check-wasm-integrity.ts",
     "check:pack": "tsx buildscripts/check-pack.ts",
-    "prepublishOnly": "pnpm build"
+    "prepublishOnly": "node buildscripts/require-pnpm-publish.mjs && pnpm build"
   },
   "keywords": [
     "3d",
