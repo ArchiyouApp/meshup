@@ -15,3 +15,6 @@ src/wasm/snippets/
 # folder beside the test file itself, so generated files sit next to what makes
 # them rather than in a parallel tree.
 tests/**/outputs/
+
+.claude/
+.mcp.json
