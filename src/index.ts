@@ -86,6 +86,40 @@ export { Importer } from './Importer';
 export type { ImportFormat, ImportOptions } from './Importer';
 export type { StyleData } from './Style';
 
+/*  The pieces below used to be reachable only through deep subpath imports
+    (`@archiyou/meshup/src/Color` and friends), which the `./src/*` export maps onto
+    TypeScript. That works inside a monorepo and nowhere else: a published consumer would
+    have to compile .ts out of node_modules. Everything the engine needs is therefore named
+    here, so `@archiyou/meshup` alone is a complete import surface. */
+
+export { Color } from './Color';
+export type { ColorInput } from './Color';
+export { Style } from './Style';
+export { TOLERANCE, SHAPE_DEFAULT_STYLE } from './constants';
+export { isPointLike } from './types';
+export type { SpanParams, SpanPoint } from './types';
+export { rad, deg, nodeToString, GLTFJsonDocumentToString } from './utils';
+
+/*  Scene membership. A method that produces a shape has to say what becomes of it — the
+    result replaces the receiver, joins the active layer, or carries its scene along — so
+    these are part of the contract for anyone building shape-producing methods on meshup,
+    not an internal detail. Exported as a complete family: a partial set would leave the
+    choice looking arbitrary. */
+export {
+  activeLayerOf,
+  addResultToScene,
+  replaceInScene,
+  sceneAdd,
+  sceneCarry,
+  sceneLayer,
+  sceneReplace,
+  sceneReplaceOrKeep,
+  sceneUpdate,
+  colSceneAdd,
+  colSceneLayer,
+  colSceneReplace,
+} from './sceneDecorators';
+
 export {
   BentleyLineStyleProperty,
   BentleyLineStyleExtension,

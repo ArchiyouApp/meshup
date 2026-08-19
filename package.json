@@ -1,15 +1,12 @@
 {
   "name": "@archiyou/meshup",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "General purpose 3D mesh library with various modeling techniques (CSG, 2D, quasi-CAD) and target applications (3D printing, craft, CNC) in Typescript and powered by Rust (CSGRS). ",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    },
+    ".": "./src/index.ts",
     "./src/*": "./src/*.ts",
     "./package.json": "./package.json"
   },
@@ -62,7 +59,16 @@
     "node": ">=20.19"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./package.json": "./package.json"
+    }
   },
   "packageManager": "pnpm@10.32.1",
   "devDependencies": {

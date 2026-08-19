@@ -4,6 +4,39 @@ All notable changes to `@archiyou/meshup` are documented here.
 This project follows [semantic versioning](https://semver.org/); while on 0.x, minor
 versions may contain breaking changes.
 
+## 0.3.0 — 2026-08-19
+
+Makes `@archiyou/meshup` usable as a published package rather than only as a workspace
+sibling. Nothing in the geometry changed.
+
+### Added
+
+- **The root export is now complete.** `Color`, `Style`, `TOLERANCE`,
+  `SHAPE_DEFAULT_STYLE`, `isPointLike`, the `SpanParams`/`SpanPoint` types, `rad`, `deg`,
+  `nodeToString`, `GLTFJsonDocumentToString` and the twelve scene-membership decorators
+  (`sceneAdd`, `sceneCarry`, `sceneReplace`, `sceneUpdate`, `activeLayerOf`,
+  `addResultToScene`, `replaceInScene`, `sceneLayer`, `sceneReplaceOrKeep`, `colSceneAdd`,
+  `colSceneLayer`, `colSceneReplace`) are exported from the package root. They were
+  reachable only through `@archiyou/meshup/src/*` before, which is a subpath that maps onto
+  TypeScript — fine inside a monorepo, impossible for anyone installing from npm, since
+  Node refuses to strip types under `node_modules` and most bundlers will not compile
+  `.ts` found there.
+
+  The decorators are a deliberate part of the public surface: a method that produces a shape
+  has to declare what becomes of it, so anyone building shape-producing methods on meshup
+  needs them.
+
+### Changed
+
+- **The published package exposes only its root.** `exports` in the tarball is `.` plus
+  `./package.json`; the `./src/*` subpath is gone from it, so no consumer can accidentally
+  import raw TypeScript. Inside this repository nothing changes: the workspace manifest
+  points `.` at `src/index.ts` and keeps `./src/*`, so an edit here is still live for the
+  monorepo with no build step. The swap happens through `publishConfig`.
+
+  If you were deep-importing from `@archiyou/meshup/src/…` as an outside consumer — which
+  could not have worked at runtime — import from the package root instead.
+
 ## 0.1.0 — 2026-08-18
 
 First published release. Previously the package was private to the Archiyou monorepo and
