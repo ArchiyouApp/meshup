@@ -2295,12 +2295,16 @@ export class Mesh extends Shape
         return this.rotateToOrtho(o);
     }
 
-    /** Flatten a 3D mesh to its bottom-facing polygons projected onto the XY plane.
-     *  Finds all polygons whose normal is most aligned with -Z (or a given `axis`),
-     *  collapses them to Z = 0 and returns a new Mesh composed of those faces.
+    /** Flatten this Mesh onto a coordinate plane: keep the polygons whose normal is
+     *  parallel to `axis`, collapse them onto the plane through the origin perpendicular
+     *  to that axis, and drop the doubles that creates.
      *
-     *  @param axis  Optional axis keyword ('x' | 'y' | 'z'). Selects polygons whose
-     *               normal is parallel to that axis.  Defaults to 'z' (bottom face).
+     *  Flattening a box along 'z' selects its top and bottom face; both land on the same
+     *  rectangle, so only one is kept — the same single-face result the brep kernel's
+     *  Solid.flatten() gives.
+     *
+     *  @param axis  Axis whose faces to keep and along which to collapse ('x' | 'y' | 'z',
+     *               default 'z' — the horizontal faces, flattened onto the XY plane).
      */
     @sceneReplace
     flatten(axis: Axis = 'z'): Mesh
@@ -2309,7 +2313,7 @@ export class Mesh extends Shape
                       : axis === 'y' ? Vector.from(0, 1, 0)
                       :                Vector.from(0, 0, 1);
 
-        const flatPolys = this.polygons()
+        const flatPolys = this.polygons().toArray()
             .filter(poly =>
             {
                 const n = poly.normal();
@@ -2319,15 +2323,47 @@ export class Mesh extends Shape
                 );
                 return angle < TOLERANCE * 10;
             })
-            .map(poly => poly.vertices().map(pt => new Point(pt.x, pt.y, 0)));
+            // Collapse along the axis only — flattening along 'x'/'y' used to zero z instead,
+            // which turned a side face into a line.
+            .map(poly => poly.vertices().map(pt => new Point(
+                (axis === 'x') ? 0 : pt.x,
+                (axis === 'y') ? 0 : pt.y,
+                (axis === 'z') ? 0 : pt.z,
+            )));
 
         if (flatPolys.length === 0)
         {
-            console.warn('Mesh.flatten(): no polygons found aligned with axis', axis, '— returning empty Mesh');
+            console.warn('Mesh.flatten(): no polygons found aligned with axis', axis, '\u2014 returning empty Mesh');
             return new Mesh();
         }
 
-        return Mesh.fromPolygons(flatPolys);
+        // Flattening stacks geometry that was apart in 3D — a box's top and bottom face land
+        // on the same rectangle — so keep only the first polygon per vertex set. The key is
+        // sorted, making it independent of where the face starts and which way it is wound.
+        const seen = new Set<string>();
+        const uniquePolys = flatPolys.filter(pts =>
+        {
+            const key = pts.map(p => [p.x, p.y, p.z]
+                            .map(c => (Math.round(c / TOLERANCE) * TOLERANCE + 0).toFixed(6))
+                            .join(',')).sort().join('|');
+            if (seen.has(key)) { return false; }
+            seen.add(key);
+            return true;
+        });
+
+        return Mesh.fromPolygons(uniquePolys);
+    }
+
+    /** Order- and winding-independent key for this Mesh's geometry, used by
+     *  ShapeCollection.flatten() to filter out shapes that flattened onto each other. */
+    _flatKey(tolerance: number = TOLERANCE): string
+    {
+        return this.polygons().toArray()
+            .map(poly => poly.vertices().map(v => [v.x, v.y, v.z]
+                            .map(c => (Math.round(c / tolerance) * tolerance + 0).toFixed(6))
+                            .join(',')).sort().join('|'))
+            .sort()
+            .join('#');
     }
 
     //// EDGE PROJECTION AND SECTIONING ////

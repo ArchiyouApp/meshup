@@ -444,6 +444,42 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         return this;
     }
 
+    /**
+     * Line width for this container's contents, in SCREEN PIXELS — not model units.
+     *
+     * It travels to the viewer as `BENTLEY_materials_line_style.width` and becomes a pixel
+     * `linewidth` on the fat-line material, so lines keep the same apparent weight however far
+     * you zoom. `thickness(4)` is four pixels, not four millimetres.
+     *
+     * Sets this container's OWN style; the cascade to shapes happens lazily in
+     * {@link effectiveStyle}, so a shape that sets its own width still wins. Assigning a
+     * partial stroke is safe — the `stroke` setter merges — so this does not disturb a dash
+     * pattern set separately on the same container.
+     */
+    strokeWidth(width: number): this
+    {
+        this.style.stroke = { width };
+        return this;
+    }
+
+    /** Alias for `strokeWidth()`. Reads more naturally for a curve. Screen pixels. */
+    thickness(width: number): this { return this.strokeWidth(width); }
+
+    /**
+     * Give this container a gradient, cascaded to every shape beneath it.
+     *
+     * Like the other style methods on SceneNode this sets the container's OWN style and does
+     * not touch its children; the cascade happens lazily in {@link effectiveStyle}, so a shape
+     * that sets its own gradient still wins.
+     *
+     * See {@link Curve.colorGradient} for the accepted argument forms.
+     */
+    colorGradient(...args: Array<any>): this
+    {
+        this.style.gradient = Style.normaliseStops(Style.parseGradientArgs(args));
+        return this;
+    }
+
     /** Show or hide this container (and all its contents) during export. */
     visible(v: boolean): this
     {

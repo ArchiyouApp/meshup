@@ -16,9 +16,9 @@ export type StyleColor = string; // CSS color string, e.g. 'red', '#ff0000', 'rg
 
 import { Color } from './Color';
 import { SHAPE_DEFAULT_STYLE } from './constants';
-import type { ColorInput } from './Color';
+import type { ColorInput, ColorStop } from './Color';
 export { Color } from './Color';
-export type { ColorInput } from './Color';
+export type { ColorInput, ColorStop } from './Color';
 
 
 /** Data of Style */
@@ -43,7 +43,26 @@ export type StyleData = {
         color?: StyleColor;
         shape?: 'circle' | 'square';
     };
+    /**
+     * A colour ramp along the shape, rendered as per-vertex colour.
+     *
+     * Deliberately a TOP-LEVEL key rather than living inside `stroke`. `_explicit` tracks whole
+     * top-level keys, so setting a gradient under `stroke` would mark the entire stroke object
+     * explicit and push its default width/dash/cap/join into the style cascade, silently
+     * overriding whatever a parent layer had set. A top-level key also reads correctly for
+     * meshes, which have a gradient but no stroke.
+     *
+     * Absent means no gradient. There is deliberately no entry in SHAPE_DEFAULT_STYLE — the
+     * Style constructor only deep-copies `fill`, `stroke` and `point`, so a fourth nested
+     * default would be shared mutable state across every Style in the process.
+     */
+    gradient?: GradientData;
     material?: any; // TODO
+}
+
+/** A normalised colour ramp: stops sorted by position, colours resolved to '#rrggbb'. */
+export type GradientData = {
+    stops: Array<{ at: number; color: StyleColor }>;
 }
 
 /**
@@ -56,7 +75,7 @@ export type StyleData = {
  * a second time. Textures are unaffected: glTF marks baseColorTexture as sRGB-encoded
  * and the loader tags it accordingly.
  */
-function srgbToLinear(c: number): number
+export function srgbToLinear(c: number): number
 {
     return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
 }
@@ -98,6 +117,7 @@ export class Style
         if (data.fill !== undefined) this.fill = data.fill;
         if (data.stroke !== undefined) this.stroke = data.stroke;
         if (data.point !== undefined) this.point = data.point;
+        if (data.gradient !== undefined) this.gradient = data.gradient;
         if (data.material !== undefined) this._style.material = data.material;
         return this;
     }
@@ -115,6 +135,7 @@ export class Style
         if (this._explicit.has('fill')) d.fill = { ...this._style.fill };
         if (this._explicit.has('stroke')) d.stroke = { ...this._style.stroke };
         if (this._explicit.has('point')) d.point = { ...this._style.point };
+        if (this._explicit.has('gradient')) d.gradient = Style._cloneGradient(this._style.gradient);
         if (this._explicit.has('material')) d.material = this._style.material;
         return d;
     }
@@ -143,6 +164,149 @@ export class Style
         this._style.fill!.color = n;
         this._style.stroke!.color = n;
         this._explicit.add('color');
+        // A flat colour set after a gradient wins: last call decides. Without this the
+        // gradient would keep rendering and .color() would look like it did nothing.
+        this._style.gradient = undefined;
+        this._explicit.delete('gradient');
+    }
+
+    /**
+     * A colour ramp along the shape. Undefined when none is set.
+     *
+     * Rendered as per-vertex colour (glTF `COLOR_0`), so a gradient is smooth rather than
+     * banded, and one shape stays one shape. Note that opacity is NOT part of the ramp: fat
+     * lines carry only rgb per vertex, so a gradient that faded opacity would work on hairlines
+     * and silently not on thick ones. Opacity stays uniform on the shape.
+     */
+    get gradient(): GradientData | undefined {
+        return Style._cloneGradient(this._style.gradient);
+    }
+    set gradient(v: GradientData | Array<{ at: number; color: ColorInput }> | undefined)
+    {
+        if (v === undefined || v === null)
+        {
+            this._style.gradient = undefined;
+            this._explicit.delete('gradient');
+            return;
+        }
+        const stops = Array.isArray(v) ? v : v.stops;
+        this._style.gradient = { stops: Style.normaliseStops(stops) };
+        this._explicit.add('gradient');
+    }
+
+    /**
+     * Put a raw stop list into canonical form: colours resolved to '#rrggbb', positions clamped
+     * to 0–1, sorted ascending, and always at least two stops.
+     *
+     * Sorting here rather than at sample time is deliberate — `Color.sample` runs once per
+     * vertex during export and must not re-sort a ramp on every call.
+     */
+    static normaliseStops(stops: Array<{ at: number; color: ColorInput }>): Array<{ at: number; color: StyleColor }>
+    {
+        if (!Array.isArray(stops) || stops.length === 0)
+        {
+            throw new Error('Style.gradient: a colour ramp needs at least one stop.');
+        }
+
+        const out = stops.map((s, i) =>
+        {
+            if (s === null || typeof s !== 'object' || !('color' in s))
+            {
+                throw new Error(`Style.gradient: stop ${i} is not a { at, color } object.`);
+            }
+            const at = typeof s.at === 'number' && isFinite(s.at) ? Math.max(0, Math.min(1, s.at)) : 0;
+            return { at, color: Style._resolveColor(s.color) };
+        });
+
+        // A stable sort keeps coincident stops in the order written, which is what makes
+        // [{0,red},{0.5,red},{0.5,blue},{1,blue}] read as a hard break at the midpoint.
+        out.sort((a, b) => a.at - b.at);
+
+        // A single stop is a flat colour; give the ramp two ends so every consumer can assume
+        // a span without special-casing.
+        if (out.length === 1) { return [{ at: 0, color: out[0].color }, { at: 1, color: out[0].color }]; }
+        return out;
+    }
+
+    /**
+     * Parse the arguments of `colorGradient(...)` into a raw stop list.
+     *
+     * Accepted forms:
+     *
+     * ```
+     * colorGradient('red', 'blue')                        two colours, 0 and 1
+     * colorGradient('red', 'white', 'blue')               N colours, evenly spaced
+     * colorGradient([[0,'red'], [0.5,'x'], [1,'blue']])   an array of stops
+     * colorGradient([0,'red'], [0.5,'x'], [1,'blue'])     the same, as varargs
+     * colorGradient([{ at: 0, color: 'red' }, …])         stops as objects
+     * ```
+     *
+     * ONE AMBIGUITY HAS TO BE RESOLVED EXPLICITLY, because {@link ColorInput} already accepts
+     * `[r,g,b]` tuples: is `[0, 255]` a colour or a stop? The rule is that a stop is a
+     * two-element array whose second element is **not** a number. So `[255,0,0]` is a colour
+     * (three numbers) and `[0.5,'blue']` is a stop. Nothing else disambiguates them, so this
+     * rule is part of the public contract, not an implementation detail.
+     */
+    static parseGradientArgs(args: Array<any>): Array<{ at: number; color: ColorInput }>
+    {
+        // Both halves of this matter. Requiring a NUMERIC position stops a two-element array
+        // OF stops — `[[0,'red'],[1,'blue']]` — from being read as one stop whose position is
+        // an array. Requiring a NON-numeric colour is what separates `[0.5,'blue']` (a stop)
+        // from `[255,0,0]` (a colour).
+        const isStopPair = (v: any): boolean =>
+            Array.isArray(v) && v.length === 2 && typeof v[0] === 'number' && typeof v[1] !== 'number';
+        const isStopObject = (v: any): boolean =>
+            v !== null && typeof v === 'object' && !Array.isArray(v) && 'color' in v;
+        const toStop = (v: any) =>
+            (isStopPair(v) ? { at: v[0], color: v[1] } : { at: v.at, color: v.color });
+
+        if (args.length === 0)
+        {
+            throw new Error(
+                'colorGradient(): needs at least two colours, e.g. colorGradient(\'red\', \'blue\'), '
+                + 'or a list of stops, e.g. colorGradient([[0,\'red\'],[1,\'blue\']]).');
+        }
+
+        // A single array argument is a list of stops — unless it is itself one stop.
+        if (args.length === 1 && Array.isArray(args[0]) && !isStopPair(args[0]))
+        {
+            const arr = args[0] as Array<any>;
+            if (arr.length > 0 && arr.every(x => isStopPair(x) || isStopObject(x)))
+            {
+                return arr.map(toStop);
+            }
+            throw new Error(
+                `colorGradient(): could not read ${JSON.stringify(args[0])} as a list of stops. `
+                + 'A stop is [position, colour] — e.g. [0.5, \'blue\'] — or { at, color }. '
+                + 'Note that [255,0,0] is a COLOUR, not a stop: a stop is a two-element array '
+                + 'whose second element is not a number.');
+        }
+
+        if (args.every(a => isStopPair(a) || isStopObject(a))) { return args.map(toStop); }
+
+        if (args.length === 1)
+        {
+            throw new Error(
+                'colorGradient(): one colour is not a gradient. Use .color() for a flat colour, '
+                + 'or give at least two, e.g. colorGradient(\'red\', \'blue\').');
+        }
+
+        // Two or more plain colours, spread evenly from 0 to 1.
+        return args.map((color, i) => ({ at: i / (args.length - 1), color: color as ColorInput }));
+    }
+
+    /** Deep-copy a gradient, so callers cannot mutate a Style's ramp through the reference. */
+    private static _cloneGradient(g: GradientData | undefined): GradientData | undefined
+    {
+        return g ? { stops: g.stops.map(s => ({ ...s })) } : undefined;
+    }
+
+    /** Colour at position `t` (0–1) along the ramp, or the flat colour when there is none. */
+    sampleGradient(t: number): string
+    {
+        const g = this._style.gradient;
+        if (!g) { return this.strokeColor; }
+        return Color.sample(g.stops, t).toHex();
     }
 
     /** Overall opacity (0–1). Also sets fill.opacity and stroke.opacity. */
@@ -407,7 +571,14 @@ export class Style
         }
 
         // stroke
-        const strokeColor = this._style.stroke?.color;
+        // A gradient degrades to a single representative colour here. SVG can do real ramps,
+        // but only through a <defs><linearGradient> that this method has no way to contribute
+        // to — it sets attributes on one element and cannot reach the document. Sampling the
+        // middle of the ramp keeps printed output recognisable; see toSvgAttrs for the same
+        // reasoning.
+        const strokeColor = this._style.gradient
+            ? this.sampleGradient(0.5)
+            : this._style.stroke?.color;
         if (strokeColor !== undefined)
         {
             elem.setAttribute('stroke', strokeColor);
@@ -549,8 +720,21 @@ export class Style
         }
 
         // stroke
-        const sc = this._style.stroke?.color ?? defaultStroke.color!;
-        if (!(omitDefaults && sc === defaultStroke.color)) parts.push(`stroke="${sc}"`);
+        //
+        // GRADIENTS FLATTEN HERE, deliberately. A real SVG gradient needs a
+        // <defs><linearGradient id=…> in the document plus stroke="url(#…)", and this method
+        // returns a bare attribute string with no channel to contribute a defs entry. Rather
+        // than half-render one, the ramp is sampled at its midpoint so a printed drawing shows
+        // a sensible representative colour instead of the ramp's first stop.
+        //
+        // The flattened colour also bypasses `omitDefaults`: it is never the default stroke, so
+        // it must always be written.
+        const gradientColor = this._style.gradient ? this.sampleGradient(0.5) : undefined;
+        const sc = gradientColor ?? this._style.stroke?.color ?? defaultStroke.color!;
+        if (gradientColor !== undefined || !(omitDefaults && sc === defaultStroke.color))
+        {
+            parts.push(`stroke="${sc}"`);
+        }
 
         const so = this._style.stroke?.opacity;
         if (so !== undefined && so !== 1) parts.push(`stroke-opacity="${so}"`);
@@ -637,6 +821,7 @@ export class Style
             fill: { ...this._style.fill },
             stroke: { ...this._style.stroke },
             point: { ...this._style.point },
+            gradient: Style._cloneGradient(this._style.gradient),
             material: this._style.material,
         };
     }

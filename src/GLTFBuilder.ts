@@ -34,7 +34,7 @@ import
     type ReaderContext,
     type WriterContext,
 } from '@gltf-transform/core';
-import { Style } from './Style';
+import { Style, srgbToLinear } from './Style';
 import { Color } from './Color';
 
 import { GLTFJsonDocumentToString, remapAxis } from './utils';
@@ -97,8 +97,7 @@ function mulberry32(seed: number): () => number
  */
 function rgbOf(color: string): [number, number, number]
 {
-    const toLinear = (c: number) => c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-    try { return new Color(color).toRgb().map(v => toLinear(v / 255)) as [number, number, number]; }
+    try { return new Color(color).toRgb().map(v => srgbToLinear(v / 255)) as [number, number, number]; }
     catch { return [0, 0, 0]; }
 }
 
@@ -1027,10 +1026,89 @@ export class GLTFBuilder
         };
     }
 
+    /**
+     * Resample a tessellated polyline so a vertex lands on every gradient stop, and report each
+     * vertex's position along the curve as a fraction of ARC LENGTH.
+     *
+     * Two reasons this is not just `i / (count - 1)`:
+     *
+     *  - Tessellation is adaptive (chord error, not even spacing), so index position and arc
+     *    position diverge wherever a curve is tightly curved. A gradient driven by index would
+     *    visibly bunch up on the tight parts.
+     *  - A colour only exists AT a vertex; between vertices the GPU interpolates linearly. A
+     *    straight line tessellates to two points, i.e. one segment, so a three-stop ramp on it
+     *    would interpolate first→last and drop the middle stop entirely. Inserting a vertex at
+     *    each stop is what makes multi-stop gradients work on straight geometry.
+     *
+     * Returns the (possibly extended) points in the same flat xyz layout as the input.
+     */
+    private static _resampleAlongStops(
+        raw: Float32Array, stops: Array<{ at: number }>): { points: Float32Array; t: Float32Array }
+    {
+        const n = raw.length / 3;
+        const at = (i: number): [number, number, number] => [raw[i * 3], raw[i * 3 + 1], raw[i * 3 + 2]];
+
+        // Cumulative arc length → t per original vertex.
+        const ts = new Float32Array(n);
+        let total = 0;
+        for (let i = 1; i < n; i++)
+        {
+            const [x0, y0, z0] = at(i - 1), [x1, y1, z1] = at(i);
+            total += Math.hypot(x1 - x0, y1 - y0, z1 - z0);
+            ts[i] = total;
+        }
+        // A closed or degenerate curve of zero length has no meaningful parameterisation; leave
+        // every vertex at 0 so the ramp's first colour is used throughout rather than dividing
+        // by zero.
+        if (total > 0) { for (let i = 0; i < n; i++) { ts[i] /= total; } }
+
+        // Merge in any interior stop that no vertex already sits on.
+        const EPS = 1e-6;
+        const wanted: number[] = Array.from(ts);
+        for (const s of stops)
+        {
+            if (s.at <= EPS || s.at >= 1 - EPS) { continue; }
+            if (wanted.some(t => Math.abs(t - s.at) < EPS)) { continue; }
+            wanted.push(s.at);
+        }
+
+        if (wanted.length === n) { return { points: raw, t: ts }; }
+        wanted.sort((a, b) => a - b);
+
+        const out = new Float32Array(wanted.length * 3);
+        const tOut = new Float32Array(wanted.length);
+        let seg = 0;
+        for (let k = 0; k < wanted.length; k++)
+        {
+            const t = wanted[k];
+            tOut[k] = t;
+            while (seg < n - 2 && ts[seg + 1] < t) { seg++; }
+
+            const span = ts[seg + 1] - ts[seg];
+            const local = span > 0 ? Math.max(0, Math.min(1, (t - ts[seg]) / span)) : 0;
+            const [x0, y0, z0] = at(seg), [x1, y1, z1] = at(seg + 1);
+            out[k * 3]     = x0 + (x1 - x0) * local;
+            out[k * 3 + 1] = y0 + (y1 - y0) * local;
+            out[k * 3 + 2] = z0 + (z1 - z0) * local;
+        }
+        return { points: out, t: tOut };
+    }
+
     /** Assemble a GltfNode for a Curve from its raw toBuffer() data. */
     private _curveToGLTFNode(curve: Curve, name = 'curve', style?: Style): { node: GltfNode; material: Material }
     {
-        const rawBuf = curve.toBuffer();
+        const effStyle = style ?? curve.style;
+        const gradient = effStyle.gradient;
+
+        let rawBuf = curve.toBuffer();
+        let tPerVertex: Float32Array | null = null;
+        if (gradient)
+        {
+            const resampled = GLTFBuilder._resampleAlongStops(rawBuf, gradient.stops);
+            rawBuf = resampled.points;
+            tPerVertex = resampled.t;
+        }
+
         const count = rawBuf.length / 3;
         const posF32 = new Float32Array(count * 3);
         const bb = curve.bbox();
@@ -1046,10 +1124,14 @@ export class GLTFBuilder
             .setArray(posF32)
             .setBuffer(gtBuf);
 
-        const matDef = (style ?? curve.style).toGltfMaterial('curve_material', true) as any;
+        const matDef = effStyle.toGltfMaterial('curve_material', true) as any;
         const [r, g, b, a] = matDef.pbrMetallicRoughness.baseColorFactor;
         const material = this._doc.createMaterial('curve_material')
-            .setBaseColorFactor([r, g, b, a])
+            // glTF MULTIPLIES COLOR_0 by baseColorFactor, so a gradient curve's factor has to be
+            // white or every stop would be tinted by the flat stroke colour. Every curve already
+            // owns a private material here (nothing is deduplicated), so this affects only this
+            // one curve. Alpha is kept: opacity stays uniform, it is not part of the ramp.
+            .setBaseColorFactor(gradient ? [1, 1, 1, a] : [r, g, b, a])
             .setMetallicFactor(matDef.pbrMetallicRoughness.metallicFactor)
             .setRoughnessFactor(matDef.pbrMetallicRoughness.roughnessFactor)
             .setDoubleSided(matDef.doubleSided ?? true);
@@ -1059,6 +1141,29 @@ export class GLTFBuilder
             .setAttribute('POSITION', posAcc)
             .setMode(Primitive.Mode.LINE_STRIP)
             .setMaterial(material);
+
+        if (gradient && tPerVertex)
+        {
+            // VEC3, not VEC4: fat lines carry only rgb per vertex (instanceColorStart is a
+            // vec3), so a per-vertex alpha would work on hairlines and silently not on thick
+            // lines. Opacity therefore stays on the material.
+            const colF32 = new Float32Array(count * 3);
+            // Resolve each stop's colour ONCE — Color._cssNameToHex rebuilds a 148-entry table
+            // per call, and this loop runs per vertex.
+            const resolved = gradient.stops.map(s => ({ at: s.at, color: new Color(s.color) }));
+            for (let i = 0; i < count; i++)
+            {
+                const [cr, cg, cb] = Color.sample(resolved, tPerVertex[i]).toRgb();
+                colF32[i * 3]     = srgbToLinear(cr / 255);
+                colF32[i * 3 + 1] = srgbToLinear(cg / 255);
+                colF32[i * 3 + 2] = srgbToLinear(cb / 255);
+            }
+            const colAcc = this._doc.createAccessor()
+                .setType(Accessor.Type.VEC3)
+                .setArray(colF32)
+                .setBuffer(gtBuf);
+            prim.setAttribute('COLOR_0', colAcc);
+        }
 
         const gltfMesh = this._doc.createMesh(name).addPrimitive(prim);
         const [tx, ty, tz] = remapAxis(c.x, c.y, c.z, this._up);

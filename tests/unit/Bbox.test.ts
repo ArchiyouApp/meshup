@@ -2,6 +2,7 @@ import { beforeAll, describe, it, expect } from 'vitest';
 import { Curve, initAsync, Mesh, Polygon } from '../../src/index';
 import { Bbox } from '../../src/Bbox';
 import { Vertex } from '../../src/Vertex';
+import { SceneNode } from '../../src/SceneNode';
 
 beforeAll(async () =>
 {
@@ -263,5 +264,44 @@ describe('Bbox.shape()', () =>
     {
         const bbox = new Bbox([0, 0, 0], [10, 20, 30]);
         expect(bbox.toShape()).toBeInstanceOf(Mesh);
+    });
+});
+
+describe('Bbox helper shapes carry the measured shape\'s modeler + scene', () =>
+{
+    /** The host app is reached through `_modeler`; without it every app-level method on a
+     *  derived shape (.dim(), .label(), .material()) silently does nothing. */
+    it('side/plane accessors carry _modeler and _scene, without adding to the scene', () =>
+    {
+        const scene = new SceneNode('root');
+        const rect = Curve.Rect(400, 200);
+        scene.addShape(rect);
+        (rect as any)._modeler = { fake: true };
+
+        const bb = rect.bbox()!;
+        const before = scene.shapes().length;
+
+        const side = bb.back() as any;              // 2D bbox → an edge Curve
+        expect(side).toBeDefined();
+        expect(side._modeler).toBe((rect as any)._modeler);
+        expect(side._scene).toBe(scene);
+        expect(side.node()).toBe(null);             // a reference, not geometry in the scene
+        expect(scene.shapes().length).toBe(before);
+
+        const planes = new Bbox([0, 0, 0], [10, 20, 30])._fromShape(rect).planes();
+        expect(planes.length).toBe(6);
+        expect(planes.every(p => (p as any)._modeler === (rect as any)._modeler)).toBe(true);
+        expect(scene.shapes().length).toBe(before);
+    });
+
+    it('rect()/box() still land IN the scene (they are geometry, not references)', () =>
+    {
+        const scene = new SceneNode('root');
+        const rect = Curve.Rect(400, 200);
+        scene.addShape(rect);
+
+        const before = scene.shapes().length;
+        rect.bbox()!.rect();
+        expect(scene.shapes().length).toBe(before + 1);
     });
 });

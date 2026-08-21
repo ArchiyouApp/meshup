@@ -97,6 +97,7 @@ export type { ColorInput } from './Color';
 export { Style } from './Style';
 export { TOLERANCE, SHAPE_DEFAULT_STYLE } from './constants';
 export { isPointLike } from './types';
+export { ANNOTATIONS_SVG_START, ANNOTATIONS_SVG_END, ANNOTATION_MARGIN_MM } from './ShapeCollection';
 export type { SpanParams, SpanPoint } from './types';
 export { rad, deg, nodeToString, GLTFJsonDocumentToString } from './utils';
 
@@ -108,6 +109,7 @@ export { rad, deg, nodeToString, GLTFJsonDocumentToString } from './utils';
 export {
   activeLayerOf,
   addResultToScene,
+  carryToResult,
   replaceInScene,
   sceneAdd,
   sceneCarry,

@@ -364,6 +364,13 @@ export const sceneUpdate: Decorator = (_t, _k, desc) =>
     return desc
 }
 
+/** The shape to inherit from when the source is a ShapeCollection: it has no node of its own,
+ *  so anchor on the first of its shapes that is in the scene. */
+function anchorOf(source: Any): Any
+{
+    return (source._node) ? source : (source._shapes?.find((s: Any) => s?._node) ?? source)
+}
+
 /** Add `result` to the scene the way an @sceneAdd method would, for shape *producers that are
  *  not Shapes themselves* — Bbox / OBbox, which build a Curve or Mesh from the shape they were
  *  measured on. The measured shape is the source: results carry its `_modeler`/scene root and
@@ -371,12 +378,21 @@ export const sceneUpdate: Decorator = (_t, _k, desc) =>
 export function addResultToScene(source: Any, result: Any): void
 {
     if (!source) return
-    // A ShapeCollection has no node of its own: anchor on the first of its shapes that is in
-    // the scene, so `collection.bbox().box()` lands next to the shapes it measured.
-    const anchor = (source._node) ? source : (source._shapes?.find((s: Any) => s?._node) ?? source)
+    const anchor = anchorOf(source)
     propagate(anchor, result)
     if (anchor._node && !anchor._suppressScene)
     {
         addTo(activeLayerOf(anchor), result)
     }
+}
+
+/** Carry-only version of addResultToScene(): `result` inherits the source's `_modeler`, scene
+ *  root and tmp-ness, but is NOT put in the scene — what @sceneCarry does for sub-shape
+ *  accessors, for producers that are not Shapes themselves (Bbox's side/plane accessors).
+ *  Without the `_modeler` reference the host app is unreachable from the result, so app-level
+ *  methods on it (`.dim()`, `.label()`, `.material()`) silently do nothing. */
+export function carryToResult(source: Any, result: Any): void
+{
+    if (!source) return
+    propagate(anchorOf(source), result)
 }

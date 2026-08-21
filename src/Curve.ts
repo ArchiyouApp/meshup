@@ -37,6 +37,7 @@ import { Vertex } from './Vertex';
 import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { Polygon } from './Polygon';
+import { Style } from './Style';
 
 import { rad, shortestArcAxisAngle, primaryOrthoXYAngle } from "./utils";
 import { GLTFBuilder } from './GLTFBuilder';
@@ -1853,12 +1854,15 @@ export class Curve extends Shape
     }
 
     /** Move the curve so its bbox center lands at the given point */
-    moveTo(target: PointLike): this
+    /** Move this Curve so its bbox centre lands on `target`. Takes loose coordinates too
+     *  (`moveTo(200, 475, 0)`) - this override used to drop everything but the first
+     *  argument, silently moving the Curve to y=0/z=0 while Mesh.moveTo() did the right thing. */
+    moveTo(target: PointLike | number, py?: number, pz?: number): this
     {
         const bb = this.bbox();
         if (!bb) return this;
         const c = bb.center();
-        const t = Point.from(target);
+        const t = Point.from(target as PointLike, py, pz);
         return this.translate(t.x - c.x, t.y - c.y, t.z - c.z);
     }
 
@@ -2181,6 +2185,58 @@ export class Curve extends Shape
         this.update(Curve.Polyline(pts.map(p => [p.x, p.y, p.z] as [number, number, number])));
         this._holes = this._holes.map(h => h.projectOnto(plane));
         return this;
+    }
+
+    /** Flatten this Curve onto a coordinate plane: project it onto the plane through the
+     *  origin perpendicular to `axis` and drop the doubles that creates — segments that
+     *  collapse onto each other (the two vertical edges of a wall outline) or onto nothing
+     *  (an edge running along the axis). Mirrors Mesh.flatten() / ShapeCollection.flatten().
+     *
+     *  @param axis  Axis to collapse along ('x' | 'y' | 'z', default 'z' — onto the XY plane).
+     */
+    flatten(axis: Axis = 'z'): this
+    {
+        const normal: [number, number, number] = (axis === 'x') ? [1, 0, 0]
+                                               : (axis === 'y') ? [0, 1, 0]
+                                               :                  [0, 0, 1];
+        this.projectOnto({ normal, origin: [0, 0, 0] });
+
+        // Fresh, plain, non-scene-bound pieces: Curve.Compound() consumes them and the
+        // dropped ones must never be shapes that live in the scene.
+        const segs = this._atomicSegments();
+        if (segs.length > 1)
+        {
+            // Projecting stacks segments that were apart along the axis (the two horizontal
+            // edges of a wall outline) and collapses those running along it to nothing.
+            const seen = new Set<string>();
+            const kept = segs
+                .filter(s => s.length() > Curve.ZERO_LENGTH_TOLERANCE)
+                .filter(s =>
+                {
+                    const key = s._flatKey();
+                    if (seen.has(key)) { return false; }
+                    seen.add(key);
+                    return true;
+                });
+
+            if (kept.length > 0 && kept.length < segs.length)
+            {
+                this.update((kept.length === 1) ? kept[0] : Curve.Compound(kept));
+            }
+        }
+        return this;
+    }
+
+    /** Order- and direction-independent key for this Curve's geometry, used by flatten()
+     *  and ShapeCollection.flatten() to filter out curves that flattened onto each other. */
+    _flatKey(tolerance: number = 1e-5): string
+    {
+        return this.tessellate()
+            .map(p => [p.x, p.y, p.z]
+                        .map(c => (Math.round(c / tolerance) * tolerance + 0).toFixed(6))
+                        .join(','))
+            .sort()
+            .join('|');
     }
 
     /** Build an in-plane { normal, x, y } frame from a plane normal, aligning x to
@@ -3552,6 +3608,32 @@ export class Curve extends Shape
 
     /** Alias for `opacity()`. */
     alpha(a: number): this { return this.opacity(a); }
+
+    /**
+     * Colour this Curve with a gradient along its length.
+     *
+     * ```js
+     * curve.colorGradient('red', 'blue')                        // two colours, end to end
+     * curve.colorGradient('red', 'white', 'blue')               // evenly spaced
+     * curve.colorGradient([[0,'red'], [0.5,'orange'], [1,'blue']])
+     * curve.colorGradient([0,'red'], [0.5,'orange'], [1,'blue']) // the same, as varargs
+     * ```
+     *
+     * Positions run 0 to 1 along the curve's ARC LENGTH, so a stop at 0.5 is halfway along the
+     * drawn line whatever the tessellation does.
+     *
+     * A stop is `[position, colour]` — a two-element array whose second element is not a
+     * number. That matters because `[255,0,0]` is a colour, so `colorGradient([255,0,0],
+     * [0,0,255])` is two colours while `colorGradient([0,'red'], [1,'blue'])` is two stops.
+     *
+     * Rendered as per-vertex colour, so it stays ONE curve with one material rather than being
+     * chopped into segments. Calling {@link color} afterwards clears the gradient.
+     */
+    colorGradient(...args: Array<any>): this
+    {
+        this.style.gradient = Style.normaliseStops(Style.parseGradientArgs(args));
+        return this;
+    }
 
     /** Set stroke dash pattern. Defaults to [2, 2] when called with no arguments. */
     //// PROJECTION ////

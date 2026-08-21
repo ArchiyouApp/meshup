@@ -31,6 +31,22 @@ import { GLTFBuilder } from './GLTFBuilder';
 
 import { TOLERANCE, ISOMETRY_HLR_STRATEGY_DEFAULT } from './constants';
 
+/*  Annotations in an exported drawing.
+
+    A drawing is written once; a document view then needs the same drawing with its
+    annotations sized for the page it is shown at (their text is set in millimeters — see
+    the DIMENSION_*_MM settings on the host Annotator). Redrawing the geometry for that is
+    wasteful — it is thousands of path strings — so the annotation block is delimited by
+    these markers and `data-extents` publishes what the drawing spans without any margin,
+    which is all a view needs to solve for its scale. See View._resolveShapesToSVGForPage(). */
+
+/** Start marker of the annotation block inside an exported drawing */
+export const ANNOTATIONS_SVG_START = '<!--annotations-->';
+/** End marker of the annotation block inside an exported drawing */
+export const ANNOTATIONS_SVG_END = '<!--/annotations-->';
+/** Room left around a dimension for its value text, in page millimeters */
+export const ANNOTATION_MARGIN_MM = 12;
+
 /** Minimal interface a shape must satisfy to be held in a ShapeCollection. */
 export interface CollectableShape {
     copy(): this
@@ -61,7 +77,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     private _fakeGroupKeys = new Set<string>();
 
     //// SCENE BACKING ////
-    // Set by the host modeler (Modeler.collection()) to make this collection scene-backed:
+    // Set by the host modeler (Modeler.group()) to make this collection scene-backed:
     // its shapes (and groups) live under a dedicated layer node. Transient collections
     // (internal op results) keep these null and stay flat.
     _modeler: any = null;
@@ -171,6 +187,9 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     add(...shapes: Array<S | ShapeCollection<any> | Array<any>>): this
     {
         const before = this._shapes.length;
+        // Sub-collections that carry a real name become groups of this collection - see below
+        const namedCols: Array<ShapeCollection<any>> = [];
+
         shapes.forEach(shapeArg =>
         {
             if (Shape.isShape(shapeArg))
@@ -179,6 +198,10 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             }
             else if (Array.isArray(shapeArg) || ShapeCollection.isShapeCollection(shapeArg))
             {
+                if (ShapeCollection.isShapeCollection(shapeArg) && shapeArg._name && shapeArg._name !== 'collection')
+                {
+                    namedCols.push(shapeArg);
+                }
                 const addShapes: S[] = ShapeCollection.isShapeCollection(shapeArg)
                     ? shapeArg.toArray() as unknown as S[]
                     : (shapeArg as any[])
@@ -203,6 +226,19 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         {
             this._shapes.slice(before).forEach(s => this._layer!.addShape(s as any));
         }
+
+        // A named sub-collection keeps its identity inside the parent: `table = collection(spine,
+        // topPlanks)` gives `table.getGroup('spine')` / `table.spine` for free, and on a
+        // scene-backed collection the group also becomes a sub-layer (same as addGroup()).
+        // The shapes themselves are already added above, so tag rather than add them again.
+        namedCols.forEach(col =>
+        {
+            // Tag with the raw shapes, never the collection itself: add() would see a named
+            // collection again and recurse into tagGroup forever.
+            this.tagGroup(col._name, col.toArray() as any);
+            this._layer?.addLayer(col._name, col as any);
+        });
+
         return this;
     }
 
@@ -257,11 +293,26 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         this._setFakeGroupKeys(); // drop the now-stale fake key
     }
 
-    group(groupName: string): ShapeCollection<S> | undefined
+    /** The shapes of a named group, or undefined when there is no such group.
+     *  Groups come from addGroup()/tagGroup() and from adding a NAMED sub-collection
+     *  (see add()). Also reachable as a shortcut property: `table.spine`. */
+    getGroup(groupName: string): ShapeCollection<S> | undefined
     {
         const g = this._groups.get(groupName);
-        if (!g) { console.error(`ShapeCollection::group(): No group '${groupName}'. Available:`, Array.from(this._groups.keys())); return undefined; }
+        if (!g) { console.error(`ShapeCollection::getGroup(): No group '${groupName}'. Available:`, Array.from(this._groups.keys())); return undefined; }
         return g;
+    }
+
+    /** Alias for getGroup() */
+    group(groupName: string): ShapeCollection<S> | undefined
+    {
+        return this.getGroup(groupName);
+    }
+
+    /** Names of all groups in this collection. */
+    groupNames(): Array<string>
+    {
+        return Array.from(this._groups.keys());
     }
 
     //// TYPE FILTERS ////
@@ -702,6 +753,45 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     /** Mirror every shape across the plane z = `z` (default 0). */
     mirrorZ(z?: number): this { this._shapes.forEach(s => (s as any).mirrorZ?.(z)); return this; }
 
+    /** Flatten every shape in the collection onto the plane perpendicular to `axis`, then
+     *  drop the doubles that creates — both across shapes (two identical walls flattened
+     *  onto the same rectangle) and within them (see Mesh.flatten() / Curve.flatten()).
+     *  Dropped shapes are removed from the scene; shapes that cannot be flattened are kept
+     *  untouched. Mutates this collection.
+     *
+     *  @param axis  Axis to collapse along ('x' | 'y' | 'z', default 'z' — onto the XY plane).
+     */
+    flatten(axis: Axis = 'z'): this
+    {
+        const results = this._shapes.map(s =>
+        {
+            // Mesh.flatten() returns a replacement shape, Curve.flatten() flattens in place.
+            if (typeof (s as any).flatten !== 'function')
+            {
+                console.warn(`ShapeCollection::flatten(): cannot flatten a ${(s as any).type ?? 'Shape'} — kept as is`);
+                return s;
+            }
+            return ((s as any).flatten(axis) ?? s) as S;
+        });
+
+        // Shapes that were apart along the axis can flatten onto each other — keep the first
+        // of each identical geometry (see Mesh._flatKey() / Curve._flatKey()).
+        const seen = new Set<string>();
+        const kept = results.filter(s =>
+        {
+            const key = (s as any)._flatKey?.() ?? (s as any).id();
+            if (seen.has(key)) { return false; }
+            seen.add(key);
+            return true;
+        });
+        const keptSet = new Set(kept);
+        results.forEach(s => { if (!keptSet.has(s)) { (s as any).removeFromScene?.(); } });
+
+        this._shapes = kept;
+        this._setFakeArrayKeys();
+        return this;
+    }
+
     offset(distance: number, cornerType: 'sharp' | 'round' | 'smooth' = 'sharp'): ShapeCollection<Curve>
     {
         console.warn('ShapeCollection::offset(): Only Curve shapes are offset! Non-curve shapes will be ignored. TODO');
@@ -749,6 +839,37 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     dashed(dash: number[] = [2, 2]): this
     {
         this._shapes.forEach(shape => (shape as any).dashed?.(dash));
+        return this;
+    }
+
+    /**
+     * Line width in SCREEN PIXELS — not model units.
+     *
+     * Applied to every Shape in the Collection. It travels to the viewer as `BENTLEY_materials_line_style.width` and becomes a pixel
+     * `linewidth` on the fat-line material, so a line keeps the same apparent weight however
+     * far you zoom. `thickness(4)` is four pixels, not four millimetres.
+     */
+    strokeWidth(width: number): this
+    {
+        this._shapes.forEach(shape => (shape as any).strokeWidth?.(width));
+        return this;
+    }
+
+    /** Alias for `strokeWidth()`. Reads more naturally for a curve. Screen pixels. */
+    thickness(width: number): this { return this.strokeWidth(width); }
+
+    /**
+     * Give every Curve in this Collection the same gradient along its own length.
+     *
+     * Each shape runs the full ramp individually — this does NOT spread one ramp across the
+     * collection — which is how `.color()` and `.dashed()` already behave.
+     *
+     * Shapes that cannot carry a gradient (Meshes, for now) are skipped, as with `.dashed()`.
+     * See {@link Curve.colorGradient} for the accepted argument forms.
+     */
+    colorGradient(...args: Array<any>): this
+    {
+        this._shapes.forEach(shape => (shape as any).colorGradient?.(...args));
         return this;
     }
 
@@ -804,6 +925,24 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             if (!current) return null;
         }
         return current ?? null;
+    }
+
+    /** Link annotations (dimension lines, labels) to this collection. Mirrors
+     *  Shape.addAnnotations() and the brep ShapeCollection's, which is what the host
+     *  annotator calls when it links an auto-dimension to the collection it measured. */
+    addAnnotations(annotations: any | Array<any>): this
+    {
+        const list = Array.isArray(annotations) ? annotations : [annotations];
+        list.forEach(a => { if (a && !this.annotations.includes(a)) this.annotations.push(a); });
+        return this;
+    }
+
+    /** Every annotation linked to this collection or to a Shape in it. Mirrors the brep
+     *  ShapeCollection's getAnnotations() — what toSVG() draws. */
+    getAnnotations(): Array<any>
+    {
+        const fromShapes = this._shapes.flatMap(s => (s as any).annotations?.() ?? []);
+        return [...new Set([...this.annotations, ...fromShapes])];
     }
 
     /** Remove this collection's shapes (and layer node) from the scene. */
@@ -1866,7 +2005,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      * @param options.nonScalingStroke - pin stroke + dash to device pixels. Off by default;
      *      see Style.toSvgAttrs for why.
      */
-    toSVG(options?: { strokeWidth?: number; nonScalingStroke?: boolean }): string
+    toSVG(options?: { strokeWidth?: number; nonScalingStroke?: boolean; unitsPerMm?: number }): string
     {
         const curves = this.curves();
         if (curves.length === 0)
@@ -1900,18 +2039,43 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
         curves.forEach(curve =>
         {
-            const svg = (curve as any).toSVG();
-            const vbMatch = svg.match(/viewBox="([^"]*)"/);
             const groupName = curveToGroup.get(curve as unknown as S);
             const cssClass = 'line' + (groupName ? ` ${groupName}` : '');
             paths.push((curve as any).toSVGElem(cssClass, styleOpts));
-            if (vbMatch)
-            {
-                const [vx, vy, vw, vh] = vbMatch[1].split(' ').map(Number);
-                if (vx < minX) minX = vx;   if (vy < minY) minY = vy;
-                if (vx + vw > maxX) maxX = vx + vw;  if (vy + vh > maxY) maxY = vy + vh;
-            }
+
+            /*  Extents, straight off the geometry. This used to serialize every curve to a
+                COMPLETE SVG document (Curve.toSVG()) purely to read its viewBox back out with
+                a regex — a second full pass over the drawing, thrown away, per curve.
+
+                The 5% pad below is Curve.toSVG()'s, kept so the framing does not shift: a
+                curve's own document pads itself by 5% of its longest side. Padding is a
+                property of the document, not of a curve in it, so it belongs with the rest of
+                the framing — it moves there when the SVG assembler lands. */
+            const bb = (curve as any).bbox?.();
+            if (!bb) return;
+            const w = bb.max().x - bb.min().x;
+            const h = bb.max().y - bb.min().y;
+            const pad = Math.max(w, h) * 0.05 || 1;
+            // SVG's y axis points down: model y [min,max] is svg y [-max,-min]
+            const vx = +(bb.min().x - pad).toFixed(6);
+            const vy = +(-bb.max().y - pad).toFixed(6);
+            const vw = +(w + 2 * pad).toFixed(6);
+            const vh = +(h + 2 * pad).toFixed(6);
+
+            if (vx < minX) minX = vx;   if (vy < minY) minY = vy;
+            if (vx + vw > maxX) maxX = vx + vw;  if (vy + vh > maxY) maxY = vy + vh;
         });
+
+        /*  Annotations (dimension lines, labels) are NOT drawn here. They are host-app
+            objects — core's Annotator owns them — and meshup never imports core. The host
+            takes this method over at load time and assembles the document itself: geometry
+            from here, annotations from the annotator, one frame and one stylesheet around
+            both (see core's modeler/svgLayers.ts). Drawing them here as well is what gave
+            the two kernels two different answers for the same drawing.
+
+            The extents are still published: they say what the line-work spans, which is what
+            a document view needs to work out the scale it can show it at. */
+        const extents = (isFinite(minX)) ? [minX, minY, maxX - minX, maxY - minY] : null;
 
         if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 1; maxY = 1; }
         const vb = `${minX} ${minY} ${maxX - minX} ${maxY - minY}`;
@@ -1934,7 +2098,9 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             // mechanism. Paper-white rather than transparent for that reason.
             + '.fill{fill:#fff;stroke:none}'
             + '</style>';
-        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}">${style}${paths.join('')}</svg>`;
+        const dataAttrs = extents ? ` data-extents="${extents.map(n => +n.toFixed(4)).join(' ')}"` : '';
+
+        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}"${dataAttrs}>${style}${paths.join('')}</svg>`;
     }
 
 

@@ -180,6 +180,15 @@ export abstract class Shape
         return t === 'Curve' || t === 'Edge' || t === 'Wire';
     }
 
+    /** Whether this Shape has extent along all three axes — the complement of is2D(), which
+     *  Mesh and Curve each define from their bbox. Kept on the base class because callers
+     *  outside meshup (the host annotator deciding which way to offset a dimension line) ask
+     *  any Shape, and a missing method there is a crash, not a `false`. */
+    is3D(): boolean
+    {
+        return !(this as any).is2D?.();
+    }
+
     /** True for solid-like shapes: mesh Mesh (brep Shell/Solid once wired). */
     isSolid(): boolean
     {
@@ -353,11 +362,21 @@ export abstract class Shape
 
     alpha(a: number): this { return this.opacity(a); }
 
+    /**
+     * Line width in SCREEN PIXELS — not model units.
+     *
+     * It travels to the viewer as `BENTLEY_materials_line_style.width` and becomes a pixel
+     * `linewidth` on the fat-line material, so a line keeps the same apparent weight however
+     * far you zoom. `thickness(4)` is four pixels, not four millimetres.
+     */
     strokeWidth(width: number): this
     {
         this.style.strokeWidth = width;
         return this;
     }
+
+    /** Alias for `strokeWidth()`. Reads more naturally for a curve. Screen pixels. */
+    thickness(width: number): this { return this.strokeWidth(width); }
 
     hide(): this
     {

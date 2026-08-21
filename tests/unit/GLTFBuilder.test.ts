@@ -3,6 +3,7 @@ import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { Vertex } from '../../src/Vertex';
 import { SceneNode } from '../../src/SceneNode';
+import { Curve } from '../../src/Curve';
 import { computeEdgeVisibilityBitfield, GLTFBuilder } from '../../src/GLTFBuilder';
 
 beforeAll(async () =>
@@ -295,6 +296,158 @@ describe('GLTFBuilder: vertex point style extension', () =>
         );
         const [r, g, b] = mat.pbrMetallicRoughness.baseColorFactor;
         expect(r).toBeCloseTo(0); expect(g).toBeCloseTo(1); expect(b).toBeCloseTo(0);
+    });
+});
+
+describe('GLTFBuilder: curve vertex colors', () =>
+{
+    /**
+     * Read a VEC3 float accessor back out of the GLB's binary chunk.
+     *
+     * Stride-aware on purpose: gltf-transform INTERLEAVES POSITION and COLOR_0 into a single
+     * bufferView with `byteStride: 24`, so a tightly-packed read returns the two attributes
+     * shuffled together and every assertion built on it is quietly meaningless.
+     */
+    const readVec3 = (glb: Uint8Array, accessorIndex: number): number[][] =>
+    {
+        const json = extractGLTFJson(glb);
+        const acc = json.accessors[accessorIndex];
+        const view = json.bufferViews[acc.bufferView];
+        const dv = new DataView(extractGLTFBin(glb));
+        const stride = view.byteStride ?? 12;
+        const base = (view.byteOffset ?? 0) + (acc.byteOffset ?? 0);
+
+        const out: number[][] = [];
+        for (let i = 0; i < acc.count; i++)
+        {
+            const at = base + i * stride;
+            out.push([dv.getFloat32(at, true), dv.getFloat32(at + 4, true), dv.getFloat32(at + 8, true)]);
+        }
+        return out;
+    };
+
+    /** glTF omits baseColorFactor when it is the default white, so absent means [1,1,1,1]. */
+    const baseColor = (glb: Uint8Array): number[] =>
+        extractGLTFJson(glb).materials[0].pbrMetallicRoughness.baseColorFactor ?? [1, 1, 1, 1];
+
+    /** sRGB 0-255 -> linear 0-1, matching srgbToLinear in Style.ts. */
+    const lin = (v: number) => { const c = v / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+
+    it('emits no COLOR_0 for a plain curve', async () =>
+    {
+        // Guards the golden fixtures: a curve without a gradient must export exactly as before.
+        const glb = await Curve.Line([0, 0, 0], [10, 0, 0]).color('red').toGLB();
+        const json = extractGLTFJson(glb);
+        expect(json.meshes[0].primitives[0].attributes.COLOR_0).toBeUndefined();
+        expect(json.meshes[0].primitives[0].mode).toBe(3); // LINE_STRIP
+    });
+
+    it('emits a COLOR_0 accessor matching POSITION in count', async () =>
+    {
+        const glb = await Curve.Line([0, 0, 0], [10, 0, 0]).colorGradient('red', 'blue').toGLB();
+        const json = extractGLTFJson(glb);
+        const prim = json.meshes[0].primitives[0];
+
+        expect(prim.attributes.COLOR_0).toBeDefined();
+        const col = json.accessors[prim.attributes.COLOR_0];
+        const pos = json.accessors[prim.attributes.POSITION];
+        expect(col.type).toBe('VEC3');
+        expect(col.componentType).toBe(5126); // FLOAT
+        expect(col.count).toBe(pos.count);
+    });
+
+    it('writes the end stops as LINEAR rgb', async () =>
+    {
+        const glb = await Curve.Line([0, 0, 0], [10, 0, 0]).colorGradient('#ff0000', '#0000ff').toGLB();
+        const json = extractGLTFJson(glb);
+        const colors = readVec3(glb, json.meshes[0].primitives[0].attributes.COLOR_0);
+
+        expect(colors[0][0]).toBeCloseTo(lin(255), 5);
+        expect(colors[0][2]).toBeCloseTo(lin(0), 5);
+        expect(colors[colors.length - 1][2]).toBeCloseTo(lin(255), 5);
+        expect(colors[colors.length - 1][0]).toBeCloseTo(lin(0), 5);
+    });
+
+    it('whitens baseColorFactor, because COLOR_0 multiplies it', async () =>
+    {
+        // Leaving the stroke colour in the factor would tint every stop by it.
+        const glb = await Curve.Line([0, 0, 0], [10, 0, 0]).colorGradient('red', 'blue').toGLB();
+        expect(baseColor(glb).slice(0, 3)).toEqual([1, 1, 1]);
+
+        // And to show the assertion has teeth: without a gradient the stroke colour IS in the
+        // factor, so white is a real change rather than just the glTF default showing through.
+        const flat = await Curve.Line([0, 0, 0], [10, 0, 0]).color('red').toGLB();
+        expect(baseColor(flat).slice(0, 3)).not.toEqual([1, 1, 1]);
+    });
+
+    it('keeps alpha in the factor — opacity is not part of the ramp', async () =>
+    {
+        const glb = await Curve.Line([0, 0, 0], [10, 0, 0]).colorGradient('red', 'blue').opacity(0.5).toGLB();
+        expect(baseColor(glb)[3]).toBeCloseTo(0.5, 5);
+    });
+
+    it('inserts a vertex at every interior stop on a straight line', async () =>
+    {
+        // THE case that makes multi-stop gradients work on straight geometry: a line
+        // tessellates to 2 points = 1 segment, so without resampling the middle stop would be
+        // interpolated straight past and never appear.
+        const glb = await Curve.Line([0, 0, 0], [10, 0, 0])
+            .colorGradient([[0, 'red'], [0.5, '#00ff00'], [1, 'blue']]).toGLB();
+        const json = extractGLTFJson(glb);
+        const prim = json.meshes[0].primitives[0];
+
+        expect(json.accessors[prim.attributes.POSITION].count).toBe(3);
+        const colors = readVec3(glb, prim.attributes.COLOR_0);
+        expect(colors[1][1]).toBeCloseTo(lin(255), 5); // green, full strength, at midspan
+        expect(colors[1][0]).toBeCloseTo(lin(0), 5);
+    });
+
+    it('places the inserted vertex at the right point along the line', async () =>
+    {
+        const glb = await Curve.Line([0, 0, 0], [10, 0, 0])
+            .colorGradient([[0, 'red'], [0.25, 'white'], [1, 'blue']]).toGLB();
+        const json = extractGLTFJson(glb);
+        const pos = readVec3(glb, json.meshes[0].primitives[0].attributes.POSITION);
+        // Positions are centred on the bbox, which the node translation puts back; the middle
+        // vertex must sit a quarter along, i.e. 2.5 of 10, so -2.5 from the centre at 5.
+        expect(pos[1][0]).toBeCloseTo(-2.5, 4);
+    });
+
+    it('does not resample when a vertex already sits on the stop', async () =>
+    {
+        const plain = extractGLTFJson(await Curve.Line([0, 0, 0], [10, 0, 0]).toGLB());
+        const grad = extractGLTFJson(await Curve.Line([0, 0, 0], [10, 0, 0]).colorGradient('red', 'blue').toGLB());
+        const n = (j: any) => j.accessors[j.meshes[0].primitives[0].attributes.POSITION].count;
+        expect(n(grad)).toBe(n(plain));
+    });
+
+    it('parameterises by arc length, not vertex index', async () =>
+    {
+        // A polyline whose segments are deliberately uneven: 1 unit then 9. The midpoint of the
+        // ramp belongs at 5 units along, which is INSIDE the long segment — an index-based
+        // parameterisation would put it at the corner instead.
+        const c = Curve.Polyline([[0, 0, 0], [1, 0, 0], [10, 0, 0]])
+            .colorGradient([[0, 'red'], [0.5, '#00ff00'], [1, 'blue']]);
+        const glb = await c.toGLB();
+        const json = extractGLTFJson(glb);
+        const pos = readVec3(glb, json.meshes[0].primitives[0].attributes.POSITION);
+        const colors = readVec3(glb, json.meshes[0].primitives[0].attributes.COLOR_0);
+
+        const greenAt = colors.findIndex(c2 => c2[1] > 0.9 && c2[0] < 0.1);
+        expect(greenAt).toBeGreaterThan(-1);
+        // Centred positions: bbox centre is x=5, so the pure-green vertex must sit at x≈0.
+        expect(pos[greenAt][0]).toBeCloseTo(0, 3);
+    });
+
+    it('carries a gradient cascaded from a SceneNode', async () =>
+    {
+        const node = new SceneNode('layer');
+        node.addShape(Curve.Line([0, 0, 0], [10, 0, 0]) as any);
+        node.colorGradient('red', 'blue');
+
+        const json = extractGLTFJson(await node.toGLB());
+        const prim = json.meshes[0].primitives[0];
+        expect(prim.attributes.COLOR_0).toBeDefined();
     });
 });
 

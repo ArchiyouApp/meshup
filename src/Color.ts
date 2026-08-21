@@ -21,6 +21,16 @@
 /** CSS color string, 0xRRGGBB integer, or [r, g, b] tuple with values 0–255 */
 export type ColorInput = string | number | [number, number, number];
 
+/**
+ * One stop of a colour ramp: a colour at a position along it, `at` running 0 to 1.
+ *
+ * `color` accepts an already-parsed {@link Color} as well as any {@link ColorInput}. That is
+ * not just convenience — {@link Color._cssNameToHex} rebuilds a 148-entry table on every call,
+ * so a caller sampling a ramp per vertex should resolve its stops to `Color` instances once and
+ * pass those, rather than re-parsing `'red'` a thousand times.
+ */
+export type ColorStop = { at: number; color: ColorInput | Color };
+
 export class Color
 {
     private readonly _r: number;
@@ -89,6 +99,73 @@ export class Color
     }
 
     // ---- static helpers ----
+
+    /**
+     * Linearly interpolate between two colours.
+     *
+     * Interpolation is in sRGB space, i.e. straight across the byte values, which is what the
+     * rest of this class works in. It is not perceptually uniform — a red→green mix passes
+     * through a muddy olive rather than a bright yellow — but it matches every other colour
+     * operation here and is what a caller reading `mix('red','blue',0.5)` expects to see.
+     *
+     * `t` is clamped to 0–1.
+     */
+    static mix(a: ColorInput | Color, b: ColorInput | Color, t: number): Color
+    {
+        const ca = a instanceof Color ? a : new Color(a);
+        const cb = b instanceof Color ? b : new Color(b);
+        const k = Math.max(0, Math.min(1, t));
+
+        const [r1, g1, b1] = ca.toRgb();
+        const [r2, g2, b2] = cb.toRgb();
+        return new Color([
+            r1 + (r2 - r1) * k,
+            g1 + (g2 - g1) * k,
+            b1 + (b2 - b1) * k,
+        ]);
+    }
+
+    /**
+     * Sample a colour ramp at position `t` (0–1).
+     *
+     * Stops are expected **sorted by `at` ascending**; this does not sort them, because the
+     * normal caller has already normalised the ramp once and sampling happens in a hot loop.
+     * `t` outside the range of the stops clamps to the first or last colour, so a ramp that
+     * does not span the full 0–1 range simply holds its end colours.
+     *
+     * @throws if `stops` is empty — a ramp with no colours has no defensible answer.
+     */
+    static sample(stops: Array<ColorStop>, t: number): Color
+    {
+        if (!stops || stops.length === 0)
+        {
+            throw new Error('Color.sample(): no stops to sample. A colour ramp needs at least one stop.');
+        }
+
+        const asColor = (c: ColorInput | Color): Color => (c instanceof Color ? c : new Color(c));
+
+        if (stops.length === 1) { return asColor(stops[0].color); }
+
+        const k = Math.max(0, Math.min(1, t));
+        if (k <= stops[0].at) { return asColor(stops[0].color); }
+
+        const last = stops[stops.length - 1];
+        if (k >= last.at) { return asColor(last.color); }
+
+        for (let i = 0; i < stops.length - 1; i++)
+        {
+            const lo = stops[i], hi = stops[i + 1];
+            if (k > hi.at) { continue; }
+
+            const span = hi.at - lo.at;
+            // Coincident stops are a hard colour break: land on the later one rather than
+            // dividing by zero.
+            const local = span <= 0 ? 1 : (k - lo.at) / span;
+            return Color.mix(asColor(lo.color), asColor(hi.color), local);
+        }
+
+        return asColor(last.color);
+    }
 
     /**
      * Returns true when the input can be parsed as a Color, false otherwise.

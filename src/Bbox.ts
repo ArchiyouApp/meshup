@@ -12,7 +12,7 @@ import type { PointLike, Axis } from './types';
 import { isPointLike } from './types';
 
 import { BASE_PLANE_NAME_TO_PLANE, TOLERANCE, BBOX_SIDES, BBOX_FLAT_EPS, BBOX_FLAT_REL_EPS } from './constants';
-import { addResultToScene } from './sceneDecorators';
+import { addResultToScene, carryToResult } from './sceneDecorators';
 
 
 /** Axis-aligned Bounding Box */
@@ -68,6 +68,28 @@ export class Bbox
     _attach<T>(shape: T): T
     {
         addResultToScene(this._source, shape);
+        return shape;
+    }
+
+    /** Carry the measured shape's modeler + scene onto a shape this bbox built, WITHOUT
+     *  adding it to the scene: sides and planes are measurement references you dimension or
+     *  align to, not geometry to draw. They still need the `_modeler` reference, or the host
+     *  app is unreachable from them and `bbox().back().dim()` silently does nothing. */
+    _carry<T>(shape: T): T
+    {
+        carryToResult(this._source, shape);
+
+        /*  Parent chain. The host annotator resolves a dimension up the `_parent` chain to the
+            Shape (or collection) it really belongs to, so `elevation.bbox().back().dim()`
+            links to `elevation` and is drawn by its toSVG() — rather than to the throwaway
+            side Curve, where nothing would ever find it. brep's Bbox does the same. */
+        if (this._source)
+        {
+            const targets: Array<any> = (shape as any)?.isShapeCollection?.() ? (shape as any).toArray()
+                                      : Array.isArray(shape) ? shape
+                                      : [shape];
+            targets.forEach(t => { if (t && typeof t === 'object') { (t as any)._parent = this._source; } });
+        }
         return shape;
     }
 
@@ -410,7 +432,7 @@ export class Bbox
     /** get all planes as polygons of this bbox */
     planes(): Array<Polygon>
     {
-       return this._boxRaw().polygons().toArray();
+       return this._carry(this._boxRaw().polygons().toArray());
     }
 
     /** Get side face of bbox  
@@ -432,7 +454,7 @@ export class Bbox
      *  This mirrors the brep Bbox, where side accessors degrade the same way. */
     getSide(side: string): Polygon|Curve|Vertex|undefined
     {
-        if(this._isFlatAlong(this.maxSize())){ return new Vertex(this.center()); }
+        if(this._isFlatAlong(this.maxSize())){ return this._carry(new Vertex(this.center())); }
         if(this.is2D()){ return this.getSidesShapes(side, 'edge').first() as Curve|undefined; }
         return this.getPlane(side);
     }
@@ -503,7 +525,7 @@ export class Bbox
             const planes = (sides.length === 0)
                 ? this.planes()
                 : sides.map(k => this.getPlane(k)).filter((p): p is Polygon => !!p);
-            return new ShapeCollection<Polygon>(planes);
+            return this._carry(new ShapeCollection<Polygon>(planes));
         }
 
         const mins    = [this._min.x, this._min.y, this._min.z];
@@ -531,7 +553,7 @@ export class Bbox
         // Loose real axes are those not pinned by a keyword: some become the shape's spanning
         // (free) axes, the rest are enumerated over both bounds ("greedy" — select all).
         const loose = realAxes.filter(a => !pins.has(a));
-        if (loose.length < freeDim) return new ShapeCollection([]); // can't form this shape here
+        if (loose.length < freeDim) return this._carry(new ShapeCollection([])); // can't form this shape here
 
         // Base coordinate with pinned axes set; loose/degenerate axes default to min.
         const baseFor = (): [number, number, number] =>
@@ -569,7 +591,7 @@ export class Bbox
             });
         });
 
-        return new ShapeCollection(results);
+        return this._carry(new ShapeCollection(results));
     }
 
     /** All ways to pick `k` items from `arr`, preserving order (k=0 → [[]]). */
