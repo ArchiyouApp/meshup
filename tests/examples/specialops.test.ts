@@ -4,8 +4,9 @@ import { Mesh } from '../../src/Mesh';
 import { Polygon } from '../../src/Polygon';
 import { PlaneJs } from '../../src/wasm/meshup';
 import { save } from '../../src/utils';
+import { outputDir } from '../helpers/outputs';
 
-const SAVE_FOLDER = './tests/examples/outputs/';
+const OUTPUT_DIR = outputDir(import.meta.url);
 
 beforeAll(async () =>
 {
@@ -30,7 +31,7 @@ describe('Mesh.split()', () =>
 
         result.first().color('blue');
 
-        await save(`${SAVE_FOLDER}test.specialops.split.plane.gltf`,
+        await save(`${OUTPUT_DIR}test.specialops.split.plane.gltf`,
             await new ShapeCollection<Mesh>(result).toGLTF());
     });
 
@@ -60,7 +61,7 @@ describe('Mesh.split()', () =>
         
         expect(result.last().bbox().height()).toBeCloseTo(40/2, 1);
 
-        await save(`${SAVE_FOLDER}test.specialops.split.polygon.gltf`,
+        await save(`${OUTPUT_DIR}test.specialops.split.polygon.gltf`,
             await new ShapeCollection<Mesh>(result).toGLTF());
     });
 
@@ -77,7 +78,7 @@ describe('Mesh.split()', () =>
         result.forEach(m => expect(m.inner().triangleCount()).toBeGreaterThan(0));
         expect(result.first().bbox().max().z).toBeCloseTo(0, 1);
 
-        await save(`${SAVE_FOLDER}test.specialops.split.mesh.gltf`,
+        await save(`${OUTPUT_DIR}test.specialops.split.mesh.gltf`,
             await new ShapeCollection<Mesh>(
                 cube.opacity(0.5), cutter.opacity(0.5), result).toGLTF());
     });
@@ -121,7 +122,7 @@ describe('Mesh.cutoffBy()', () =>
         // Largest piece is the lower part (height ~75)
         expect(result.bbox().height()).toBeGreaterThan(50);
 
-        await save(`${SAVE_FOLDER}test.specialops.cutoff.plane.gltf`, await result.toGLTF());
+        await save(`${OUTPUT_DIR}test.specialops.cutoff.plane.gltf`, await result.toGLTF());
     });
 
     it('keeps the smallest piece when keepSmallest=true', () =>
@@ -145,7 +146,7 @@ describe('Mesh.cutoffBy()', () =>
         // The two halves are equal for a centred sphere — just check a piece came out
         expect(result.inner().triangleCount()).toBeGreaterThan(0);
 
-        await save(`${SAVE_FOLDER}test.specialops.cutoffby.mesh.gltf`, 
+        await save(`${OUTPUT_DIR}test.specialops.cutoffby.mesh.gltf`, 
             await (new ShapeCollection<Mesh>(sphere, slab, result).toGLTF()));
     });
 
@@ -189,7 +190,7 @@ describe('Mesh.cutoff()', () =>
         expect(result.bbox().min().x).toBeGreaterThanOrEqual(-0.01);
         expect(result.bbox().max().x).toBeCloseTo(20, 0);
 
-        await save(`${SAVE_FOLDER}test.specialops.cutoff.x.gltf`, 
+        await save(`${OUTPUT_DIR}test.specialops.cutoff.x.gltf`, 
             await (new ShapeCollection<Mesh>(cube, result).toGLTF()));
     });
 
@@ -211,7 +212,7 @@ describe('Mesh.cutoff()', () =>
         expect(result.bbox().min().z).toBeGreaterThanOrEqual(-0.01);
         expect(result.bbox().max().z).toBeCloseTo(20, 0);
 
-        await save(`${SAVE_FOLDER}test.specialops.cutoff.z.gltf`, 
+        await save(`${OUTPUT_DIR}test.specialops.cutoff.z.gltf`, 
             await (new ShapeCollection<Mesh>(cube, result).toGLTF()));
     });
 
@@ -246,7 +247,7 @@ describe('Mesh.cutoff()', () =>
         beamR.cutoff('x', 30);
         beamR.cutoff('y', -10);
 
-        save(`${SAVE_FOLDER}test.specialops.cutoff.beam.gltf`, 
+        save(`${OUTPUT_DIR}test.specialops.cutoff.beam.gltf`, 
                 await new ShapeCollection<Mesh>(beam, beamR).toGLTF());
 
         expect(beamR.bbox().min().y).toBeCloseTo(-10, 1);

@@ -6,8 +6,9 @@ import { Curve } from '../../src/Curve';
 import { SceneNode } from '../../src/SceneNode';
 import { save } from '../../src/utils';
 import { dashPatternToUint16 } from '../../src/GLTFBuilder';
+import { outputDir } from '../helpers/outputs';
 
-const OUTPUT_DIR = './tests/examples/outputs/';
+const OUTPUT_DIR = outputDir(import.meta.url);
 
 beforeAll(async () =>
 {

@@ -7,9 +7,10 @@ import { Curve, initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { save } from '../../src/utils';
 import { ShapeCollection  } from '../../src/ShapeCollection';
+import { outputDir } from '../helpers/outputs';
 
 // from project dir
-const OUTPUT_DIR = './tests/examples/outputs/';
+const OUTPUT_DIR = outputDir(import.meta.url);
 
 
 beforeAll(async () =>

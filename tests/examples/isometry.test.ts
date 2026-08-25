@@ -3,8 +3,9 @@ import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { save } from '../../src/utils';
 import { ShapeCollection } from '../../src/ShapeCollection';
+import { outputDir } from '../helpers/outputs';
 
-const OUTPUT_DIR = './tests/examples/outputs/';
+const OUTPUT_DIR = outputDir(import.meta.url);
 
 function collectPolylineEndpoints(shape: ShapeCollection<any>): Array<[number, number]>
 {

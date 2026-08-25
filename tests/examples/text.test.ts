@@ -2,8 +2,9 @@ import { beforeAll, describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { initAsync, Sketch, Curve, Mesh, ShapeCollection, HERSHEY_FONTS } from '../../src/index';
 import { save } from '../../src/utils';
+import { outputDir } from '../helpers/outputs';
 
-const OUTPUT_DIR = './tests/examples/outputs/';
+const OUTPUT_DIR = outputDir(import.meta.url);
 const ttf = () => new Uint8Array(readFileSync('./rust/asar.ttf'));
 
 beforeAll(async () =>

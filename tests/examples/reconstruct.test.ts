@@ -2,8 +2,9 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { save } from '../../src/utils';
+import { outputDir } from '../helpers/outputs';
 
-const OUTPUT_DIR = './tests/examples/outputs/';
+const OUTPUT_DIR = outputDir(import.meta.url);
 
 beforeAll(async () =>
 {

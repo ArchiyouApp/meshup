@@ -3,8 +3,9 @@ import { initAsync, ShapeCollection } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { Sketch } from '../../src/Sketch';
 import { save } from '../../src/utils';
+import { outputDir } from '../helpers/outputs';
 
-const OUTPUT_DIR = './tests/examples/outputs/';
+const OUTPUT_DIR = outputDir(import.meta.url);
 
 beforeAll(async () =>
 {

@@ -20,8 +20,9 @@ import { Mesh } from '../../src/Mesh';
 import { save } from '../../src/utils';
 import { ShapeCollection } from '../../src/ShapeCollection';
 import type { HlrStrategy } from '../../src/types';
+import { outputDir } from '../helpers/outputs';
 
-const OUTPUT_DIR = './tests/examples/outputs/';
+const OUTPUT_DIR = outputDir(import.meta.url);
 
 /** Strategies that work on any geometry. */
 const GENERAL_STRATEGIES: HlrStrategy[] = ['raycast', 'exact'];

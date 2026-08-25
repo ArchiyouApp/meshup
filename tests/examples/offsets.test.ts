@@ -2,8 +2,9 @@ import { beforeAll, describe, it, expect } from 'vitest';
 import { ShapeCollection, Vector, initAsync } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { save } from '../../src/utils';
+import { outputDir } from '../helpers/outputs';
 
-const OUTPUT_DIR = './tests/examples/outputs/';
+const OUTPUT_DIR = outputDir(import.meta.url);
 
 beforeAll(async () => 
 {

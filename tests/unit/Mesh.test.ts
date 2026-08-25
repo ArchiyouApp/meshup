@@ -4,8 +4,9 @@ import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
 import { Polygon } from '../../src/Polygon';
 import { save } from '../../src/utils';
+import { outputDir } from '../helpers/outputs';
 
-const OUTPUT_DIR = './tests/unit/outputs/';
+const OUTPUT_DIR = outputDir(import.meta.url);
 
 beforeAll(async () =>
 {

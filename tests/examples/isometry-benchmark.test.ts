@@ -29,10 +29,11 @@ import { Mesh } from '../../src/Mesh';
 import { save } from '../../src/utils';
 import { ShapeCollection } from '../../src/ShapeCollection';
 import type { HlrStrategy } from '../../src/types';
+import { outputDir } from '../helpers/outputs';
 
 const STRATEGIES: HlrStrategy[] = ['raycast', 'exact', 'clip', 'painter'];
 
-const OUTPUT_DIR = './tests/examples/outputs/';
+const OUTPUT_DIR = outputDir(import.meta.url);
 const SVG_DIR = OUTPUT_DIR + 'svgs/';
 const GLTF_DIR = OUTPUT_DIR + 'gltfs/';
 

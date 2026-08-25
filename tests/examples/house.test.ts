@@ -7,8 +7,9 @@ import { ShapeCollection, initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { Sketch } from '../../src/Sketch';
 import { save, rad } from '../../src/utils';
+import { outputDir } from '../helpers/outputs';
 
-const OUTPUT_DIR = './tests/examples/outputs/';
+const OUTPUT_DIR = outputDir(import.meta.url);
 
 beforeAll(async () =>
 {
