@@ -243,6 +243,27 @@ export class Vertex extends Shape
     return Curve.Line(this.toPoint(), new Point(this.x + d.x, this.y + d.y, this.z + d.z));
   }
 
+  /** Collapse this Vertex onto the coordinate plane perpendicular to `axis`, in place.
+   *  Mirrors Curve.flatten() / Mesh.flatten() / ShapeCollection.flatten().
+   *
+   *  A point is the one shape flattening cannot lose anything from, but without this method
+   *  ShapeCollection.flatten() had nothing to call and kept the Vertex AT ITS OLD HEIGHT.
+   *  One stray point — a `select('V||...')` result that stayed in the layer, say — then held
+   *  the flattened collection's bbox open in the collapsed axis, which is what a bbox().dim()
+   *  measures and a plan view frames: a dimension 282 tall on a drawing with no height at
+   *  all, drawn from above as a value with no line under it.
+   *
+   *  @param axis  Axis to collapse along ('x' | 'y' | 'z', default 'z' — onto the XY plane).
+   */
+  flatten(axis: Axis = 'z'): this
+  {
+    return this.translate(
+      (axis === 'x') ? -this.x : 0,
+      (axis === 'y') ? -this.y : 0,
+      (axis === 'z') ? -this.z : 0,
+    );
+  }
+
   //// SHAPE PROTOCOL ////
 
   override readonly type = 'Vertex' as const;

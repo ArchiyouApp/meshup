@@ -161,3 +161,45 @@ describe('Curve.isometry', () =>
             .toBe(shape(line.copy().isometry([-1, -1, 1], 'raycast')));
     });
 });
+
+/**
+ * A projection's groups are reachable as shortcut properties (iso.visible), and
+ * that only works while no method owns the name. ShapeCollection's filters are
+ * therefore called onlyVisible()/onlyHidden(): naming them visible()/hidden()
+ * made every group key collide, so the shortcut was skipped and a warning was
+ * logged on every re-index — 1204 of them for one workbench drawing.
+ */
+describe('projection group shortcuts', () =>
+{
+    it('exposes visible/hidden/silhouette as live shortcut properties', () =>
+    {
+        const warns: string[] = [];
+        const orig = console.warn;
+        console.warn = (...a: any[]) => { warns.push(a.join(' ')); };
+        const iso: any = Mesh.Box(100, 100, 100).isometry([-1, -1, 1], 'exact', { hiddenLines: true });
+        console.warn = orig;
+
+        expect(warns.filter(w => w.includes('conflicts with an existing'))).toEqual([]);
+
+        for (const name of ['visible', 'hidden', 'silhouette'])
+        {
+            expect(ShapeCollection.isShapeCollection(iso[name])).toBe(true);
+            expect(iso[name].length).toBe(iso.group(name)!.length);
+        }
+
+        // the shortcut IS the group, not a copy of it — mutations reach the shapes
+        expect(iso.hidden.toArray()[0]).toBe(iso.group('hidden')!.toArray()[0]);
+        iso.hidden.color('red');
+        expect((iso.group('hidden')!.toArray()[0] as any).style.color).toBe('#ff0000');
+    });
+
+    it('keeps the visibility filters under their only- names', () =>
+    {
+        const col = new ShapeCollection<any>(Mesh.Box(10, 10, 10), Mesh.Box(10, 10, 10).move(50).hide());
+        expect(col.onlyVisible().length).toBe(1);
+        expect(col.onlyHidden().length).toBe(1);
+        // the old names must stay free, or the shortcuts above break again
+        expect((ShapeCollection.prototype as any).visible).toBe(undefined);
+        expect((ShapeCollection.prototype as any).hidden).toBe(undefined);
+    });
+});

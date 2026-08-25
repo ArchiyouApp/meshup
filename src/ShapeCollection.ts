@@ -31,6 +31,16 @@ import { GLTFBuilder } from './GLTFBuilder';
 
 import { TOLERANCE, ISOMETRY_HLR_STRATEGY_DEFAULT } from './constants';
 
+/** A Shape that SVG can draw as a FACE: a Mesh or a Polygon lying on a plane parallel to XY.
+ *
+ *  Kept as a duck-typed check rather than `instanceof Polygon`: Polygon imports this module,
+ *  so importing it back would make the cycle real and leave `Polygon extends Shape`
+ *  undefined at load time. */
+function isDrawableFace(shape: any): boolean
+{
+    return (shape?.type === 'Mesh' || shape?.type === 'Polygon') && shape.isFlatOnXY?.() === true;
+}
+
 /*  Annotations in an exported drawing.
 
     A drawing is written once; a document view then needs the same drawing with its
@@ -334,16 +344,24 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return this.meshes();
     }
 
-    /** Only the Shapes that are visible (not hidden with hide()) */
+    /** Only the Shapes that are visible (not hidden with hide())
+     *
+     *  NOT named visible(): projections (iso/elevation/section) put their line
+     *  work in groups called 'visible', 'hidden' and 'silhouette', and a group
+     *  is reachable as a shortcut property (iso.visible). A method of the same
+     *  name would occupy that property and force the shortcut to be skipped.
+     *  `only-` also disambiguates from the two other meanings the word carries:
+     *  Shape.visible() (a boolean) and SceneNode.visible(v) (a setter).
+     */
     @sceneCarry
-    visible(): ShapeCollection<S>
+    onlyVisible(): ShapeCollection<S>
     {
         return new ShapeCollection<S>(...this._shapes.filter(s => (s as any).style?.visible !== false));
     }
 
-    /** Only the Shapes that are hidden with hide() */
+    /** Only the Shapes that are hidden with hide(). See onlyVisible() for the name. */
     @sceneCarry
-    hidden(): ShapeCollection<S>
+    onlyHidden(): ShapeCollection<S>
     {
         return new ShapeCollection<S>(...this._shapes.filter(s => (s as any).style?.visible === false));
     }
@@ -2007,12 +2025,23 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      */
     toSVG(options?: { strokeWidth?: number; nonScalingStroke?: boolean; unitsPerMm?: number }): string
     {
-        const curves = this.curves();
-        if (curves.length === 0)
+        /*  Curves AND faces. A face carries the same 2D drawing as its outline does, so a
+            flatten() — which answers with Meshes, not Curves — used to serialize to the
+            "no curves" placeholder below and look like a broken export. Only faces that LIE
+            on a plane parallel to XY are taken: drawing a standing wall from above would
+            collapse it to a line and say nothing about it (see Mesh.isFlatOnXY). */
+        const drawables: Array<any> = [
+            ...this._shapes.filter(s => isDrawableFace(s)),
+            ...this.curves().toArray(),
+        ];
+
+        if (drawables.length === 0)
         {
-            console.warn(`ShapeCollection::toSVG(): Exporting with ${curves.length} curves. Only curves will be exported to SVG.`);
+            console.warn(`ShapeCollection::toSVG(): nothing to export from ${this._shapes.length} shape(s). `
+                + `SVG holds curves and faces lying flat on the XY plane \u2014 3D shapes need a `
+                + `projection (isometry(), elevation(), section()) or a flatten() first.`);
             return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 20">
-                            <text x="4" y="15" font-size="5" fill="red">ShapeCollection::toSVG() — no curves</text></svg>`;
+                            <text x="4" y="15" font-size="5" fill="red">ShapeCollection::toSVG() \u2014 nothing 2D to draw</text></svg>`;
         }
 
         const paths: string[] = [];
@@ -2021,7 +2050,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         const curveToGroup = new Map<S, string>();
         this._groups.forEach((groupCol, groupName) =>
         {
-            // A curve can be in several groups and gets one class, so later
+            // A shape can be in several groups and gets one class, so later
             // groups win. The per-shape provenance tags the per-shape
             // strategies add (`shape-0`, `shape-1`, …) are registered last and
             // would otherwise displace the group that says how to *draw* the
@@ -2037,11 +2066,11 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
         const styleOpts = { omitDefaults: true, nonScalingStroke: options?.nonScalingStroke === true };
 
-        curves.forEach(curve =>
+        drawables.forEach(drawable =>
         {
-            const groupName = curveToGroup.get(curve as unknown as S);
+            const groupName = curveToGroup.get(drawable as S);
             const cssClass = 'line' + (groupName ? ` ${groupName}` : '');
-            paths.push((curve as any).toSVGElem(cssClass, styleOpts));
+            paths.push(drawable.toSVGElem(cssClass, styleOpts));
 
             /*  Extents, straight off the geometry. This used to serialize every curve to a
                 COMPLETE SVG document (Curve.toSVG()) purely to read its viewBox back out with
@@ -2051,7 +2080,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
                 curve's own document pads itself by 5% of its longest side. Padding is a
                 property of the document, not of a curve in it, so it belongs with the rest of
                 the framing — it moves there when the SVG assembler lands. */
-            const bb = (curve as any).bbox?.();
+            const bb = drawable.bbox?.();
             if (!bb) return;
             const w = bb.max().x - bb.min().x;
             const h = bb.max().y - bb.min().y;

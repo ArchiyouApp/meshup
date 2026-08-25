@@ -6,6 +6,7 @@ import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
 import { ShapeCollection } from '../../src/ShapeCollection';
+import { Vertex } from '../../src/Vertex';
 
 beforeAll(async () =>
 {
@@ -65,8 +66,41 @@ describe('Curve.flatten()', () =>
     });
 });
 
+describe('Vertex.flatten()', () =>
+{
+    it('collapses a point onto the plane', () =>
+    {
+        const v = new Vertex([100, 50, 282]).flatten();
+
+        expect(v.z).toBeCloseTo(0);
+        expect(v.x).toBeCloseTo(100);
+        expect(v.y).toBeCloseTo(50);
+    });
+
+    it('collapses along the axis it is given', () =>
+    {
+        expect(new Vertex([100, 50, 282]).flatten('y').y).toBeCloseTo(0);
+        expect(new Vertex([100, 50, 282]).flatten('y').z).toBeCloseTo(282);
+    });
+});
+
 describe('ShapeCollection.flatten()', () =>
 {
+    it('flattens a stray Vertex with the rest, instead of leaving it behind', () =>
+    {
+        /*  A point is the one shape flattening cannot lose anything from, but it had no
+            flatten() to call and was kept AT ITS OLD HEIGHT. One stray point — a
+            select('V||...') result left in a layer — then held the flattened collection's
+            bbox open in z, and everything that reads that bbox followed it: an autoDim level
+            quoted as a fraction landed at the wrong place, and bbox().back().dim() measured a
+            282-tall side of a drawing with no height, which a plan view can only draw as a
+            number with no line under it. */
+        const col = new ShapeCollection<any>(Mesh.Box(100, 50, 20), new Vertex([0, 0, 282])).flatten();
+
+        expect(col.bbox().max().z).toBeCloseTo(0);
+        expect(col.bbox().min().z).toBeCloseTo(0);
+    });
+
     it('flattens every shape and removes shapes that become identical', () =>
     {
         const a = Mesh.Box(100, 50, 20);

@@ -340,3 +340,35 @@ export function debugGLTFNormals(gltfJson: string): Float32Array[]
 
     return results;
 }
+//// SVG OUTPUT ////
+
+/** A box in MODEL space, as every Shape.bbox() reports it. */
+export interface Box2D { minX: number, minY: number, maxX: number, maxY: number }
+
+/** Wrap SVG element strings in a self-contained `<svg>` document framed on `box`.
+ *
+ *  The y flip and the 5% pad live here rather than in each shape's toSVG(): SVG's y axis
+ *  points down, so model y [min,max] is svg y [-max,-min], and a shape's own document pads
+ *  itself by 5% of its longest side. Curve, Polygon and Mesh each carried their own copy of
+ *  those four lines, which is how they came to disagree about framing.
+ *
+ *  A null box (no geometry to measure) gives a unit viewBox rather than NaNs. */
+export function svgDocument(elements: string | Array<string>, box: Box2D | null): string
+{
+    const fmt = (n: number) => +n.toFixed(6);
+    let vbX = 0, vbY = 0, vbW = 1, vbH = 1;
+
+    if (box)
+    {
+        const w = box.maxX - box.minX;
+        const h = box.maxY - box.minY;
+        const pad = Math.max(w, h) * 0.05 || 1;
+        vbX = fmt(box.minX - pad);
+        vbY = fmt(-box.maxY - pad);
+        vbW = fmt(w + 2 * pad);
+        vbH = fmt(h + 2 * pad);
+    }
+
+    const content = Array.isArray(elements) ? elements.join('\n') : elements;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}">${content}</svg>`;
+}
