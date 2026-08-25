@@ -20,7 +20,7 @@ import { Point } from './Point';
 import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { Vector } from './Vector'
-import { rad, deg, shortestArcAxisAngle, primaryOrthoXYAngle } from './utils';
+import { rad, deg, shortestArcAxisAngle, primaryOrthoXYAngle, svgDocument } from './utils';
 import { Style } from './Style';
 import { sceneReplace, sceneLayer, sceneCarry, sceneReplaceOrKeep, replaceInScene } from './sceneDecorators';
 import { GLTFBuilder } from './GLTFBuilder';
@@ -1820,6 +1820,51 @@ export class Mesh extends Shape
         return new GLTFBuilder(up).add(this).applyExtensions().toGLB();
     }
     
+    //// SVG EXPORT ////
+
+    /** True when every face of this Mesh lies on one plane parallel to XY — a drawing SVG can
+     *  write out as it is, rather than one it would have to project. What flatten() leaves
+     *  behind.
+     *
+     *  is2D() is not enough on its own: it is also true for a mesh standing up in Z (a wall),
+     *  which drawn from above collapses to a single line. */
+    isFlatOnXY(): boolean
+    {
+        const bb = this.bbox();
+        return !!bb && bb.height() <= TOLERANCE;
+    }
+
+    /** Return the SVG elements for this Mesh's faces — one `<polygon>` (or `<path>`, for a
+     *  face with holes) each — without the outer `<svg>` wrapper. Used by ShapeCollection and
+     *  SceneNode to compose a drawing.
+     *
+     *  Faces are drawn from above, as Polygon.toSVGElem() draws them: exact for a mesh lying
+     *  on a plane parallel to XY (see isFlatOnXY()), a projection for anything else. Every
+     *  face is drawn with the MESH's style — the Polygon wrappers faces() hands out are fresh
+     *  each call and carry the default style, not the one the author set on the mesh.
+     *
+     *  Several elements, not a `<g>` wrapping them: the callers assemble flat element lists
+     *  and add the grouping (and the class) they need themselves. */
+    toSVGElem(cssClass?: string, styleOpts?: { nonScalingStroke?: boolean; omitDefaults?: boolean }): string
+    {
+        return this.polygons().toArray()
+            .map(poly =>
+            {
+                poly.style = this.style;
+                return poly.toSVGElem(cssClass, styleOpts);
+            })
+            .join('\n');
+    }
+
+    /** Export this Mesh's faces as a self-contained SVG string, drawn from above.
+     *  See toSVGElem() — a Mesh that is not flat on XY is projected, not refused. */
+    toSVG(): string
+    {
+        const bb = this.bbox();
+        return svgDocument(this.toSVGElem(),
+            bb ? { minX: bb.min().x, minY: bb.min().y, maxX: bb.max().x, maxY: bb.max().y } : null);
+    }
+
     /** Export Mesh to an AMF document (XML string).
      *  @param name   Object name (also used as the object id in the document)
      *  @param units  AMF unit name: millimeter, inch, feet, meter or micron */

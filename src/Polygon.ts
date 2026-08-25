@@ -7,7 +7,7 @@
 
 import type { PointLike, Axis, OrientationXY } from './types';
 import { isPointLike, isAxis } from './types';
-import { rad, shortestArcAxisAngle, primaryOrthoXYAngle } from './utils';
+import { rad, shortestArcAxisAngle, primaryOrthoXYAngle, svgDocument } from './utils';
 import { TOLERANCE } from './constants';
 import { Shape } from './Shape';
 import { Point } from './Point';
@@ -1307,5 +1307,75 @@ export class Polygon extends Shape
     async toGLB(up: Axis = 'z'): Promise<Uint8Array | undefined>
     {
         return this.toMesh().toGLB(up);
+    }
+
+    //// SVG EXPORT ////
+
+    /** True when this Polygon lies on a plane parallel to XY — a face SVG can draw as it is,
+     *  rather than a face SVG would have to project. What flatten() leaves behind.
+     *
+     *  is2D() cannot answer this: every Polygon is planar, so it is always true, including
+     *  for a wall standing up in Z which projects to a single line. */
+    isFlatOnXY(): boolean
+    {
+        const verts = this.vertices().toArray();
+        if (verts.length === 0) return false;
+        const z = verts[0].z;
+        return verts.every(v => Math.abs(v.z - z) <= TOLERANCE);
+    }
+
+    /**
+     * Return just the SVG element for this Polygon — a `<polygon>`, or a `<path>` when it has
+     * holes — without the outer `<svg>` wrapper. Used by Mesh, ShapeCollection and SceneNode
+     * to compose a drawing.
+     *
+     * The face is drawn as seen from above: x and y straight through with y negated (SVG's y
+     * axis points down), z dropped. That is exact for a face lying on a plane parallel to XY
+     * and a projection for anything else — see isFlatOnXY(), which is what the collection
+     * exporter filters on so a standing wall is never silently flattened to a line.
+     *
+     * Holes leave as extra subpaths of ONE `<path>` with `fill-rule="evenodd"`, not as
+     * elements of their own: a separate element would be filled in as solid as its parent the
+     * moment the face carries a fill, and the hole would disappear.
+     *
+     * `styleOpts` is passed straight to {@link Style.toSvgAttrs} — see there for why
+     * non-scaling-stroke is opt-in and what omitDefaults is for.
+     */
+    toSVGElem(cssClass?: string, styleOpts?: { nonScalingStroke?: boolean; omitDefaults?: boolean }): string
+    {
+        const fmt = (n: number) => +n.toFixed(6);
+        const classAttr = cssClass ? ` class="${cssClass}"` : '';
+        const styleAttrs = this.style.toSvgAttrs(true, styleOpts);
+        const styleAttr = styleAttrs ? ` ${styleAttrs}` : '';
+
+        const points = (verts: Array<Vertex>): Array<string> =>
+            verts.map(v => `${fmt(v.x)},${fmt(-v.y)}`);
+
+        const holes = ((this._polygon.holes() as VertexJs[][]) ?? [])
+                        .map(hole => hole.map(v => Vertex.from(v)))
+                        .filter(hole => hole.length > 2);
+
+        if (holes.length === 0)
+        {
+            return `<polygon points="${points(this._boundaryVertices()).join(' ')}"`
+                + `${classAttr}${styleAttr}/>`;
+        }
+
+        const subpath = (verts: Array<Vertex>): string =>
+        {
+            const pts = points(verts);
+            return `M${pts[0].replace(',', ' ')}` + pts.slice(1).map(p => ` L${p.replace(',', ' ')}`).join('') + ' Z';
+        };
+
+        const d = [this._boundaryVertices(), ...holes].map(subpath).join(' ');
+        return `<path d="${d}" fill-rule="evenodd"${classAttr}${styleAttr}/>`;
+    }
+
+    /** Export this Polygon as a self-contained SVG string, drawn from above (see toSVGElem). */
+    toSVG(): string
+    {
+        const bb = this.bbox();
+        return svgDocument(this.toSVGElem(),
+            bb ? { minX: bb.min().x, minY: bb.min().y, maxX: bb.max().x, maxY: bb.max().y } : null);
     }
 }
