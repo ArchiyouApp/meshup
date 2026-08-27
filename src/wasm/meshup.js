@@ -4253,6 +4253,18 @@ export class VertexJs {
 if (Symbol.dispose) VertexJs.prototype[Symbol.dispose] = VertexJs.prototype.free;
 
 /**
+ * The tessellation profile in force, as `[segmentsPerTurn, chordTolerance, min, max]`.
+ * Lets the TypeScript side assert what it actually installed rather than what it sent.
+ * @returns {Float64Array}
+ */
+export function getTessellationQuality() {
+    const ret = wasm.getTessellationQuality();
+    var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v1;
+}
+
+/**
  * Import a DXF drawing into native planar curves.
  *
  * LWPOLYLINE and POLYLINE bulges become real arcs, ARC and CIRCLE are exact rather than
@@ -4292,6 +4304,23 @@ export function importSvgCurves(doc) {
 
 export function init_panic_hook() {
     wasm.init_panic_hook();
+}
+
+/**
+ * Install the tessellation profile every default-quality sampling route reads.
+ *
+ * The counterpart of `setQuality()` on the TypeScript side: that owns the full profile
+ * (which also covers loft/revolve facets and mesh primitive segments, decided in JS), and
+ * pushes the four dials the exact-curve kernel needs down here. Sanitised on the way in,
+ * so a nonsense dial falls back to the default rather than emptying a polyline or hanging
+ * a sampling loop.
+ * @param {number} segments_per_turn
+ * @param {number} chord_tolerance
+ * @param {number} min_segments
+ * @param {number} max_segments
+ */
+export function setTessellationQuality(segments_per_turn, chord_tolerance, min_segments, max_segments) {
+    wasm.setTessellationQuality(segments_per_turn, chord_tolerance, min_segments, max_segments);
 }
 
 const EXPECTED_RESPONSE_TYPES = new Set(['basic', 'cors', 'default']);

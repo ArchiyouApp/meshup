@@ -1206,6 +1206,28 @@ export class Polygon extends Shape
         return this.toCurve().loft(profiles, solid);
     }
 
+    /**
+     * Revolve this polygon around an axis into a Mesh — the lathe.
+     *
+     * The boundary is a closed curve, so a full turn gives a watertight solid and a partial
+     * one is shut with a flat cap at either end (see Curve.revolve()). Interior holes are
+     * carried across and revolved into a cavity — unlike extrude(), which drops them.
+     *
+     * @param angle      Sweep in degrees, negative to sweep the other way. Default 360.
+     * @param axisStart  Axis base point — or the axis direction, when `axisEnd` is left out.
+     * @param axisEnd    A second point on the axis.
+     * @param segments   Facets around the sweep.
+     */
+    @sceneReplace
+    revolve(angle: number = 360, axisStart?: PointLike|Axis, axisEnd?: PointLike|Axis, segments?: number): Mesh | null
+    {
+        // Curve.revolve() is @sceneReplace too, but this boundary Curve is a throwaway that was
+        // never added to a scene, so nothing gets replaced there — only this Polygon is.
+        const profile = this.toCurve();
+        this._holeCurves().forEach( hole => profile.addHole(hole));
+        return profile.revolve(angle, axisStart, axisEnd, segments);
+    }
+
     /** Rotate this polygon so it lies flat on the XY plane (its normal pointing +Z) and drop
      *  it onto z = 0. Unlike Mesh.layflat(), which has to guess the thin axis from an oriented
      *  bounding box, a Polygon has an exact plane normal to rotate. Mutates and returns `this`. */
@@ -1275,12 +1297,27 @@ export class Polygon extends Shape
         return Curve.Polyline(this._boundaryVertices()).close();
     }
 
-    /** Outer boundary vertices with the closing duplicate (if any) removed.
-     *  vertices() can repeat the first vertex at the end to close the loop; a zero-length
-     *  segment makes Curve.close() fail with "No connection found to create a compound curve". */
+    /** Outer boundary vertices with the closing duplicate (if any) removed. */
     private _boundaryVertices(): Array<Vertex>
     {
-        const verts = this.vertices().toArray();
+        return Polygon._dropClosingDuplicate(this.vertices().toArray());
+    }
+
+    /** Interior hole rings as closed Curves. The kernel keeps them as raw vertex loops, and a
+     *  sweep wants curves it can carry along with the boundary. */
+    private _holeCurves(): Array<Curve>
+    {
+        return (this._polygon.holes() as Array<Array<VertexJs>> ?? [])
+            .map( hole => Polygon._dropClosingDuplicate(hole.map( v => Vertex.from(v))))
+            .filter( hole => hole.length >= 3)
+            .map( hole => Curve.Polyline(hole).close());
+    }
+
+    /** A vertex ring without its closing duplicate: a ring can repeat its first vertex at the
+     *  end to close the loop, and the zero-length segment that leaves behind makes
+     *  Curve.close() fail with "No connection found to create a compound curve". */
+    private static _dropClosingDuplicate(verts: Array<Vertex>): Array<Vertex>
+    {
         if (verts.length > 1)
         {
             const f = verts[0], l = verts[verts.length - 1];

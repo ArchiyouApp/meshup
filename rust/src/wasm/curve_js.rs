@@ -17,20 +17,76 @@ use hypercurve::{
 use nalgebra::{Point3, Vector3};
 use wasm_bindgen::prelude::*;
 
-const DEFAULT_CHORD: f64 = hcurve::DEFAULT_CHORD_ERROR;
+/// The tessellation profile for one call: the global one ([`hcurve::quality`], set from
+/// TypeScript by `setQuality()`) unless the caller passed an explicit chord tolerance, which
+/// is read as a *relative* sagitta and turned into the equivalent angular density.
+fn tess_quality(tol: Option<f64>) -> hcurve::TessQuality
+{
+    match tol
+    {
+        Some(t) => hcurve::TessQuality::from_chord_tolerance(t),
+        None => hcurve::quality(),
+    }
+}
 
-/// Chord error for the polylines that back **parameter inversion** on a [`Geom::Path`]
-/// (`pointAt`, `paramAtLength`, `paramClosestToPoint`, and everything layered on them —
-/// `tangentAt`, `Curve.distance`, `Curve.closestPoints`, `Curve.perpendicularPointTo`).
+/// Chord error for a **metric** polyline — one built to answer where something *is* or how
+/// long it is, rather than to be looked at.
 ///
-/// Deliberately far finer than [`DEFAULT_CHORD`]. That one sizes a polyline meant to be
+/// Three routes use it: **parameter inversion** on a [`Geom::Path`] (`pointAt`,
+/// `paramAtLength`, `paramClosestToPoint`, and everything layered on them — `tangentAt`,
+/// `Curve.distance`, `Curve.closestPoints`, `Curve.perpendicularPointTo`); the **intersection**
+/// fallback, for a crossing that cannot be solved on exact geometry; and the **length** and
+/// **area** of a span with no closed form.
+///
+/// Deliberately far finer than the display profile. That one sizes a polyline meant to be
 /// *looked at*, where a chord under a pixel is indistinguishable from the curve and extra
-/// vertices cost triangles in every downstream mesh. Inversion is the opposite trade: the
-/// table is transient, nothing downstream carries its vertex count, and its spacing sets
-/// how far the answer can be from the true parameter — a coarse table hands back a point
-/// and a tangent from the wrong place on the curve. Only [`Geom::Path`] pays it at all;
-/// line/arc geometry inverts in closed form and never builds a table.
-const INVERSION_CHORD: f64 = 1.0e-6;
+/// vertices cost triangles in every downstream mesh. A metric polyline is the opposite trade:
+/// it is transient, nothing downstream carries its vertex count, and its chord sagitta is a
+/// floor under how wrong the answer can be. Tying it to the display dial would mean a
+/// `split()` landing 0.1 units off on a circle of radius 100 because someone had asked for a
+/// draft *preview*.
+///
+/// Line and arc geometry mostly sidesteps this: it inverts, measures and intersects in
+/// closed form, and never builds a table.
+const METRIC_CHORD: f64 = 1.0e-6;
+
+/// A profile for a metric query. Note it does **not** inherit the *display* profile's per-span
+/// ceiling — that ceiling exists to keep drawn geometry light, which is not this polyline's
+/// problem, and a script asking for a draft preview has not asked for a `pointAt` that lands
+/// in the wrong place.
+///
+/// It keeps a ceiling of its own, at the 512 the tolerance-only sampler used before there was
+/// a profile. The tolerance route lands at 500 samples per span at [`METRIC_CHORD`] and is
+/// unaffected; the cap only bites on a wide *arc* span inside an otherwise exact path, where
+/// the turn-based count would ask for ~2200. Letting that through would have made `pointAt`
+/// and `intersect` several times slower than they used to be on exactly the mixed paths that
+/// are already the slow case, to move an answer that is a micron out.
+fn metric_quality() -> hcurve::TessQuality
+{
+    hcurve::TessQuality {
+        min_segments: 2,
+        max_segments: 512,
+        ..hcurve::TessQuality::from_chord_tolerance(METRIC_CHORD)
+    }
+}
+
+/// A metric profile unless the caller named a tolerance of their own.
+fn metric_quality_or(tol: Option<f64>) -> hcurve::TessQuality
+{
+    match tol
+    {
+        Some(t) => hcurve::TessQuality::from_chord_tolerance(t),
+        None => metric_quality(),
+    }
+}
+
+/// Error bound handed to hypercurve's *certified* Bezier parallel when offsetting an exact
+/// path. Deliberately NOT the display profile's tolerance: this one is hypercurve's own,
+/// read as an absolute bound on the parallel curve, and it decides whether the offset is
+/// accepted at all — not how many points something is drawn with. Tying it to the display
+/// dial would have quietly loosened every spline offset by the same factor a user coarsened
+/// their preview by.
+const PARALLEL_VERIFICATION_TOL: f64 = 1.0e-4;
 
 /// An orthonormal planar frame in 3D: `world = origin + x·u + y·v`.
 #[derive(Clone, Debug)]
@@ -285,13 +341,13 @@ pub struct Curve3DJs
 impl Curve3DJs
 {
     /// Local-XY tessellation of the geometry.
-    fn local_points(&self, chord: f64) -> Result<Vec<[f64; 2]>, String>
+    fn local_points(&self, q: &hcurve::TessQuality) -> Result<Vec<[f64; 2]>, String>
     {
         match &self.geom
         {
-            Geom::Open(cs) => hcurve::tessellate_open(cs, chord),
-            Geom::Closed(ct) => hcurve::tessellate_closed(ct, chord),
-            Geom::Path(pg) => hcurve::tessellate_path(&pg.path, chord),
+            Geom::Open(cs) => hcurve::tessellate_open(cs, q),
+            Geom::Closed(ct) => hcurve::tessellate_closed(ct, q),
+            Geom::Path(pg) => hcurve::tessellate_path(&pg.path, q),
         }
     }
 
@@ -567,9 +623,9 @@ impl Curve3DJs
     /// to make progress and cannot recurse. Used as the offset fallback: hypercurve
     /// certifies exact equidistance when offsetting an arc, which an arc whose centre came
     /// from an f64 boolean cannot satisfy (`RadiusMismatch`), and line work sidesteps that.
-    fn to_polyline_curve(&self, chord: f64) -> Result<Curve3DJs, JsValue>
+    fn to_polyline_curve(&self, q: &hcurve::TessQuality) -> Result<Curve3DJs, JsValue>
     {
-        let pts = self.local_points(chord).map_err(err)?;
+        let pts = self.local_points(q).map_err(err)?;
         let geom = if self.closed()
         {
             Geom::Closed(hcurve::closed_contour(&pts).map_err(err)?)
@@ -595,7 +651,7 @@ impl Curve3DJs
             Geom::Closed(ct) => Geom::Closed(ct.clone()),
             Geom::Path(pg) =>
             {
-                let pts = hcurve::tessellate_path(&pg.path, DEFAULT_CHORD).map_err(err)?;
+                let pts = hcurve::tessellate_path(&pg.path, &hcurve::quality()).map_err(err)?;
                 if pg.closed
                 {
                     Geom::Closed(hcurve::closed_contour(&pts).map_err(err)?)
@@ -612,19 +668,19 @@ impl Curve3DJs
     /// 3D tessellation (local points lifted into world via the frame). A
     /// non-coplanar polyline uses its retained true 3D vertices directly so
     /// metric queries reflect the real path rather than its planar projection.
-    fn world_points(&self, chord: f64) -> Result<Vec<Point3<Real>>, String>
+    fn world_points(&self, q: &hcurve::TessQuality) -> Result<Vec<Point3<Real>>, String>
     {
         if let Some(pts) = &self.world_pts
         {
             return Ok(pts.clone());
         }
-        Ok(self.local_points(chord)?.iter().map(|xy| self.frame.to_world(*xy)).collect())
+        Ok(self.local_points(q)?.iter().map(|xy| self.frame.to_world(*xy)).collect())
     }
 
     /// Cumulative arc length at each tessellation vertex, plus the points.
-    fn arc_length_table(&self, chord: f64) -> Result<(Vec<Point3<Real>>, Vec<f64>), String>
+    fn arc_length_table(&self, q: &hcurve::TessQuality) -> Result<(Vec<Point3<Real>>, Vec<f64>), String>
     {
-        let pts = self.world_points(chord)?;
+        let pts = self.world_points(q)?;
         let mut cum = vec![0.0f64; pts.len()];
         for i in 1..pts.len()
         {
@@ -649,7 +705,7 @@ impl Curve3DJs
                 return Ok(self.frame.to_world(seg_local(&local)));
             }
         }
-        let (pts, cum) = self.arc_length_table(INVERSION_CHORD).map_err(err)?;
+        let (pts, cum) = self.arc_length_table(&metric_quality()).map_err(err)?;
         if pts.is_empty()
         {
             return Err(JsValue::from_str("Curve3DJs: empty curve"));
@@ -913,8 +969,7 @@ impl Curve3DJs
     #[wasm_bindgen(js_name = tessellate)]
     pub fn tessellate(&self, tol: Option<f64>) -> Result<Vec<Point3Js>, JsValue>
     {
-        let chord = tol.unwrap_or(DEFAULT_CHORD);
-        let local = self.local_points(chord).map_err(err)?;
+        let local = self.local_points(&tess_quality(tol)).map_err(err)?;
         Ok(local
             .iter()
             .map(|xy| {
@@ -933,15 +988,16 @@ impl Curve3DJs
         {
             return Ok(pts.windows(2).map(|w| (w[1] - w[0]).norm()).sum());
         }
-        let chord = tol.unwrap_or(DEFAULT_CHORD);
+        // Length is a metric query: it follows METRIC_CHORD, not the display profile.
+        let q = metric_quality_or(tol);
         match &self.geom
         {
-            Geom::Open(cs) => hcurve::length_open(cs, chord).map_err(err),
-            Geom::Closed(ct) => hcurve::length_closed(ct, chord).map_err(err),
+            Geom::Open(cs) => hcurve::length_open(cs, &q).map_err(err),
+            Geom::Closed(ct) => hcurve::length_closed(ct, &q).map_err(err),
             // Exact for line/arc spans, certified-chord for conic/Bezier/spline spans (their
             // arc length has no closed form). The frame is orthonormal, so local distances
             // equal world distances.
-            Geom::Path(pg) => hcurve::length_path(&pg.path, chord).map_err(err),
+            Geom::Path(pg) => hcurve::length_path(&pg.path, &q).map_err(err),
         }
     }
 
@@ -960,7 +1016,7 @@ impl Curve3DJs
                 Ok(a) => Ok(a),
                 Err(_) =>
                 {
-                    let pts = hcurve::tessellate_path(&pg.path, DEFAULT_CHORD).map_err(err)?;
+                    let pts = hcurve::tessellate_path(&pg.path, &metric_quality()).map_err(err)?;
                     let ct = hcurve::closed_contour(&pts).map_err(err)?;
                     hcurve::signed_area(&ct).map_err(err)
                 }
@@ -998,14 +1054,14 @@ impl Curve3DJs
     #[wasm_bindgen(js_name = offset)]
     pub fn offset(&self, distance: f64, tol: Option<f64>) -> Result<Curve3DJs, JsValue>
     {
-        let chord = tol.unwrap_or(DEFAULT_CHORD);
+        let q = tess_quality(tol);
         let native = match &self.geom
         {
             Geom::Open(cs) => hcurve::offset_open(cs, distance)
                 .map(|off| Curve3DJs::from_open(self.frame.clone(), off)),
             Geom::Closed(ct) => hcurve::offset_closed(ct, distance)
                 .map(|off| Curve3DJs::from_closed(self.frame.clone(), off)),
-            Geom::Path(pg) => match hcurve::offset_path(&pg.path, distance, chord)
+            Geom::Path(pg) => match hcurve::offset_path(&pg.path, distance, PARALLEL_VERIFICATION_TOL)
             {
                 Ok(Some(parallel)) => Ok(Curve3DJs::from_path_normalized(
                     self.frame.clone(),
@@ -1024,7 +1080,7 @@ impl Curve3DJs
             // parallel does not trim) falls back to offsetting its line projection.
             Err(_) if matches!(self.geom, Geom::Path(_)) =>
             {
-                self.to_polyline_curve(chord)?.offset(distance, tol)
+                self.to_polyline_curve(&q)?.offset(distance, tol)
             }
             // Native line/arc geometry gets no such fallback, deliberately. hypercurve
             // certifies exact equidistance when offsetting an arc, so an arc whose centre
@@ -1041,7 +1097,8 @@ impl Curve3DJs
     #[wasm_bindgen(js_name = intersect)]
     pub fn intersect(&self, other: &Curve3DJs, tol: Option<f64>) -> Result<Vec<Point3Js>, JsValue>
     {
-        let chord = tol.unwrap_or(DEFAULT_CHORD);
+        // Intersection is a metric query, not a display route — see [`METRIC_CHORD`].
+        let q = metric_quality_or(tol);
 
         // Exact mixed-family path intersection when either side is a conic/spline, so an
         // ellipse is not lowered to line work first. Declines (an algebraic contact with no
@@ -1066,10 +1123,10 @@ impl Curve3DJs
             }
         }
 
-        let a = self.as_curve_string(chord).map_err(err)?;
+        let a = self.as_curve_string(&q).map_err(err)?;
         // Project other's tessellation into this frame as an open polyline.
         let other_local: Vec<[f64; 2]> = other
-            .local_points(chord)
+            .local_points(&q)
             .map_err(err)?
             .iter()
             .map(|xy| self.frame.to_local(&other.frame.to_world(*xy)))
@@ -1127,8 +1184,10 @@ impl Curve3DJs
         // hypercurve declines exact bounds for some families (a rational-quadratic span
         // blocks with `NativeTopology / Ordering`), so an ellipse has no exact box today.
         // Fall back to min/max over a certified projection — the previous behaviour.
-        let chord = tol.unwrap_or(DEFAULT_CHORD);
-        let pts = self.tessellate(Some(chord))?;
+        // A bounding box read off a display-quality polyline falls short of the true bulge
+        // of every arc it samples, so this fallback measures a metric one.
+        let q = metric_quality_or(tol);
+        let pts = self.tessellate(Some(q.chord_tolerance))?;
         if pts.is_empty()
         {
             return Err(JsValue::from_str("Curve3DJs::bbox(): empty curve"));
@@ -1258,7 +1317,7 @@ impl Curve3DJs
     #[wasm_bindgen(js_name = paramAtLength)]
     pub fn param_at_length(&self, len: f64) -> Result<f64, JsValue>
     {
-        let (_, cum) = self.arc_length_table(INVERSION_CHORD).map_err(err)?;
+        let (_, cum) = self.arc_length_table(&metric_quality()).map_err(err)?;
         let total = cum.last().copied().unwrap_or(0.0);
         if total <= 0.0
         {
@@ -1306,7 +1365,7 @@ impl Curve3DJs
                 return hcurve::param_closest_to_point(segs, &q).map_err(err);
             }
         }
-        let (pts, cum) = self.arc_length_table(INVERSION_CHORD).map_err(err)?;
+        let (pts, cum) = self.arc_length_table(&metric_quality()).map_err(err)?;
         let total = cum.last().copied().unwrap_or(0.0);
         if pts.len() < 2 || total <= 0.0
         {
@@ -1845,7 +1904,7 @@ impl Curve3DJs
     #[wasm_bindgen(js_name = segmentTessellations)]
     pub fn segment_tessellations(&self, tol: Option<f64>) -> Result<JsValue, JsValue>
     {
-        let chord = tol.unwrap_or(DEFAULT_CHORD);
+        let q = tess_quality(tol);
         let out = js_sys::Array::new();
         // One array per EXACT span, whatever the family. A conic path used to come back as
         // a single lumped polyline, so the TS layer could not tell its spans apart.
@@ -1853,7 +1912,7 @@ impl Curve3DJs
         {
             let path = CurvePath2::try_new(vec![span])
                 .map_err(|e| err(format!("hcurve: span path failed ({e:?})")))?;
-            let pts2d = hcurve::tessellate_path(&path, chord).map_err(err)?;
+            let pts2d = hcurve::tessellate_path(&path, &q).map_err(err)?;
             let flat: Vec<f64> = pts2d
                 .iter()
                 .flat_map(|xy| {
@@ -2001,7 +2060,7 @@ impl Curve3DJs
             // decide. Retry on line work rather than failing the operation outright.
             None =>
             {
-                let (la, lb) = (self.to_polyline_curve(DEFAULT_CHORD)?, other.to_polyline_curve(DEFAULT_CHORD)?);
+                let (la, lb) = (self.to_polyline_curve(&hcurve::quality())?, other.to_polyline_curve(&hcurve::quality())?);
                 let (pa, pb) = (
                     la.native_closed_contour().ok_or_else(|| {
                         JsValue::from_str("Curve3DJs::boolean(): 'this' is not a closed region")
@@ -2075,8 +2134,10 @@ impl Curve3DJs
             Geom::Closed(ct) => Some(ct.clone()),
             Geom::Path(pg) if pg.closed =>
             {
-                // A fine line contour of the closed ellipse for native boolean ops.
-                let pts = hcurve::tessellate_path(&pg.path, DEFAULT_CHORD).ok()?;
+                // A line contour of the closed ellipse for native boolean ops. On the
+                // display profile on purpose: the boolean's OUTPUT is geometry the caller
+                // keeps and meshes, so its density is a rendering decision, not a metric one.
+                let pts = hcurve::tessellate_path(&pg.path, &hcurve::quality()).ok()?;
                 hcurve::closed_contour(&pts).ok()
             }
             Geom::Open(_) | Geom::Path(_) => None,
@@ -2094,19 +2155,20 @@ impl Curve3DJs
 
     /// This curve's geometry as an open curve string in its own local frame
     /// (a closed contour's segments are reused directly).
-    fn as_curve_string(&self, chord: f64) -> Result<CurveString2, String>
+    fn as_curve_string(&self, q: &hcurve::TessQuality) -> Result<CurveString2, String>
     {
         match &self.geom
         {
             Geom::Open(cs) => Ok(cs.clone()),
-            Geom::Closed(ct) =>
-            {
-                let pts = hcurve::tessellate_closed(ct, chord)?;
-                hcurve::open_polyline(&pts)
-            }
+            // A contour is line/arc topology already, and a `CurveString2` holds exactly the
+            // same segments — it is only the closure that differs. Reusing them keeps the
+            // exact arcs, where tessellating first handed `intersect` a polyline whose
+            // accuracy was capped by whatever the display quality happened to be.
+            Geom::Closed(ct) => CurveString2::try_new(ct.segments().to_vec())
+                .map_err(|e| format!("hcurve: contour as curve string failed ({e:?})")),
             Geom::Path(pg) =>
             {
-                let pts = hcurve::tessellate_path(&pg.path, chord)?;
+                let pts = hcurve::tessellate_path(&pg.path, q)?;
                 hcurve::open_polyline(&pts)
             }
         }

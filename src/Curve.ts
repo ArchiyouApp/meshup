@@ -18,7 +18,8 @@
  * 
  */
 
-import { ANGLE_COMPARE_TOLERANCE, TESSELATION_TOLERANCE, BASE_PLANE_NAME_TO_PLANE } from './constants';
+import { ANGLE_COMPARE_TOLERANCE, BASE_PLANE_NAME_TO_PLANE } from './constants';
+import { getQuality } from './quality';
 
 import { Vector3Js, VertexJs, Point3Js, PolygonJs, SketchJs, Curve3DJs } from "./wasm/meshup";
 
@@ -39,7 +40,7 @@ import { OBbox } from './OBbox';
 import { Polygon } from './Polygon';
 import { Style } from './Style';
 
-import { rad, shortestArcAxisAngle, primaryOrthoXYAngle } from "./utils";
+import { rad, shortestArcAxisAngle, primaryOrthoXYAngle, gridCounts } from "./utils";
 import { GLTFBuilder } from './GLTFBuilder';
 import { Selector } from './Selector';
 
@@ -72,8 +73,31 @@ const PERPENDICULAR_ZERO_TOLERANCE = 1e-9;
 
 /** How finely a loft subdivides a curved segment, counted per full turn: a whole circle becomes
  *  this many ring steps, a quarter-circle fillet a quarter of them. Straight segments are lofted
- *  as they are, so a rectangle stays four faces however high this is. */
-const LOFT_SEGMENTS_PER_TURN = 64;
+ *  as they are, so a rectangle stays four faces however high this is.
+ *
+ *  Read from the quality profile at call time, so `setQuality()` reaches a loft written before
+ *  it. @see {@link QualitySettings.loftSegmentsPerTurn} */
+const loftSegmentsPerTurn = (): number => getQuality().loftSegmentsPerTurn;
+
+/** How finely a revolve subdivides its sweep, counted per full turn: a 360° revolve becomes
+ *  this many rings of faces, a 90° one a quarter of them. Matches the loft count, so a circle
+ *  comes out equally smooth whether it was lofted or revolved.
+ *  @see {@link QualitySettings.revolveSegmentsPerTurn} */
+const revolveSegmentsPerTurn = (): number => getQuality().revolveSegmentsPerTurn;
+
+/** Relative tolerance for the lengths and cosines a revolve tests: a point this close to the
+ *  axis (against the profile's own reach) counts as sitting on it, and a direction this close
+ *  to perpendicular to a plane normal counts as lying in that plane. */
+const REVOLVE_RELATIVE_TOLERANCE = 1e-6;
+
+/** Below this share of its own reach squared, a profile ring encloses no area worth speaking
+ *  of and is treated as flat — a straight profile has no winding to orient its walls by. */
+const REVOLVE_FLAT_RING_TOLERANCE = 1e-9;
+
+/** A sweep smaller than this many degrees is no sweep at all, and one this close to 360°
+ *  is a full turn that needs no caps. */
+const REVOLVE_ZERO_ANGLE = 1e-9;
+
 
 export class Curve extends Shape
 {
@@ -1616,7 +1640,7 @@ export class Curve extends Shape
 
         // Tessellate at a tolerance tighter than the cuboid tolerance so arcs
         // and splines are sampled finely enough to be flagged as non-cuboid.
-        const pts = this.tessellate(Math.min(tolerance * 0.5, TESSELATION_TOLERANCE));
+        const pts = this.tessellate(Math.min(tolerance * 0.5, getQuality().curveChordTolerance));
         if (!pts || pts.length === 0) return false;
 
         for (const v of pts)
@@ -1810,14 +1834,23 @@ export class Curve extends Shape
     }
 
     /** Tessellate the curve into a series of points.
-     *  @param tol - tessellation normal tolerance
+     *
+     *  How dense the result is comes from the quality profile — see `setQuality()` — which
+     *  sizes an arc by how far it *turns*, so a circle costs the same at any radius.
+     *
+     *  @param tol - chord deviation as a **fraction of the span's own size**, overriding the
+     *      profile for this call. Not a distance in model units: `1e-4` means "within 0.01%
+     *      of the radius", which is the same request whether the model is in metres or in
+     *      millimetres. Roughly, `1e-2` → 22 facets per full turn, `1e-3` → 70, `1e-4` → 222.
      *  @returns array of points representing the tessellated curve
-     * 
-     *  NOTE: tessellation tolerance is the hypercurve chord error
-     *      More control can be added in the future
      */
-    tessellate(tol: number = TESSELATION_TOLERANCE): Array<Point>
+    tessellate(tol?: number): Array<Point>
     {
+        // Left out, the tolerance is NOT filled in from the profile here: the kernel holds
+        // the same profile (setQuality() pushes it) and reads its facets-per-turn dial
+        // directly. Passing the profile's tolerance instead would silently override that
+        // dial with the count the tolerance implies — `curveSegmentsPerTurn: 64` would draw
+        // a circle with 72 facets, because 1e-3 works out to 70 per turn.
         return this.inner().tessellate(tol)
             .map(p => Point.from(p));
     }
@@ -1825,9 +1858,9 @@ export class Curve extends Shape
     /** Create new Curve by tessellating any (compound) curve with degree > 1 into a degree-1 polyline,
      *  then run `mergeColinearLines()` to collapse redundant collinear segments.
      *  Curves that are already fully degree-1 are returned unchanged.
-     *  @param tol - tessellation tolerance (default: TESSELATION_TOLERANCE)
+     *  @param tol - tessellation tolerance; defaults to the quality profile's.
      */
-    toDegree1(tol: number = TESSELATION_TOLERANCE): Curve
+    toDegree1(tol?: number): Curve
     {
         const maxDeg = this.maxDegree();
         if (maxDeg !== null && maxDeg <= 1) return this;
@@ -2492,25 +2525,30 @@ export class Curve extends Shape
         }
     }
 
+    /** Arrange copies of this Curve on a 3-D grid.
+     *  Counts are floored and clamped to at least 1, so `grid(4, 3, 0)` is a flat 4x3 grid
+     *  in XY rather than an empty collection.
+     *  @param spacing Distance between copy origins, uniform or per axis.
+     *  @returns ShapeCollection<Curve> of all copies - this Curve itself is the copy at
+     *      cell [0,0,0] (like row()), so the scene never gets a duplicate on top of it.
+     */
     grid(cx:number=2, cy:number=2, cz:number=1, spacing:number|PointLike=2):ShapeCollection<Curve>
     {
-        if(typeof cx !== 'number' || typeof cy !== 'number' || typeof cz !== 'number')
-        {
-            throw new Error("Curve::grid(): Please supply valid numbers for counts along each axes!");
-        }
+        const [nx, ny, nz] = gridCounts([cx, cy, cz], 'Curve::grid()');
 
         const spacingVector = (typeof spacing === 'number')
             ? new Vector(spacing, spacing, spacing)
             : Vector.from(spacing)
+        const name = this.name() as string | undefined;
         const curves = new ShapeCollection<Curve>()
 
-        for(let x=0; x<cx; x++)
+        for(let x=0; x<nx; x++)
         {
-            for(let y=0; y<cy; y++)
+            for(let y=0; y<ny; y++)
             {
-                for(let z=0; z<cz; z++)
+                for(let z=0; z<nz; z++)
                 {
-                    const curve = this.copy()
+                    const curve = (x === 0 && y === 0 && z === 0) ? this : this.copy()
                     if(curve)
                     {
                         curve.move(
@@ -2524,7 +2562,7 @@ export class Curve extends Shape
             }
         }
 
-        ShapeCollection._nameGrid(curves, this.name() as string | undefined, cx, cy, cz);
+        ShapeCollection._nameGrid(curves, name, nx, ny, nz);
         return curves
     }
 
@@ -3454,9 +3492,10 @@ export class Curve extends Shape
      */
     private _loftRings(profiles: Curve[]): Point[][]
     {
+        const perTurn = loftSegmentsPerTurn();
         const uniform = (): Point[][] => profiles.map( p =>
-                Array.from({ length: LOFT_SEGMENTS_PER_TURN + 1 },
-                    (_, i) => new Point(p.inner().pointAt(i / LOFT_SEGMENTS_PER_TURN))));
+                Array.from({ length: perTurn + 1 },
+                    (_, i) => new Point(p.inner().pointAt(i / perTurn))));
 
         const segments = profiles.map( p => p._atomicSegments() );
         const count = segments[0].length;
@@ -3467,7 +3506,7 @@ export class Curve extends Shape
             if(segments.every( s => s[j].degree() === 1 )){ return 1; }
             // the profile that turns the most through this segment sets its resolution
             const turn = Math.max(...segments.map( s => Curve._turnOf(s[j]) ));
-            return Math.max(2, Math.ceil(LOFT_SEGMENTS_PER_TURN * turn / 360));
+            return Math.max(2, Math.ceil(perTurn * turn / 360));
         });
 
         return segments.map( (segs, i) =>
@@ -3516,11 +3555,234 @@ export class Curve extends Shape
 
 
 
+
+    /** Revolve this curve around an axis into a Mesh — the lathe operation.
+     *
+     *  - **Closed profile** → a solid. A full turn closes on itself; a partial one is shut
+     *    with a flat cap at either end, so the result is watertight either way.
+     *  - **Open profile** → a swept surface. It still comes out a closed solid when the
+     *    profile begins and ends on the axis: a half circle revolves into a sphere.
+     *
+     *  Interior holes (left behind by a boolean difference) are revolved along with the
+     *  boundary, so a profile with a hole in it gives a solid with a matching cavity.
+     *
+     *  The axis can be given as two points (`axisStart` → `axisEnd`), as a single direction
+     *  through the world origin (`revolve(90, 'z')`), or left out altogether — then it is
+     *  detected from the curve: the world axis (Z first, then Y, then X) that lies in the
+     *  profile's own plane and that the profile does not straddle. A profile that straddles
+     *  its axis sweeps through itself; that is warned about, never silently corrected.
+     *
+     *  @param angle      Sweep in degrees, negative to sweep the other way. Default 360, clamped to ±360.
+     *  @param axisStart  Axis base point — or the axis direction, when `axisEnd` is left out.
+     *  @param axisEnd    A second point on the axis.
+     *  @param segments   Facets around the sweep (default: the quality profile's count for a full turn).
+     *  @returns A new Mesh, or null on invalid input.
+     */
+    @sceneReplace
+    revolve(angle: number = 360, axisStart?: PointLike|Axis, axisEnd?: PointLike|Axis, segments?: number): Mesh | null
+    {
+        if (!this._curve) { return null; }
+
+        if (!Number.isFinite(angle) || Math.abs(angle) < REVOLVE_ZERO_ANGLE)
+        {
+            console.warn('Curve::revolve(): angle must be a non-zero number of degrees. Returning null.');
+            return null;
+        }
+
+        const sweep = Math.sign(angle) * Math.min(Math.abs(angle), 360);
+        if (sweep !== angle)
+        {
+            console.warn(`Curve::revolve(): ${angle}° clamped to ${sweep}° — a revolve never turns further than a full circle.`);
+        }
+
+        const axis = this._revolveAxis(axisStart, axisEnd);
+        if (!axis) { return null; }
+
+        const steps = Math.max(2, Math.ceil(segments ?? revolveSegmentsPerTurn() * Math.abs(sweep) / 360));
+        const full  = Math.abs(sweep) > 360 - REVOLVE_ZERO_ANGLE;
+
+        // Sample the profile the way a loft samples its own: a straight segment stays one
+        // face however fine the sweep is, a curved one subdivides by how far it turns.
+        const boundary = this._loftRings([this])[0];
+        const reach = _farthestFromAxis(boundary, axis.origin, axis.direction);
+        if (!reach)
+        {
+            console.warn('Curve::revolve(): the whole profile sits on the axis, so the sweep has no radius. Returning null.');
+            return null;
+        }
+
+        // Where the surface travels at that outermost point — the direction the profile is
+        // locally pushed in, and with it the direction the caps of a partial sweep look.
+        const tangent = axis.direction.copy().cross(reach).normalize().scale(Math.sign(sweep));
+
+        // Which way round a wall quad has to run for its normal to face out of the solid. A
+        // wall is a local extrusion of the profile along `tangent`, and an extrusion faces
+        // outward exactly when the profile's winding agrees with the direction it is pushed
+        // (see Polygon.extrude). A straight profile encloses nothing, so there is no winding
+        // to read — its surface stays open whatever happens, and is simply faced away from
+        // the axis.
+        const winding = _newellNormal(boundary);
+        const spine   = boundary[boundary.length - 1].toVector().subtract(boundary[0].toVector());
+        const flip    = (winding.length() > reach.length() ** 2 * REVOLVE_FLAT_RING_TOLERANCE)
+            ? winding.dot(tangent) < 0
+            : spine.cross(tangent).dot(reach) < 0;
+
+        // Hole rings are wound against the boundary, so their walls face into the cavity they
+        // cut rather than out of it.
+        const rings = [boundary, ...this._holes.map( hole =>
+        {
+            const ring = this._loftRings([hole])[0];
+            return (_newellNormal(ring).dot(winding) > 0) ? [...ring].reverse() : ring;
+        })];
+
+        const step = sweep / steps;
+        const onAxisTolerance = reach.length() * REVOLVE_RELATIVE_TOLERANCE;
+
+        // One turned copy of every ring per sweep step. A full turn reuses the first copy as
+        // its last, so the seam closes on exactly the same points instead of on rounding. The
+        // caps below are cut from these very copies too, for the same reason.
+        const turned = rings.map( ring =>
+        {
+            const copies = Array.from({ length: steps + 1 },
+                (_unused, j) => ring.map( p => _rotateAroundAxis(p, axis.origin, axis.direction, j * step)));
+            if (full) { copies[steps] = copies[0]; }
+            return copies;
+        });
+
+        const faces: Array<Array<Point>> = [];
+
+        rings.forEach( (ring, r) =>
+        {
+            const copies = turned[r];
+            const onAxis = ring.map( p => _radialVector(p, axis.origin, axis.direction).length() < onAxisTolerance );
+
+            ring.slice(0, -1).forEach( (from, i) =>
+            {
+                // An edge of no length, or one lying along the axis, sweeps into nothing.
+                if (from.distance(ring[i + 1]) < Curve.ZERO_LENGTH_TOLERANCE) { return; }
+                if (onAxis[i] && onAxis[i + 1]) { return; }
+
+                Array.from({ length: steps }).forEach( (_unused, j) =>
+                {
+                    // The quad collapses to a triangle at an end of the edge that is on the
+                    // axis: that end does not move, so two of the quad's corners coincide.
+                    const quad = [copies[j][i], copies[j][i + 1], copies[j + 1][i + 1], copies[j + 1][i]];
+                    const face = onAxis[i]     ? [quad[0], quad[1], quad[2]]
+                               : onAxis[i + 1] ? [quad[0], quad[1], quad[3]]
+                               : quad;
+                    faces.push(flip ? [...face].reverse() : face);
+                });
+            });
+        });
+
+        // A partial sweep of a closed profile leaves that profile standing open at both ends.
+        if (!full && this.isClosed())
+        {
+            faces.push(...this._revolveCap(turned.map( copies => copies[0]), tangent.copy().reverse()));
+            faces.push(...this._revolveCap(turned.map( copies => copies[steps]),
+                _rotateVector(tangent, axis.direction, sweep)));
+        }
+
+        if (faces.length === 0) { return null; }
+        return Mesh.fromPolygons(faces);
+    }
+
+    /** Resolve the axis a revolve turns around, from whatever the caller gave:
+     *
+     *  - both points → the line running from `axisStart` to `axisEnd`;
+     *  - `axisStart` alone → read as a direction through the world origin, so `revolve(90, 'z')`
+     *    and `revolve(90, [0,0,1])` both mean "around the world Z axis";
+     *  - neither → detected from the curve itself, see {@link _autoRevolveAxis}.
+     */
+    private _revolveAxis(axisStart?: PointLike|Axis, axisEnd?: PointLike|Axis): { origin: Vector, direction: Vector } | null
+    {
+        if (axisStart === undefined && axisEnd === undefined) { return this._autoRevolveAxis(); }
+
+        const origin = (axisStart !== undefined && axisEnd !== undefined)
+            ? Vector.from(axisStart as PointLike)
+            : Vector.from(0, 0, 0);
+        const direction = Vector.from((axisEnd ?? axisStart) as PointLike).subtract(origin);
+
+        if (direction.length() < Curve.ZERO_LENGTH_TOLERANCE)
+        {
+            console.warn('Curve::revolve(): axisStart and axisEnd are the same point, so the axis has no direction. Returning null.');
+            return null;
+        }
+        return { origin, direction: direction.normalize() };
+    }
+
+    /** Work out an axis to revolve around when the caller names none.
+     *
+     *  A lathe axis has to lie IN the profile's plane: an axis anywhere else drags the profile
+     *  out of its own plane and through itself. So the curve's plane decides, and within it:
+     *
+     *  1. the world origin is projected onto that plane. This is what lets a profile drawn on
+     *     an offset plane (y = 10, say) still turn about a centre line of its own rather than
+     *     about a line its plane never meets;
+     *  2. of the world axes Z, Y then X, the first that lies in the plane is taken — Z first,
+     *     because a lathe stands upright far more often than it lies down;
+     *  3. an axis the profile straddles is passed over: sweeping across the axis folds the
+     *     result through itself. Only when every candidate straddles (a circle centred on the
+     *     origin, say) is one taken anyway, with a warning.
+     *
+     *  A non-planar curve has no plane to respect and simply takes the first world axis it
+     *  does not straddle. A plane holding no world axis at all — a tilted one — gets the
+     *  in-plane direction closest to Z.
+     */
+    private _autoRevolveAxis(): { origin: Vector, direction: Vector } | null
+    {
+        const plane  = this.getOnPlane();
+        const origin = plane
+            ? plane.normal.copy().scale(this.start().toVector().dot(plane.normal))
+            : Vector.from(0, 0, 0);
+
+        const worldAxes = (['z', 'y', 'x'] as Array<Axis>).map( a => Vector.from(a));
+        const inPlane = plane
+            ? worldAxes.filter( d => Math.abs(d.dot(plane.normal)) < REVOLVE_RELATIVE_TOLERANCE)
+            : worldAxes;
+        const candidates = (inPlane.length > 0) ? inPlane : [_inPlaneClosestToZ(plane!)];
+
+        const clear = candidates.find( d => !this._straddlesAxis(origin, d));
+        if (clear) { return { origin, direction: clear }; }
+
+        console.warn('Curve::revolve(): the profile straddles every axis in its plane, so the sweep runs back through itself. '
+                    + 'Pass an explicit axis (or move the profile off it) to fix that.');
+        return { origin, direction: candidates[0] };
+    }
+
+    /** Whether this curve has points on both sides of the line (`origin`, `direction`). A
+     *  profile that does cannot be revolved cleanly: half of it sweeps into the other half. */
+    private _straddlesAxis(origin: Vector, direction: Vector): boolean
+    {
+        const radials = this.tessellate().map( p => _radialVector(p, origin, direction));
+        const widest  = radials.reduce( (best, r) => (r.length() > best.length()) ? r : best, radials[0]);
+        if (!widest || widest.length() < Curve.ZERO_LENGTH_TOLERANCE) { return false; } // the profile IS the axis
+
+        const across = widest.copy().normalize();
+        return radials.some( r => r.dot(across) < -widest.length() * REVOLVE_RELATIVE_TOLERANCE);
+    }
+
+    /** The flat face that shuts one end of a partial revolve: the profile as it stands at that
+     *  end, wound so it looks along `outward`. Holes have to be cut out of it, which needs the
+     *  face triangulated; a cap without holes stays a single n-gon, as everywhere else here. */
+    private _revolveCap(rings: Array<Array<Point>>, outward: Vector): Array<Array<Point>>
+    {
+        const [boundary, ...holes] = rings.map(_openRing);
+        if (!boundary || boundary.length < 3) { return []; }
+        if (holes.length === 0) { return [_facingOutward(boundary, outward)]; }
+
+        const face = new Polygon(boundary);
+        holes.filter( hole => hole.length >= 3).forEach( hole => face.addHole(hole));
+        return face.triangulate().map( triangle =>
+            _facingOutward(triangle.vertices().toArray().map( v => Point.from(v)), outward));
+    }
+
+
     //// TRANSFORMATION TO OTHER TYPES ////
 
     /** Convert this curve to a Polygon via tessellation (including hole rings if present). */
     @sceneReplace
-    toPolygon(tolerance: number = TESSELATION_TOLERANCE): Polygon | undefined
+    toPolygon(tolerance?: number): Polygon | undefined
     {
         return this._toPolygon(tolerance);
     }
@@ -3528,7 +3790,7 @@ export class Curve extends Shape
     /** Pure tessellation to a Polygon — never touches the scene. Used internally (extrude,
      *  toFace, toMesh) so the decorated public toPolygon() can't corrupt the scene when
      *  called during another op. */
-    private _toPolygon(tolerance: number = TESSELATION_TOLERANCE): Polygon | undefined
+    private _toPolygon(tolerance?: number): Polygon | undefined
     {
         this.close(); // ensure the curve is closed before tessellation
         const points = this.tessellate(tolerance);
@@ -3557,13 +3819,13 @@ export class Curve extends Shape
 
     /** Alias for toPolygon() */
     @sceneReplace
-    toFace(tolerance: number = TESSELATION_TOLERANCE): Polygon | undefined
+    toFace(tolerance?: number): Polygon | undefined
     {
         return this._toPolygon(tolerance);
     }
 
     @sceneReplace
-    toMesh(tolerance: number = TESSELATION_TOLERANCE): Mesh | undefined
+    toMesh(tolerance?: number): Mesh | undefined
     {
         const poly = this._toPolygon(tolerance);
         if (!poly)
@@ -4258,6 +4520,89 @@ function _appendArcSvg(
     const largeArcFlag = sweepToEnd > Math.PI ? 1 : 0;
 
     pathParts.push(`A${r} ${r} 0 ${largeArcFlag} ${sweepFlag} ${fmt(end2D[0])} ${fmt(end2D[1])}`);
+}
+
+/** Rodrigues' rotation: turn `v` by `angleDeg` around the unit direction `dir`. Done here
+ *  rather than through Vector.rotate() so a revolve reads in degrees throughout, and so the
+ *  point version below can turn around an axis that misses the world origin. */
+function _rotateVector(v: Vector, dir: Vector, angleDeg: number): Vector
+{
+    const turn = rad(angleDeg);
+    const cos = Math.cos(turn);
+    const sin = Math.sin(turn);
+    const along = v.x * dir.x + v.y * dir.y + v.z * dir.z;
+    return Vector.from(
+        v.x * cos + (dir.y * v.z - dir.z * v.y) * sin + dir.x * along * (1 - cos),
+        v.y * cos + (dir.z * v.x - dir.x * v.z) * sin + dir.y * along * (1 - cos),
+        v.z * cos + (dir.x * v.y - dir.y * v.x) * sin + dir.z * along * (1 - cos),
+    );
+}
+
+/** Turn `p` by `angleDeg` around the axis through `origin` running along the unit `dir`. */
+function _rotateAroundAxis(p: Point, origin: Vector, dir: Vector, angleDeg: number): Point
+{
+    const turned = _rotateVector(p.toVector().subtract(origin), dir, angleDeg);
+    return new Point(turned.x + origin.x, turned.y + origin.y, turned.z + origin.z);
+}
+
+/** The part of `p` that stands off the axis (`origin`, unit `dir`) — its radius vector. */
+function _radialVector(p: Point, origin: Vector, dir: Vector): Vector
+{
+    const offset = p.toVector().subtract(origin);
+    return offset.subtract(dir.copy().scale(offset.dot(dir)));
+}
+
+/** The radius vector of whichever point stands furthest off the axis, or null when they all
+ *  sit on it (nothing to revolve). */
+function _farthestFromAxis(points: Array<Point>, origin: Vector, dir: Vector): Vector | null
+{
+    const widest = points.reduce( (best: Vector|null, p) =>
+    {
+        const radius = _radialVector(p, origin, dir);
+        return (!best || radius.length() > best.length()) ? radius : best;
+    }, null);
+    return (widest && widest.length() > Curve.ZERO_LENGTH_TOLERANCE) ? widest : null;
+}
+
+/** Newell's normal of a ring of points: perpendicular to the ring's best-fit plane, and as
+ *  long as twice the area the ring encloses — so its length also says how much of a ring this
+ *  really is. A polyline that doubles back on itself, a straight profile above all, comes out
+ *  at zero. A closing duplicate point contributes nothing and can be left in. */
+function _newellNormal(ring: Array<Point>): Vector
+{
+    const sum = ring.reduce( (acc, p, i) =>
+    {
+        const next = ring[(i + 1) % ring.length];
+        return [
+            acc[0] + (p.y - next.y) * (p.z + next.z),
+            acc[1] + (p.z - next.z) * (p.x + next.x),
+            acc[2] + (p.x - next.x) * (p.y + next.y),
+        ];
+    }, [0, 0, 0]);
+    return Vector.from(sum[0] / 2, sum[1] / 2, sum[2] / 2);
+}
+
+/** Drop a ring's closing duplicate point, if it carries one. */
+function _openRing(ring: Array<Point>): Array<Point>
+{
+    return (ring.length > 1 && ring[0].distance(ring[ring.length - 1]) < 1e-6)
+        ? ring.slice(0, -1)
+        : ring;
+}
+
+/** Wind `ring` so the face it spans looks along `outward`. */
+function _facingOutward(ring: Array<Point>, outward: Vector): Array<Point>
+{
+    return (_newellNormal(ring).dot(outward) < 0) ? [...ring].reverse() : ring;
+}
+
+/** The direction in `plane` that comes closest to world Z — the fallback revolve axis for a
+ *  tilted plane, which holds no world axis at all. */
+function _inPlaneClosestToZ(plane: { normal: Vector, x: Vector, y: Vector }): Vector
+{
+    const up = Vector.from(0, 0, 1);
+    const inPlane = up.copy().subtract(plane.normal.copy().scale(up.dot(plane.normal)));
+    return (inPlane.length() > REVOLVE_RELATIVE_TOLERANCE) ? inPlane.normalize() : plane.x.copy();
 }
 
 /** Test whether two 2D segments (p1→p2) and (p3→p4) properly cross — i.e. each

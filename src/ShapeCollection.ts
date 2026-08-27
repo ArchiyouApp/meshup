@@ -30,6 +30,7 @@ import { MeshJs } from './wasm/meshup';
 import { GLTFBuilder } from './GLTFBuilder';
 
 import { TOLERANCE, ISOMETRY_HLR_STRATEGY_DEFAULT } from './constants';
+import { gridCounts } from './utils';
 
 /** A Shape that SVG can draw as a FACE: a Mesh or a Polygon lying on a plane parallel to XY.
  *
@@ -2455,22 +2456,36 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return result;
     }
 
-    /** Copy this collection in a 3D grid, spaced uniformly or per axis */
+    /** Copy this collection in a 3D grid, spaced uniformly or per axis.
+     *
+     *  Counts are floored and clamped to at least 1: `grid(4, 3, 0)` reads as "a flat 4x3
+     *  grid in XY", not "no copies at all" - a zero count on the unused axis used to return
+     *  an empty collection, so nothing showed up in the scene.
+     *
+     *  `spacing` is the distance between copy ORIGINS (unlike row(), where it is the gap
+     *  between bounding boxes). The shapes of this collection form the cell at [0,0,0]
+     *  themselves (like row()), so the scene never gets a duplicate set on top of them. */
     grid(cx: number = 2, cy: number = 2, cz: number = 1, spacing: number | PointLike = 10): ShapeCollection<S>
     {
+        const [nx, ny, nz] = gridCounts([cx, cy, cz], `${this.constructor.name}::grid()`);
+
         const spacingPoint = typeof spacing === 'number'
             ? [spacing, spacing, spacing] as [number, number, number]
             : Point.from(spacing).toArray() as [number, number, number]
         const result = new ShapeCollection<S>();
-        for (let iz = 0; iz < cz; iz++)
-        for (let iy = 0; iy < cy; iy++)
-        for (let ix = 0; ix < cx; ix++)
+        for (let iz = 0; iz < nz; iz++)
+        for (let iy = 0; iy < ny; iy++)
+        for (let ix = 0; ix < nx; ix++)
         {
-            result.add(this.copy().translate(
+            const cell = (ix === 0 && iy === 0 && iz === 0) ? this : this.copy();
+            cell.translate(
                 ix * spacingPoint[0],
                 iy * spacingPoint[1],
                 iz * spacingPoint[2],
-            ));
+            );
+            // Add the raw shapes: a named source collection handed to add() as a collection
+            // would be tagged as a group, which the (unnamed) copies of it never are.
+            result.add(cell.toArray());
         }
         return result;
     }

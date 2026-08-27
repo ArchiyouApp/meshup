@@ -317,3 +317,50 @@ describe('Collection.subtract() scene layer behaviour', () =>
         expect(cutLayer.shapes().toArray()).toEqual([cutter]);
     });
 });
+
+describe('ShapeCollection.grid()', () =>
+{
+    it('reads a zero count as a flat grid on that axis instead of returning nothing', () =>
+    {
+        // Regression: `.grid(nx, ny, 0, [100,100,0])` used to return an empty collection,
+        // so nothing was added to the scene.
+        const col = new Collection<Mesh>(Mesh.Cube(2));
+        const grid = col.grid(4, 3, 0, [100, 100, 0]);
+        expect(grid.count()).toBe(12);
+    });
+
+    it('adds every cell to the active layer, with the source shapes as cell [0,0,0]', () =>
+    {
+        const root = new SceneNode('root');
+        const screw = Mesh.Cube(2);
+        const layer = root.addLayer('foundation', screw);
+        root.setActiveLayer(layer);
+
+        const grid = layer.shapes().grid(4, 3, 0, [100, 100, 0]);
+
+        expect(grid.count()).toBe(12);
+        expect(grid.toArray()).toContain(screw);
+        // 12 shapes in the scene, not 13: no copy stacked on top of the original.
+        expect(layer.shapes().count()).toBe(12);
+        expect(grid.toArray().every(s => layer.shapes().toArray().includes(s))).toBe(true);
+    });
+
+    it('spaces cells by the given per-axis distance between origins', () =>
+    {
+        const col = new Collection<Mesh>(Mesh.Cube(2));
+        const centers = col.grid(2, 2, 1, [100, 50, 0]).toArray()
+            .map(m => (m as Mesh).center().round(1e-9).toArray());
+
+        expect(centers).toContainEqual([0, 0, 0]);
+        expect(centers).toContainEqual([100, 0, 0]);
+        expect(centers).toContainEqual([0, 50, 0]);
+        expect(centers).toContainEqual([100, 50, 0]);
+    });
+
+    it('floors non-integer counts and throws on non-finite ones', () =>
+    {
+        const col = new Collection<Mesh>(Mesh.Cube(2));
+        expect(col.copy().grid(2.9, 2, 1, 10).count()).toBe(4);
+        expect(() => col.copy().grid(NaN, 2, 1, 10)).toThrow(/grid/);
+    });
+});

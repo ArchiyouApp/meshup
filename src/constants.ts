@@ -20,10 +20,22 @@ export const BBOX_FLAT_REL_EPS = 1e-9;
  *  convention as BBOX_FLAT_EPS. */
 export const OBBOX_PLANAR_EPS = 1e-7;
 export const OBBOX_PLANAR_REL_EPS = 1e-7;
+/*  How finely curved geometry is discretised now lives in a quality profile — see
+    ./quality.ts, `setQuality()` / `getQuality()`. The constants below are the `'normal'`
+    preset's values, kept as exports because they are part of the published API and because
+    they are what these numbers were before there was a profile. Read the profile, not these,
+    for anything that should follow a `setQuality()` call. */
+
+/** Chord deviation as a fraction of a span's own size, at `'normal'` quality.
+ *  NOT a distance in model units — see quality.ts for why that distinction is the whole
+ *  point. @see {@link QualitySettings.curveChordTolerance} */
 export const TESSELATION_TOLERANCE = 1e-3;
 
+/** @see {@link QualitySettings.sphereSegmentsWidth} */
 export const SHAPES_SPHERE_SEGMENTS_WIDTH = 32;
+/** @see {@link QualitySettings.sphereSegmentsHeight} */
 export const SHAPES_SPHERE_SEGMENTS_HEIGHT = 16;
+/** @see {@link QualitySettings.cylinderSegmentsRadial} */
 export const SHAPES_CYLINDER_SEGMENTS_RADIAL = 32;
 
 export const MAIN_AXIS = ['x', 'y', 'z'];

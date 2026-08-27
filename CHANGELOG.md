@@ -4,6 +4,129 @@ All notable changes to `@archiyou/meshup` are documented here.
 This project follows [semantic versioning](https://semver.org/); while on 0.x, minor
 versions may contain breaking changes.
 
+## Unreleased
+
+### Added
+
+- **Quality presets — one dial for how finely curved geometry is discretised.** `setQuality()`
+  takes a preset name (`'draft'`, `'preview'`, `'normal'`, `'fine'`, `'precise'`) or a partial
+  override, and `getQuality()` / `resetQuality()` read and clear it. It bundles what used to be
+  four unrelated numbers across two languages: the curve chord tolerance, the facets a loft and
+  a revolve lay per turn, and the segment counts of `Mesh.Sphere()` / `Mesh.Cylinder()`.
+
+  ```ts
+  setQuality('draft');                       // a whole preset
+  setQuality({ curveSegmentsPerTurn: 24 });  // one dial, rest unchanged
+  ```
+
+  It is a global default, not a parameter to thread: every method keeps its explicit
+  `tolerance` / `segments` argument and an explicit argument still wins, so
+  `curve.tessellate()` follows the profile while `curve.tessellate(1e-5)` does what it says at
+  any quality. A `setQuality()` written above the `await init()` is not lost — `init()` flushes
+  the profile into the kernel once the WASM is up.
+
+  `'normal'` is the default and reproduces the loft, revolve and mesh-primitive counts meshup
+  has always used, so only the curve tessellation route moves.
+
+  The BREP side of Archiyou has its own `MeshingQualitySettings` for OpenCascade's tessellator.
+  The two are the natural pair for a later single quality dial across the whole engine;
+  `Modeler._exportScene(quality)` is where they would meet.
+
+- **`Curve.revolve()`, `Polygon.revolve()` and `Sketch.revolve()` — the lathe.** A closed profile sweeps into a
+  solid (a full turn closes on itself, a partial one is shut with a flat cap at either end);
+  an open one sweeps into a surface, and still closes into a solid when it begins and ends on
+  the axis, so a half circle revolves into a sphere. Interior holes are revolved along with
+  the boundary into a matching cavity. The profile is sampled the way a loft samples its
+  own — a straight segment stays one face, a curved one subdivides by how far it turns — and
+  the sweep gets `REVOLVE_SEGMENTS_PER_TURN` facets per full turn unless a count is passed.
+
+  The signature follows the BREP kernel's `Shape.revolve()`: `revolve(angle, axisStart,
+  axisEnd)`, degrees, 360 by default, negative to sweep the other way. A single point is read
+  as a direction through the world origin, so `revolve(90, 'z')` means what it looks like.
+  `Sketch.revolve()` reads its axis in sketch coordinates and places the result on the
+  workplane, exactly as `Sketch.extrude()` does. `Polygon.revolve()` sweeps the face's
+  boundary the way `Polygon.loft()` lofts it — and carries the face's holes along into a
+  cavity, which `Polygon.extrude()` still drops.
+
+  Left out entirely, the axis is **detected from the curve**, which the BREP kernel never got
+  round to doing: a lathe axis has to lie in the profile's plane, so the world origin is
+  projected onto that plane (a profile drawn on `y = 10` turns about a centre line of its
+  own, not about a line its plane never meets), and of the world axes Z, Y then X the first
+  one lying in that plane — and that the profile does not straddle — is taken. Sweeping
+  across the axis folds the result through itself, so an axis the profile straddles is passed
+  over; when every candidate straddles, one is used anyway with a warning.
+
+  The mesh kernel could already revolve, but only in Rust: `Sketch::revolve()` turns around
+  the local Y axis alone, ignores open profiles, and leaves holes out of its caps. Nothing on
+  the TypeScript side reached it.
+
+### Changed
+
+- **Curve tessellation no longer depends on the curve's size or the model's unit.** The kernel
+  had two disagreeing samplers: `tessellate_path` (ellipses, splines) read its chord error as a
+  fraction of the span, while `tessellate_open` / `tessellate_closed` — every circle, arc,
+  fillet, offset and boolean result — ran hypercurve's *certified* projection, which reads it as
+  an absolute distance. So a circle's point count grew with its radius and again with the choice
+  of millimetres over metres:
+
+  | | before | after |
+  |---|---|---|
+  | `Curve.Circle(10).tessellate()` | 226 pts | 65 pts |
+  | `Curve.Circle(100).tessellate()` | 706 pts | 65 pts |
+  | `Curve.Circle(1000).tessellate()` | 2224 pts | 65 pts |
+  | `Curve.Circle(5000).tessellate()` | 3144 pts | 65 pts |
+  | `Curve.Rect(1000,500).fillet(50)` | 505 pts | 69 pts |
+  | `Curve.Circle(100).extrude(50)` | 708 polys | 67 polys |
+  | `Curve.Rect(1000,500).fillet(50).extrude(100)` | 507 polys | 71 polys |
+
+  Both extrudes also run about ten times faster (~220 ms → ~20 ms in Node, cold).
+
+  Every mesh built from a curve — `extrude`, `loft`, `toPolygon`, `toMesh`, `sweep` — inherited
+  that density, which is what made models heavy. Both routes now go through one sampler that
+  sizes an arc by how far it **turns**: `segmentsPerTurn × |sweep| / 2π`, from the sweep the arc
+  already knows exactly. What is given up is the chord-error *certificate* on the closed/open
+  route; what is bought is a count that is the same at r = 10 and at r = 10 000. For comparison,
+  `Mesh.Cylinder(100, 50)` — the same solid — has always been 96 polygons.
+
+  Ellipses and splines are unchanged: they have no exact turn to read and keep the relative
+  chord heuristic they already used.
+
+- **Metric queries no longer follow the display quality.** `length()`, `area()`, `bbox()`,
+  `intersect()` and the parameter-inversion table behind `pointAt` / `distance` /
+  `closestPoints` / `perpendicularPointTo` answer *where something is*, not *what it looks
+  like*. They now sample at a fixed fine tolerance of their own, so asking for a draft preview
+  does not move a `split()` point or shorten a measured length. Their polylines are transient —
+  nothing downstream carries the vertex count — so the density costs only time, and it is
+  capped where it always was (512 samples per span), so no metric query got slower either. The
+  error bound hypercurve certifies when offsetting a spline is likewise held at its own
+  absolute value rather than borrowed from the display dial.
+
+- **A tessellation tolerance is now read relatively.** `tessellate(1e-4)`, and every other
+  explicit `tolerance` argument, means "within 0.01% of the span's own size", not "within 0.1
+  model units". Roughly, `1e-2` → 22 facets per full turn, `1e-3` → 70, `1e-4` → 222, `1e-5` →
+  702 — at any radius. Callers asking for accuracy get the same answer as before; callers who
+  had tuned a number against a particular model scale will want to re-read it as a fraction.
+
+- **`Curve.Circle` and other contour geometry no longer tessellate to their chords in the
+  kernel's path sampler.** `Curve2::point_at` evaluates a span in its rational-quadratic Bezier
+  form, which cannot represent a half turn — every interior parameter of a 180° arc collapses
+  onto its end point. Harmless while that sampler only saw ellipses (pre-split into quarter
+  turns); circles reach it now, so arcs are sampled through `point_at_sweep_fraction` instead.
+
+### Fixed
+
+- **`grid()` no longer returns nothing when a count is zero.** `Mesh.grid()`, `Curve.grid()`
+  and `ShapeCollection.grid()` floor their per-axis counts and clamp them to at least 1, so
+  `grid(4, 3, 0, [100, 100, 0])` — the natural way to write a flat grid in XY — lays out the
+  12 copies it reads as instead of an empty collection. Nothing was ever added to the scene
+  before, since there was nothing to add. Counts that are not finite numbers still throw, and
+  `Mesh.array()` shares the same rule.
+
+- **`grid()` and `array()` no longer leave a duplicate on top of the source shape.** The cell
+  at `[0, 0, 0]` is now the source shape itself, the way `row()` has always done it, rather
+  than a copy laid over a source that stays in the scene. A 4×3 grid puts 12 shapes in the
+  scene, not 13.
+
 ## 0.3.0 — 2026-08-19
 
 Makes `@archiyou/meshup` usable as a published package rather than only as a workspace

@@ -12,6 +12,7 @@
  */
 
 import { loadAsync } from './loader'; // Loader for the WASM module
+import { syncQualityToKernel } from './quality';
 import type { InitOptions } from './loader';
 import type { CsgrsModule } from './types';
 
@@ -39,6 +40,10 @@ export async function init(options?: InitOptions): Promise<void>
     {
         const t = performance.now();
         _csgrs = await loadAsync(options);
+        // The kernel owns the curve-sampling loops, so it has to be told the quality profile.
+        // Flushed here rather than only from setQuality() so that a setQuality() written
+        // ABOVE the await — where getCsgrs() would still throw — is not silently lost.
+        syncQualityToKernel();
         console.info(`Meshup WASM loaded successfully in ${Math.round(performance.now() - t)} ms.`);
     }
     else
@@ -96,10 +101,15 @@ export { Color } from './Color';
 export type { ColorInput } from './Color';
 export { Style } from './Style';
 export { TOLERANCE, SHAPE_DEFAULT_STYLE } from './constants';
+
+/*  How finely curved geometry is discretised — one profile behind every tessellation,
+    loft/revolve subdivision and mesh primitive. See ./quality.ts. */
+export { setQuality, getQuality, resetQuality, QUALITY_PRESETS, DEFAULT_QUALITY_PRESET } from './quality';
+export type { QualityPreset, QualitySettings } from './quality';
 export { isPointLike } from './types';
 export { ANNOTATIONS_SVG_START, ANNOTATIONS_SVG_END, ANNOTATION_MARGIN_MM } from './ShapeCollection';
 export type { SpanParams, SpanPoint } from './types';
-export { rad, deg, nodeToString, GLTFJsonDocumentToString } from './utils';
+export { rad, deg, nodeToString, GLTFJsonDocumentToString, gridCounts } from './utils';
 
 /*  Scene membership. A method that produces a shape has to say what becomes of it — the
     result replaces the receiver, joins the active layer, or carries its scene along — so

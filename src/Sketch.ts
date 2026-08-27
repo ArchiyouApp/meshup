@@ -647,6 +647,43 @@ export class Sketch
        return this._alignMeshToWorld(mesh);
     }
 
+    /** Revolve the sketch's closed curves around an axis into a solid Mesh — the lathe.
+     *
+     *  The axis is given in the sketch's own 2D coordinates, like everything else drawn here:
+     *  `revolve(360, [0, 0], [0, 1])` turns about the sketch's vertical centre line. Left out,
+     *  it is worked out from the profile (see Curve.revolve()), which on a sketch plane comes
+     *  down to the local Y axis unless the profile straddles it — then the local X axis. The
+     *  result is placed onto the sketch's workplane in world space, exactly as extrude() does.
+     *
+     *  As in extrude(), the first closed curve is the contour and any further ones are holes
+     *  in it; a hole is revolved along with the contour into a cavity.
+     *
+     *  @param angle      Sweep in degrees, negative to sweep the other way. Default 360.
+     *  @param axisStart  Axis base point in sketch coordinates — or the direction, when `axisEnd` is left out.
+     *  @param axisEnd    A second point on the axis, in sketch coordinates.
+     *  @param segments   Facets around the sweep (default: the quality profile's count for a full turn).
+     *  @returns Mesh in world space, or null if there are no closed curves to revolve.
+     */
+    revolve(angle: number = 360, axisStart?: PointLike|Axis, axisEnd?: PointLike|Axis, segments?: number): Mesh | null
+    {
+        this.combine();
+        const closed = this._curves.curves().toArray().filter( c => c.isClosed());
+
+        if (closed.length === 0)
+        {
+            console.error('Sketch.revolve(): No closed curves to revolve. Use close() first.');
+            return null;
+        }
+
+        // Work on copies: addHole() and the revolve itself must not touch the sketch's own
+        // curves, which the user can still draw on and end() afterwards.
+        const profile = closed[0].copy();
+        closed.slice(1).forEach( hole => profile.addHole(hole.copy()));
+
+        const mesh = profile.revolve(angle, axisStart, axisEnd, segments);
+        return mesh ? this._alignMeshToWorld(mesh) : null;
+    }
+
     loft(other: Sketch): Mesh | null
     {
         // TODO: is this really practical?

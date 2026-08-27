@@ -3,6 +3,7 @@ import { initAsync, ShapeCollection } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
 import { Polygon } from '../../src/Polygon';
+import { SceneNode } from '../../src/SceneNode';
 import { save } from '../../src/utils';
 import { outputDir } from '../helpers/outputs';
 
@@ -178,6 +179,51 @@ describe('Mesh.grid()', () =>
         expect(meshes.length).toBe(8);
         expect(centers).toContainEqual([0, 0, 0]);
         expect(centers).toContainEqual([5, 6, 7]);
+    });
+
+    it('reads a zero count as a flat grid on that axis instead of returning nothing', () =>
+    {
+        // grid(4,3,0) is how you write a flat XY grid - it must not yield an empty collection
+        const meshes = Mesh.Cube(2).grid(4, 3, 0, [100, 100, 0]);
+        expect(meshes.length).toBe(12);
+    });
+
+    it('floors non-integer counts and throws on non-finite ones', () =>
+    {
+        expect(Mesh.Cube(2).grid(2.7, 2, 1, 10).length).toBe(4);
+        expect(() => Mesh.Cube(2).grid(NaN, 2, 1, 10)).toThrow(/Mesh::grid/);
+        expect(() => Mesh.Cube(2).grid('2' as any, 2, 1, 10)).toThrow(/Mesh::grid/);
+    });
+
+    it('puts the source Mesh itself at cell [0,0,0] - no duplicate left in the scene', () =>
+    {
+        const root = new SceneNode('root');
+        const cube = Mesh.Cube(2);
+        const layer = root.addLayer('grid', cube);
+        root.setActiveLayer(layer);
+
+        const meshes = cube.grid(4, 3, 0, [100, 100, 0]);
+
+        expect(meshes.toArray()).toContain(cube);
+        expect(layer.shapes().count()).toBe(12); // not 13: no copy stacked on the original
+        expect(meshes.toArray().every(m => layer.shapes().toArray().includes(m))).toBe(true);
+    });
+});
+
+describe('Mesh.array()', () =>
+{
+    it('puts the source Mesh itself at [0,0,0] - no duplicate left in the scene', () =>
+    {
+        const root = new SceneNode('root');
+        const cube = Mesh.Cube(2);
+        const layer = root.addLayer('array', cube);
+        root.setActiveLayer(layer);
+
+        const meshes = cube.array([3, 2, 1]);
+
+        expect(meshes.length).toBe(6);
+        expect(meshes.toArray()).toContain(cube);
+        expect(layer.shapes().count()).toBe(6);
     });
 });
 

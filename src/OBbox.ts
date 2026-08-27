@@ -47,7 +47,7 @@ import { Mesh } from './Mesh';
 import { Curve } from './Curve';
 import type { PointLike } from './types';
 import { addResultToScene } from './sceneDecorators';
-import { POINT_TOLERANCE, TESSELATION_TOLERANCE, BBOX_FLAT_EPS, BBOX_FLAT_REL_EPS,
+import { POINT_TOLERANCE, BBOX_FLAT_EPS, BBOX_FLAT_REL_EPS,
          OBBOX_PLANAR_EPS, OBBOX_PLANAR_REL_EPS } from './constants';
 
 /** An axis as a plain triple — the internal currency of the frame maths, to keep the
@@ -209,7 +209,7 @@ export class OBbox
      *  but they still skew the covariance of the PCA fallback — a plain 200x100 rect came out
      *  as a 210x121 box rotated by 6 degrees.
      */
-    static fromCurve(c: Curve, tessellationTol: number = TESSELATION_TOLERANCE): OBbox
+    static fromCurve(c: Curve, tessellationTol?: number): OBbox
     {
         const unique = new Map<string, Point>();
 

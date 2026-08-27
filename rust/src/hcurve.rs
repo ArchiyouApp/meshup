@@ -18,10 +18,10 @@
 use hypercurve::{
     Aabb2, ArcArcIntersection, BezierParallelVerificationOptions,
     BooleanOp, Classification,
-    CircularArc2, Contour2, Curve2, CurveFamily2, CurveGeometry2, CurvePath2, CurvePolicy,
+    CircularArc2, Contour2, Curve2, CurveGeometry2, CurvePath2, CurvePolicy,
     CurveRegion2,
     CurveString2, EllipseMap2, FillRule,
-    FiniteProjectionOptions, LineArcIntersection, LineArcRegion2, LineLineIntersection, LineSeg2,
+    LineArcIntersection, LineArcRegion2, LineLineIntersection, LineSeg2,
     NurbsCurve2, Point2, RationalBezierIntersectionPointEvidence2, RationalQuadraticBezier2, Real,
     RegionView2, Segment2,
     SegmentIntersection, Similarity2,
@@ -30,7 +30,126 @@ use hypercurve::{
 
 /// Default chord error used when sampling exact arcs/curves to f64 polylines.
 /// Small enough for display/meshing, large enough to keep vertex counts sane.
-pub const DEFAULT_CHORD_ERROR: f64 = 1.0e-4;
+///
+/// Read **relatively** — as a fraction of a span's own size, not as a distance in model
+/// units. See [`span_samples`] for why.
+pub const DEFAULT_CHORD_ERROR: f64 = 1.0e-3;
+
+/// Default facets per full turn for an exact circular-arc span. A whole circle becomes this
+/// many chords, a quarter-circle fillet a quarter of them.
+pub const DEFAULT_SEGMENTS_PER_TURN: f64 = 64.0;
+
+/// Least / most samples one curved span is ever subdivided into. The floor keeps a very
+/// short arc from collapsing to its chord; the ceiling is the backstop against a
+/// pathological tolerance, not an accuracy target.
+pub const DEFAULT_MIN_SEGMENTS: usize = 2;
+pub const DEFAULT_MAX_SEGMENTS: usize = 512;
+
+/// How finely exact geometry is sampled down to f64 polylines.
+///
+/// One profile, held globally (see [`quality`] / [`set_quality`]) and overridable per call,
+/// so that every route out of the exact kernel — [`tessellate_open`], [`tessellate_closed`],
+/// [`tessellate_path`] — agrees on how dense its output is. They did not always: the first
+/// two used to run hypercurve's *certified* projection, which reads a chord error as an
+/// absolute distance and therefore sampled a circle more finely the bigger it was (r=10 →
+/// 226 points, r=1000 → 2224), while the third already sampled relatively. Every mesh built
+/// from a curve — `extrude`, `loft`, `toPolygon`, `sweep` — inherited that.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TessQuality
+{
+    /// Facets per full turn for an exact circular-arc span. The primary angular dial: it
+    /// fixes an arc's chord count by how far the arc *turns*, which no radius or unit
+    /// choice can inflate.
+    pub segments_per_turn: f64,
+    /// Chord deviation as a **fraction of the span's own size**. Drives spans that have no
+    /// exact turn to read — Bezier, rational conic, spline.
+    pub chord_tolerance: f64,
+    /// Least samples for one curved span.
+    pub min_segments: usize,
+    /// Most samples for one curved span.
+    pub max_segments: usize,
+}
+
+impl Default for TessQuality
+{
+    fn default() -> Self
+    {
+        Self {
+            segments_per_turn: DEFAULT_SEGMENTS_PER_TURN,
+            chord_tolerance: DEFAULT_CHORD_ERROR,
+            min_segments: DEFAULT_MIN_SEGMENTS,
+            max_segments: DEFAULT_MAX_SEGMENTS,
+        }
+    }
+}
+
+impl TessQuality
+{
+    /// A profile from a bare chord tolerance, for the callers that still pass one number.
+    ///
+    /// The tolerance is a *relative* sagitta (deviation ÷ radius), so the equivalent angular
+    /// density follows from `dev/R = 1 - cos(θ / 2n)` over a full turn:
+    /// `segments_per_turn = π / acos(1 - tol)`. That gives 22 facets per turn at 1e-2, 70 at
+    /// 1e-3, 222 at 1e-4 and 702 at 1e-5 — at any radius, in any unit.
+    pub fn from_chord_tolerance(tol: f64) -> Self
+    {
+        let base = quality();
+        let tol = if tol.is_finite() && tol > 0.0 && tol < 2.0 { tol } else { base.chord_tolerance };
+        // acos() of anything <= -1 is undefined territory; the guard above keeps tol < 2.
+        let half = (1.0 - tol).clamp(-1.0, 1.0).acos();
+        let per_turn = if half > 0.0 { std::f64::consts::PI / half } else { base.segments_per_turn };
+        Self { segments_per_turn: per_turn, chord_tolerance: tol, ..base }
+    }
+
+    /// Clamp `n` into this profile's per-span range, never below 1.
+    #[inline]
+    fn clamp_samples(&self, n: usize) -> usize
+    {
+        let lo = self.min_segments.max(1);
+        let hi = self.max_segments.max(lo);
+        n.clamp(lo, hi)
+    }
+
+    /// Reject a profile built from nonsense rather than letting it reach a sampling loop:
+    /// a non-finite or non-positive dial would otherwise mean an empty polyline or a hang.
+    fn sanitised(self) -> Self
+    {
+        let d = Self::default();
+        Self {
+            segments_per_turn: if self.segments_per_turn.is_finite() && self.segments_per_turn >= 1.0
+                { self.segments_per_turn.min(100_000.0) } else { d.segments_per_turn },
+            chord_tolerance: if self.chord_tolerance.is_finite() && self.chord_tolerance > 0.0
+                { self.chord_tolerance } else { d.chord_tolerance },
+            min_segments: self.min_segments.clamp(1, 4096),
+            max_segments: self.max_segments.clamp(1, 4096),
+        }
+    }
+}
+
+thread_local! {
+    static QUALITY: std::cell::Cell<TessQuality> = const {
+        std::cell::Cell::new(TessQuality {
+            segments_per_turn: DEFAULT_SEGMENTS_PER_TURN,
+            chord_tolerance: DEFAULT_CHORD_ERROR,
+            min_segments: DEFAULT_MIN_SEGMENTS,
+            max_segments: DEFAULT_MAX_SEGMENTS,
+        })
+    };
+}
+
+/// The tessellation profile in force. Every default-quality sampling route reads this.
+#[inline]
+pub fn quality() -> TessQuality
+{
+    QUALITY.with(|q| q.get())
+}
+
+/// Install a new tessellation profile. Sanitised first, so a caller cannot install a dial
+/// that would produce an empty polyline or an unbounded loop.
+pub fn set_quality(q: TessQuality)
+{
+    QUALITY.with(|cell| cell.set(q.sanitised()));
+}
 
 /// Convert an f64 to an exact [`Real`], rejecting NaN / infinities.
 #[inline]
@@ -592,20 +711,18 @@ pub fn closed_contour(points: &[[f64; 2]]) -> Result<Contour2, String>
     Contour2::try_new(segs).map_err(|e| format!("hcurve: closed contour failed ({e:?})"))
 }
 
-fn projection_options(chord_error: f64) -> Result<FiniteProjectionOptions, String>
-{
-    FiniteProjectionOptions::try_new(chord_error)
-        .map_err(|e| format!("hcurve: projection options failed ({e:?})"))
-}
-
 /// Sample an open curve string to an f64 polyline.
-pub fn tessellate_open(cs: &CurveString2, chord_error: f64) -> Result<Vec<[f64; 2]>, String>
+///
+/// `CurveString2` is line/arc topology only (see [`segments_from_path`]), so the spans are
+/// lifted into an exact [`CurvePath2`] and sampled by [`tessellate_path`] — the one
+/// sampler. This used to call hypercurve's *certified* finite projection instead, which
+/// bounds the chord error as an absolute distance and therefore made the point count grow
+/// with the curve's radius and shrink with the model's unit. Bounding the turn instead
+/// costs the certificate and buys a count that is the same at r = 10 and at r = 10 000.
+pub fn tessellate_open(cs: &CurveString2, q: &TessQuality) -> Result<Vec<[f64; 2]>, String>
 {
-    let opts = projection_options(chord_error)?;
-    let mut pts = cs
-        .project_to_finite_polyline(&opts)
-        .map(|poly| poly.into_points())
-        .map_err(|e| format!("hcurve: tessellate open failed ({e:?})"))?;
+    let path = path_from_segments(cs.segments())?;
+    let mut pts = tessellate_path(&path, q)?;
 
     // hypercurve flattens arcs through rational Bezier subcurves, so the sampled
     // ends can drift by an ulp from the curve string's exact endpoints. Snap them
@@ -628,12 +745,22 @@ pub fn tessellate_open(cs: &CurveString2, chord_error: f64) -> Result<Vec<[f64; 
 }
 
 /// Sample a closed contour to an f64 ring (first point repeated at the end).
-pub fn tessellate_closed(ct: &Contour2, chord_error: f64) -> Result<Vec<[f64; 2]>, String>
+///
+/// Same route as [`tessellate_open`], plus the closing point: [`tessellate_path`] walks a
+/// path and stops at its last span's end, while every caller of this reads a ring that
+/// returns to its start.
+pub fn tessellate_closed(ct: &Contour2, q: &TessQuality) -> Result<Vec<[f64; 2]>, String>
 {
-    let opts = projection_options(chord_error)?;
-    ct.project_to_finite_ring(&opts)
-        .map(|poly| poly.into_points())
-        .map_err(|e| format!("hcurve: tessellate closed failed ({e:?})"))
+    let path = path_from_segments(ct.segments())?;
+    let mut pts = tessellate_path(&path, q)?;
+    if let (Some(&first), Some(&last)) = (pts.first(), pts.last())
+    {
+        if first != last
+        {
+            pts.push(first);
+        }
+    }
+    Ok(pts)
 }
 
 /// Exact extent of a curve along an arbitrary in-plane direction `(dx, dy)`, as
@@ -712,12 +839,12 @@ pub enum SupportGeom<'a>
 /// * **Line / circular arc** — exact (`r*theta` for the arc), via [`segment_length`].
 /// * **Everything else** — the arc length of a polynomial or rational Bezier has no closed
 ///   form (for a rational quadratic it is an elliptic integral), so the span is measured by
-///   summing hypercurve's certified adaptive chords. That is an approximation, but a
-///   *bounded* one, and it converges as `chord_error` shrinks.
+///   summing the chords [`tessellate_path`] lays over it. That is an approximation, and it
+///   converges as the profile's `chord_tolerance` tightens.
 ///
 /// This replaced a flat chord sum over the whole path, which also approximated the line and
 /// arc spans that have exact answers.
-pub fn length_path(path: &CurvePath2, chord_error: f64) -> Result<f64, String>
+pub fn length_path(path: &CurvePath2, q: &TessQuality) -> Result<f64, String>
 {
     let mut total = 0.0;
     for curve in path.curves()
@@ -732,7 +859,7 @@ pub fn length_path(path: &CurvePath2, chord_error: f64) -> Result<f64, String>
             {
                 let span = CurvePath2::try_new(vec![curve.clone()])
                     .map_err(|e| format!("hcurve: span path failed ({e:?})"))?;
-                let pts = tessellate_path(&span, chord_error)?;
+                let pts = tessellate_path(&span, q)?;
                 pts.windows(2)
                     .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
                     .sum::<f64>()
@@ -1189,29 +1316,52 @@ fn unit_direction(angle: f64) -> Result<(Real, Real), String>
     Ok((real(c)?, real(s)?))
 }
 
-/// Sample an exact [`CurvePath2`] (e.g. an ellipse) to an f64 polyline.
+/// Sample an exact [`CurvePath2`] to an f64 polyline. **The one sampler** — every route out
+/// of the exact kernel ([`tessellate_open`] and [`tessellate_closed`] included) arrives here.
 ///
-/// Delegates to hypercurve's own finite projection, which subdivides each polynomial or
-/// rational Bezier span **in its native representation** and converts only the resulting
-/// boundary product to `f64` — so the emitted chords actually honour `chord_error`.
+/// Each span is evaluated at a fixed number of uniform parameters, decided per span by
+/// [`span_samples`]: exactly by sweep for a circular arc, once for a line, and by a relative
+/// chord heuristic for anything else. Uniform parameter spacing is not uniform arc length on
+/// a rational conic, so the chord error on those spans is estimated rather than bounded —
+/// [`span_samples`] carries the reasoning and the cost measurement behind that trade.
 ///
-/// This replaced a hand-rolled loop that evaluated each span at a fixed number of uniform
-/// `t` values, derived from `chord_error` by a heuristic and clamped to 128. Uniform
-/// parameter spacing is not uniform arc length on a rational conic, so that sampling did
-/// not bound the chord error it was given, and the clamp silently capped accuracy on large
-/// or eccentric curves.
-pub fn tessellate_path(path: &CurvePath2, chord_error: f64) -> Result<Vec<[f64; 2]>, String>
+/// The doc that stood here described hypercurve's certified finite projection, which this
+/// no longer uses: certifying flatness in exact arithmetic per candidate span measured
+/// ~60-150x the per-point cost of the native line/arc path, and — read as an absolute
+/// distance — made a curve's point count depend on its radius and on the model's unit.
+pub fn tessellate_path(path: &CurvePath2, q: &TessQuality) -> Result<Vec<[f64; 2]>, String>
 {
+    let pol = policy();
     let mut out: Vec<[f64; 2]> = Vec::new();
     for curve in path.curves()
     {
-        let samples = span_samples(curve, chord_error);
+        let samples = span_samples(curve, q);
+        // A circular arc is sampled through its own sweep, NOT through `Curve2::point_at`.
+        // `point_at` evaluates a span in its rational-quadratic Bezier form, which cannot
+        // represent a half turn (the weight at the apex goes to zero): every interior
+        // parameter of a 180° arc collapses onto its end point, and the arc tessellates to
+        // its chord. Nothing noticed while this function only ever saw a `Geom::Path`,
+        // whose arcs arrive pre-split into quarter turns by `elliptical_arc_path`; the
+        // contours reaching it now — `hcurve::circle` is two 180° arcs — are not split.
+        let arc = match curve.geometry()
+        {
+            CurveGeometry2::CircularArc(a) => Some(a),
+            _ => None,
+        };
         for i in 0..=samples
         {
             let t = i as f64 / samples as f64;
-            let pt = curve
-                .point_at(&real(t)?)
-                .map_err(|e| format!("hcurve: path point failed ({e:?})"))?;
+            let pt = match arc
+            {
+                Some(a) => match a.point_at_sweep_fraction(&real(t)?, &pol)
+                {
+                    Ok(Classification::Decided(p)) => p,
+                    _ => return Err("hcurve: arc sweep sample undecided".to_string()),
+                },
+                None => curve
+                    .point_at(&real(t)?)
+                    .map_err(|e| format!("hcurve: path point failed ({e:?})"))?,
+            };
             let xy = point_to_f64(&pt).ok_or_else(|| "hcurve: path point not finite".to_string())?;
             if out.last() != Some(&xy)
             {
@@ -1222,7 +1372,7 @@ pub fn tessellate_path(path: &CurvePath2, chord_error: f64) -> Result<Vec<[f64; 
     Ok(out)
 }
 
-/// Sample count for one exact span, at a chord error taken **relative to the span**.
+/// Sample count for one exact span, under a [`TessQuality`] profile.
 ///
 /// A uniform-parameter sampler does not *certify* the chord error the way
 /// [`CurvePath2::project_to_finite_polyline`] does, and this deliberately trades that
@@ -1231,42 +1381,65 @@ pub fn tessellate_path(path: &CurvePath2, chord_error: f64) -> Result<Vec<[f64; 
 /// cost of the native line/arc path — over a second to tessellate one spline, on a path
 /// that `toPolygon`, `toMesh`, GLTF export and `OBbox` all sit on.
 ///
-/// `chord_error` is read as a **fraction of the span's own size**, not as an absolute
+/// The rule is per family, finest information first:
+///
+/// * **Line** — one chord. Every interior sample lands on the line the span already
+///   describes, so subdividing one only inflates the polyline. This is not an optimisation
+///   of an approximation; two points are the exact answer.
+/// * **Circular arc** — the count follows how far the arc *turns*:
+///   `segments_per_turn × |sweep| / 2π`. An arc knows its sweep exactly ([`arc_params`]),
+///   so this is the real answer rather than an estimate, and it is the reason a circle
+///   costs the same at r = 10 and at r = 10 000.
+/// * **Everything else** (Bezier, rational conic, spline) — no exact turn to read, so the
+///   relative-chord heuristic below.
+///
+/// `chord_tolerance` is read as a **fraction of the span's own size**, not as an absolute
 /// distance. It arrives here as a bare number with no unit attached, and the same model is
 /// authored in metres by one script and millimetres by another: read absolutely,
-/// `DEFAULT_CHORD_ERROR` (1e-4) asks for 0.1 mm accuracy on the first and 0.1 *micron* on
-/// the second. That is what an earlier revision of this function did, and on a house
-/// measured in millimetres it turned one 2500 mm span into `sqrt(2500 / 8e-4)` = 1768
-/// chords — feeding mesh CSG geometry ~50x denser than it needs and costing the house
-/// script 10x its runtime, for accuracy far below what any display or mesh can show.
+/// `DEFAULT_CHORD_ERROR` asks for 1 mm accuracy on the first and 1 *micron* on the second.
+/// That is what an earlier revision of this function did, and on a house measured in
+/// millimetres it turned one 2500 mm span into `sqrt(2500 / 8e-4)` = 1768 chords — feeding
+/// mesh CSG geometry ~50x denser than it needs and costing the house script 10x its
+/// runtime, for accuracy far below what any display or mesh can show.
 ///
 /// Reading it relatively makes the count depend on the curve's shape rather than on the
 /// units it happens to be measured in, and keeps a caller that asks for something finer
-/// (`Curve.perpendicularPointTo` samples at 1e-4, `tessellate(1e-5)`) getting it.
+/// (`Curve.perpendicularPointTo` samples at 1e-6, `tessellate(1e-5)`) getting it.
 /// Exact geometry and exact point evaluation are unchanged; only the subdivision *proof*
 /// is dropped.
-fn span_samples(curve: &Curve2, chord_error: f64) -> usize
+fn span_samples(curve: &Curve2, q: &TessQuality) -> usize
 {
-    // A straight span is its own chord: every interior sample lands on the line it already
-    // describes, so subdividing one only inflates the polyline. This is not an optimisation
-    // of an approximation — two points are the exact answer.
-    if matches!(curve.family(), CurveFamily2::Line)
+    match curve.geometry()
     {
-        return 1;
+        CurveGeometry2::Line(_) => 1,
+        CurveGeometry2::CircularArc(arc) => match arc_params(arc)
+        {
+            // `sweep` is signed and wrapped into (0, TAU]; only its magnitude matters here.
+            Some(p) => q.clamp_samples(
+                (q.segments_per_turn * p.sweep.abs() / std::f64::consts::TAU).ceil() as usize),
+            // An arc whose centre or radius did not survive the conversion to f64 has no
+            // sweep to read. Fall back to the tolerance heuristic rather than to one chord.
+            None => q.clamp_samples(heuristic_samples(q.chord_tolerance)),
+        },
+        _ => q.clamp_samples(heuristic_samples(q.chord_tolerance)),
     }
-    let tol = if chord_error.is_finite() && chord_error > 0.0 { chord_error } else { 1.0e-4 };
-    // For a chord over 1/n of a span, deviation falls as (L/n)^2 / R, so holding it to a
-    // fixed fraction of L makes n depend only on the tolerance — which is the point: the
-    // span's size cancels, so the count cannot run away with the model's units.
-    //
-    // The constant is calibrated to `0.5 / sqrt(tol)`: the density of the tolerance-only
-    // heuristic this replaced, and therefore the density every fixture and threshold in the
-    // suite is written against. It is a heuristic, not a bound — the (L/n)^2 / R estimate
-    // assumes a span no more sharply curved than its own extent, and a tighter one deviates
-    // proportionally more. Callers needing a *certified* chord error use the projection path
-    // (`tessellate_open` / `tessellate_closed`) instead. The clamp is a backstop against a
-    // pathological tolerance, not an accuracy ceiling: 1e-5 yields 158 samples, 1e-6 yields 500.
-    ((1.0 / (4.0 * tol)).sqrt().ceil() as usize).clamp(8, 512)
+}
+
+/// Sample count for a span with no exact turn to read, from a relative chord tolerance.
+///
+/// For a chord over 1/n of a span, deviation falls as (L/n)^2 / R, so holding it to a fixed
+/// fraction of L makes n depend only on the tolerance — which is the point: the span's size
+/// cancels, so the count cannot run away with the model's units.
+///
+/// The constant is calibrated to `0.5 / sqrt(tol)`: the density of the tolerance-only
+/// heuristic this replaced, and therefore the density every fixture and threshold in the
+/// suite is written against. It is a heuristic, not a bound — the (L/n)^2 / R estimate
+/// assumes a span no more sharply curved than its own extent, and a tighter one deviates
+/// proportionally more.
+fn heuristic_samples(tol: f64) -> usize
+{
+    let tol = if tol.is_finite() && tol > 0.0 { tol } else { DEFAULT_CHORD_ERROR };
+    (1.0 / (4.0 * tol)).sqrt().ceil() as usize
 }
 
 /// Build a planar similarity transform from f64 affine entries
@@ -1763,13 +1936,13 @@ fn segments_length(segs: &[Segment2]) -> Result<f64, String>
 }
 
 /// Exact length of an open curve string.
-pub fn length_open(cs: &CurveString2, _chord_error: f64) -> Result<f64, String>
+pub fn length_open(cs: &CurveString2, _q: &TessQuality) -> Result<f64, String>
 {
     segments_length(cs.segments())
 }
 
 /// Exact perimeter of a closed contour.
-pub fn length_closed(ct: &Contour2, _chord_error: f64) -> Result<f64, String>
+pub fn length_closed(ct: &Contour2, _q: &TessQuality) -> Result<f64, String>
 {
     segments_length(ct.segments())
 }
@@ -1809,7 +1982,7 @@ mod tests
     fn ellipse_tessellation_spans_the_semi_axes()
     {
         let e = ellipse(3.0, 1.5, 0.0, 0.0, 0.0).unwrap();
-        let pts = tessellate_path(&e, DEFAULT_CHORD_ERROR).unwrap();
+        let pts = tessellate_path(&e, &quality()).unwrap();
         let max_x = pts.iter().map(|p| p[0]).fold(f64::MIN, f64::max);
         let max_y = pts.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
         assert!((max_x - 3.0).abs() < 1e-9, "max_x = {max_x}");
@@ -1821,7 +1994,7 @@ mod tests
     {
         // 90° rotation swaps the x/y extents (major axis now vertical).
         let e = ellipse(3.0, 1.5, std::f64::consts::FRAC_PI_2, 0.0, 0.0).unwrap();
-        let pts = tessellate_path(&e, DEFAULT_CHORD_ERROR).unwrap();
+        let pts = tessellate_path(&e, &quality()).unwrap();
         let max_x = pts.iter().map(|p| p[0]).fold(f64::MIN, f64::max);
         let max_y = pts.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
         assert!((max_x - 1.5).abs() < 1e-9, "max_x = {max_x}");
@@ -1834,7 +2007,7 @@ mod tests
         let a = elliptical_arc(3.0, 1.5, 0.0, 0.0, 0.0, 0.0, std::f64::consts::FRAC_PI_2).unwrap();
         assert_eq!(a.curves().len(), 1);
         assert_ne!(a.start(), a.end());
-        let pts = tessellate_path(&a, DEFAULT_CHORD_ERROR).unwrap();
+        let pts = tessellate_path(&a, &quality()).unwrap();
         // Starts at the +x vertex (3,0), ends at the +y vertex (0,1.5).
         assert!((pts.first().unwrap()[0] - 3.0).abs() < 1e-9);
         assert!((pts.last().unwrap()[1] - 1.5).abs() < 1e-9);
@@ -1844,7 +2017,7 @@ mod tests
     fn open_polyline_tessellates_to_same_points()
     {
         let cs = open_polyline(&[[0.0, 0.0], [10.0, 0.0], [10.0, 5.0]]).unwrap();
-        let pts = tessellate_open(&cs, DEFAULT_CHORD_ERROR).unwrap();
+        let pts = tessellate_open(&cs, &quality()).unwrap();
         assert_eq!(pts.first(), Some(&[0.0, 0.0]));
         assert_eq!(pts.last(), Some(&[10.0, 5.0]));
     }
@@ -1896,7 +2069,7 @@ mod tests
             "circle area = {area}"
         );
         // Exact arc-length perimeter is 2 pi r (independent of chord error).
-        let per = length_closed(&c, 1.0).unwrap();
+        let per = length_closed(&c, &quality()).unwrap();
         assert!(
             (per - 2.0 * std::f64::consts::PI * 4.0).abs() < 1e-9,
             "circle perimeter = {per}"
@@ -1935,7 +2108,7 @@ mod tests
         let moved = transform_contour(&sq, &s).unwrap();
         let area = signed_area(&moved).unwrap().abs();
         assert!((area - 16.0).abs() < 1e-9, "scaled area = {area}"); // 4 * 2^2
-        let ring = tessellate_closed(&moved, DEFAULT_CHORD_ERROR).unwrap();
+        let ring = tessellate_closed(&moved, &quality()).unwrap();
         // Bounding-box midpoint should now be near (10, 20).
         let (mut minx, mut maxx, mut miny, mut maxy) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
         for p in &ring
@@ -1961,7 +2134,7 @@ mod tests
     {
         // Semicircle over center (5,0), r=5: (0,0) -> (5,5) -> (10,0).
         let cs = arc_3pt([0.0, 0.0], [5.0, 5.0], [10.0, 0.0]).unwrap();
-        let pts = tessellate_open(&cs, 1e-5).unwrap();
+        let pts = tessellate_open(&cs, &TessQuality::from_chord_tolerance(1e-5)).unwrap();
         assert_eq!(pts.first(), Some(&[0.0, 0.0]));
         assert_eq!(pts.last(), Some(&[10.0, 0.0]));
         // Apex of the arc should reach ~ (5, 5).
@@ -2022,7 +2195,7 @@ mod tests
         let pts = [[0.0, 0.0], [1.0, 2.0], [3.0, 3.0], [5.0, 1.0], [6.0, 4.0]];
         let c = nurbs_interpolate(&pts, 3).unwrap();
         assert_eq!(c.degree(), 3);
-        let tess = tessellate_path(&nurbs_path(&c), 1e-5).unwrap();
+        let tess = tessellate_path(&nurbs_path(&c), &TessQuality::from_chord_tolerance(1e-5)).unwrap();
         // Each input point must lie on the tessellated curve (interpolation property).
         //
         // Measured point-to-SEGMENT, not point-to-vertex: a chord tolerance bounds how far
@@ -2081,11 +2254,11 @@ mod tests
         // Segment along +x; left (+distance) is +y.
         let line = open_polyline(&[[0.0, 0.0], [10.0, 0.0]]).unwrap();
         let off = offset_open(&line, 2.0).unwrap();
-        let pts = tessellate_open(&off, DEFAULT_CHORD_ERROR).unwrap();
+        let pts = tessellate_open(&off, &quality()).unwrap();
         assert!(pts.iter().all(|p| (p[1] - 2.0).abs() < 1e-9), "offset = {pts:?}");
         // Right side (negative) -> y = -3.
         let off_r = offset_open(&line, -3.0).unwrap();
-        let pts_r = tessellate_open(&off_r, DEFAULT_CHORD_ERROR).unwrap();
+        let pts_r = tessellate_open(&off_r, &quality()).unwrap();
         assert!(pts_r.iter().all(|p| (p[1] + 3.0).abs() < 1e-9), "offset_r = {pts_r:?}");
     }
 
@@ -2126,7 +2299,7 @@ mod tests
     fn line_through_circle_hits_twice()
     {
         // Horizontal line y=0 through a circle centred at origin, r=4 -> (-4,0),(4,0).
-        let circ_pts = tessellate_closed(&circle(0.0, 0.0, 4.0).unwrap(), 1e-6).unwrap();
+        let circ_pts = tessellate_closed(&circle(0.0, 0.0, 4.0).unwrap(), &TessQuality::from_chord_tolerance(1e-6)).unwrap();
         // Build the circle as an arc-based OPEN curve string (two semicircles) so
         // intersection uses exact arc geometry rather than the tessellation.
         let c = circle(0.0, 0.0, 4.0).unwrap();

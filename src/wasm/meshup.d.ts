@@ -993,6 +993,12 @@ export class VertexJs {
 }
 
 /**
+ * The tessellation profile in force, as `[segmentsPerTurn, chordTolerance, min, max]`.
+ * Lets the TypeScript side assert what it actually installed rather than what it sent.
+ */
+export function getTessellationQuality(): Float64Array;
+
+/**
  * Import a DXF drawing into native planar curves.
  *
  * LWPOLYLINE and POLYLINE bulges become real arcs, ARC and CIRCLE are exact rather than
@@ -1011,6 +1017,17 @@ export function importDxfCurves(bytes: Uint8Array): CurveImportJs;
 export function importSvgCurves(doc: string): CurveImportJs;
 
 export function init_panic_hook(): void;
+
+/**
+ * Install the tessellation profile every default-quality sampling route reads.
+ *
+ * The counterpart of `setQuality()` on the TypeScript side: that owns the full profile
+ * (which also covers loft/revolve facets and mesh primitive segments, decided in JS), and
+ * pushes the four dials the exact-curve kernel needs down here. Sanitised on the way in,
+ * so a nonsense dial falls back to the default rather than emptying a polyline or hanging
+ * a sampling loop.
+ */
+export function setTessellationQuality(segments_per_turn: number, chord_tolerance: number, min_segments: number, max_segments: number): void;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
@@ -1092,6 +1109,7 @@ export interface InitOutput {
   readonly edgeprojectionresultjs_hiddenPolylines: (a: number) => any;
   readonly edgeprojectionresultjs_silhouetteIndices: (a: number) => any;
   readonly edgeprojectionresultjs_visiblePolylines: (a: number) => any;
+  readonly getTessellationQuality: () => [number, number];
   readonly importDxfCurves: (a: number, b: number) => [number, number, number];
   readonly importSvgCurves: (a: number, b: number) => [number, number, number];
   readonly matrix4js_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
@@ -1319,6 +1337,7 @@ export interface InitOutput {
   readonly vertexjs_toArray: (a: number) => [number, number];
   readonly vertexjs_toString: (a: number) => [number, number];
   readonly init_panic_hook: () => void;
+  readonly setTessellationQuality: (a: number, b: number, c: number, d: number) => void;
   readonly vector3js_new: (a: number, b: number, c: number) => number;
   readonly polygonjs_new: (a: number, b: number, c: any) => number;
   readonly point3js_x: (a: number) => number;

@@ -34,6 +34,13 @@ fluent, chainable JS API — built as the modeling kernel for
   `'raycast'`, `'clip'`, `'painter'`) — `isometry([-1,-1,1], 'exact', { hiddenLines: true })`.
 - **Styling**: per-shape `Style` (color, opacity, stroke width/dash/cap/join, point
   markers, PBR materials) that flows through to exported geometry.
+- **Quality presets**: one dial for how finely curved geometry is discretised —
+  `setQuality('draft' | 'preview' | 'normal' | 'fine' | 'precise')`, or override single
+  settings (`setQuality({ curveSegmentsPerTurn: 24 })`). Covers curve tessellation,
+  loft/revolve subdivision and mesh primitive segments. Arcs are sized by how far they
+  *turn*, so a circle costs the same at radius 10 as at radius 10 000, in metres or in
+  millimetres. Explicit per-call arguments (`tessellate(1e-5)`, `revolve(360, …, 128)`)
+  still win.
 - **Scene graph**: `SceneNode` hierarchy with layers, named lookup (`find`/`findAll`),
   active-layer tracking, and cascading style.
 - **Export**: glTF/GLB via `GLTFBuilder`/`SceneNode.toGLTF()`/`toGLB()`, including custom

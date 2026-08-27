@@ -292,6 +292,19 @@ describe('Curve.grid()', () =>
         expect(centers).toContainEqual([5, 0, 0]);
         expect(centers).toContainEqual([10, 6, 7]);
     });
+
+    it('reads a zero count as a flat grid on that axis instead of returning nothing', () =>
+    {
+        const curves = Curve.Line([0, 0, 0], [10, 0, 0]).grid(4, 3, 0, [100, 100, 0]);
+        expect(curves.length).toBe(12);
+    });
+
+    it('puts the source Curve itself at cell [0,0,0]', () =>
+    {
+        const line = Curve.Line([0, 0, 0], [10, 0, 0]);
+        const curves = line.grid(3, 2, 1, [100, 100, 0]);
+        expect(curves.toArray()).toContain(line);
+    });
 });
 
 describe('Curve.toPolygon()', () =>

@@ -16,6 +16,38 @@ pub mod vector_js;
 pub mod vertex_js;
 
 
+/// Install the tessellation profile every default-quality sampling route reads.
+///
+/// The counterpart of `setQuality()` on the TypeScript side: that owns the full profile
+/// (which also covers loft/revolve facets and mesh primitive segments, decided in JS), and
+/// pushes the four dials the exact-curve kernel needs down here. Sanitised on the way in,
+/// so a nonsense dial falls back to the default rather than emptying a polyline or hanging
+/// a sampling loop.
+#[wasm_bindgen(js_name = setTessellationQuality)]
+pub fn set_tessellation_quality(
+    segments_per_turn: f64,
+    chord_tolerance: f64,
+    min_segments: usize,
+    max_segments: usize,
+)
+{
+    crate::hcurve::set_quality(crate::hcurve::TessQuality {
+        segments_per_turn,
+        chord_tolerance,
+        min_segments,
+        max_segments,
+    });
+}
+
+/// The tessellation profile in force, as `[segmentsPerTurn, chordTolerance, min, max]`.
+/// Lets the TypeScript side assert what it actually installed rather than what it sent.
+#[wasm_bindgen(js_name = getTessellationQuality)]
+pub fn get_tessellation_quality() -> Vec<f64>
+{
+    let q = crate::hcurve::quality();
+    vec![q.segments_per_turn, q.chord_tolerance, q.min_segments as f64, q.max_segments as f64]
+}
+
 // Optional: better panic messages in the browser console.
 #[cfg(feature = "console_error_panic_hook")]
 #[wasm_bindgen(start)]

@@ -20,7 +20,7 @@ import { Point } from './Point';
 import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { Vector } from './Vector'
-import { rad, deg, shortestArcAxisAngle, primaryOrthoXYAngle, svgDocument } from './utils';
+import { rad, deg, shortestArcAxisAngle, primaryOrthoXYAngle, svgDocument, gridCounts } from './utils';
 import { Style } from './Style';
 import { sceneReplace, sceneLayer, sceneCarry, sceneReplaceOrKeep, replaceInScene } from './sceneDecorators';
 import { GLTFBuilder } from './GLTFBuilder';
@@ -33,8 +33,9 @@ import { Vertex } from './Vertex';
 import { Selector } from './Selector';
 
 // Settings
-import { TOLERANCE, SHAPES_SPHERE_SEGMENTS_WIDTH, SHAPES_SPHERE_SEGMENTS_HEIGHT,
-    SHAPES_CYLINDER_SEGMENTS_RADIAL, EDGE_PROJECTION_DEFAULTS, EDGE_PROJECTION_LIMITS, ISOMETRY_HLR_STRATEGY_DEFAULT, BASE_PLANE_NAME_TO_PLANE } from './constants';
+import { TOLERANCE, EDGE_PROJECTION_DEFAULTS, EDGE_PROJECTION_LIMITS,
+    ISOMETRY_HLR_STRATEGY_DEFAULT, BASE_PLANE_NAME_TO_PLANE } from './constants';
+import { getQuality } from './quality';
 
     
 
@@ -440,9 +441,10 @@ export class Mesh extends Shape
 
     static Sphere(radius: number): Mesh
     {
-        const meshJs = getCsgrs()?.MeshJs.sphere(radius, 
-            SHAPES_SPHERE_SEGMENTS_WIDTH, 
-            SHAPES_SPHERE_SEGMENTS_HEIGHT, {});
+        const quality = getQuality();
+        const meshJs = getCsgrs()?.MeshJs.sphere(radius,
+            quality.sphereSegmentsWidth,
+            quality.sphereSegmentsHeight, {});
         const mesh = this.from(meshJs);
         mesh.metadata.subtype = 'Sphere';
         return mesh;
@@ -450,8 +452,8 @@ export class Mesh extends Shape
 
     static Cylinder(radius: number, height: number): Mesh
     {
-        const meshJs = getCsgrs()?.MeshJs.cylinder(radius, height, 
-            SHAPES_CYLINDER_SEGMENTS_RADIAL, {});
+        const meshJs = getCsgrs()?.MeshJs.cylinder(radius, height,
+            getQuality().cylinderSegmentsRadial, {});
         const mesh = this.from(meshJs);
         mesh.metadata.subtype = 'Cylinder';
         return mesh;
@@ -1684,24 +1686,30 @@ export class Mesh extends Shape
         return meshes;
     }
 
+    /** Arrange copies of this Mesh on a 3-D grid.
+     *  Counts are floored and clamped to at least 1, so `grid(4, 3, 0)` is a flat 4x3 grid
+     *  in XY rather than an empty collection.
+     *  @param spacing Distance between copy origins, uniform or per axis.
+     *  @returns ShapeCollection<Mesh> of all copies - this Mesh itself is the copy at
+     *      cell [0,0,0] (like row()), so the scene never gets a duplicate on top of it.
+     */
     grid(cx:number=2, cy:number=2, cz:number=1, spacing:number|PointLike=2):ShapeCollection<Mesh>
     {
-        if(typeof cx !== 'number' || typeof cy !== 'number' || typeof cz !== 'number')
-        {
-            throw new Error("Mesh::grid(): Please supply valid numbers for counts along each axes!");
-        }
+        const [nx, ny, nz] = gridCounts([cx, cy, cz], 'Mesh::grid()');
+
         const spacingVector = (typeof spacing === 'number')
             ? new Vector(spacing, spacing, spacing)
             : Vector.from(spacing)
 
+        const name = this.name() as string | undefined;
         const meshes = new ShapeCollection<Mesh>();
-        for(let x=0; x<cx; x++)
+        for(let x=0; x<nx; x++)
         {
-            for(let y=0; y<cy; y++)
+            for(let y=0; y<ny; y++)
             {
-                for(let z=0; z<cz; z++)
+                for(let z=0; z<nz; z++)
                 {
-                    const mesh = this.copy();
+                    const mesh = (x === 0 && y === 0 && z === 0) ? this : this.copy();
                     if(mesh)
                     {
                         mesh.move(
@@ -1714,7 +1722,7 @@ export class Mesh extends Shape
                 }
             }
         }
-        ShapeCollection._nameGrid(meshes, this.name() as string | undefined, cx, cy, cz);
+        ShapeCollection._nameGrid(meshes, name, nx, ny, nz);
         return meshes;
     }
 
@@ -1728,14 +1736,13 @@ export class Mesh extends Shape
     array(sizes: PointLike = [2, 2, 1], offsets?: PointLike): ShapeCollection<Mesh>
     {
         const s = Point.from(sizes);
-        const nx = Math.max(1, Math.floor(s.x));
-        const ny = Math.max(1, Math.floor(s.y));
-        const nz = Math.max(1, Math.floor(s.z));
+        const [nx, ny, nz] = gridCounts([s.x, s.y, s.z], 'Mesh::array()');
 
         const bb = this.bbox();
         const defaultOff = new Vector(bb.width(), bb.depth(), bb.height());
         const off = offsets ? Vector.from(offsets) : defaultOff;
 
+        const name = this.name() as string | undefined;
         const meshes = new ShapeCollection<Mesh>();
         for (let x = 0; x < nx; x++)
         {
@@ -1743,13 +1750,15 @@ export class Mesh extends Shape
             {
                 for (let z = 0; z < nz; z++)
                 {
-                    const mesh = this.copy();
+                    // Reuse this Mesh at [0,0,0] - copying it there would leave the original
+                    // in the scene under an identical copy.
+                    const mesh = (x === 0 && y === 0 && z === 0) ? this : this.copy();
                     mesh.translate(x * off.x, y * off.y, z * off.z);
                     meshes.add(mesh);
                 }
             }
         }
-        ShapeCollection._nameGrid(meshes, this.name() as string | undefined, nx, ny, nz);
+        ShapeCollection._nameGrid(meshes, name, nx, ny, nz);
         return meshes;
     }
 

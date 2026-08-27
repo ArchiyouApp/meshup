@@ -372,3 +372,22 @@ export function svgDocument(elements: string | Array<string>, box: Box2D | null)
     const content = Array.isArray(elements) ? elements.join('\n') : elements;
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}">${content}</svg>`;
 }
+
+/** Normalise the per-axis copy counts of a grid/array pattern.
+ *
+ *  Counts are floored and clamped to a minimum of 1: `grid(4, 3, 0)` reads as
+ *  "a flat 4x3 grid in XY", not "no copies at all" - a zero on the unused axis is the
+ *  natural way to write a 2D grid and must not silently yield an empty collection.
+ *  Non-numeric or non-finite counts are a genuine mistake and throw.
+ */
+export function gridCounts(counts:Array<number>, methodName:string):Array<number>
+{
+    return counts.map(c =>
+    {
+        if(typeof c !== 'number' || !Number.isFinite(c))
+        {
+            throw new Error(`${methodName}: Please supply valid numbers for counts along each axes! Got: ${c}`);
+        }
+        return Math.max(1, Math.floor(c));
+    });
+}
