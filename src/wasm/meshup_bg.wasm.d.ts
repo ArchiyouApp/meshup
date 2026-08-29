@@ -52,6 +52,7 @@ export const curve3djs_makeEllipticalArc: (a: number, b: number, c: number, d: n
 export const curve3djs_makeInterpolated: (a: number, b: number, c: number) => [number, number, number];
 export const curve3djs_makeLine: (a: number, b: number) => [number, number, number];
 export const curve3djs_makePolyline: (a: number, b: number, c: number) => [number, number, number];
+export const curve3djs_mergeCollinear: (a: number) => [number, number, number];
 export const curve3djs_mirror: (a: number, b: number, c: number) => [number, number, number];
 export const curve3djs_offset: (a: number, b: number, c: number, d: number) => [number, number, number];
 export const curve3djs_paramAtLength: (a: number, b: number) => [number, number, number];
@@ -64,6 +65,7 @@ export const curve3djs_scale: (a: number, b: number) => [number, number, number]
 export const curve3djs_scaleNonUniform: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
 export const curve3djs_segmentCount: (a: number) => number;
 export const curve3djs_segmentTessellations: (a: number, b: number, c: number) => [number, number, number];
+export const curve3djs_selfIntersects: (a: number, b: number, c: number) => [number, number, number];
 export const curve3djs_spanParams: (a: number) => [number, number, number];
 export const curve3djs_spans: (a: number) => [number, number, number, number];
 export const curve3djs_subtype: (a: number) => [number, number];

@@ -1898,6 +1898,136 @@ pub fn offset_path(path: &CurvePath2, distance: f64, chord_error: f64) -> Result
 }
 
 
+/// The exact straight continuation of a native line segment, `length` beyond one of its ends.
+///
+/// Exact matters here for a reason that is not accuracy: the extension has to be *certifiably*
+/// collinear with the span it continues, or the collinear merge that follows cannot collapse
+/// the old endpoint and the curve keeps a corner where there is none. Deriving the direction
+/// from the segment's own exact delta — including the `sqrt` for its length, which `Real`
+/// carries symbolically — makes them collinear by construction. Taking the tangent out to
+/// world coordinates and back, as the caller does for every other span kind, leaves them
+/// collinear only to about 1e-16, which is not the same thing.
+///
+/// `None` when the segment is an arc: its tangent is not its chord, so there is nothing to
+/// continue exactly.
+pub fn extend_line(seg: &Segment2, length: f64, at_end: bool) -> Option<LineSeg2>
+{
+    let Segment2::Line(l) = seg else { return None };
+    let (anchor, from) = if at_end { (l.end(), l.start()) } else { (l.start(), l.end()) };
+    let (dx, dy) = anchor.delta_from(from);
+    let scale = (real(length).ok()? / (&dx * &dx + &dy * &dy).sqrt().ok()?).ok()?;
+    let tip = Point2::new(anchor.x() + &(&dx * &scale), anchor.y() + &(&dy * &scale));
+    if at_end
+    {
+        LineSeg2::try_new(anchor.clone(), tip).ok()
+    }
+    else
+    {
+        LineSeg2::try_new(tip, anchor.clone()).ok()
+    }
+}
+
+/// Merge runs of adjacent, same-direction line segments into one.
+///
+/// Collinearity is *certified* here, not measured against a tolerance: hypercurve compares the
+/// supports exactly and declines rather than guessing a merge boundary. Mixed line/arc topology
+/// is preserved, and a collinear reversal is left alone — a spike doubling back on itself is
+/// real authored topology, not a redundant vertex.
+///
+/// Replaces a TypeScript pass that took the cross product of consecutive unit directions
+/// against a `1e-3` tolerance, ran over the control-point list rather than the segments, and
+/// gave up entirely on any curve containing an arc.
+pub fn merge_collinear(segs: &[Segment2], closed: bool) -> Result<Vec<Segment2>, String>
+{
+    let pol = boolean_policy();
+    if closed
+    {
+        let ct = Contour2::try_new(segs.to_vec())
+            .map_err(|e| format!("hcurve: merge contour failed ({e:?})"))?;
+        let merged = decided(ct.merge_adjacent_collinear_lines(&pol)
+            .map_err(|e| format!("hcurve: merge failed ({e:?})"))?)?;
+        Ok(merged.segments().to_vec())
+    }
+    else
+    {
+        let cs = CurveString2::try_new(segs.to_vec())
+            .map_err(|e| format!("hcurve: merge curve string failed ({e:?})"))?;
+        let merged = decided(cs.merge_adjacent_collinear_lines(&pol)
+            .map_err(|e| format!("hcurve: merge failed ({e:?})"))?)?;
+        Ok(merged.segments().to_vec())
+    }
+}
+
+/// Decompose a spline span into its exact Bezier segments' affine control nets.
+///
+/// hypercurve keeps the decomposition itself (`NurbsCurve2::bezier_spans` /
+/// `PolynomialSplineCurve2::bezier_spans`), which inserts every interior knot to full
+/// multiplicity in exact arithmetic and hands back one native Bezier per knot interval. This
+/// only reads the control points off it.
+///
+/// Exists because the alternative was doing it in TypeScript: `Curve.ts` carried a full
+/// homogeneous Boehm knot-insertion routine in f64 — ~155 lines whose only consumer was the SVG
+/// writer — and its caller then destructured exactly four control points out of each segment,
+/// so a spline above degree three was written as cubics ending at the wrong point.
+///
+/// `None` when the span is not a spline, or when hypercurve declines the decomposition.
+pub fn spline_bezier_spans(g: &CurveGeometry2) -> Option<Vec<Vec<Point2>>>
+{
+    let pol = policy();
+    // The fixed-degree carriers hand back borrowed points; the general one owns a slice.
+    let owned = |ps: [&Point2; 3]| ps.into_iter().cloned().collect::<Vec<_>>();
+    let of_subcurve = |c: &hypercurve::BezierSubcurve2| -> Vec<Point2> {
+        match c
+        {
+            hypercurve::BezierSubcurve2::Quadratic(q) => owned(q.control_points()),
+            hypercurve::BezierSubcurve2::Cubic(c) =>
+                c.control_points().into_iter().cloned().collect(),
+            hypercurve::BezierSubcurve2::RationalQuadratic(r) => owned(r.control_points()),
+            hypercurve::BezierSubcurve2::Rational(r) => r.control_points().to_vec(),
+        }
+    };
+    match g
+    {
+        CurveGeometry2::Nurbs(n) => Some(
+            done(n.bezier_spans(&pol).ok()?)
+                .map(|span| span.control_points().to_vec())
+                .collect(),
+        ),
+        CurveGeometry2::PolynomialBSpline(s) => Some(
+            done(s.bezier_spans(&pol).ok()?)
+                .map(|span| of_subcurve(span.curve()))
+                .collect(),
+        ),
+        // A Bezier is already one Bezier span.
+        CurveGeometry2::RationalBezier(b) => Some(vec![b.control_points().to_vec()]),
+        _ => None,
+    }
+}
+
+/// Whether a chain of native line/arc segments crosses itself away from its shared vertices.
+///
+/// hypercurve decides this exactly, with the same predicates as its intersection kernel and an
+/// AABB prefilter. The alternative, which this replaces, was an O(n²) crossing test in
+/// TypeScript over a *tessellation* — so the answer depended on how finely the curve happened
+/// to be sampled, and an arc that grazed itself between two samples was simply missed.
+pub fn self_intersects(segs: &[Segment2], closed: bool) -> Result<bool, String>
+{
+    let pol = boolean_policy();
+    let classified = if closed
+    {
+        Contour2::try_new(segs.to_vec())
+            .map_err(|e| format!("hcurve: self-intersection contour failed ({e:?})"))?
+            .has_self_contacts(&pol)
+    }
+    else
+    {
+        CurveString2::try_new(segs.to_vec())
+            .map_err(|e| format!("hcurve: self-intersection curve string failed ({e:?})"))?
+            .has_self_contacts(&pol)
+    };
+    decided(classified.map_err(|e| format!("hcurve: self-intersection failed ({e:?})"))?)
+}
+
 /// Collect the intersection point(s) carried by a single segment-pair relation.
 fn segment_intersection_points(rel: &SegmentIntersection, out: &mut Vec<[f64; 2]>)
 {

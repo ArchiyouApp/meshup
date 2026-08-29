@@ -650,6 +650,21 @@ export class Curve3DJs {
         return v1;
     }
     /**
+     * Merge runs of adjacent, same-direction line segments into one.
+     *
+     * Collinearity is certified exactly by hypercurve, which also handles the closed seam and
+     * leaves arcs and deliberate collinear reversals alone. An exact path has no native
+     * segment topology to merge, so it is returned unchanged.
+     * @returns {Curve3DJs}
+     */
+    mergeCollinear() {
+        const ret = wasm.curve3djs_mergeCollinear(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return Curve3DJs.__wrap(ret[0]);
+    }
+    /**
      * The arc-length parameter (in `[0, 1]`) at absolute length `len`.
      * @param {number} len
      * @returns {number}
@@ -660,6 +675,23 @@ export class Curve3DJs {
             throw takeFromExternrefTable0(ret[1]);
         }
         return ret[0];
+    }
+    /**
+     * Whether the curve crosses itself away from its shared vertices.
+     *
+     * Decided exactly by hypercurve, with the predicates its intersection kernel uses and an
+     * AABB prefilter — not by sampling. An exact path (conic / Bezier / spline) has no native
+     * self-contact query, so it is answered on its certified line projection, which is what
+     * the caller was doing for every curve.
+     * @param {number | null} [tol]
+     * @returns {boolean}
+     */
+    selfIntersects(tol) {
+        const ret = wasm.curve3djs_selfIntersects(this.__wbg_ptr, !isLikeNone(tol), isLikeNone(tol) ? 0 : tol);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] !== 0;
     }
     /**
      * Construct a smooth NURBS curve of `degree` (>= 2) interpolating the given 3D points.
@@ -917,11 +949,6 @@ export class Curve3DJs {
         return ret >>> 0;
     }
     /**
-     * Extend the curve by `length` along its endpoint tangent(s).
-     *
-     * `side` is `"start"`, `"end"` or `"both"`. The extension is a straight span appended
-     * to the exact geometry, so the original spans survive — this used to rebuild the whole
-     * curve as a polyline through `controlPoints()`, collapsing any arc to a chord.
      * @param {number} length
      * @param {string} side
      * @returns {Curve3DJs}

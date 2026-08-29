@@ -113,9 +113,26 @@ export class Curve3DJs {
    */
   controlPoints(): Point3Js[];
   /**
+   * Merge runs of adjacent, same-direction line segments into one.
+   *
+   * Collinearity is certified exactly by hypercurve, which also handles the closed seam and
+   * leaves arcs and deliberate collinear reversals alone. An exact path has no native
+   * segment topology to merge, so it is returned unchanged.
+   */
+  mergeCollinear(): Curve3DJs;
+  /**
    * The arc-length parameter (in `[0, 1]`) at absolute length `len`.
    */
   paramAtLength(len: number): number;
+  /**
+   * Whether the curve crosses itself away from its shared vertices.
+   *
+   * Decided exactly by hypercurve, with the predicates its intersection kernel uses and an
+   * AABB prefilter — not by sampling. An exact path (conic / Bezier / spline) has no native
+   * self-contact query, so it is answered on its certified line projection, which is what
+   * the caller was doing for every curve.
+   */
+  selfIntersects(tol?: number | null): boolean;
   /**
    * Construct a smooth NURBS curve of `degree` (>= 2) interpolating the given 3D points.
    *
@@ -241,13 +258,6 @@ export class Curve3DJs {
    * where both used to report 1 from the line approximation.
    */
   degree(): number;
-  /**
-   * Extend the curve by `length` along its endpoint tangent(s).
-   *
-   * `side` is `"start"`, `"end"` or `"both"`. The extension is a straight span appended
-   * to the exact geometry, so the original spans survive — this used to rebuild the whole
-   * curve as a polyline through `controlPoints()`, collapsing any arc to a chord.
-   */
   extend(length: number, side: string): Curve3DJs;
   /**
    * Fillet (round) interior corners with an arc of the given `radius`.
@@ -1102,6 +1112,7 @@ export interface InitOutput {
   readonly curve3djs_makeInterpolated: (a: number, b: number, c: number) => [number, number, number];
   readonly curve3djs_makeLine: (a: number, b: number) => [number, number, number];
   readonly curve3djs_makePolyline: (a: number, b: number, c: number) => [number, number, number];
+  readonly curve3djs_mergeCollinear: (a: number) => [number, number, number];
   readonly curve3djs_mirror: (a: number, b: number, c: number) => [number, number, number];
   readonly curve3djs_offset: (a: number, b: number, c: number, d: number) => [number, number, number];
   readonly curve3djs_paramAtLength: (a: number, b: number) => [number, number, number];
@@ -1114,6 +1125,7 @@ export interface InitOutput {
   readonly curve3djs_scaleNonUniform: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
   readonly curve3djs_segmentCount: (a: number) => number;
   readonly curve3djs_segmentTessellations: (a: number, b: number, c: number) => [number, number, number];
+  readonly curve3djs_selfIntersects: (a: number, b: number, c: number) => [number, number, number];
   readonly curve3djs_spanParams: (a: number) => [number, number, number];
   readonly curve3djs_spans: (a: number) => [number, number, number, number];
   readonly curve3djs_subtype: (a: number) => [number, number];

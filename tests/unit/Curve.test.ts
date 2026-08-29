@@ -585,6 +585,23 @@ describe('Curve.selfIntersecting()', () =>
     {
         expect(Curve.Line([0, 0, 0], [10, 0, 10]).selfIntersecting()).toBe(false);
     });
+
+    it('sees an arc that crosses a leg, not just the chord through it', () =>
+    {
+        // The arc bows to y = 10, over the leg at y = 5 that closes the shape; its chord from
+        // (0,0) to (20,0) misses that leg entirely. Decided from the arc itself — the answer
+        // used to depend on whether a tessellation vertex happened to land past the leg.
+        const over = Curve.fromData({ type: 'Path', d: 'M0 0 A10 10 0 0 0 20 0 L20 5 L-5 5 Z' });
+        expect(over.inner().hasArcs()).toBe(true);
+        expect(over.selfIntersecting()).toBe(true);
+    });
+
+    it('leaves an arc that stays clear of its own legs alone', () =>
+    {
+        const clear = Curve.fromData({ type: 'Path', d: 'M0 0 A10 10 0 0 0 20 0 L20 -5 L-5 -5 Z' });
+        expect(clear.inner().hasArcs()).toBe(true);
+        expect(clear.selfIntersecting()).toBe(false);
+    });
 });
 
 describe('Curve.union()', () =>

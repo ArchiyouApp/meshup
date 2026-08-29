@@ -416,6 +416,16 @@ impl Curve3DJs
         self.span_params_raw(curve).validated()
     }
 
+    /// A spline span's exact Bezier decomposition, lifted into world coordinates.
+    fn beziers_of(&self, curve: &Curve2) -> Vec<Vec<[f64; 3]>>
+    {
+        hcurve::spline_bezier_spans(curve.geometry())
+            .unwrap_or_default()
+            .iter()
+            .map(|net| net.iter().map(|p| self.w3p(p)).collect())
+            .collect()
+    }
+
     fn span_params_raw(&self, curve: &Curve2) -> SpanParamsJs
     {
         let (start, end) = (self.w3p(curve.start()), self.w3p(curve.end()));
@@ -508,6 +518,7 @@ impl Curve3DJs
                 rational: n.weights().iter().any(|w| {
                     w.to_f64_lossy().is_none_or(|v| (v - 1.0).abs() > 1.0e-12)
                 }),
+                beziers: self.beziers_of(curve),
                 start,
                 end,
             },
@@ -518,6 +529,7 @@ impl Curve3DJs
                 knots: reals(s.knots()),
                 weights: vec![1.0; s.control_points().len()],
                 rational: false,
+                beziers: self.beziers_of(curve),
                 start,
                 end,
             },
@@ -537,6 +549,7 @@ impl Curve3DJs
                     rational: b.weights().iter().any(|w| {
                         w.to_f64_lossy().is_none_or(|v| (v - 1.0).abs() > 1.0e-12)
                     }),
+                    beziers: self.beziers_of(curve),
                     start,
                     end,
                 }
@@ -812,6 +825,14 @@ enum SpanParamsJs
         knots: Vec<f64>,
         weights: Vec<f64>,
         rational: bool,
+        /// The span's exact Bezier decomposition: one affine control net per knot interval,
+        /// each of `degree + 1` points. Empty when hypercurve declines it.
+        ///
+        /// Carried alongside the control net rather than instead of it, because the two answer
+        /// different questions: a DXF SPLINE entity wants the authored net and knot vector, and
+        /// a renderer wants Bezier segments it can write as `Q`/`C`. The renderer used to
+        /// derive these itself, by running Boehm knot insertion in f64 on the JavaScript side.
+        beziers: Vec<Vec<[f64; 3]>>,
         start: [f64; 3],
         end: [f64; 3],
     },
@@ -1733,6 +1754,37 @@ impl Curve3DJs
     /// `side` is `"start"`, `"end"` or `"both"`. The extension is a straight span appended
     /// to the exact geometry, so the original spans survive — this used to rebuild the whole
     /// curve as a polyline through `controlPoints()`, collapsing any arc to a chord.
+    /// The straight span that continues `boundary` by `length`, beyond its end or before its
+    /// start.
+    ///
+    /// A line span is continued exactly, from its own delta, so the two are certifiably
+    /// collinear and the merge that follows can retire the old endpoint. Anything else falls
+    /// back to the curve's world-space endpoint tangent, which is the only direction available
+    /// for an arc or a Bezier and is collinear with nothing by construction anyway.
+    fn extension_of(&self, boundary: &Curve2, length: f64, at_end: bool)
+        -> Result<LineSeg2, JsValue>
+    {
+        if let Some(native) = match boundary.geometry()
+        {
+            CurveGeometry2::Line(l) =>
+                hcurve::extend_line(&Segment2::Line(l.clone()), length, at_end),
+            _ => None,
+        }
+        {
+            return Ok(native);
+        }
+
+        let t = self.tangent_at(if at_end { 1.0 } else { 0.0 })?;
+        let anchor = if at_end { boundary.end() } else { boundary.start() }.clone();
+        let world = self.frame.to_world(seg_local(&anchor));
+        let dir = Vector3::new(t.inner.x, t.inner.y, t.inner.z) * (length as Real);
+        let tip = if at_end { world + dir } else { world - dir };
+        let local = self.frame.to_local(&tip);
+        let far = hcurve::point(local[0], local[1]).map_err(err)?;
+        let (a, b) = if at_end { (anchor, far) } else { (far, anchor) };
+        LineSeg2::try_new(a, b).map_err(|e| err(format!("extend: {e:?}")))
+    }
+
     #[wasm_bindgen(js_name = extend)]
     pub fn extend(&self, length: f64, side: &str) -> Result<Curve3DJs, JsValue>
     {
@@ -1749,35 +1801,22 @@ impl Curve3DJs
         };
 
         let mut spans = self.exact_spans().map_err(err)?;
-        // Tangents come from the world-space endpoints, then drop into local coordinates.
+        // Only the TIP goes through world coordinates. The extension's other end is the exact
+        // point the curve already ends at, reused verbatim — round-tripping it through
+        // `to_world` and back left a sub-picometre gap that hypercurve could not certify as
+        // zero, so `join_curves` bridged it with a connector line and every extended curve
+        // carried a degenerate span. Nothing noticed, because the caller's collinear merge was
+        // a TypeScript pass that dropped coincident vertices as a side effect.
         if at_end
         {
-            let t = self.tangent_at(1.0)?;
-            let end = self.frame.to_world(seg_local(spans.last().map_or_else(
-                || unreachable!("non-empty by construction"),
-                |c| c.end(),
-            )));
-            let tip = end + Vector3::new(t.inner.x, t.inner.y, t.inner.z) * (length as Real);
-            let seg = LineSeg2::try_new(
-                hcurve::point(self.frame.to_local(&end)[0], self.frame.to_local(&end)[1]).map_err(err)?,
-                hcurve::point(self.frame.to_local(&tip)[0], self.frame.to_local(&tip)[1]).map_err(err)?,
-            )
-            .map_err(|e| err(format!("extend: {e:?}")))?;
+            let last = spans.last().map_or_else(|| unreachable!("non-empty"), Clone::clone);
+            let seg = self.extension_of(&last, length, true)?;
             spans.push(Curve2::from(seg));
         }
         if at_start
         {
-            let t = self.tangent_at(0.0)?;
-            let start = self.frame.to_world(seg_local(spans.first().map_or_else(
-                || unreachable!("non-empty by construction"),
-                |c| c.start(),
-            )));
-            let tip = start - Vector3::new(t.inner.x, t.inner.y, t.inner.z) * (length as Real);
-            let seg = LineSeg2::try_new(
-                hcurve::point(self.frame.to_local(&tip)[0], self.frame.to_local(&tip)[1]).map_err(err)?,
-                hcurve::point(self.frame.to_local(&start)[0], self.frame.to_local(&start)[1]).map_err(err)?,
-            )
-            .map_err(|e| err(format!("extend: {e:?}")))?;
+            let first = spans.first().map_or_else(|| unreachable!("non-empty"), Clone::clone);
+            let seg = self.extension_of(&first, length, false)?;
             spans.insert(0, Curve2::from(seg));
         }
         let path = hcurve::join_curves(spans).map_err(err)?;
@@ -1883,6 +1922,51 @@ impl Curve3DJs
     pub fn clone_js(&self) -> Curve3DJs
     {
         Curve3DJs { frame: self.frame.clone(), geom: self.geom.clone(), world_pts: self.world_pts.clone() }
+    }
+
+    /// Merge runs of adjacent, same-direction line segments into one.
+    ///
+    /// Collinearity is certified exactly by hypercurve, which also handles the closed seam and
+    /// leaves arcs and deliberate collinear reversals alone. An exact path has no native
+    /// segment topology to merge, so it is returned unchanged.
+    #[wasm_bindgen(js_name = mergeCollinear)]
+    pub fn merge_collinear(&self) -> Result<Curve3DJs, JsValue>
+    {
+        match &self.geom
+        {
+            Geom::Closed(ct) =>
+            {
+                let segs = hcurve::merge_collinear(ct.segments(), true).map_err(err)?;
+                let c = Contour2::try_new(segs)
+                    .map_err(|e| err(format!("Curve3DJs::mergeCollinear: {e:?}")))?;
+                Ok(Curve3DJs::from_closed(self.frame.clone(), c))
+            }
+            Geom::Open(cs) =>
+            {
+                let segs = hcurve::merge_collinear(cs.segments(), false).map_err(err)?;
+                let c = CurveString2::try_new(segs)
+                    .map_err(|e| err(format!("Curve3DJs::mergeCollinear: {e:?}")))?;
+                Ok(Curve3DJs::from_open(self.frame.clone(), c))
+            }
+            Geom::Path(_) => Ok(self.clone_js()),
+        }
+    }
+
+    /// Whether the curve crosses itself away from its shared vertices.
+    ///
+    /// Decided exactly by hypercurve, with the predicates its intersection kernel uses and an
+    /// AABB prefilter — not by sampling. An exact path (conic / Bezier / spline) has no native
+    /// self-contact query, so it is answered on its certified line projection, which is what
+    /// the caller was doing for every curve.
+    #[wasm_bindgen(js_name = selfIntersects)]
+    pub fn self_intersects(&self, tol: Option<f64>) -> Result<bool, JsValue>
+    {
+        match &self.geom
+        {
+            Geom::Closed(ct) => hcurve::self_intersects(ct.segments(), true).map_err(err),
+            Geom::Open(cs) => hcurve::self_intersects(cs.segments(), false).map_err(err),
+            Geom::Path(_) => self.to_polyline_curve(&tess_quality(tol))?.self_intersects(tol),
+        }
     }
 
     /// Whether the geometry is curved anywhere — a circular arc, or any conic / Bezier /

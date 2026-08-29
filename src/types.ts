@@ -147,6 +147,13 @@ export type SpanParams =
         knots: number[];
         weights: number[];
         rational: boolean;
+        /** The span's exact Bezier decomposition: one affine control net per knot interval,
+         *  each of `degree + 1` points. Empty when hypercurve declines it.
+         *
+         *  Carried alongside the control net rather than instead of it: a DXF SPLINE entity
+         *  wants the authored net and knot vector, a renderer wants Bezier segments it can
+         *  write as `Q`/`C`. */
+        beziers: SpanPoint[][];
         start: SpanPoint;
         end: SpanPoint;
     }

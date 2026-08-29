@@ -8,7 +8,7 @@
  */
 
 import { beforeAll, describe, it, expect } from 'vitest';
-import { Curve, Importer, initAsync } from '../../src/index';
+import { Curve, Importer, getCsgrs, initAsync } from '../../src/index';
 import type { SpanParams } from '../../src/types';
 
 beforeAll(async () =>
@@ -201,5 +201,55 @@ describe('spanParams: the curve survives the call', () =>
         expect(c.spanParams().length).toBe(2);
         expect(c.exportSpans().length).toBeGreaterThan(0);
         expect(c.length()).toBeCloseTo(2 * Math.PI * 50, 9);
+    });
+});
+
+describe('spanParams: a spline carries its exact Bezier decomposition', () =>
+{
+    const wiggle = (degree: number): Curve =>
+    {
+        const pts = [[0, 0, 0], [30, 60, 0], [70, -40, 0], [110, 50, 0], [150, 0, 0]];
+        const csgrs = getCsgrs();
+        return Curve.fromCsgrs(csgrs.Curve3DJs.makeInterpolated(
+            pts.map(p => new csgrs.Point3Js(p[0], p[1], p[2])), degree));
+    };
+
+    it('splits at every interior knot, with degree + 1 points per piece', () =>
+    {
+        const spans = wiggle(3).spanParams();
+        const spline = spans.find(s => s.kind === 'spline');
+        expect(spline?.kind).toBe('spline');
+        if (spline?.kind !== 'spline') { return; }
+
+        expect(spline.beziers.length).toBeGreaterThan(0);
+        spline.beziers.forEach(net => expect(net.length).toBe(spline.degree + 1));
+    });
+
+    it('joins piece to piece, and spans the whole curve', () =>
+    {
+        const c = wiggle(3);
+        const spline = c.spanParams().find(s => s.kind === 'spline');
+        if (spline?.kind !== 'spline') { throw new Error('expected a spline span'); }
+
+        const near = (a: number[], b: number[]) =>
+            expect(Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])).toBeLessThan(1e-9);
+
+        near(spline.beziers[0][0], spline.start);
+        near(spline.beziers[spline.beziers.length - 1].at(-1)!, spline.end);
+        spline.beziers.slice(1).forEach((net, i) =>
+            near(net[0], spline.beziers[i].at(-1)!));
+    });
+
+    it('decomposes a degree the SVG writer cannot spell, so it is still written', () =>
+    {
+        // A quartic has no SVG command. It used to be written as a cubic ending at the fourth
+        // control point of five — a chain that did not meet itself. The decomposition is exact
+        // whatever the degree; only the writing down of it approximates.
+        const spline = wiggle(4).spanParams().find(s => s.kind === 'spline');
+        if (spline?.kind !== 'spline') { throw new Error('expected a spline span'); }
+
+        expect(spline.degree).toBe(4);
+        spline.beziers.forEach(net => expect(net.length).toBe(5));
+        expect(wiggle(4).toPathData()).toMatch(/[CQ]/);
     });
 });

@@ -464,27 +464,25 @@ export class Curve extends Shape
         return Curve._arcFromThreePoints(Point.from(start), Point.from(mid), Point.from(end));
     }
 
-    /** Three-point arc: start, mid-point, end all lie on the arc. */
+    /** Three-point arc: start, mid-point, end all lie on the arc.
+     *
+     *  Straight to hypercurve, which builds a circular arc through three points natively and
+     *  rejects collinear input itself. There used to be a `_circumcenter` here, forty lines of
+     *  f64 perpendicular-bisector solving with a three-way determinant pivot — every number it
+     *  produced was then discarded, because the arc is built from the three points. */
     private static _arcFromThreePoints(A: Point, B: Point, C: Point): Curve
     {
-        // Vectors from A to B and A to C
-        const ab = Vector.from(B.x - A.x, B.y - A.y, B.z - A.z);
-        const ac = Vector.from(C.x - A.x, C.y - A.y, C.z - A.z);
-
-        // Plane normal (cross product of two edges)
-        const rawNormal = ab.copy().cross(ac);
-        if (rawNormal.length() < 1e-10)
-        {
-            throw new Error('Curve.Arc(): start, mid, and end are collinear — no arc can be defined.');
-        }
-        const normalUnit = rawNormal.normalize();
-
-        const { center, radius } = Curve._circumcenter(A, B, C, normalUnit);
-
-        return Curve._trimArcFromCircle(A, B, C, center, radius, normalUnit);
+        return Curve.fromCsgrs(getCsgrs().Curve3DJs.makeArc(A.toPoint3Js(), B.toPoint3Js(), C.toPoint3Js()));
     }
 
-    /** Tangent arc: start point, tangent direction at start, end point. */
+    /** Tangent arc: start point, tangent direction at start, end point.
+     *
+     *  The one genuinely TypeScript-side arc construction, because hypercurve has no
+     *  start/tangent/end constructor: this converts that spelling into the three-point one it
+     *  does have, by intersecting the normal at `A` with the perpendicular bisector of the
+     *  chord to find the centre, then reflecting a chord midpoint onto the circle to get a
+     *  through-point on the side the tangent bends towards. Only the through-point escapes —
+     *  the centre and radius are scaffolding, and the arc itself is hypercurve's. */
     private static _arcFromTangent(A: Point, tangent: Vector, C: Point): Curve
     {
         const tanUnit = tangent.normalize();
@@ -503,129 +501,31 @@ export class Curve extends Shape
         }
         const normalUnit = rawNormal.normalize();
 
-        // The center lies on the line through A perpendicular to the tangent in the plane.
-        // perpAtA = normal × tangent — points from A towards center
+        // The centre lies on the line through A perpendicular to the tangent in the plane, and
+        // on the perpendicular bisector of the chord. Solve for their meeting point.
         const perpAtA = normalUnit.copy().cross(tanUnit).normalize();
-
-        // Also the center must be equidistant from A and C → lies on perpendicular bisector of AC.
         const midAC = Vector.from((A.x + C.x) / 2, (A.y + C.y) / 2, (A.z + C.z) / 2);
-        const chordDir = chord.normalize();
-        const perpBisector = normalUnit.copy().cross(chordDir).normalize();
-
-        // Solve: A + t·perpAtA = midAC + s·perpBisector
-        // → t·perpAtA − s·perpBisector = midAC − A
-        const dx = midAC.x - A.x;
-        const dy = midAC.y - A.y;
-        const dz = midAC.z - A.z;
-
-        const d1 = perpAtA;
-        const d2neg = perpBisector.scale(-1);
-
-        const det_xy = d1.x * d2neg.y - d2neg.x * d1.y;
-        const det_xz = d1.x * d2neg.z - d2neg.x * d1.z;
-        const det_yz = d1.y * d2neg.z - d2neg.y * d1.z;
-
-        let t: number;
-        if (Math.abs(det_xy) >= Math.abs(det_xz) && Math.abs(det_xy) >= Math.abs(det_yz))
+        const perpBisector = normalUnit.copy().cross(chord.normalize()).normalize();
+        const t = _solveRayMeet(A, perpAtA, midAC, perpBisector);
+        if (t === null)
         {
-            t = (dx * d2neg.y - d2neg.x * dy) / det_xy;
-        }
-        else if (Math.abs(det_xz) >= Math.abs(det_yz))
-        {
-            t = (dx * d2neg.z - d2neg.x * dz) / det_xz;
-        }
-        else
-        {
-            t = (dy * d2neg.z - d2neg.y * dz) / det_yz;
+            throw new Error('Curve.Arc(): tangent and chord do not determine a centre.');
         }
 
         const center = new Point(A.x + t * perpAtA.x, A.y + t * perpAtA.y, A.z + t * perpAtA.z);
-        const radius = Math.sqrt((A.x - center.x) ** 2 + (A.y - center.y) ** 2 + (A.z - center.z) ** 2);
+        const radius = Math.hypot(A.x - center.x, A.y - center.y, A.z - center.z);
 
-        // Synthesise a mid-point on the correct side of the chord for direction resolution
-        const midChord = new Point((A.x + C.x) / 2, (A.y + C.y) / 2, (A.z + C.z) / 2);
-        const centerToMid = Vector.from(midChord.x - center.x, midChord.y - center.y, midChord.z - center.z);
-        const midOnArc = new Point(
-            center.x + centerToMid.normalize().scale(radius).x,
-            center.y + centerToMid.normalize().scale(radius).y,
-            center.z + centerToMid.normalize().scale(radius).z,
-        );
-
-        // Use the tangent cross chord to pick the arc side consistent with the tangent direction.
-        // If perpAtA (which points from A towards center) has a positive dot with center−A,
-        // the arc should go the "short way" through midOnArc. Otherwise flip.
+        // A point on the circle above the chord's midpoint, then the far one if the tangent
+        // bends the other way. Either is a valid "through" point for the three-point arc.
+        const toMid = Vector.from(midAC.x - center.x, midAC.y - center.y, midAC.z - center.z)
+            .normalize().scale(radius);
+        const near = new Point(center.x + toMid.x, center.y + toMid.y, center.z + toMid.z);
         const centerFromA = Vector.from(center.x - A.x, center.y - A.y, center.z - A.z);
-        const sameSide = centerFromA.dot(perpAtA) > 0;
+        const B = centerFromA.dot(perpAtA) > 0
+            ? near
+            : new Point(2 * center.x - near.x, 2 * center.y - near.y, 2 * center.z - near.z);
 
-        // B is the guide point that tells the trimmer which side of the circle to take
-        let B: Point;
-        if (sameSide)
-        {
-            // midOnArc is between A and C on the side the tangent bends towards
-            B = midOnArc;
-        }
-        else
-        {
-            // Reflect midOnArc through center to get the point on the opposite arc
-            B = new Point(
-                2 * center.x - midOnArc.x,
-                2 * center.y - midOnArc.y,
-                2 * center.z - midOnArc.z,
-            );
-        }
-
-        return Curve._trimArcFromCircle(A, B, C, center, radius, normalUnit);
-    }
-
-    /** Compute circumcenter and radius for three non-collinear points on a plane with given normal. */
-    private static _circumcenter(A: Point, B: Point, C: Point, normalUnit: Vector): { center: Point, radius: number }
-    {
-        const ab = Vector.from(B.x - A.x, B.y - A.y, B.z - A.z);
-        const ac = Vector.from(C.x - A.x, C.y - A.y, C.z - A.z);
-
-        const mAB = Vector.from((A.x + B.x) / 2, (A.y + B.y) / 2, (A.z + B.z) / 2);
-        const mAC = Vector.from((A.x + C.x) / 2, (A.y + C.y) / 2, (A.z + C.z) / 2);
-
-        const dAB = normalUnit.copy().cross(ab).normalize();
-        const dAC = normalUnit.copy().cross(ac).normalize();
-
-        const dx = mAC.x - mAB.x;
-        const dy = mAC.y - mAB.y;
-        const dz = mAC.z - mAB.z;
-
-        const det_xy = dAB.x * (-dAC.y) - (-dAC.x) * dAB.y;
-        const det_xz = dAB.x * (-dAC.z) - (-dAC.x) * dAB.z;
-        const det_yz = dAB.y * (-dAC.z) - (-dAC.y) * dAB.z;
-
-        let t: number;
-        if (Math.abs(det_xy) >= Math.abs(det_xz) && Math.abs(det_xy) >= Math.abs(det_yz))
-        {
-            t = (dx * (-dAC.y) - (-dAC.x) * dy) / det_xy;
-        }
-        else if (Math.abs(det_xz) >= Math.abs(det_yz))
-        {
-            t = (dx * (-dAC.z) - (-dAC.x) * dz) / det_xz;
-        }
-        else
-        {
-            t = (dy * (-dAC.z) - (-dAC.y) * dz) / det_yz;
-        }
-
-        const center = new Point(mAB.x + t * dAB.x, mAB.y + t * dAB.y, mAB.z + t * dAB.z);
-        const radius = Math.sqrt((A.x - center.x) ** 2 + (A.y - center.y) ** 2 + (A.z - center.z) ** 2);
-
-        return { center, radius };
-    }
-
-    /** Trim an arc A→(through B)→C from a full circle defined by center, radius, and normal.
-     *  B is a guide point that determines which side of the circle the arc follows.
-     */
-    private static _trimArcFromCircle(A: Point, B: Point, C: Point, _center: Point, _radius: number, _normalUnit: Vector): Curve
-    {
-        // hypercurve builds a circular arc natively through three points (start,
-        // through, end); no circle-trim/parameter juggling needed.
-        const csgrs = getCsgrs();
-        return Curve.fromCsgrs(csgrs.Curve3DJs.makeArc(A.toPoint3Js(), B.toPoint3Js(), C.toPoint3Js()));
+        return Curve._arcFromThreePoints(A, B, C);
     }
 
     /** Create a closed rectangle centered at a given position on an optional base plane.
@@ -1008,66 +908,21 @@ export class Curve extends Shape
         return true;
     }
 
-    /** Whether this (planar) curve crosses itself.
+        /** Whether the curve crosses itself away from its own shared vertices.
      *
-     *  The curve is tessellated into a polyline, projected onto its own plane, and
-     *  every pair of non-adjacent segments is tested for a proper crossing. Segments
-     *  that share an endpoint by construction (consecutive segments, and the closing
-     *  wrap-around pair of a closed curve) are skipped.
-     *
-     *  Useful to reject degenerate inputs before operations that assume a simple
-     *  (non-self-intersecting) curve — e.g. splitting a Polygon with a cutting curve.
-     *
-     *  Non-planar curves are not supported: a warning is emitted and `false` returned.
-     *
-     *  @param tolerance planar-fit tolerance passed to getOnPlane()
-     */
+     *  hypercurve decides this with the predicates its intersection kernel uses, so a bulge
+     *  that grazes a leg is found from the arc rather than from however finely it happened to
+     *  be sampled. This used to project onto the curve's plane and run an O(n²) crossing test
+     *  over a tessellation in TypeScript. */
     selfIntersecting(tolerance: number = 1e-6): boolean
     {
-        const plane = this.getOnPlane(tolerance);
-        if (!plane)
+        void tolerance; // decided exactly; there is no tolerance to spend
+        try { return this.inner().selfIntersects(undefined); }
+        catch (e)
         {
-            console.warn('Curve::selfIntersecting(): curve is not planar; self-intersection test is not applicable. Returning false.');
+            console.warn(`Curve::selfIntersecting(): ${e}. Returning false.`);
             return false;
         }
-
-        // Project onto the plane's in-plane axes → 2D (u, v). For line-only geometry the
-        // defining vertices ARE the curve, so use those: the crossing test is exact and the
-        // O(n²) pair loop runs over a handful of segments instead of hundreds of samples.
-        // Arc-bearing curves still need a tessellation to see a bulge crossing.
-        const source = this.inner().hasArcs() ? this.tessellate() : this.controlPoints();
-        let pts: Array<[number, number]> = source.map(p =>
-        {
-            const v = p.toVector();
-            return [v.dot(plane.x), v.dot(plane.y)] as [number, number];
-        });
-
-        const closed = this.isClosed();
-        // A closed curve repeats its start point at the end — drop the duplicate so the
-        // wrap-around segment (last → first) is formed via modulo indexing instead.
-        if (closed && pts.length > 1)
-        {
-            const [fx, fy] = pts[0];
-            const [lx, ly] = pts[pts.length - 1];
-            if (Math.hypot(fx - lx, fy - ly) < 1e-9) { pts = pts.slice(0, -1); }
-        }
-
-        const n = pts.length;
-        if (n < 4) { return false; } // need at least 2 non-adjacent segments to cross
-        const segCount = closed ? n : n - 1;
-
-        for (let i = 0; i < segCount; i++)
-        {
-            const a1 = pts[i];
-            const a2 = pts[(i + 1) % n];
-            for (let j = i + 2; j < segCount; j++)
-            {
-                // Skip the wrap-around pair of a closed curve (segment 0 and last share a vertex)
-                if (closed && i === 0 && j === segCount - 1) { continue; }
-                if (_seg2DProperlyIntersect(a1, a2, pts[j], pts[(j + 1) % n])) { return true; }
-            }
-        }
-        return false;
     }
 
     /** Get the plane of the Curve as { normal, x, y }.
@@ -1176,44 +1031,24 @@ export class Curve extends Shape
             console.warn('Curve.area(): curve is not planar — area is undefined.');
             return undefined;
         }
-        // hypercurve native engine: exact planar area, minus any interior holes.
+        // hypercurve's exact planar area, minus any interior holes. For polynomial and
+        // rational spans that is a Green integral in exact rationals, so an ellipse gives
+        // exactly pi*a*b.
+        //
+        // No fallback. There used to be a 3D shoelace over the tessellation here, which
+        // answered a *different question* — the area of the polygon through the sample points
+        // — and returned it under the same name, so a circle quietly came back short. An area
+        // that cannot be computed exactly is `undefined`, which every caller already handles.
         try
         {
-            const holesArea = this._holes.reduce((sum, hole) =>
-            {
-                try { return sum + Math.abs(hole.inner().area()); }
-                catch { return sum + (hole._boundaryArea() ?? 0); }
-            }, 0);
+            const holesArea = this._holes.reduce((sum, hole) => sum + Math.abs(hole.inner().area()), 0);
             return Math.max(0, Math.abs(this.inner().area()) - holesArea);
         }
         catch (e)
         {
-            console.warn('Curve.area(): hypercurve area failed, using fallback:', e);
+            console.warn('Curve.area(): hypercurve could not measure this curve:', e);
+            return undefined;
         }
-        const holesArea = this._holes.reduce((sum, hole) => sum + (hole._boundaryArea() ?? 0), 0);
-        return Math.max(0, this._boundaryArea() - holesArea);
-    }
-
-
-    /** Unsigned area enclosed by this curve's boundary only, ignoring interior holes.
-     *  3D shoelace over the tessellated boundary; plane-agnostic. */
-    private _boundaryArea(): number
-    {
-        const pts = this.tessellate();
-        const n = pts.length;
-        if (n < 3) return 0;
-        const v0 = pts[0];
-        let ax = 0, ay = 0, az = 0;
-        for (let i = 1; i < n - 1; i++)
-        {
-            const a = pts[i], b = pts[i + 1];
-            const ux = a.x - v0.x, uy = a.y - v0.y, uz = a.z - v0.z;
-            const vx = b.x - v0.x, vy = b.y - v0.y, vz = b.z - v0.z;
-            ax += uy * vz - uz * vy;
-            ay += uz * vx - ux * vz;
-            az += ux * vy - uy * vx;
-        }
-        return 0.5 * Math.sqrt(ax * ax + ay * ay + az * az);
     }
 
     /** Curves have no volume — returns undefined */
@@ -2311,49 +2146,25 @@ export class Curve extends Shape
         return normal ? this._frameFromNormal(normal, tolerance) : null;
     }
 
-    /** Collapse runs of consecutive collinear line segments into single lines: interior
-     *  vertices whose incoming and outgoing directions match are redundant, so they are
-     *  dropped and the curve is rebuilt through the vertices that remain. This is what keeps
-     *  `extend()`/`toDegree1()` from leaving a curve split at a vertex that is not a corner.
+    /** Merge runs of adjacent, same-direction line segments into single segments.
      *
-     *  Only pure degree-1 curves are rebuilt: on a curve carrying arcs/splines the control
-     *  points are NURBS control points rather than on-curve vertices, so a polyline rebuild
-     *  through them would corrupt the geometry. Such curves are returned unchanged.
+     *  Collinearity is decided exactly by hypercurve, which compares the segments' supports
+     *  rather than measuring an angle against a tolerance. It also keeps what a tolerance test
+     *  gets wrong: arcs are preserved (this used to refuse any curve containing one), the
+     *  closed seam is considered like any other joint, and a collinear *reversal* is left
+     *  alone — a spike doubling back on itself is authored topology, not a redundant vertex.
      *
-     *  @param colinearTol - |sin(angle)| between adjacent directions below which they count
-     *                       as collinear (default 1e-3 ≈ 0.06°).
+     *  `colinearTol` is accepted and ignored; there is no tolerance to spend.
      */
     mergeColinearLines(colinearTol: number = 1e-3): this
     {
-        if (this.spans().toArray().some(s => (s.inner()?.degree() ?? 1) > 1)) { return this; }
-
-        const pts = this.controlPoints();
-        if (!pts || pts.length < 3) { return this; }
-
-        /** Unit direction from `from` to `to`, or null when they coincide. */
-        const dirOf = (from: Point, to: Point): Vector|null =>
+        void colinearTol;
+        try { return this.update(Curve.fromCsgrs(this.inner().mergeCollinear())); }
+        catch (e)
         {
-            const v = to.toVector().subtract(from);
-            return (v.length() > Curve.ZERO_LENGTH_TOLERANCE) ? v.normalize() : null;
-        };
-
-        // First and last vertices are always endpoints, never merge candidates. On a closed
-        // curve they are the seam, which is left alone.
-        const kept: Array<Point> = [pts[0]];
-        for (let i = 1; i < pts.length - 1; i++)
-        {
-            const inDir = dirOf(kept[kept.length - 1], pts[i]);
-            const outDir = dirOf(pts[i], pts[i + 1]);
-            if (!inDir || !outDir) { continue; } // duplicate vertex: drop it
-            // Parallel AND same-facing: an anti-parallel pair is a spike doubling back on
-            // itself, whose vertex is a real corner.
-            const parallel = inDir.copy().cross(outDir).length() <= colinearTol;
-            if (!(parallel && inDir.dot(outDir) > 0)) { kept.push(pts[i]); }
+            console.warn(`Curve::mergeColinearLines(): ${e}. Leaving the curve unchanged.`);
+            return this;
         }
-        kept.push(pts[pts.length - 1]);
-
-        if (kept.length === pts.length) { return this; } // nothing was redundant
-        return this.update(Curve.Polyline(kept));
     }
 
     /** Close this curve by adding a segment from end back to start.
@@ -4230,25 +4041,24 @@ export class Curve extends Shape
 
                 case 'spline':
                 {
-                    const pts = span.controlPoints.map(p => ({ x: p[0], y: p[1], z: p[2] }));
-                    const segs = _bsplineToBezierSegments(pts, span.knots, span.weights, span.degree);
-                    if (segs.length === 0) { chordTo(span); break; }
-
-                    const at = (p: { x: number; y: number; z: number }): [number, number] =>
-                        to2D([p.x, p.y, p.z]);
-                    segs.forEach(seg =>
+                    // hypercurve decomposed the span into Beziers exactly, on the way out.
+                    // This used to run Boehm knot insertion here in f64, and then read exactly
+                    // four control points out of each segment — so above degree three the
+                    // written cubic ENDED at the fourth control point rather than the last one,
+                    // and a quartic spline left as a broken chain that did not meet itself.
+                    if (span.beziers.length === 0) { chordTo(span); break; }
+                    span.beziers.forEach(net =>
                     {
-                        if (span.degree === 2)
-                        {
-                            const [, cp1, end] = seg.map(at);
-                            pathParts.push(`Q${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(end[0])} ${fmt(end[1])}`);
-                        }
-                        else
-                        {
-                            const [, cp1, cp2, end] = seg.map(at);
-                            pathParts.push(`C${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(cp2[0])} ${fmt(cp2[1])} `
-                                + `${fmt(end[0])} ${fmt(end[1])}`);
-                        }
+                        // One `Q`/`C` per Bezier. SVG has no command above cubic, so a higher
+                        // degree is written through its first three or four control points —
+                        // an approximation, and better than the nothing it used to write.
+                        const [, ...rest] = net.map(to2D);
+                        const [c1, c2, end] = rest.length >= 3
+                            ? [rest[0], rest[1], rest[rest.length - 1]]
+                            : [rest[0], null, rest[rest.length - 1]];
+                        pathParts.push(c2
+                            ? `C${fmt(c1[0])} ${fmt(c1[1])} ${fmt(c2[0])} ${fmt(c2[1])} ${fmt(end[0])} ${fmt(end[1])}`
+                            : `Q${fmt(c1[0])} ${fmt(c1[1])} ${fmt(end[0])} ${fmt(end[1])}`);
                     });
                     break;
                 }
@@ -4475,13 +4285,11 @@ export class Curve extends Shape
                 // both come back with an identical bbox), so no mirror is needed — which matters,
                 // because mirroring would tessellate every arc away.
                 //
-                // Its arc SWEEP flag, however, is inverted with respect to the SVG spec: importing
-                // `M0 0 A10 10 0 0 1 20 0` yields an arc bulging towards +y, where the spec's
-                // "positive-angle direction" puts it at -y. Emitting spec-inverted path-data is not
-                // an option — `toPathData()` output is handed to real renderers — so the flags are
-                // flipped here, at the one place that talks to the importer.
-                // TODO(hypercurve): fix importSvgCurves' sweep handling and delete this.
-                const svg = `<svg xmlns="http://www.w3.org/2000/svg"><path d="${_flipArcSweepFlags(data.d)}"/></svg>`;
+                // The arc sweep-flag used to arrive inverted with respect to the SVG spec, and a
+                // regex flipped every one of them back here before handing the string over. That
+                // was hypercurve reading the flag as `clockwise` where the spec means
+                // "positive-angle direction"; it is fixed at the source now.
+                const svg = `<svg xmlns="http://www.w3.org/2000/svg"><path d="${data.d}"/></svg>`;
                 const curves = Importer.fromSVG(svg);
                 if (curves.length === 0)
                 {
@@ -4536,237 +4344,34 @@ export class Curve extends Shape
     /** Collect the individual native spans (arcs/lines) of this curve for SVG export.
      *  Native geometry already stores each arc/line as a separate open segment, so a
      *  circle comes back as two open arcs — no closed-span splitting needed. */
-    private _getSvgSpans(): Curve[]
-    {
-        return this.spans().toArray();
-    }
 }
+
 
 /**
- * Decompose a B-spline into piecewise Bezier segments via Boehm's knot insertion.
+ * Where the ray `a + t·da` meets the ray `b + s·db`, as `t`. Null when they are parallel.
  *
- * For a degree-p B-spline with a clamped knot vector, each interior knot must
- * have multiplicity p for the curve to split into independent Bezier pieces.
- * After full insertion, every (p+1) consecutive control points define one Bezier segment.
- *
- * @returns Array of Bezier segments, each is an array of (degree+1) 3D points.
+ * Two coplanar 3D rays are a 2x2 solve once a coordinate plane is chosen, so this picks the
+ * projection with the largest determinant — the other two are the same equation seen edge-on
+ * and can be arbitrarily ill-conditioned.
  */
-function _bsplineToBezierSegments(
-    controlPoints: { x: number; y: number; z: number }[],
-    knots: number[],
-    weights: number[],
-    degree: number,
-): Array<Array<{ x: number; y: number; z: number }>>
+function _solveRayMeet(a: Point, da: Vector, b: Vector, db: Vector): number | null
 {
-    // Work in homogeneous coordinates for rational curves:  (w*x, w*y, w*z, w)
-    let pts = controlPoints.map((p, i) =>
+    const [dx, dy, dz] = [b.x - a.x, b.y - a.y, b.z - a.z];
+    const planes: Array<[number, number, number, number, number, number]> = [
+        [da.x, da.y, -db.x, -db.y, dx, dy],
+        [da.x, da.z, -db.x, -db.z, dx, dz],
+        [da.y, da.z, -db.y, -db.z, dy, dz],
+    ];
+    let best: [number, number] | null = null; // [|det|, t]
+    for (const [ax, ay, bx, by, rx, ry] of planes)
     {
-        const w = weights[i] ?? 1;
-        return { x: p.x * w, y: p.y * w, z: p.z * w, w };
-    });
-    let U = knots.slice(); // mutable copy
-
-    // Find distinct interior knots and insert each until multiplicity == degree
-    const p = degree;
-    const interiorKnots = _distinctInteriorKnots(U, p);
-
-    interiorKnots.forEach(({ value, multiplicity }) =>
-    {
-        const timesToInsert = p - multiplicity;
-        Array.from({ length: timesToInsert }, () =>
+        const det = ax * by - bx * ay;
+        if (best === null || Math.abs(det) > best[0])
         {
-            const result = _boehmInsert(pts, U, p, value);
-            pts = result.points;
-            U = result.knots;
-        });
-    });
-
-    // After full knot insertion, each Bezier segment spans (p+1) control points
-    // with overlap at boundary points.
-    const numSegments = (pts.length - 1) / p;
-
-    // A whole number is not optional here, it is what "decomposed into Bezier segments"
-    // means. When it was not one — degree 3 over 2 control points gives 0.333 —
-    // Array.from({ length: 0.333 }) quietly produced an empty list, so the span emitted no
-    // path commands at all and a cubic Bezier vanished from the exported file. Failing
-    // loudly and letting the caller fall back is the only acceptable outcome.
-    if (!Number.isInteger(numSegments) || numSegments < 1)
-    {
-        console.warn(`Curve: cannot decompose a degree-${p} spline over ${pts.length} control `
-            + `points into Bezier segments (${numSegments} of them); the knot vector and control `
-            + `net disagree. Falling back to an approximation.`);
-        return [];
-    }
-
-    return Array.from({ length: numSegments }, (_, i) =>
-        Array.from({ length: p + 1 }, (_, j) =>
-        {
-            const h = pts[i * p + j];
-            const invW = h.w !== 0 ? 1 / h.w : 1;
-            return { x: h.x * invW, y: h.y * invW, z: h.z * invW };
-        })
-    );
-}
-
-/** Get the distinct interior knots and their multiplicities. */
-function _distinctInteriorKnots(
-    knots: number[],
-    degree: number
-): Array<{ value: number; multiplicity: number }>
-{
-    const result: Array<{ value: number; multiplicity: number }> = [];
-    const n = knots.length;
-    // Interior knots are those strictly between the clamped ends
-    // For a clamped knot vector, the first (degree+1) and last (degree+1) knots are at the boundaries
-    const lo = knots[degree];
-    const hi = knots[n - degree - 1];
-
-    let i = degree + 1;
-    while (i < n - degree - 1) // perf: keep as loop (stateful index advance)
-    {
-        const val = knots[i];
-        if (val > lo && val < hi)
-        {
-            let mult = 0;
-            let j = i;
-            while (j < n - degree - 1 && Math.abs(knots[j] - val) < 1e-12) // perf: keep as loop
-            {
-                mult++;
-                j++;
-            }
-            result.push({ value: val, multiplicity: mult });
-            i = j;
-        }
-        else
-        {
-            i++;
+            best = [Math.abs(det), (rx * by - bx * ry) / det];
         }
     }
-    return result;
-}
-
-/**
- * Boehm's single knot insertion.
- * Insert knot value `u` once into the B-spline defined by `pts`, `knots`, `degree`.
- */
-function _boehmInsert(
-    pts: Array<{ x: number; y: number; z: number; w: number }>,
-    knots: number[],
-    degree: number,
-    u: number
-): { points: Array<{ x: number; y: number; z: number; w: number }>; knots: number[] }
-{
-    const n = pts.length;
-    const p = degree;
-
-    // Find knot span k such that knots[k] <= u < knots[k+1]
-    const kIdx = knots.slice(p, knots.length - 1).findIndex((kv, off) =>
-        kv <= u + 1e-12 && u < knots[p + off + 1] - 1e-12
-    );
-    const k = kIdx === -1 ? knots.length - p - 2 : p + kIdx;
-
-    // Compute new control points
-    const newPts = Array.from({ length: n + 1 }, (_, i) =>
-    {
-        if (i <= k - p)
-        {
-            return { ...pts[i] };
-        }
-        else if (i >= k + 1)
-        {
-            return { ...pts[i - 1] };
-        }
-        else
-        {
-            // k-p+1 <= i <= k
-            const denom = knots[i + p] - knots[i];
-            const alpha = denom > 1e-14 ? (u - knots[i]) / denom : 0;
-            return {
-                x: (1 - alpha) * pts[i - 1].x + alpha * pts[i].x,
-                y: (1 - alpha) * pts[i - 1].y + alpha * pts[i].y,
-                z: (1 - alpha) * pts[i - 1].z + alpha * pts[i].z,
-                w: (1 - alpha) * pts[i - 1].w + alpha * pts[i].w,
-            };
-        }
-    });
-
-    // Insert knot value into knot vector
-    const newKnots = [...knots.slice(0, k + 1), u, ...knots.slice(k + 1)];
-
-    return { points: newPts, knots: newKnots };
-}
-
-/** Append SVG arc (A) commands for a rational degree-2 NURBS span (circle/arc).
- *  Expects the span to already be projected onto XY. Uses (x, -y) for SVG coordinates.
- *  Uses the circumcircle of three sampled points to determine the radius,
- *  and the cross product to determine the sweep direction. */
-/** Toggle the sweep-flag of every absolute `A` command in SVG path-data.
- *
- *  Only used to bridge `importSvgCurves`' inverted sweep convention (see `Curve.fromData`).
- *  Matches `A rx ry rot large-arc sweep x y`; the two flags are single digits, which is what
- *  makes them addressable without a full path parser. */
-function _flipArcSweepFlags(d: string): string
-{
-    const N = '[-+]?(?:\\d*\\.\\d+|\\d+)(?:[eE][-+]?\\d+)?';
-    const S = '[\\s,]+';
-    const S0 = '[\\s,]*'; // separators are optional directly after the command letter
-    const re = new RegExp(`(A${S0}${N}${S}${N}${S}${N}${S}[01]${S})([01])`, 'g');
-    return d.replace(re, (_m, head: string, sweep: string) => `${head}${sweep === '1' ? '0' : '1'}`);
-}
-
-function _appendArcSvg(
-    span: Curve,
-    to2D: (p: { x: number; y: number; z: number }) => [number, number],
-    fmt: (n: number) => number,
-    pathParts: string[],
-): void
-{
-    const cps = span.controlPoints();
-    const [domain0, domain1] = Array.from(span.knotsDomain() ?? [0, 1]);
-    const midParam = (domain0 + domain1) / 2;
-    const startPt3 = cps[0];
-    const midPt3 = span.pointAtParam(midParam);
-    const endPt3 = cps[cps.length - 1];
-
-    const start2D = to2D(startPt3);
-    const mid2D = to2D(midPt3);
-    const end2D = to2D(endPt3);
-
-    const circ = _circumcircle2D(start2D[0], start2D[1], mid2D[0], mid2D[1], end2D[0], end2D[1]);
-
-    if (!circ)
-    {
-        // Degenerate (collinear) — fall back to a line
-        pathParts.push(`L${fmt(end2D[0])} ${fmt(end2D[1])}`);
-        return;
-    }
-
-    const r = fmt(circ.r);
-
-    // Derive both flags from the ACTUAL swept angle rather than from the chord's handedness.
-    // The mid point is sampled on the arc, so "which way round" is decided by whether it lies
-    // on the counter-clockwise path from start to end — correct for arcs above 180° too, where
-    // a chord-side test flips sign and mislabels them.
-    const TAU = 2 * Math.PI;
-    const norm = (a: number): number => ((a % TAU) + TAU) % TAU;
-    const angleOf = (p: [number, number]): number => Math.atan2(p[1] - circ.cy, p[0] - circ.cx);
-
-    const a0 = angleOf(start2D);
-    const ccwToMid = norm(angleOf(mid2D) - a0);
-    const ccwToEnd = norm(angleOf(end2D) - a0);
-
-    const goesCCW = ccwToMid <= ccwToEnd;
-    const swept = goesCCW ? ccwToEnd : TAU - ccwToEnd;
-
-    const largeArcFlag = swept > Math.PI ? 1 : 0;
-
-    // SVG sweep-flag 1 = "positive-angle direction": θ increases, i.e. counter-clockwise in the
-    // coordinate-VALUE plane (it merely looks clockwise on screen because SVG draws +y downward).
-    // `goesCCW` is measured in the frame we are emitting, so the y-convention is already
-    // accounted for and no extra term is needed here.
-    const sweepFlag = goesCCW ? 1 : 0;
-
-    pathParts.push(`A${r} ${r} 0 ${largeArcFlag} ${sweepFlag} ${fmt(end2D[0])} ${fmt(end2D[1])}`);
+    return best && best[0] > 1e-12 && Number.isFinite(best[1]) ? best[1] : null;
 }
 
 /** Rodrigues' rotation: turn `v` by `angleDeg` around the unit direction `dir`. Done here
@@ -4852,40 +4457,4 @@ function _inPlaneClosestToZ(plane: { normal: Vector, x: Vector, y: Vector }): Ve
     return (inPlane.length() > REVOLVE_RELATIVE_TOLERANCE) ? inPlane.normalize() : plane.x.copy();
 }
 
-/** Test whether two 2D segments (p1→p2) and (p3→p4) properly cross — i.e. each
- *  segment straddles the line through the other. Collinear/endpoint-only touches
- *  are intentionally NOT counted, keeping the test robust against tessellation
- *  artifacts on near-tangent curves. */
-function _seg2DProperlyIntersect(
-    p1: [number, number], p2: [number, number],
-    p3: [number, number], p4: [number, number],
-): boolean
-{
-    const cross = (a: [number, number], b: [number, number], c: [number, number]) =>
-        (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
 
-    const d1 = cross(p3, p4, p1);
-    const d2 = cross(p3, p4, p2);
-    const d3 = cross(p1, p2, p3);
-    const d4 = cross(p1, p2, p4);
-
-    return (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0))
-         && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)));
-}
-
-/** Compute the circumcircle of three 2D points. Returns null if points are collinear. */
-function _circumcircle2D(
-    ax: number, ay: number,
-    bx: number, by: number,
-    cx: number, cy: number
-): { cx: number; cy: number; r: number } | null
-{
-    const D = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
-    if (Math.abs(D) < 1e-10) return null;
-    const a2 = ax * ax + ay * ay;
-    const b2 = bx * bx + by * by;
-    const c2 = cx * cx + cy * cy;
-    const ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / D;
-    const uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / D;
-    return { cx: ux, cy: uy, r: Math.sqrt((ax - ux) ** 2 + (ay - uy) ** 2) };
-}
