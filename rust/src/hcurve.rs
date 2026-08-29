@@ -18,7 +18,8 @@
 use hypercurve::{
     Aabb2, ArcArcIntersection, BezierParallelVerificationOptions,
     BooleanOp, Classification,
-    CircularArc2, Contour2, Curve2, CurveContext, CurveGeometry2, CurveOutcome, CurvePath2,
+    CircularArc2, Contour2, Curve2, CurveContext, CurveCornerMode2, CurveCornerSolutions2,
+    CurveGeometry2, CurveOutcome, CurvePath2,
     CurveRegion2,
     CurveString2, EllipseMap2,
     LineArcIntersection, LineLineIntersection, LineSeg2,
@@ -1848,6 +1849,30 @@ pub fn offset_closed(ct: &Contour2, distance: f64) -> Result<Contour2, String>
     Contour2::try_new(segs).map_err(|e| format!("hcurve: closed offset failed ({e:?})"))
 }
 
+/// How deep the certified parallel may bisect before giving up.
+///
+/// A budget, not an accuracy target — and the number is measured, not chosen for roundness.
+/// Offsetting `M 0 0 C 0 40 60 40 60 0` by 5 at a 1e-4 tolerance, native release build:
+///
+/// | depth | time    | result       |
+/// |-------|---------|--------------|
+/// | 4     |    9 ms | declines     |
+/// | 6     |   19 ms | declines     |
+/// | 8     |   38 ms | declines     |
+/// | 9     |   56 ms | declines     |
+/// | 10    |  242 **s** | 736 spans |
+///
+/// Up to 9 the cost doubles per level, as bisection should. At 10 it does not: the exact
+/// scalar expressions carried through each level stop being cheap to decide and the search
+/// runs for minutes — to return 736 spans, which is a tessellation wearing a curve's clothes.
+/// This was `24`, which under the previous hypercurve declined quickly enough not to matter;
+/// it now means the call never returns, and `Curve3DJs::offset` on any imported Bezier hangs
+/// the worker.
+///
+/// Declining is cheap and already handled: the caller falls back to offsetting a certified
+/// projection, which is what happened for these curves anyway.
+const PARALLEL_MAX_DEPTH: usize = 9;
+
 /// One-sided offset of an exact [`CurvePath2`] (conic / Bezier / spline spans).
 ///
 /// There is no *exact* free-form offset: the parallel of a general rational curve is not
@@ -1862,7 +1887,7 @@ pub fn offset_closed(ct: &Contour2, distance: f64) -> Result<Contour2, String>
 pub fn offset_path(path: &CurvePath2, distance: f64, chord_error: f64) -> Result<Option<CurvePath2>, String>
 {
     let pol = policy();
-    let opts = BezierParallelVerificationOptions::try_new(real(chord_error)?, 24, &pol)
+    let opts = BezierParallelVerificationOptions::try_new(real(chord_error)?, PARALLEL_MAX_DEPTH, &pol)
         .map_err(|e| format!("hcurve: parallel options failed ({e:?})"))?;
     match path.approximate_parallel_blend2d_certified(real(distance)?, &opts, &pol)
     {
@@ -2005,22 +2030,60 @@ fn subsegment(seg: &Segment2, u0: f64, u1: f64) -> Result<Segment2, String>
     }
 }
 
-/// Fillet every interior line–line corner of a segment chain by `radius`.
+/// Fillet the corners of a native line/arc chain by `radius`, exactly.
 ///
-/// Each rounding arc is built with [`Segment2::from_bulge`] (two tangent points +
-/// a bulge) rather than hypercurve's `fillet_vertex_by_points`, which requires an
-/// exactly-equidistant arc center — impossible to supply from f64 for a general
-/// corner (it rejects with `RadiusMismatch`). `from_bulge` derives a consistent
-/// arc from the two tangent points, so any corner rounds robustly. Corners that
-/// involve an arc, are nearly straight, or where the radius does not fit are left
-/// sharp. Works for closed contours (every vertex, wrapping) and open curve
-/// strings (interior vertices only — the two free endpoints are not corners).
+/// Each corner goes through hypercurve's own [`CurvePath2::fillet_vertex_by_radius`], which
+/// solves the tangent circle in exact arithmetic and **rebuilds only the two curves incident
+/// to that vertex**. Everything else is retained as authored — which is the whole reason for
+/// the round trip through `CurvePath2`.
+///
+/// The previous implementation computed tangent points and a bulge in f64 and then re-emitted
+/// *every* segment as a straight line from those numbers. Two consequences, both visible:
+/// filleting one corner of a shape that already had a fillet returned the first arc as its
+/// chord (a chamfer, not a fillet — rounding a second corner silently un-rounded the first),
+/// and a corner touching an arc could not be filleted at all, because a line-arc corner has no
+/// bulge to compute. Neither is a limitation of the kernel; both were the bridge's.
+///
+/// Corners where no exact solution exists — nearly straight, or a radius that does not fit —
+/// are left sharp, as before. Works for closed contours (every vertex, wrapping) and open
+/// curve strings (interior vertices only: the two free endpoints are not corners).
 /// `only`: when `Some`, restrict filleting to those corner (vertex) indices; every other
 /// corner is left sharp. `None` fillets every fitting corner. An empty slice is a no-op.
 pub fn fillet_segments(segs: &[Segment2], radius: f64, closed: bool, only: Option<&[usize]>)
     -> Result<Vec<Segment2>, String>
 {
-    if !(radius.is_finite() && radius > 0.0) || segs.len() < 2
+    corner_op(segs, radius, closed, only, |path, vi, amount, pol| {
+        path.fillet_vertex_by_radius(vi, amount, CurveCornerMode2::TrimOnly, pol)
+    })
+}
+
+/// Chamfer the corners of a native line/arc chain by `setback`, exactly. The chamfer twin of
+/// [`fillet_segments`] — same staging, same corner indexing, same retention of everything it
+/// is not editing; each corner cuts `setback` off both incident edges.
+pub fn chamfer_segments(segs: &[Segment2], setback: f64, closed: bool, only: Option<&[usize]>)
+    -> Result<Vec<Segment2>, String>
+{
+    corner_op(segs, setback, closed, only, |path, vi, amount, pol| {
+        path.chamfer_vertex_by_setbacks(vi, amount.clone(), amount, CurveCornerMode2::TrimOnly, pol)
+    })
+}
+
+/// The shared body of [`fillet_segments`] and [`chamfer_segments`].
+///
+/// Corners are edited from the highest index down, so rounding one does not shift the index of
+/// a lower one that has not been visited yet. A corner whose solver finds nothing is skipped
+/// rather than failing the whole call: "this radius does not fit here" is an ordinary answer,
+/// and the other corners still want rounding.
+fn corner_op(
+    segs: &[Segment2],
+    amount: f64,
+    closed: bool,
+    only: Option<&[usize]>,
+    solve: impl Fn(&CurvePath2, usize, Real, &CurveContext)
+        -> hypercurve::ExactCurveResult<CurveOutcome<CurveCornerSolutions2<CurvePath2>>>,
+) -> Result<Vec<Segment2>, String>
+{
+    if !(amount.is_finite() && amount > 0.0) || segs.len() < 2
     {
         return Ok(segs.to_vec());
     }
@@ -2028,99 +2091,39 @@ pub fn fillet_segments(segs: &[Segment2], radius: f64, closed: bool, only: Optio
     {
         return Ok(segs.to_vec());
     }
-    let n = segs.len();
-    let sl = |p: &Point2| -> (f64, f64) {
-        (p.x().to_f64_lossy().unwrap_or(0.0), p.y().to_f64_lossy().unwrap_or(0.0))
-    };
-    let norm = |a: (f64, f64)| -> (f64, f64) {
-        let m = (a.0 * a.0 + a.1 * a.1).sqrt();
-        if m > 1e-12 { (a.0 / m, a.1 / m) } else { (0.0, 0.0) }
-    };
-    let dist = |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
 
-    // The rounding of one vertex: tangent point on the previous segment, tangent
-    // point on the next segment, and the connecting arc's bulge (tan of a quarter
-    // of the signed turn angle).
-    struct Corner
+    let pol = boolean_policy();
+    let value = real(amount)?;
+    let mut path = path_from_segments(segs)?;
+
+    // Vertex `vi` is the junction of curve `vi - 1` and curve `vi`; vertex 0 is the wrap-around
+    // corner of a closed path, which an open one does not have.
+    let first = usize::from(!closed);
+    for vi in (first..path.curves().len()).rev()
     {
-        tp: (f64, f64),
-        tn: (f64, f64),
-        bulge: f64,
-    }
-    let corner_at = |vi: usize| -> Option<Corner> {
-        if !closed && (vi == 0 || vi >= n)
-        {
-            return None; // open endpoints are not corners
-        }
         if only.is_some_and(|sel| !sel.contains(&vi))
         {
-            return None; // not one of the requested corners — leave it sharp
+            continue;
         }
-        let prev = if closed { (vi + n - 1) % n } else { vi - 1 };
-        let cur = vi % n;
-        let (ps, cs) = (&segs[prev], &segs[cur]);
-        if !matches!(ps, Segment2::Line(_)) || !matches!(cs, Segment2::Line(_))
+        let solutions = match solve(&path, vi, value.clone(), &pol)
         {
-            return None; // only line–line corners
-        }
-        let v = sl(cs.start());
-        let p = sl(ps.start());
-        let q = sl(cs.end());
-        let u = norm((p.0 - v.0, p.1 - v.1)); // toward previous vertex
-        let w = norm((q.0 - v.0, q.1 - v.1)); // toward next vertex
-        let half = (u.0 * w.0 + u.1 * w.1).clamp(-1.0, 1.0).acos() / 2.0; // half interior angle
-        if half < 1.0e-3 || half > std::f64::consts::FRAC_PI_2 - 1.0e-6
+            Ok(outcome) => done(outcome),
+            // The solver declines this corner (an unsupported carrier, or a predicate it
+            // cannot close). Leave it sharp.
+            Err(_) => continue,
+        };
+        path = match solutions
         {
-            return None; // straight / degenerate
-        }
-        let d = radius / half.tan(); // setback along each edge
-        if d > dist(p, v) - 1e-9 || d > dist(v, q) - 1e-9
-        {
-            return None; // radius does not fit
-        }
-        let tp = (v.0 + u.0 * d, v.1 + u.1 * d);
-        let tn = (v.0 + w.0 * d, v.1 + w.1 * d);
-        // Signed turn from the incoming travel direction (−u) to the outgoing (w).
-        let cross = u.0 * w.1 - u.1 * w.0;
-        let dotp = u.0 * w.0 + u.1 * w.1;
-        let sweep = (-cross).atan2(-dotp);
-        Some(Corner { tp, tn, bulge: (sweep / 4.0).tan() })
-    };
-
-    let mk_line = |a: (f64, f64), b: (f64, f64)| -> Result<Option<Segment2>, String> {
-        if dist(a, b) < 1e-9
-        {
-            return Ok(None); // corner consumed the whole edge — drop the degenerate line
-        }
-        Ok(Some(Segment2::Line(
-            LineSeg2::try_new(point(a.0, a.1)?, point(b.0, b.1)?)
-                .map_err(|e| format!("hcurve: fillet line failed ({e:?})"))?,
-        )))
-    };
-    let mk_arc = |c: &Corner| -> Result<Segment2, String> {
-        Segment2::from_bulge(point(c.tp.0, c.tp.1)?, point(c.tn.0, c.tn.1)?, real(c.bulge)?)
-            .map_err(|e| format!("hcurve: fillet arc failed ({e:?})"))
-    };
-
-    // Rebuild the chain: the arc for vertex `i` precedes segment `i`; segment `i`
-    // starts at that vertex's `tn` and ends at the next vertex's `tp` when filleted.
-    let mut out: Vec<Segment2> = Vec::new();
-    for i in 0..n
-    {
-        let ci = corner_at(i);
-        if let Some(c) = &ci
-        {
-            out.push(mk_arc(c)?);
-        }
-        let start = ci.as_ref().map(|c| c.tn).unwrap_or_else(|| sl(segs[i].start()));
-        let next_vi = if closed { (i + 1) % n } else { i + 1 };
-        let end = corner_at(next_vi).map(|c| c.tp).unwrap_or_else(|| sl(segs[i].end()));
-        if let Some(line) = mk_line(start, end)?
-        {
-            out.push(line);
-        }
+            CurveCornerSolutions2::Unique(p) => p,
+            // Several exact candidates. They come back in deterministic order and the first is
+            // the one that cuts the authored corner rather than an extension of it.
+            CurveCornerSolutions2::Multiple(mut ps) if !ps.is_empty() => ps.swap_remove(0),
+            _ => continue, // no solution: radius does not fit, or the corner is straight
+        };
     }
-    Ok(out)
+
+    segments_from_path(&path)
+        .ok_or_else(|| "hcurve: corner edit left geometry that is not line/arc".to_string())
 }
 
 /// Extract the native sub-curve spanning normalized arc-length fractions

@@ -11,8 +11,8 @@ use crate::hcurve;
 use crate::wasm::point_js::Point3Js;
 use crate::wasm::vector_js::Vector3Js;
 use hypercurve::{
-    BooleanOp, Contour2, Curve2, CurveContext, CurveCornerMode2, CurveFamily2, CurveGeometry2,
-    CurvePath2, CurveString2, LineSeg2, Point2, Real as ExactReal, Segment2, Similarity2,
+    BooleanOp, Contour2, Curve2, CurveFamily2, CurveGeometry2,
+    CurvePath2, CurveString2, LineSeg2, Point2, Segment2, Similarity2,
 };
 use nalgebra::{Point3, Vector3};
 use wasm_bindgen::prelude::*;
@@ -1662,13 +1662,15 @@ impl Curve3DJs
         {
             Geom::Closed(ct) =>
             {
-                let chamfered = chamfer_op(ct, setback, only).map_err(err)?;
-                Ok(Curve3DJs::from_closed(self.frame.clone(), chamfered))
+                let segs = hcurve::chamfer_segments(ct.segments(), setback, true, only).map_err(err)?;
+                let c = Contour2::try_new(segs).map_err(|e| err(format!("Curve3DJs::chamfer: {e:?}")))?;
+                Ok(Curve3DJs::from_closed(self.frame.clone(), c))
             }
             Geom::Open(cs) =>
             {
-                let chamfered = chamfer_op(cs, setback, only).map_err(err)?;
-                Ok(Curve3DJs::from_open(self.frame.clone(), chamfered))
+                let segs = hcurve::chamfer_segments(cs.segments(), setback, false, only).map_err(err)?;
+                let c = CurveString2::try_new(segs).map_err(|e| err(format!("Curve3DJs::chamfer: {e:?}")))?;
+                Ok(Curve3DJs::from_open(self.frame.clone(), c))
             }
             // Chamfer the line approximation of an exact conic path.
             Geom::Path(_) => self.to_line_curve()?.chamfer(setback, at),
@@ -2188,150 +2190,6 @@ impl Curve3DJs
 fn err(e: String) -> JsValue
 {
     JsValue::from_str(&e)
-}
-
-/// A contour/curve-string that supports hypercurve's exact per-vertex chamfer.
-/// Abstracts over the closed ([`Contour2`]) and open ([`CurveString2`]) cases,
-/// which share the geometry but differ in vertex range (open curves have two free
-/// endpoints that are not corners) and result type.
-trait CornerTarget: Clone + Sized
-{
-    fn corner_segments(&self) -> &[Segment2];
-    /// Closed targets treat every vertex as a corner and wrap the previous
-    /// segment; open targets only chamfer interior vertices (`1..segments`) and
-    /// never wrap.
-    fn is_closed_corner_target() -> bool;
-    fn rebuild(segments: Vec<Segment2>) -> Option<Self>;
-
-    /// Chamfer one vertex, cutting `setback` off each incident edge.
-    ///
-    /// hypercurve's corner solvers live on [`CurvePath2`] now — the native
-    /// `Contour2::chamfer_vertex_by_points` / `CurveString2::chamfer_vertex_by_points`
-    /// pair is gone, and so is the by-*points* parameterization. `by_setbacks` asks for
-    /// the same thing more directly: the caller already computed those tangent points as
-    /// "`setback` along each edge from the corner", which is the setback itself. Round
-    /// trip through the path form, which is lossless for line/arc geometry.
-    fn chamfer_corner(&self, vi: usize, setback: &ExactReal, pol: &CurveContext) -> Option<Self>
-    {
-        let path = hcurve::path_from_segments(self.corner_segments()).ok()?;
-        let solutions = hcurve::done(
-            path.chamfer_vertex_by_setbacks(
-                vi,
-                setback.clone(),
-                setback.clone(),
-                CurveCornerMode2::TrimOnly,
-                pol,
-            )
-            .ok()?,
-        );
-        let chamfered = match solutions
-        {
-            hypercurve::CurveCornerSolutions2::Unique(path) => path,
-            // Several exact candidates: the solver orders them deterministically and a
-            // line-line chamfer's first is the one that cuts the authored corner.
-            hypercurve::CurveCornerSolutions2::Multiple(mut paths) if !paths.is_empty() =>
-            {
-                paths.swap_remove(0)
-            }
-            _ => return None,
-        };
-        Self::rebuild(hcurve::segments_from_path(&chamfered)?)
-    }
-}
-
-impl CornerTarget for Contour2
-{
-    fn corner_segments(&self) -> &[Segment2] { self.segments() }
-    fn is_closed_corner_target() -> bool { true }
-    fn rebuild(segments: Vec<Segment2>) -> Option<Self> { Contour2::try_new(segments).ok() }
-}
-
-impl CornerTarget for CurveString2
-{
-    fn corner_segments(&self) -> &[Segment2] { self.segments() }
-    fn is_closed_corner_target() -> bool { false }
-    fn rebuild(segments: Vec<Segment2>) -> Option<Self> { CurveString2::try_new(segments).ok() }
-}
-
-/// Chamfer (bevel) every interior line–line corner of a contour/curve-string by
-/// `amount` (setback along each edge). Corners where it does not fit, or that
-/// involve an arc, are left unchanged. Uses hypercurve's exact vertex chamfer,
-/// computing the tangent points here. Works for closed contours (every vertex) and
-/// open curve strings (interior vertices only — the two free endpoints are not
-/// corners). (Fillets use [`hcurve::fillet_segments`] instead — a `from_bulge` arc
-/// avoids the exactly-equidistant-center that hypercurve's vertex fillet demands.)
-/// `only`: when `Some`, restrict chamfering to those corner (vertex) indices; every other
-/// corner is left sharp. `None` chamfers every fitting corner. An empty slice is a no-op.
-fn chamfer_op<T: CornerTarget>(target: &T, amount: f64, only: Option<&[usize]>) -> Result<T, String>
-{
-    if !(amount.is_finite() && amount > 0.0)
-    {
-        return Ok(target.clone());
-    }
-    if only.is_some_and(|sel| sel.is_empty())
-    {
-        return Ok(target.clone());
-    }
-    let pol = hcurve::boolean_policy();
-    let mut cur = target.clone();
-    let n = cur.corner_segments().len();
-    let closed = T::is_closed_corner_target();
-
-    let norm = |v: (f64, f64)| -> (f64, f64) {
-        let m = (v.0 * v.0 + v.1 * v.1).sqrt();
-        if m > 1e-12 { (v.0 / m, v.1 / m) } else { (0.0, 0.0) }
-    };
-    let dot = |a: (f64, f64), b: (f64, f64)| a.0 * b.0 + a.1 * b.1;
-    let dist = |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
-    let l = |p: &Point2| seg_local(p);
-
-    // Vertex vi is the junction of segment `vi-1` and segment `vi`. Closed: every
-    // vertex `0..n` (vertex 0 wraps to the last segment). Open: interior vertices
-    // `1..n` only (endpoints are not corners). Process high -> low so chamfering one
-    // corner does not shift lower, unprocessed indices.
-    let first = if closed { 0 } else { 1 };
-    for vi in (first..n).rev()
-    {
-        if only.is_some_and(|sel| !sel.contains(&vi))
-        {
-            continue; // not one of the requested corners — leave it sharp
-        }
-        let segs = cur.corner_segments();
-        let m = segs.len();
-        if vi >= m
-        {
-            continue;
-        }
-        let prev_seg = &segs[if closed { (vi + m - 1) % m } else { vi - 1 }];
-        let cur_seg = &segs[vi];
-        if !matches!(prev_seg, Segment2::Line(_)) || !matches!(cur_seg, Segment2::Line(_))
-        {
-            continue; // only line–line corners
-        }
-        let v = { let p = cur_seg.start(); (l(p)[0], l(p)[1]) };
-        let p = { let q = prev_seg.start(); (l(q)[0], l(q)[1]) };
-        let q = { let e = cur_seg.end(); (l(e)[0], l(e)[1]) };
-
-        let u = norm((p.0 - v.0, p.1 - v.1)); // toward previous vertex
-        let w = norm((q.0 - v.0, q.1 - v.1)); // toward next vertex
-        let half = dot(u, w).clamp(-1.0, 1.0).acos() / 2.0; // half interior angle
-        if half < 1.0e-3 || half > std::f64::consts::FRAC_PI_2 - 1.0e-6
-        {
-            continue; // straight / degenerate
-        }
-
-        let d = amount;
-        if d > dist(p, v) - 1e-9 || d > dist(v, q) - 1e-9
-        {
-            continue;
-        }
-        let setback = hcurve::real(d)?;
-        if let Some(c) = cur.chamfer_corner(vi, &setback, &pol)
-        {
-            cur = c;
-        }
-    }
-    Ok(cur)
 }
 
 fn parse_op(op: &str) -> Result<BooleanOp, JsValue>
