@@ -145,12 +145,44 @@ export abstract class Shape
         return this._id;
     }
 
+    /** Overwrite this shape's id. Ids are minted per construction, so a shape rebuilt from
+     *  a saved document would otherwise come back with a fresh uuid and lose every reference
+     *  to it (scene links, host selection, undo entries). Deserialisers call this to restore
+     *  identity; nothing else should. */
+    setId(id: string): this
+    {
+        this._id = id;
+        return this;
+    }
+
     node(): SceneNode | null
     {
         return this._node;
     }
 
     //// SCENE MEMBERSHIP ////
+
+    /** Add this shape to the scene, under the active layer of the scene it is bound to.
+     *  Clears the sticky `tmp()` flag — `addToScene()` is the documented way back in.
+     *
+     *  `scene` may be given explicitly (the usual case for a host that owns a root and is
+     *  adding a freshly built, never-attached shape); otherwise the shape's own node/carried
+     *  root is used. Returns `this` even when no scene is reachable, so it stays chainable. */
+    addToScene(name?: string, scene?: SceneNode): this
+    {
+        this._suppressScene = false;
+        if (name !== undefined) this.name(name);
+
+        if (scene) this._scene = scene;
+
+        // Active layer when the root tracks one, else the root itself — a scene without any
+        // layer set up must still accept shapes, or addToScene() would silently do nothing.
+        const root = scene ?? this._node?.root() ?? this._scene ?? null;
+        const layer = activeLayerOf(this) ?? root;
+        if (layer) (layer as SceneNode).addShape(this as any);
+
+        return this;
+    }
 
     /** Remove this shape from the scene (detaches its SceneNode). Returns `this`. */
     removeFromScene(): this

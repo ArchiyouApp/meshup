@@ -23,12 +23,12 @@ import { getQuality } from './quality';
 
 import { Vector3Js, VertexJs, Point3Js, PolygonJs, SketchJs, Curve3DJs } from "./wasm/meshup";
 
-import { ShapeCollection, getCsgrs, Mesh } from './index';
+import { ShapeCollection, getCsgrs, Mesh, Importer } from './index';
 import { Shape } from './Shape';
 import type { SceneNode } from './SceneNode';
 import { sceneReplace, sceneAdd, sceneUpdate, sceneCarry, sceneReplaceOrKeep, sceneLayer } from './sceneDecorators';
 import type { CsgrsModule, PointLike, Axis, BasePlane, CurveCornerSelection, OrientationXY, HlrStrategy,
-    SpanParams, SpanEllipse, SpanPoint } from './types';
+    SpanParams, SpanEllipse, SpanPoint, CurveData, PointData } from './types';
 import { resolveIsometryArgs, DEFAULT_ISOMETRY_CAM } from './projectionOptions';
 import type { IsometryOptions } from './projectionOptions';
 import { isPointLike, isBasePlane } from './types'
@@ -4093,6 +4093,32 @@ export class Curve extends Shape
                 + `${this.style.toSvgAttrs(true, styleOpts)}/>`;
         }
 
+        // Holes are intentionally NOT included here — `toSVGElem()` has never emitted them and
+        // callers rely on its exact output. Use `toPathData()` for the complete geometry.
+        const d = this._outlinePathData(true, fmt);
+        return `<path d="${d}"${classAttr} ${this.style.toSvgAttrs(this.isClosed(), styleOpts)}/>`;
+    }
+
+    /** Walk the native spans and emit SVG path-data for this curve's OUTLINE (no holes).
+     *  Shared by `toSVGElem()` and `toPathData()`; `flipY` decides the Y convention.
+     *
+     *  SVG's y axis points down, so `flipY` mirrors every model point on the way out. That
+     *  flip reverses handedness, which is why the arc writers below decide their sweep flag
+     *  from the projected points rather than from the span's own `ccw` — and why they stay
+     *  correct when a caller asks for the unflipped form. */
+    private _outlinePathData(
+        flipY: boolean,
+        fmt: (n: number) => number,
+    ): string
+    {
+        const to2D = flipY
+            ? (p: SpanPoint): [number, number] => [p[0], -p[1]]
+            : (p: SpanPoint): [number, number] => [p[0], p[1]];
+
+        // Half a turn at most per span: an SVG `A` whose endpoints coincide is dropped by
+        // renderers, so a full ellipse has to leave as two arcs rather than one.
+        const spans = this.exportSpans({ maxSweep: Math.PI });
+
         const pathParts: string[] = [];
         const L = (p: SpanPoint) => { const [x, y] = to2D(p); pathParts.push(`L${fmt(x)} ${fmt(y)}`); };
 
@@ -4120,7 +4146,7 @@ export class Curve extends Shape
          *  used to disappear from an exported path without a word. */
         const chordTo = (span: SpanParams): void =>
         {
-            console.warn(`Curve::toSVGElem(): span of kind '${span.kind}' cannot be written `
+            console.warn(`Curve::toPathData(): span of kind '${span.kind}' cannot be written `
                 + `as a path command; approximating it with a straight chord.`);
             L(span.end);
         };
@@ -4235,8 +4261,7 @@ export class Curve extends Shape
 
         if (this.isClosed()) pathParts.push('Z');
 
-        const d = pathParts.join(' ');
-        return `<path d="${d}"${classAttr} ${this.style.toSvgAttrs(this.isClosed(), styleOpts)}/>`;
+        return pathParts.join(' ');
     }
 
     /** The circle these spans describe, or null if they describe anything else.
@@ -4264,6 +4289,207 @@ export class Curve extends Shape
         return Math.abs(Math.abs(total) - Math.PI * 2) < 1e-9
             ? { center: first.center, radius: first.radius }
             : null;
+    }
+
+    /** This curve as SVG **path-data** — just the `d`, no element, no style attributes.
+     *
+     *  Differs from `toSVGElem()` in three ways that matter to a host renderer:
+     *   - a `Circle` comes back as real path-data (two 180° arc spans), where `toSVGElem()`
+     *     returns `<circle cx cy r/>` with no `d` at all;
+     *   - interior holes are included as additional `M…Z` subpaths;
+     *   - the Y convention is selectable. `flipY: true` (default) matches `toSVGElem()` and
+     *     SVG's y-down screen space for a y-up curve. Pass `flipY: false` when the curve is
+     *     ALREADY in y-down coordinates — that is also the form `Importer.fromSVG` reads back,
+     *     so `Curve.fromData(c.toData())` round-trips without a mirror (which would tessellate
+     *     arcs).
+     *
+     *  Lines and circular arcs are exact; splines are emitted as `Q`/`C` Béziers.
+     */
+    toPathData(opts: { flipY?: boolean; holes?: boolean } = {}): string
+    {
+        const flipY = opts.flipY ?? true;
+        const withHoles = opts.holes ?? true;
+
+        const fmt = (n: number) => +n.toFixed(6);
+        const to2D = flipY
+            ? (p: { x: number; y: number; z: number }): [number, number] => [p.x, -p.y]
+            : (p: { x: number; y: number; z: number }): [number, number] => [p.x, p.y];
+
+        const parts = [this._outlinePathData(flipY, fmt)];
+        if (withHoles)
+        {
+            this._holes.forEach(h => parts.push(h._outlinePathData(flipY, fmt)));
+        }
+        return parts.filter(p => p.length > 0).join(' ');
+    }
+
+    //// LIFETIME ////
+
+    /** Release the underlying kernel curve (and any holes) immediately.
+     *
+     *  wasm-bindgen registers a `FinalizationRegistry` for every kernel object, so this is not
+     *  required for correctness — but GC finalisation is non-deterministic and applies no
+     *  back-pressure on WASM linear memory. A host that keeps curves alive across a long
+     *  session (a CAD document rather than a one-shot script) should free them explicitly on
+     *  delete. Mirrors `Mesh.dispose()`.
+     *
+     *  After `dispose()` the curve is unusable: `inner()` will throw. */
+    dispose(): void
+    {
+        this._holes.forEach(h => h.dispose());
+        this._holes = [];
+
+        if (this._curve)
+        {
+            (this._curve as unknown as { free?: () => void }).free?.();
+            this._curve = undefined;
+        }
+    }
+
+    //// SERIALISATION ////
+
+    /** This curve as an exact, JSON-safe `CurveData`.
+     *
+     *  Each variant maps onto a native constructor, so `Curve.fromData(c.toData())` rebuilds
+     *  the geometry rather than a tessellation of it. Curves that no constructor can express —
+     *  compounds (boolean/offset/trim results), splines, ellipses — fall back to `Path`
+     *  (SVG path-data, y-down), which keeps lines and circular arcs exact.
+     *
+     *  **Known losses, via the `Path` fallback only:** Béziers are flattened to line segments
+     *  and elliptical arcs are skipped, because that is what `importSvgCurves` does on the way
+     *  back in. A spline therefore survives as a polyline. Build splines and ellipses from
+     *  their own parameters (`Interpolated` / `Ellipse` / `EllipticalArc`) if you need them to
+     *  round-trip exactly. */
+    toData(): CurveData
+    {
+        const P = (p: { x: number; y: number; z: number }): PointData => [p.x, p.y, p.z];
+        const holes = this._holes.length
+            ? { holes: this._holes.map(h => h.toData()) }
+            : {};
+
+        const cps = this.controlPoints();
+
+        switch (this.subtype())
+        {
+            case 'Line':
+            {
+                if (cps.length === 2) return { type: 'Line', start: P(cps[0]), end: P(cps[1]), ...holes };
+                break;
+            }
+
+            case 'Rect':
+            case 'Polyline':
+            {
+                // A `Rect` is a closed 4-segment polyline in hypercurve — there is no separate
+                // rect primitive, so a polyline rebuilds it exactly.
+                if (!this.inner().hasArcs())
+                {
+                    return { type: 'Polyline', points: cps.map(P), closed: this.isClosed(), ...holes };
+                }
+                break;
+            }
+
+            case 'Arc':
+            {
+                // controlPoints() gives span START points plus the final end — for an arc that
+                // is [start, end], with the bulge missing. Sample the parametric midpoint to
+                // recover a true three-point arc.
+                const [d0, d1] = Array.from(this.knotsDomain() ?? [0, 1]);
+                const mid = this.pointAtParam((d0 + d1) / 2);
+                return { type: 'Arc', start: P(cps[0]), mid: P(mid), end: P(cps[cps.length - 1]), ...holes };
+            }
+
+            case 'Circle':
+            {
+                const bb = this.bbox();
+                if (bb)
+                {
+                    const c = this.center();
+                    const n = this.normal();
+                    return {
+                        type: 'Circle',
+                        radius: (bb.max().x - bb.min().x) / 2,
+                        center: [c.x, c.y, c.z],
+                        normal: n ? [n.x, n.y, n.z] : [0, 0, 1],
+                        ...holes,
+                    };
+                }
+                break;
+            }
+        }
+
+        return { type: 'Path', d: this.toPathData({ flipY: false, holes: false }), ...holes };
+    }
+
+    /** Rebuild a curve written by `toData()`. Inverse of every variant it can emit, plus
+     *  `Interpolated` / `Ellipse` / `EllipticalArc`, which `toData()` never produces but a
+     *  caller that knows its own construction parameters can supply. */
+    static fromData(data: CurveData): Curve
+    {
+        const curve = Curve._fromDataOutline(data);
+        (data.holes ?? []).forEach(h => curve.addHole(Curve.fromData(h)));
+        return curve;
+    }
+
+    private static _fromDataOutline(data: CurveData): Curve
+    {
+        switch (data.type)
+        {
+            case 'Line':
+                return Curve.Line(data.start, data.end);
+
+            case 'Polyline':
+            {
+                // Curve.Polyline INFERS closure from last ≈ first (there is no flag), so a
+                // closed ring has to be handed back its repeated first point.
+                const pts = data.points.slice();
+                const first = pts[0];
+                const last = pts[pts.length - 1];
+                const isRepeated = first && last
+                    && Math.abs(first[0] - last[0]) < Curve.ZERO_LENGTH_TOLERANCE
+                    && Math.abs(first[1] - last[1]) < Curve.ZERO_LENGTH_TOLERANCE
+                    && Math.abs(first[2] - last[2]) < Curve.ZERO_LENGTH_TOLERANCE;
+                if (data.closed && !isRepeated) pts.push(first);
+                return Curve.Polyline(pts);
+            }
+
+            case 'Arc':
+                return Curve.Arc(data.start, data.mid, data.end, 'threepoint');
+
+            case 'Circle':
+                return Curve.Circle(data.radius, data.center, data.normal);
+
+            case 'Ellipse':
+                return Curve.Ellipse(data.radiusX, data.radiusY, data.center, data.rotation, data.normal);
+
+            case 'EllipticalArc':
+                return Curve.EllipticalArc(data.radiusX, data.radiusY, data.startAngle, data.endAngle,
+                    data.center, data.rotation, data.normal);
+
+            case 'Interpolated':
+                return Curve.Interpolated(data.points);
+
+            case 'Path':
+            {
+                // importSvgCurves keeps coordinates as-is (verified: a rect and a boolean result
+                // both come back with an identical bbox), so no mirror is needed — which matters,
+                // because mirroring would tessellate every arc away.
+                //
+                // Its arc SWEEP flag, however, is inverted with respect to the SVG spec: importing
+                // `M0 0 A10 10 0 0 1 20 0` yields an arc bulging towards +y, where the spec's
+                // "positive-angle direction" puts it at -y. Emitting spec-inverted path-data is not
+                // an option — `toPathData()` output is handed to real renderers — so the flags are
+                // flipped here, at the one place that talks to the importer.
+                // TODO(hypercurve): fix importSvgCurves' sweep handling and delete this.
+                const svg = `<svg xmlns="http://www.w3.org/2000/svg"><path d="${_flipArcSweepFlags(data.d)}"/></svg>`;
+                const curves = Importer.fromSVG(svg);
+                if (curves.length === 0)
+                {
+                    throw new Error(`Curve.fromData(): SVG path-data produced no curves: "${data.d}"`);
+                }
+                return curves.length === 1 ? curves.first() : Curve.Compound(curves.toArray());
+            }
+        }
     }
 
     /** Export this curve as a self-contained GLTF JSON string (LINE_STRIP). */
@@ -4474,11 +4700,25 @@ function _boehmInsert(
  *  Expects the span to already be projected onto XY. Uses (x, -y) for SVG coordinates.
  *  Uses the circumcircle of three sampled points to determine the radius,
  *  and the cross product to determine the sweep direction. */
+/** Toggle the sweep-flag of every absolute `A` command in SVG path-data.
+ *
+ *  Only used to bridge `importSvgCurves`' inverted sweep convention (see `Curve.fromData`).
+ *  Matches `A rx ry rot large-arc sweep x y`; the two flags are single digits, which is what
+ *  makes them addressable without a full path parser. */
+function _flipArcSweepFlags(d: string): string
+{
+    const N = '[-+]?(?:\\d*\\.\\d+|\\d+)(?:[eE][-+]?\\d+)?';
+    const S = '[\\s,]+';
+    const S0 = '[\\s,]*'; // separators are optional directly after the command letter
+    const re = new RegExp(`(A${S0}${N}${S}${N}${S}${N}${S}[01]${S})([01])`, 'g');
+    return d.replace(re, (_m, head: string, sweep: string) => `${head}${sweep === '1' ? '0' : '1'}`);
+}
+
 function _appendArcSvg(
     span: Curve,
     to2D: (p: { x: number; y: number; z: number }) => [number, number],
     fmt: (n: number) => number,
-    pathParts: string[]
+    pathParts: string[],
 ): void
 {
     const cps = span.controlPoints();
@@ -4503,21 +4743,28 @@ function _appendArcSvg(
 
     const r = fmt(circ.r);
 
-    const cross = (end2D[0] - start2D[0]) * (mid2D[1] - start2D[1])
-                - (end2D[1] - start2D[1]) * (mid2D[0] - start2D[0]);
-    const sweepFlag = cross > 0 ? 0 : 1;
+    // Derive both flags from the ACTUAL swept angle rather than from the chord's handedness.
+    // The mid point is sampled on the arc, so "which way round" is decided by whether it lies
+    // on the counter-clockwise path from start to end — correct for arcs above 180° too, where
+    // a chord-side test flips sign and mislabels them.
+    const TAU = 2 * Math.PI;
+    const norm = (a: number): number => ((a % TAU) + TAU) % TAU;
+    const angleOf = (p: [number, number]): number => Math.atan2(p[1] - circ.cy, p[0] - circ.cx);
 
-    const dx1 = start2D[0] - circ.cx, dy1 = start2D[1] - circ.cy;
-    const dx2 = end2D[0] - circ.cx, dy2 = end2D[1] - circ.cy;
+    const a0 = angleOf(start2D);
+    const ccwToMid = norm(angleOf(mid2D) - a0);
+    const ccwToEnd = norm(angleOf(end2D) - a0);
 
-    const angleStart = Math.atan2(dy1, dx1);
-    const angleEnd = Math.atan2(dy2, dx2);
+    const goesCCW = ccwToMid <= ccwToEnd;
+    const swept = goesCCW ? ccwToEnd : TAU - ccwToEnd;
 
-    let sweepToEnd = sweepFlag === 1
-        ? (angleEnd - angleStart + 2 * Math.PI) % (2 * Math.PI)
-        : (angleStart - angleEnd + 2 * Math.PI) % (2 * Math.PI);
+    const largeArcFlag = swept > Math.PI ? 1 : 0;
 
-    const largeArcFlag = sweepToEnd > Math.PI ? 1 : 0;
+    // SVG sweep-flag 1 = "positive-angle direction": θ increases, i.e. counter-clockwise in the
+    // coordinate-VALUE plane (it merely looks clockwise on screen because SVG draws +y downward).
+    // `goesCCW` is measured in the frame we are emitting, so the y-convention is already
+    // accounted for and no extra term is needed here.
+    const sweepFlag = goesCCW ? 1 : 0;
 
     pathParts.push(`A${r} ${r} 0 ${largeArcFlag} ${sweepFlag} ${fmt(end2D[0])} ${fmt(end2D[1])}`);
 }

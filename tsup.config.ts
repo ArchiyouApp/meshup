@@ -4,7 +4,10 @@ import { copyFile, mkdir } from 'node:fs/promises';
 export default defineConfig({
   entry: ['src/index.ts'],
   format: ['esm'], // ESM only: the base64-inlined WASM costs ~9.3 MB per extra format
-  dts: true, // Generate declaration file (.d.ts)
+  // Declarations come from `pnpm build:dts` (plain tsc --emitDeclarationOnly), which
+  // `pnpm build` chains after this: tsup's own dts build fails on this source, and tsc
+  // handles it without complaint.
+  dts: false,
   // MUST stay true. src/loader.ts reaches the base64 kernel through a dynamic
   // import so it lands in its own lazy chunk, only fetched when the .wasm file
   // could not be used. With splitting off esbuild inlines that import straight
