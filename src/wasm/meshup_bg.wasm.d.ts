@@ -79,6 +79,7 @@ export const edgeprojectionresultjs_silhouetteIndices: (a: number) => any;
 export const edgeprojectionresultjs_visiblePolylines: (a: number) => any;
 export const getTessellationQuality: () => [number, number];
 export const importDxfCurves: (a: number, b: number) => [number, number, number];
+export const importDxfDocument: (a: number, b: number) => [number, number, number, number];
 export const importSvgCurves: (a: number, b: number) => [number, number, number];
 export const matrix4js_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
 export const matrix4js_toArray: (a: number) => [number, number];

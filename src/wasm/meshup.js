@@ -4285,6 +4285,45 @@ export function importDxfCurves(bytes) {
 }
 
 /**
+ * Import a DXF drawing as **flat entity records** — the drawing, not geometry to model with.
+ *
+ * The counterpart to [`import_dxf_curves`], which answers "what curves are in this file".
+ * This one answers "what is in this file at all": every entity keeps its layer, colour,
+ * linetype and extrusion, an ARC stays a centre/radius/angles, a polyline keeps its bulges,
+ * and INSERTs are left unexpanded against the block table. Interpreting any of it — block
+ * expansion, OCS, unit guessing — is the caller's job, which is the point: those are the
+ * awkward parts, and they are better iterated on in TypeScript against real files.
+ *
+ * Returned as a **JSON string**, not through `serde-wasm-bindgen`. That serializer silently
+ * drops `#[serde(flatten)]` and internally-tagged enums, both of which `DxfDoc` uses for its
+ * entity kinds, so entities arrived as `{}`. `serde_json` + `JSON.parse` keeps them.
+ *
+ * Coordinates are exactly as the file has them: DXF's Y-up frame, in the file's own units.
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
+export function importDxfDocument(bytes) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.importDxfDocument(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
  * Import an SVG document into native planar curves. Lines, circular arcs and Béziers are
  * all kept exact — a `C` command arrives as a `CubicBezier2` span, not as chords.
  * Unsupported path commands (elliptical arcs with rx ≠ ry) are skipped and surfaced via

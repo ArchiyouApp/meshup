@@ -16,6 +16,12 @@ mod dxf;
 #[cfg(feature = "dxf-io")]
 pub mod dxf_curves;
 
+// `serde` as well as `dxf-io`: the whole point of this module is a document that crosses to
+// JS in one `serde_json` call, and `serde` is an optional dependency the `wasm` feature turns
+// on. A plain `cargo test` has neither.
+#[cfg(all(feature = "dxf-io", feature = "serde"))]
+pub mod dxf_entities;
+
 #[cfg(feature = "obj-io")]
 mod obj;
 

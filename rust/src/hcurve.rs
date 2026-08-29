@@ -18,14 +18,14 @@
 use hypercurve::{
     Aabb2, ArcArcIntersection, BezierParallelVerificationOptions,
     BooleanOp, Classification,
-    CircularArc2, Contour2, Curve2, CurveGeometry2, CurvePath2, CurvePolicy,
+    CircularArc2, Contour2, Curve2, CurveContext, CurveGeometry2, CurveOutcome, CurvePath2,
     CurveRegion2,
-    CurveString2, EllipseMap2, FillRule,
-    LineArcIntersection, LineArcRegion2, LineLineIntersection, LineSeg2,
-    NurbsCurve2, Point2, RationalBezierIntersectionPointEvidence2, RationalQuadraticBezier2, Real,
-    RegionView2, Segment2,
+    CurveString2, EllipseMap2,
+    LineArcIntersection, LineLineIntersection, LineSeg2,
+    NurbsCurve2, Point2, RationalQuadraticBezier2, Real,
+    Segment2,
     SegmentIntersection, Similarity2,
-    Tolerance, elliptical_arc_path,
+    elliptical_arc_path,
 };
 
 /// Default chord error used when sampling exact arcs/curves to f64 polylines.
@@ -165,29 +165,46 @@ pub fn point(x: f64, y: f64) -> Result<Point2, String>
     Ok(Point2::new(real(x)?, real(y)?))
 }
 
-/// The shared operation policy. `hypercurve` threads a [`CurvePolicy`] through
-/// every predicate; the default is the standard exact/escalating mode.
+/// The shared operation context. `hypercurve` threads a [`CurveContext`] through every
+/// predicate; `STRICT` accepts only exact or certified-refinement decisions.
 #[inline]
-pub fn policy() -> CurvePolicy
+pub fn policy() -> CurveContext
 {
-    CurvePolicy::default()
+    CurveContext::STRICT
 }
 
-/// Policy for region booleans. The strict `certified` default *declines*
-/// arc↔line region topology (returning `Uncertain`), so booleans between circles
-/// and polygons never resolve. `edge_preview` is hypercurve's tolerance-aware
-/// policy for exactly this boundary — it decides arc/line/tangency cases quickly
-/// while staying on native geometry (no tessellation).
+/// Context for region booleans and corner edits.
+///
+/// `STRICT` alone *declines* a fair amount of arc↔line region topology — a tangency, or an
+/// intersection landing exactly on a shared vertex, comes back `Uncertain` — so booleans
+/// between circles and polygons did not resolve. `APPROXIMATE_512` is hypercurve's authorized
+/// escape: it permits hyperlimit's terminal 512-bit interpretation for the decisions that
+/// strict refinement cannot close.
+///
+/// It is not a *tolerance*, and it is not lossy geometry: every operation first runs a
+/// complete strict pass and only then re-runs under the terminal (see
+/// `resolve_certified_operation`), the result is the same exact carrier either way, and the
+/// returned [`CurveOutcome::certainty`] records which one answered. This replaces the old
+/// `CurvePolicy::edge_preview(Tolerance)` and the escalating tolerance ladder built on it,
+/// neither of which exists upstream any more — tolerances are now confined to
+/// `CurvePreviewOptions`, which is for rendering and explicitly must not be retained as
+/// topology.
 #[inline]
-pub fn boolean_policy() -> CurvePolicy
+pub fn boolean_policy() -> CurveContext
 {
-    boolean_policy_with(1.0e-9, 1.0e-12)
+    CurveContext::APPROXIMATE_512
 }
 
+/// Unwrap a completed operation, discarding the certainty flag.
+///
+/// Every hypercurve operation now returns [`CurveOutcome`] — the value plus whether any
+/// decision consumed the `APPROXIMATE_512` terminal. meshup asks for that terminal
+/// deliberately (see [`boolean_policy`]) and has nowhere to report the distinction, so the
+/// flag is dropped at this one named place rather than at forty call sites.
 #[inline]
-fn boolean_policy_with(point: f64, area: f64) -> CurvePolicy
+pub(crate) fn done<T>(outcome: CurveOutcome<T>) -> T
 {
-    CurvePolicy::edge_preview(Tolerance::new(point, area))
+    outcome.into_value()
 }
 
 /// A native boolean-result region: an exact exterior contour plus the exact hole
@@ -203,49 +220,53 @@ pub struct NativeRegion
 /// contours (no finite projection). Holes are associated to their material
 /// exterior by exact containment. Returns `None` when hypercurve declines the
 /// topology (caller may fall back to another engine).
+///
+/// Both operands are promoted to [`CurveRegion2`], hypercurve's single authoritative region
+/// type, which retains the line/arc carrier as a certified fast path — so this is still the
+/// native route, not a lowering. `RegionView2`/`LineArcRegion2`, the borrowed line/arc region
+/// pair this used to call, are no longer public: there is one region Boolean now, and the
+/// native contours come back out through [`CurveRegion2::native_contours_fast_path`].
 pub fn boolean_native(a: &Contour2, b: &Contour2, op: BooleanOp) -> Option<Vec<NativeRegion>>
 {
-    // First try the exact geometry with an escalating edge tolerance: the tight default
-    // declines vertex-coincident / near-tangent topology (e.g. a circle passing exactly
-    // through a rectangle corner). A slightly looser tolerance decides most of those.
-    boolean_native_once(a, b, op, &[(1.0e-9, 1.0e-12), (1.0e-7, 1.0e-10), (1.0e-5, 1.0e-8)]).or_else(|| {
-        // Still declined — the contact is exactly degenerate (an intersection landing on a
-        // shared vertex, e.g. a circle through a rectangle corner). Nudge `b` by a small
-        // offset to turn the coincidence into a clean crossing (Simulation-of-Simplicity
-        // style), then decide at the tight tolerance. The offset must exceed the loosest
-        // tolerance above so it reads as a real crossing, yet stays below display
-        // resolution — the result is geometrically indistinguishable.
+    // The exact geometry first. There is no tolerance ladder to climb any more — the old one
+    // escalated `edge_preview` tolerances, and the tolerance-carrying policy is gone.
+    boolean_native_once(a, b, op).or_else(|| {
+        // Declined — the contact is exactly degenerate (an intersection landing on a shared
+        // vertex, e.g. a circle through a rectangle corner). Nudge `b` by a small offset to
+        // turn the coincidence into a clean crossing (Simulation-of-Simplicity style). The
+        // offset stays below display resolution, so the result is geometrically
+        // indistinguishable.
         const EPS: f64 = 1.0e-4;
         let nudges = [(EPS, 0.0), (0.0, EPS), (-EPS, EPS)];
         nudges.iter().find_map(|&(dx, dy)| {
             let moved = transform_contour(b, &similarity(1.0, 0.0, 0.0, 1.0, dx, dy).ok()?).ok()?;
-            boolean_native_once(a, &moved, op, &[(1.0e-9, 1.0e-12)])
+            boolean_native_once(a, &moved, op)
         })
     })
 }
 
-/// One boolean attempt over the exact contours, trying each `(point, area)` edge
-/// tolerance in order and returning the first decided result.
-fn boolean_native_once(a: &Contour2, b: &Contour2, op: BooleanOp, ladder: &[(f64, f64)]) -> Option<Vec<NativeRegion>>
+/// One boolean attempt over the exact contours.
+fn boolean_native_once(a: &Contour2, b: &Contour2, op: BooleanOp) -> Option<Vec<NativeRegion>>
 {
-    let a_view = RegionView2::new(std::slice::from_ref(a), &[]);
-    let b_view = RegionView2::new(std::slice::from_ref(b), &[]);
-    ladder.iter().find_map(|&(pt, ar)| {
-        let pol = boolean_policy_with(pt, ar);
-        match a_view.boolean_region(&b_view, op, FillRule::NonZero, &pol).ok()?
-        {
-            Classification::Decided(r) => Some(associate_holes(&r, &pol)),
-            Classification::Uncertain(_) => None,
-        }
-    })
+    let pol = boolean_policy();
+    let region_a = done(CurveRegion2::try_from_native_material_contours(vec![a.clone()], &pol).ok()?);
+    let region_b = done(CurveRegion2::try_from_native_material_contours(vec![b.clone()], &pol).ok()?);
+    let result = done(region_a.boolean_region(&region_b, op, &pol).ok()?);
+    // Ask for the line/arc carrier back. A line/arc boolean of line/arc operands stays
+    // line/arc, so this is the expected answer; anything else means the result needs the
+    // path-based route instead of this one.
+    let native = match done(result.native_contours_fast_path(&pol).ok()?)
+    {
+        Classification::Decided(view) => view,
+        Classification::Uncertain(_) => return None,
+    };
+    Some(associate_holes(native.material_contours(), native.hole_contours(), &pol))
 }
 
 /// Group a region's material and hole contours into [`NativeRegion`]s, assigning
 /// each hole to the material contour that contains it.
-fn associate_holes(region: &LineArcRegion2, pol: &CurvePolicy) -> Vec<NativeRegion>
+fn associate_holes(materials: &[Contour2], holes: &[Contour2], pol: &CurveContext) -> Vec<NativeRegion>
 {
-    let materials = region.material_contours();
-    let holes = region.hole_contours();
     let mut out: Vec<NativeRegion> = materials
         .iter()
         .map(|m| NativeRegion { exterior: m.clone(), holes: Vec::new() })
@@ -340,22 +361,28 @@ pub fn transform_affine_path(
 ) -> Option<Vec<CurvePath2>>
 {
     let pol = policy();
-    let region = CurveRegion2::try_from_boundary_paths(std::slice::from_ref(path)).ok()?;
-    let moved = region
-        .transform_affine(
-            &real(m00).ok()?,
-            &real(m01).ok()?,
-            &real(m10).ok()?,
-            &real(m11).ok()?,
-            &real(tx).ok()?,
-            &real(ty).ok()?,
-            &pol,
-        )
-        .ok()?;
-    match moved.materialized_boundary_paths()
+    let region = done(CurveRegion2::try_from_boundary_paths(std::slice::from_ref(path), &pol).ok()?);
+    let moved = done(
+        region
+            .transform_affine(
+                &real(m00).ok()?,
+                &real(m01).ok()?,
+                &real(m10).ok()?,
+                &real(m11).ok()?,
+                &real(tx).ok()?,
+                &real(ty).ok()?,
+                &pol,
+            )
+            .ok()?,
+    );
+    match moved.materialized_boundary_paths(&pol)
     {
-        Ok(Classification::Decided(paths)) if !paths.is_empty() => Some(paths),
-        _ => None,
+        Ok(outcome) => match done(outcome)
+        {
+            Classification::Decided(paths) if !paths.is_empty() => Some(paths),
+            _ => None,
+        },
+        Err(_) => None,
     }
 }
 
@@ -370,19 +397,22 @@ pub fn transform_affine_path(
 /// Returns `Ok(None)` when hypercurve declines the topology, leaving the caller to fall back.
 pub fn boolean_paths(a: &CurvePath2, b: &CurvePath2, op: BooleanOp) -> Option<Vec<CurvePath2>>
 {
-    let region_a = CurveRegion2::try_from_boundary_paths(std::slice::from_ref(a)).ok()?;
-    let region_b = CurveRegion2::try_from_boundary_paths(std::slice::from_ref(b)).ok()?;
     let pol = boolean_policy();
-    let result = region_a.retain_boolean(&region_b, &pol).ok()?;
-    let region = match result.boolean_region(op)
+    let region_a = done(CurveRegion2::try_from_boundary_paths(std::slice::from_ref(a), &pol).ok()?);
+    let region_b = done(CurveRegion2::try_from_boundary_paths(std::slice::from_ref(b), &pol).ok()?);
+    // One call now: the two-step `retain_boolean` -> `boolean_region(op)` split, which built
+    // shared intersection evidence and then read one operation out of it, is folded into
+    // `boolean_region`. `boolean_regions` is the surviving batch form, for callers that want
+    // all four operations off one arrangement.
+    let region = done(region_a.boolean_region(&region_b, op, &pol).ok()?);
+    match region.materialized_boundary_paths(&pol)
     {
-        Ok(r) => r,
-        Err(_) => return None,
-    };
-    match region.materialized_boundary_paths()
-    {
-        Ok(Classification::Decided(paths)) if !paths.is_empty() => Some(paths),
-        _ => None,
+        Ok(outcome) => match done(outcome)
+        {
+            Classification::Decided(paths) if !paths.is_empty() => Some(paths),
+            _ => None,
+        },
+        Err(_) => None,
     }
 }
 
@@ -393,22 +423,16 @@ pub fn boolean_paths(a: &CurvePath2, b: &CurvePath2, op: BooleanOp) -> Option<Ve
 pub fn intersect_paths(a: &CurvePath2, b: &CurvePath2) -> Option<Vec<[f64; 2]>>
 {
     let pol = policy();
-    let retained = a.retain_intersection(b, &pol).ok()?;
-    let result = retained.result().ok()?;
+    let result = done(a.intersect_path(b, &pol).ok()?);
     let mut pts: Vec<[f64; 2]> = Vec::new();
     for contact in result.contacts()
     {
-        match contact.contact().point()
-        {
-            RationalBezierIntersectionPointEvidence2::Exact(p) =>
-            {
-                pts.push(point_to_f64(p)?);
-            }
-            // The contact is retained as an exact algebraic image rather than as `Real`
-            // coordinates. Rather than silently drop a real intersection, decline the whole
-            // query so the caller falls back to the sampled path, which will find it.
-            RationalBezierIntersectionPointEvidence2::Algebraic(_) => return None,
-        }
+        // `as_exact` is `Some` only when the contact carries `Real` coordinates. Every other
+        // form retains the point as an exact algebraic image instead — the enum has grown
+        // seven such variants. Rather than silently drop a real intersection, decline the
+        // whole query so the caller falls back to the sampled path, which will find it.
+        let p = contact.contact().point().as_exact()?;
+        pts.push(point_to_f64(p)?);
     }
     Some(merge_near_duplicates(pts))
 }
@@ -659,7 +683,16 @@ pub fn path_from_segments(segs: &[Segment2]) -> Result<CurvePath2, String>
             Segment2::Arc(a) => Curve2::from(a.clone()),
         })
         .collect();
-    CurvePath2::try_new(curves).map_err(|e| format!("hcurve: path from segments failed ({e:?})"))
+    // NOT the bare `try_new`, which is `STRICT`. The chain arrives from a `Contour2` or a
+    // `CurveString2`, both of which hypercurve already validated as connected, so this is
+    // re-deciding a question that has an answer — and after a boolean or an offset it is a
+    // question STRICT cannot always close: two endpoints that ARE the same point can be
+    // carried as different exact expressions, and certifying their difference to zero then
+    // needs the authorized terminal. Without it, offsetting a boolean result failed at the
+    // lift, before any offsetting happened.
+    CurvePath2::try_new_with_policy(curves, &boolean_policy())
+        .map(done)
+        .map_err(|e| format!("hcurve: path from segments failed ({e:?})"))
 }
 
 /// Lower an exact [`CurvePath2`] back to native line/arc [`Segment2`]s — the other half of
@@ -877,14 +910,24 @@ pub fn length_path(path: &CurvePath2, q: &TessQuality) -> Result<f64, String>
 /// used to get.
 pub fn signed_area_path(path: &CurvePath2) -> Result<f64, String>
 {
-    let region = CurveRegion2::try_from_boundary_paths(std::slice::from_ref(path))
-        .map_err(|e| format!("hcurve: region from path failed ({e:?})"))?;
-    match region.signed_area()
+    let pol = policy();
+    let region = done(
+        CurveRegion2::try_from_boundary_paths(std::slice::from_ref(path), &pol)
+            .map_err(|e| format!("hcurve: region from path failed ({e:?})"))?,
+    );
+    match region.signed_area(&pol)
     {
-        Ok(Some(area)) => area
-            .to_f64_lossy()
-            .ok_or_else(|| "hcurve: path area not representable as f64".to_string()),
-        Ok(None) => Err("hcurve: path area undefined".to_string()),
+        Ok(outcome) => match done(outcome)
+        {
+            Classification::Decided(Some(area)) => area
+                .to_f64_lossy()
+                .ok_or_else(|| "hcurve: path area not representable as f64".to_string()),
+            Classification::Decided(None) => Err("hcurve: path area undefined".to_string()),
+            Classification::Uncertain(reason) =>
+            {
+                Err(format!("hcurve: path area undecided ({reason:?})"))
+            }
+        },
         Err(e) => Err(format!("hcurve: path signed_area failed ({e:?})")),
     }
 }
@@ -1358,9 +1401,11 @@ pub fn tessellate_path(path: &CurvePath2, q: &TessQuality) -> Result<Vec<[f64; 2
                     Ok(Classification::Decided(p)) => p,
                     _ => return Err("hcurve: arc sweep sample undecided".to_string()),
                 },
-                None => curve
-                    .point_at(&real(t)?)
-                    .map_err(|e| format!("hcurve: path point failed ({e:?})"))?,
+                None => done(
+                    curve
+                        .point_at(&real(t)?, &pol)
+                        .map_err(|e| format!("hcurve: path point failed ({e:?})"))?,
+                ),
             };
             let xy = point_to_f64(&pt).ok_or_else(|| "hcurve: path point not finite".to_string())?;
             if out.last() != Some(&xy)
@@ -1522,7 +1567,8 @@ pub fn nurbs_interpolate(points: &[[f64; 2]], degree: usize) -> Result<NurbsCurv
         .map(|c| real(c / total))
         .collect::<Result<_, _>>()?;
 
-    NurbsCurve2::interpolate_global(degree, pts, parameters)
+    NurbsCurve2::interpolate_global(degree, pts, parameters, &policy())
+        .map(done)
         .map_err(|e| format!("hcurve: nurbs interpolation failed ({e:?})"))
 }
 
@@ -1573,34 +1619,233 @@ pub fn arc_3pt(start: [f64; 2], mid: [f64; 2], end: [f64; 2]) -> Result<CurveStr
         .map_err(|e| format!("hcurve: arc_3pt curve string failed ({e:?})"))
 }
 
+/// How far a mitered corner may run out from the original vertex, as a multiple of the
+/// offset distance, before the join falls back to an arc. A very sharp corner mitres to a
+/// spike that is longer than the geometry it joins; the arc is the honest answer there.
+const MITER_LIMIT: f64 = 4.0;
+
+/// Left-side offsets of a chain of native line/arc segments, joined at the corners.
+///
+/// **meshup owns this join layer.** hypercurve used to expose it as
+/// `CurveString2::offset_left_with_line_joins` / `Contour2::offset_left_with_corner_style`;
+/// both were removed when region offsetting became authoritative
+/// ([`CurveRegion2::offset`]), and the private join machinery went with them. What survives
+/// upstream — and what this is built on — is the primitive
+/// [`hypercurve::Segment2::offset_left`]: the exact parallel of one line or one arc.
+///
+/// The staging is the one those methods used, and the one the profile-offset literature
+/// describes: offset each segment independently, then reconnect. A line–line corner is
+/// mitered at the exact intersection of the two offset support lines; every other corner —
+/// and any miter that would run off into a spike — is joined by a circular arc centred on
+/// the original vertex, which both offset endpoints already sit on at exactly `|distance|`.
+///
+/// Like the code it replaces, this is a raw parallel: it does **not** trim
+/// self-intersections. Offset a profile far enough to fold over itself and the result
+/// self-touches rather than being regularized. [`CurveRegion2::offset`] is the upstream
+/// engine that does regularize, but it works in grow/shrink terms on a filled region, not
+/// in "left of travel" terms on one boundary, so it is not a drop-in here.
+fn offset_segments_left(segs: &[Segment2], distance: f64, closed: bool) -> Result<Vec<Segment2>, String>
+{
+    if segs.is_empty()
+    {
+        return Err("hcurve: offset of an empty segment chain".to_string());
+    }
+    let pol = policy();
+    let d = real(distance)?;
+
+    // 1. Each segment's own exact parallel. A line translates; an arc becomes concentric.
+    let offsets: Vec<Segment2> = segs
+        .iter()
+        .map(|seg| {
+            seg.offset_left(d.clone(), &pol)
+                .map_err(|e| format!("hcurve: segment offset failed ({e:?})"))
+                .and_then(decided)
+        })
+        .collect::<Result<_, _>>()?;
+
+    // 2. Resolve every corner. Corner `i` sits between offset `i` and offset `i + 1`; a
+    //    closed chain has one more of them, wrapping back to offset 0.
+    let n = offsets.len();
+    let corners = if closed { n } else { n.saturating_sub(1) };
+    let mut joins: Vec<Join> = Vec::with_capacity(corners);
+    for i in 0..corners
+    {
+        let j = (i + 1) % n;
+        joins.push(corner_join(&segs[i], &offsets[i], &offsets[j], distance));
+    }
+
+    // 3. Rebuild. A miter moves the two incident endpoints onto the miter point; a round
+    //    join is inserted between them as an extra arc.
+    let mut out: Vec<Segment2> = Vec::with_capacity(n + corners);
+    for i in 0..n
+    {
+        // The corner *before* segment i, which may have moved its start point.
+        let prev_corner = if i > 0 { Some(i - 1) } else if closed { Some(corners - 1) } else { None };
+        let start = prev_corner.and_then(|c| joins.get(c)).and_then(Join::miter_point);
+        let end = joins.get(i).and_then(Join::miter_point);
+        let adjusted = retarget_segment(&offsets[i], start, end)?;
+        let adjusted_end = adjusted.end().clone();
+        out.push(adjusted);
+
+        if let Some(Join::Round) = joins.get(i)
+        {
+            let to = offsets[(i + 1) % n].start().clone();
+            if adjusted_end != to
+            {
+                let centre = segs[i].end().clone();
+                out.push(round_join(&adjusted_end, &to, &centre)?);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// How one corner of an offset chain is reconnected.
+enum Join
+{
+    /// The two offsets already meet — a tangent-continuous corner, e.g. a fillet arc
+    /// running into its line.
+    Meet,
+    /// Both sides are lines and their offset support lines cross here.
+    Miter(Point2),
+    /// An arc is involved, the supports are parallel, or the miter would spike.
+    Round,
+}
+
+impl Join
+{
+    const fn miter_point(&self) -> Option<&Point2>
+    {
+        match self
+        {
+            Self::Miter(p) => Some(p),
+            _ => None,
+        }
+    }
+}
+
+/// Decide how to reconnect `prev`'s end to `next`'s start, given the source segment whose
+/// end is the original corner vertex.
+fn corner_join(source: &Segment2, prev: &Segment2, next: &Segment2, distance: f64) -> Join
+{
+    if prev.end() == next.start()
+    {
+        return Join::Meet;
+    }
+    // Only a line–line corner mitres: an arc's endpoint cannot be moved along a support
+    // line without changing the arc.
+    let (Segment2::Line(a), Segment2::Line(b)) = (prev, next)
+    else
+    {
+        return Join::Round;
+    };
+    match line_support_intersection(a, b)
+    {
+        Some(m) =>
+        {
+            // Reject the spike. `distance` is the exact radius of the round alternative, so
+            // the limit is read against it.
+            let v = source.end();
+            let (dx, dy) = m.delta_from(v);
+            let far = match (dx.to_f64_lossy(), dy.to_f64_lossy())
+            {
+                (Some(dx), Some(dy)) => dx.hypot(dy) > MITER_LIMIT * distance.abs(),
+                _ => true,
+            };
+            if far { Join::Round } else { Join::Miter(m) }
+        }
+        None => Join::Round,
+    }
+}
+
+/// Exact intersection of two line segments' *support lines* (not the segments themselves).
+/// `None` when they are parallel, or when the sign of the denominator cannot be read.
+///
+/// Solves `a.start + t * dA = b.start + s * dB` for `t`. Every coordinate stays an exact
+/// `Real`; only the parallel test drops to f64, the way the rest of this module reads a
+/// handedness or a bound.
+fn line_support_intersection(a: &LineSeg2, b: &LineSeg2) -> Option<Point2>
+{
+    let (ax, ay) = a.end().delta_from(a.start());
+    let (bx, by) = b.end().delta_from(b.start());
+    let denom = &ax * &by - &ay * &bx;
+    // A parallel pair has no single crossing. The test has to be a *magnitude* test, not an
+    // exact-zero one: two supports that are merely near-parallel put the miter point
+    // arbitrarily far away, which the caller's spike limit would reject anyway.
+    let scale = (ax.to_f64_lossy()?.hypot(ay.to_f64_lossy()?))
+        * (bx.to_f64_lossy()?.hypot(by.to_f64_lossy()?));
+    if !(denom.to_f64_lossy()?.abs() > 1.0e-12 * scale.max(1.0))
+    {
+        return None;
+    }
+    let (rx, ry) = b.start().delta_from(a.start());
+    let t = ((&rx * &by - &ry * &bx) / denom).ok()?;
+    Some(Point2::new(
+        a.start().x() + &(&ax * &t),
+        a.start().y() + &(&ay * &t),
+    ))
+}
+
+/// A circular join from `from` to `to` about `centre`. Both endpoints are already exactly
+/// `|distance|` from `centre` — they are the same offset applied to the two segments that
+/// meet there — so the arc is exact; only its handedness is read in f64.
+fn round_join(from: &Point2, to: &Point2, centre: &Point2) -> Result<Segment2, String>
+{
+    let (ux, uy) = from.delta_from(centre);
+    let (vx, vy) = to.delta_from(centre);
+    let cross = &ux * &vy - &uy * &vx;
+    let clockwise = cross.to_f64_lossy().is_some_and(|c| c < 0.0);
+    CircularArc2::try_from_center(from.clone(), to.clone(), centre.clone(), clockwise)
+        .map(Segment2::Arc)
+        .map_err(|e| format!("hcurve: offset round join failed ({e:?})"))
+}
+
+/// Rebuild a line segment with either endpoint moved to a miter point. Arcs are returned
+/// unchanged — a corner touching an arc is never mitered.
+fn retarget_segment(seg: &Segment2, start: Option<&Point2>, end: Option<&Point2>) -> Result<Segment2, String>
+{
+    match seg
+    {
+        Segment2::Line(l) if start.is_some() || end.is_some() =>
+        {
+            let s = start.unwrap_or_else(|| l.start()).clone();
+            let e = end.unwrap_or_else(|| l.end()).clone();
+            LineSeg2::try_new(s, e)
+                .map(Segment2::Line)
+                .map_err(|e| format!("hcurve: mitered offset segment failed ({e:?})"))
+        }
+        other => Ok(other.clone()),
+    }
+}
+
 /// One-sided offset of an **open** curve string by `distance` (positive = left of travel
 /// direction, negative = right), returned as **native** line/arc geometry.
 ///
-/// hypercurve miters line-line corners at the exact supporting-line intersection and joins
-/// the rest with a circular arc, so the result is genuinely curved geometry — this used to
-/// tessellate that result away, which is why offsetting a circle returned a 128-gon.
-///
-/// This is the raw parallel curve: it does **not** trim self-intersections (that is an
-/// explicit upstream gap), so a profile offset far enough to fold over itself will produce
-/// a self-touching result rather than a regularized one.
+/// Line–line corners are mitered at the exact supporting-line intersection and the rest are
+/// joined with a circular arc, so the result is genuinely curved geometry — this used to
+/// tessellate that result away, which is why offsetting a circle returned a 128-gon. See
+/// [`offset_segments_left`] for who owns that join layer now, and for the self-intersection
+/// caveat.
 pub fn offset_open(cs: &CurveString2, distance: f64) -> Result<CurveString2, String>
 {
-    let pol = policy();
-    decided(
-        cs.offset_left_with_line_joins(real(distance)?, &pol)
-            .map_err(|e| format!("hcurve: open offset failed ({e:?})"))?,
-    )
+    if distance == 0.0
+    {
+        return Ok(cs.clone());
+    }
+    let segs = offset_segments_left(cs.segments(), distance, false)?;
+    CurveString2::try_new(segs).map_err(|e| format!("hcurve: open offset failed ({e:?})"))
 }
 
 /// One-sided offset of a **closed** contour by `distance` (sign relative to the contour's
 /// winding), returned as **native** line/arc geometry. See [`offset_open`].
 pub fn offset_closed(ct: &Contour2, distance: f64) -> Result<Contour2, String>
 {
-    let pol = policy();
-    decided(
-        ct.offset_left_with_line_joins(real(distance)?, &pol)
-            .map_err(|e| format!("hcurve: closed offset failed ({e:?})"))?,
-    )
+    if distance == 0.0
+    {
+        return Ok(ct.clone());
+    }
+    let segs = offset_segments_left(ct.segments(), distance, true)?;
+    Contour2::try_new(segs).map_err(|e| format!("hcurve: closed offset failed ({e:?})"))
 }
 
 /// One-sided offset of an exact [`CurvePath2`] (conic / Bezier / spline spans).
@@ -2157,13 +2402,16 @@ mod tests
     /// A NURBS as an exact single-span path, which is how `Curve3DJs` stores one.
     fn nurbs_path(c: &NurbsCurve2) -> CurvePath2
     {
-        let curve = Curve2::try_nurbs(
-            c.degree(),
-            c.control_points().to_vec(),
-            c.weights().to_vec(),
-            c.knots().to_vec(),
-        )
-        .unwrap();
+        let curve = done(
+            Curve2::try_nurbs(
+                c.degree(),
+                c.control_points().to_vec(),
+                c.weights().to_vec(),
+                c.knots().to_vec(),
+                &policy(),
+            )
+            .unwrap(),
+        );
         CurvePath2::try_new(vec![curve]).unwrap()
     }
 

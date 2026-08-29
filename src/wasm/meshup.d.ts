@@ -1009,6 +1009,24 @@ export function getTessellationQuality(): Float64Array;
 export function importDxfCurves(bytes: Uint8Array): CurveImportJs;
 
 /**
+ * Import a DXF drawing as **flat entity records** — the drawing, not geometry to model with.
+ *
+ * The counterpart to [`import_dxf_curves`], which answers "what curves are in this file".
+ * This one answers "what is in this file at all": every entity keeps its layer, colour,
+ * linetype and extrusion, an ARC stays a centre/radius/angles, a polyline keeps its bulges,
+ * and INSERTs are left unexpanded against the block table. Interpreting any of it — block
+ * expansion, OCS, unit guessing — is the caller's job, which is the point: those are the
+ * awkward parts, and they are better iterated on in TypeScript against real files.
+ *
+ * Returned as a **JSON string**, not through `serde-wasm-bindgen`. That serializer silently
+ * drops `#[serde(flatten)]` and internally-tagged enums, both of which `DxfDoc` uses for its
+ * entity kinds, so entities arrived as `{}`. `serde_json` + `JSON.parse` keeps them.
+ *
+ * Coordinates are exactly as the file has them: DXF's Y-up frame, in the file's own units.
+ */
+export function importDxfDocument(bytes: Uint8Array): string;
+
+/**
  * Import an SVG document into native planar curves. Lines, circular arcs and Béziers are
  * all kept exact — a `C` command arrives as a `CubicBezier2` span, not as chords.
  * Unsupported path commands (elliptical arcs with rx ≠ ry) are skipped and surfaced via
@@ -1111,6 +1129,7 @@ export interface InitOutput {
   readonly edgeprojectionresultjs_visiblePolylines: (a: number) => any;
   readonly getTessellationQuality: () => [number, number];
   readonly importDxfCurves: (a: number, b: number) => [number, number, number];
+  readonly importDxfDocument: (a: number, b: number) => [number, number, number, number];
   readonly importSvgCurves: (a: number, b: number) => [number, number, number];
   readonly matrix4js_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
   readonly matrix4js_toArray: (a: number) => [number, number];

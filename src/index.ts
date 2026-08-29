@@ -90,6 +90,8 @@ export type { SceneNodeGraphNode, SceneNodeData, SceneDocData, SceneShapeData,
 export { GLTFBuilder } from './GLTFBuilder';
 export { Importer } from './Importer';
 export type { ImportFormat, ImportOptions } from './Importer';
+export type { DxfDoc, DxfHeaderData, DxfLayerData, DxfBlockData, DxfEntityData, DxfKindData,
+    DxfVertexData } from './DxfDoc';
 export type { StyleData } from './Style';
 
 /*  The pieces below used to be reachable only through deep subpath imports

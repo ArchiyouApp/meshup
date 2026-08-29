@@ -11,8 +11,8 @@ use crate::hcurve;
 use crate::wasm::point_js::Point3Js;
 use crate::wasm::vector_js::Vector3Js;
 use hypercurve::{
-    BooleanOp, Contour2, Curve2, CurveFamily2, CurveGeometry2, CurvePath2, CurvePolicy,
-    CurveString2, LineSeg2, Point2, Segment2, Similarity2,
+    BooleanOp, Contour2, Curve2, CurveContext, CurveCornerMode2, CurveFamily2, CurveGeometry2,
+    CurvePath2, CurveString2, LineSeg2, Point2, Real as ExactReal, Segment2, Similarity2,
 };
 use nalgebra::{Point3, Vector3};
 use wasm_bindgen::prelude::*;
@@ -563,7 +563,7 @@ impl Curve3DJs
     {
         let path = self.closed_path()?;
         let sim = target.similarity_from(&self.frame)?;
-        path.transform_similarity(&sim).ok()
+        path.transform_similarity(&sim, &hcurve::policy()).ok().map(hcurve::done)
     }
 
     /// This curve's exact spans, expressed in `target`'s local coordinates.
@@ -573,7 +573,9 @@ impl Curve3DJs
         let spans = self.exact_spans().ok()?;
         let path = hcurve::join_curves(spans).ok()?;
         let sim = target.similarity_from(&self.frame)?;
-        path.transform_similarity(&sim).ok().map(|p| p.curves().to_vec())
+        path.transform_similarity(&sim, &hcurve::policy())
+            .ok()
+            .map(|p| hcurve::done(p).curves().to_vec())
     }
 
     /// This curve's NURBS carrier, when it is exactly one spline span.
@@ -897,7 +899,9 @@ impl Curve3DJs
             nurbs.control_points().to_vec(),
             nurbs.weights().to_vec(),
             nurbs.knots().to_vec(),
+            &hcurve::policy(),
         )
+        .map(hcurve::done)
         .map_err(|e| err(format!("makeInterpolated: {e:?}")))?;
         let path = CurvePath2::try_new(vec![curve])
             .map_err(|e| err(format!("makeInterpolated: {e:?}")))?;
@@ -1269,7 +1273,11 @@ impl Curve3DJs
         // Exact reversal for a mixed-family path.
         if let Geom::Path(pg) = &self.geom
         {
-            let rev = pg.path.reversed().map_err(|e| err(format!("reverse: {e:?}")))?;
+            let rev = pg
+                .path
+                .reversed(&hcurve::policy())
+                .map(hcurve::done)
+                .map_err(|e| err(format!("reverse: {e:?}")))?;
             return Ok(Curve3DJs::from_path(self.frame.clone(), rev, pg.closed));
         }
         let segs: Vec<Segment2> = self
@@ -1958,7 +1966,8 @@ impl Curve3DJs
             {
                 let path = pg
                     .path
-                    .transform_similarity(&sim)
+                    .transform_similarity(&sim, &hcurve::policy())
+                    .map(hcurve::done)
                     .map_err(|e| err(format!("Curve3DJs::scale: {e:?}")))?;
                 Geom::Path(PathGeom::new(path, pg.closed))
             }
@@ -2185,38 +2194,63 @@ fn err(e: String) -> JsValue
 /// Abstracts over the closed ([`Contour2`]) and open ([`CurveString2`]) cases,
 /// which share the geometry but differ in vertex range (open curves have two free
 /// endpoints that are not corners) and result type.
-trait CornerTarget: Clone
+trait CornerTarget: Clone + Sized
 {
     fn corner_segments(&self) -> &[Segment2];
     /// Closed targets treat every vertex as a corner and wrap the previous
     /// segment; open targets only chamfer interior vertices (`1..segments`) and
     /// never wrap.
     fn is_closed_corner_target() -> bool;
-    fn chamfer_corner(&self, vi: usize, tp: &Point2, tn: &Point2, pol: &CurvePolicy) -> Option<Self>;
+    fn rebuild(segments: Vec<Segment2>) -> Option<Self>;
+
+    /// Chamfer one vertex, cutting `setback` off each incident edge.
+    ///
+    /// hypercurve's corner solvers live on [`CurvePath2`] now — the native
+    /// `Contour2::chamfer_vertex_by_points` / `CurveString2::chamfer_vertex_by_points`
+    /// pair is gone, and so is the by-*points* parameterization. `by_setbacks` asks for
+    /// the same thing more directly: the caller already computed those tangent points as
+    /// "`setback` along each edge from the corner", which is the setback itself. Round
+    /// trip through the path form, which is lossless for line/arc geometry.
+    fn chamfer_corner(&self, vi: usize, setback: &ExactReal, pol: &CurveContext) -> Option<Self>
+    {
+        let path = hcurve::path_from_segments(self.corner_segments()).ok()?;
+        let solutions = hcurve::done(
+            path.chamfer_vertex_by_setbacks(
+                vi,
+                setback.clone(),
+                setback.clone(),
+                CurveCornerMode2::TrimOnly,
+                pol,
+            )
+            .ok()?,
+        );
+        let chamfered = match solutions
+        {
+            hypercurve::CurveCornerSolutions2::Unique(path) => path,
+            // Several exact candidates: the solver orders them deterministically and a
+            // line-line chamfer's first is the one that cuts the authored corner.
+            hypercurve::CurveCornerSolutions2::Multiple(mut paths) if !paths.is_empty() =>
+            {
+                paths.swap_remove(0)
+            }
+            _ => return None,
+        };
+        Self::rebuild(hcurve::segments_from_path(&chamfered)?)
+    }
 }
 
 impl CornerTarget for Contour2
 {
     fn corner_segments(&self) -> &[Segment2] { self.segments() }
     fn is_closed_corner_target() -> bool { true }
-    fn chamfer_corner(&self, vi: usize, tp: &Point2, tn: &Point2, pol: &CurvePolicy) -> Option<Self>
-    {
-        self.chamfer_vertex_by_points(vi, tp, tn, pol)
-            .ok()
-            .and_then(|r| hcurve::decided(r).ok())
-    }
+    fn rebuild(segments: Vec<Segment2>) -> Option<Self> { Contour2::try_new(segments).ok() }
 }
 
 impl CornerTarget for CurveString2
 {
     fn corner_segments(&self) -> &[Segment2] { self.segments() }
     fn is_closed_corner_target() -> bool { false }
-    fn chamfer_corner(&self, vi: usize, tp: &Point2, tn: &Point2, pol: &CurvePolicy) -> Option<Self>
-    {
-        self.chamfer_vertex_by_points(vi, tp, tn, pol)
-            .ok()
-            .and_then(|r| hcurve::decided(r).ok())
-    }
+    fn rebuild(segments: Vec<Segment2>) -> Option<Self> { CurveString2::try_new(segments).ok() }
 }
 
 /// Chamfer (bevel) every interior line–line corner of a contour/curve-string by
@@ -2291,9 +2325,8 @@ fn chamfer_op<T: CornerTarget>(target: &T, amount: f64, only: Option<&[usize]>) 
         {
             continue;
         }
-        let tp = hcurve::point(v.0 + u.0 * d, v.1 + u.1 * d)?;
-        let tn = hcurve::point(v.0 + w.0 * d, v.1 + w.1 * d)?;
-        if let Some(c) = cur.chamfer_corner(vi, &tp, &tn, &pol)
+        let setback = hcurve::real(d)?;
+        if let Some(c) = cur.chamfer_corner(vi, &setback, &pol)
         {
             cur = c;
         }
@@ -2393,4 +2426,27 @@ pub fn import_dxf_curves(bytes: &[u8]) -> Result<CurveImportJs, JsValue>
     let (imported, warnings) = crate::io::dxf_curves::import_dxf_curves(bytes)
         .map_err(|e| err(format!("DXF import failed: {e:?}")))?;
     Ok(CurveImportJs { curves: imported_to_curves(imported), warnings })
+}
+
+/// Import a DXF drawing as **flat entity records** — the drawing, not geometry to model with.
+///
+/// The counterpart to [`import_dxf_curves`], which answers "what curves are in this file".
+/// This one answers "what is in this file at all": every entity keeps its layer, colour,
+/// linetype and extrusion, an ARC stays a centre/radius/angles, a polyline keeps its bulges,
+/// and INSERTs are left unexpanded against the block table. Interpreting any of it — block
+/// expansion, OCS, unit guessing — is the caller's job, which is the point: those are the
+/// awkward parts, and they are better iterated on in TypeScript against real files.
+///
+/// Returned as a **JSON string**, not through `serde-wasm-bindgen`. That serializer silently
+/// drops `#[serde(flatten)]` and internally-tagged enums, both of which `DxfDoc` uses for its
+/// entity kinds, so entities arrived as `{}`. `serde_json` + `JSON.parse` keeps them.
+///
+/// Coordinates are exactly as the file has them: DXF's Y-up frame, in the file's own units.
+#[cfg(feature = "dxf-io")]
+#[wasm_bindgen(js_name = importDxfDocument)]
+pub fn import_dxf_document(bytes: &[u8]) -> Result<String, JsValue>
+{
+    let doc = crate::io::dxf_entities::import_dxf_entities(bytes)
+        .map_err(|e| err(format!("DXF import failed: {e:?}")))?;
+    serde_json::to_string(&doc).map_err(|e| err(format!("DXF document serialisation failed: {e}")))
 }
