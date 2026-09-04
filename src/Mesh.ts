@@ -22,7 +22,7 @@ import { OBbox } from './OBbox';
 import { Vector } from './Vector'
 import { rad, deg, shortestArcAxisAngle, primaryOrthoXYAngle, svgDocument, gridCounts } from './utils';
 import { Style } from './Style';
-import { sceneReplace, sceneLayer, sceneCarry, sceneReplaceOrKeep, replaceInScene } from './sceneDecorators';
+import { sceneAdd, sceneReplace, sceneLayer, sceneCarry, sceneReplaceOrKeep, replaceInScene } from './sceneDecorators';
 import { GLTFBuilder } from './GLTFBuilder';
 
 import { MeshJs, PolygonJs, PlaneJs, Vector3Js, VertexJs } from './wasm/meshup';
@@ -701,6 +701,8 @@ export class Mesh extends Shape
         m.style.merge(this.style.explicitData() as any); // copy only explicit style properties so layer colors can cascade
         m.metadata = { ...this.metadata }; // copy metadata
 
+        m._inheritSid(this);
+
         // Scene registration is handled by Shape.copy() — _copy() is the pure clone.
         return m as this;
     }
@@ -1237,7 +1239,19 @@ export class Mesh extends Shape
     {
         if(ShapeCollection.isShapeCollection(other))
         {
-            other.meshes().toArray().forEach(mesh => this._difference(mesh));
+            const meshes = other.meshes().toArray();
+            const cutters = meshes.filter(mesh => mesh !== this);
+            if(cutters.length !== meshes.length)
+            {
+                console.warn('Mesh::difference(): skipped a cutter that is this very Mesh — a Mesh cannot be subtracted from itself. '
+                    + 'Tip: a layer collection contains the shape you are cutting too; build the cut shape on another layer or filter the cutters.');
+            }
+            cutters.forEach(mesh => this._difference(mesh));
+            return this;
+        }
+        if(other === this)
+        {
+            console.warn('Mesh::difference(): cutter is this very Mesh — a Mesh cannot be subtracted from itself. Returning it unchanged.');
             return this;
         }
         if(!other || !(other instanceof Mesh))
@@ -1258,8 +1272,20 @@ export class Mesh extends Shape
         return parts.length > 1 ? parts : this;
     }
 
-    /** Keep only intersection of the current Mesh with another */
-    intersection(other:Mesh): this
+    /** The volume this Mesh shares with another (boolean AND).
+     *
+     *  NON-REPLACING: this Mesh is left exactly as it is; the shared volume comes back as a NEW
+     *  Mesh that is added to the active layer, so it is visible without an explicit
+     *  addToScene(). Mark this Mesh tmp() to keep the result out of the scene. */
+    @sceneAdd
+    intersection(other:Mesh): Mesh
+    {
+        return this._copy()._intersection(other);
+    }
+
+    /** Mutating intersection: keeps only the shared volume and returns `this`. The pure
+     *  geometry op, used internally - it never touches the scene. */
+    _intersection(other:Mesh): this
     {
         if(!other || !(other instanceof Mesh))
         {
@@ -1382,7 +1408,7 @@ export class Mesh extends Shape
         }
 
         const outside = this._detachedClone()._difference(cutter);   // part of this outside the cutter
-        const inside  = this._detachedClone().intersection(cutter);  // part of this inside the cutter
+        const inside  = this._detachedClone()._intersection(cutter);  // part of this inside the cutter
         return this._keepBySize(
             outside, inside, keepSmallest,
             'Mesh.cutoffBy(): the cutter does not split this mesh — no cut performed.');
@@ -2024,7 +2050,7 @@ export class Mesh extends Shape
 
         try
         {
-            const overlappingMesh = this._copy().intersection(other);
+            const overlappingMesh = this._copy()._intersection(other);
             const overlappingVolume = overlappingMesh.volume();
             return (overlappingVolume != null && overlappingVolume > 0)
                 ? overlappingVolume / thisVolume

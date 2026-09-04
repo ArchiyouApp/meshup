@@ -60,7 +60,77 @@ versions may contain breaking changes.
   the local Y axis alone, ignores open profiles, and leaves holes out of its caps. Nothing on
   the TypeScript side reached it.
 
+- **`Curve.tangent()` — the tangent of a straight Curve, asked without a point.** A straight
+  Curve has one tangent along its whole length, so `tangentAt(somePointOnIt)` was ceremony
+  around an answer the curve already knew:
+
+  ```ts
+  Curve.Line([0,0,0],[100,0,0]).tangent();  // <Vector { x: 1, y: 0, z: 0 }>
+  Curve.Circle(50).tangent();               // null + a warning naming tangentAt()
+  ```
+
+  Anything that curves has a different tangent at every point of it, so there it warns and
+  returns null rather than handing back the start→end chord — a direction that is the curve's
+  tangent nowhere on an arc except by accident, and the zero vector on a closed curve.
+  `tangentAt(point)` stays the method for those. Straightness is read from the native geometry
+  (`isStraight()`), so a Polyline whose vertices are collinear answers as well as a Line does.
+
+- **`Point`, `Vertex` and `Vector` now have `moveTo()` / `moveToX()` / `moveToY()` / `moveToZ()`**,
+  so the call reads the same on a point as it does on a `Mesh`, a `Curve` or a `ShapeCollection`.
+  `Vector` gains the relative `move()` / `moveX()` / `moveY()` / `moveZ()` along with them —
+  `move()` is `add()` under the name the rest of the library uses.
+
+  ```ts
+  Curve.Line([0,0,0],[100,0,0]).start().moveToZ(50); // a Vertex, positioned like any shape
+  Point.from(1,2,3).moveTo(200, 475, 0);
+  Vector.from(1,0,0).moveToZ(1);
+  ```
+
+  All three are dimensionless, so where a shape re-centres its bbox on the target these simply
+  set the position — a `Vertex` carrying its normal along untouched, and a `Vector` being a
+  direction rooted at the origin. `Point` had `move()`/`moveX/Y/Z()` but no absolute counterpart
+  at all and `Vector` had neither; `Vertex` inherited the `Shape` versions, which took the round
+  trip through a degenerate bbox to reach the same answer.
+
+- **`continuous()` — the counterpart of `dashed()`, on `Curve`, `ShapeCollection` and
+  `SceneNode`.** There was no way back from a dash: once a layer was `.dashed()`, every line
+  under it was, and a shape could only rejoin the solid ones by the layer changing. It sets the
+  EMPTY dash pattern explicitly, which is what "no dashes" already means everywhere downstream
+  (SVG omits `stroke-dasharray`, glTF gets the all-ones `0xFFFF` pattern) — and being explicit
+  is the point: it wins in the style cascade over a dashed ancestor, while colour and width keep
+  cascading as before.
+
+  ```js
+  layer('diagram').color('blue').dashed();
+  centerline = line(a, b);                 // dashed, like the layer
+  outline = line(c, d).continuous();       // solid, still blue
+  ```
+
+  The name is the DXF/CAD linetype it exports as — `DXFExporter` has always written
+  `dashed ? 'DASHED' : 'CONTINUOUS'`. The brep kernel's `Shape` and `ShapeCollection` (in
+  `@archiyou/core`) gained the same method, so a script does not have to know its kernel.
+
 ### Changed
+
+- **`Curve.difference()` / `Curve.subtract()` take collections, and refuse to subtract a Curve
+  from itself.** They used to take exactly one `Curve`. Handing them a `ShapeCollection` —
+  `band.subtract(layer('rafters').shapes())`, the way `Mesh` and `Polygon` have always worked —
+  called `other.inner()` on the collection, and `_booleanOp`'s catch swallowed the `TypeError`
+  and surfaced it as a bare `null` with "Boolean operation failed". Both now accept any mix of
+  Curves, ShapeCollections and varargs.
+
+  Cutters are applied in order, each to every piece produced so far, so a cutter that splits the
+  region in two is still followed correctly by the next one, and a cutter whose boolean fails is
+  skipped with a warning instead of costing the whole result. Two kinds of cutter are skipped on
+  purpose: collection members that are not Curves, and a cutter that *is* the receiver. That
+  last one is the other half of the same trap: a layer's collection also holds the shape you
+  built while that layer was active, so `band.subtract(layer('rafters').shapes())` was quietly
+  subtracting the band from itself — an empty region, i.e. `null` again. `Mesh.difference()`
+  now skips a self-cutter the same way.
+
+  The result contract is unchanged: `this` when a single region is left, a
+  `ShapeCollection<Curve>` when the cut split it into several, `null` when the cutters removed
+  everything or when a single cutter's boolean failed outright.
 
 - **Curve tessellation no longer depends on the curve's size or the model's unit.** The kernel
   had two disagreeing samplers: `tessellate_path` (ellipses, splines) read its chord error as a
@@ -114,6 +184,40 @@ versions may contain breaking changes.
   turns); circles reach it now, so arcs are sampled through `point_at_sweep_fraction` instead.
 
 ### Fixed
+
+- **`segments()` no longer throws on a curve that `connect()` has joined.** Joining two curves
+  glues them with connector lines and combines the lot; every joint comes back as a separate,
+  zero-length span. `segments()` fed each control-point pair to `Curve.Line()`, which refuses a
+  zero-length line — so `edges()`, `select('E…')` and everything built on them died with
+  *"Cannot create a zero-length line"* on any connected curve. Zero-length pairs are now skipped
+  (they are no edges), matching what `vertices()` and the collinear merge already did.
+
+- **`extendTo()` now lands exactly on its target instead of stopping short.** It measured the
+  gap with the sampled `closestPoints()`, whose accuracy is set by 30 seed samples spread over
+  a probe deliberately far longer than the gap itself (`length*10 + target*2 + 1000`), refined
+  by an alternating-closest-point loop capped at 15 iterations that converges slowly wherever
+  the crossing angle is shallow. The error therefore grew with the *probe* rather than shrinking
+  with the extension: a brace extended to a wall line at ~28° stopped **4mm** short of it, and
+  a longer curve would have missed by more.
+
+  It now asks hypercurve's exact native `intersect()` for the true crossing and takes the
+  nearest hit ahead of the endpoint, falling back to the sampled closest approach only when
+  nothing actually crosses — which is what makes `extendTo()` work for converging-but-not-
+  meeting curves and is still supported. The same brace now lands within **2e-6**.
+
+  A real crossing also beats a closest-approach guess now, whichever end it is on: the whole
+  ray is searched for true intersections first. Before, a curve that genuinely crossed a target
+  300 away could lose to its *other* end drifting within 4 of it, and the wrong end moved.
+
+- **`Curve.intersect()` no longer reports "no intersection" for a pair it can actually solve.**
+  hypercurve plane-fits THIS curve to project the other into it, and that fit is ill-defined
+  for a straight line: an axis-aligned line comes back empty one way round and *throws*
+  (`open polyline failed (EmptyCurveString)`) the other. `intersect()` has always retried with
+  the operands swapped for exactly this reason, but a single `try/catch` wrapped **both**
+  attempts, so a throw on the first order swallowed the swap that would have found the hit.
+  `Curve.Line([0,0,0],[-3200,0,0]).intersect(verticalLineAtX)` logged an error and returned
+  null instead of the crossing at x = -300. Each order is now attempted on its own; null is
+  returned only when neither can answer.
 
 - **`grid()` no longer returns nothing when a count is zero.** `Mesh.grid()`, `Curve.grid()`
   and `ShapeCollection.grid()` floor their per-axis counts and clamp them to at least 1, so

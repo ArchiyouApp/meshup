@@ -21,7 +21,7 @@ import { OBbox } from './OBbox';
 import { PolygonJs, VertexJs } from './wasm/meshup';
 import { Style } from './Style';
 import { uuid } from './utils';
-import { sceneReplace, sceneUpdate, sceneCarry } from './sceneDecorators';
+import { sceneAdd, sceneReplace, sceneUpdate, sceneCarry } from './sceneDecorators';
 
 /** Build a PolygonJs from vertices that were made from bare positions.
  *
@@ -77,6 +77,7 @@ export class Polygon extends Shape
         const poly = Object.create(Polygon.prototype) as Polygon;
         // Object.create bypasses the constructor, so manually initialize Shape fields
         (poly as any)['_id'] = uuid();
+    (poly as any)['_sid'] = 0;
         (poly as any)['type'] = 'Polygon';
         poly._node = null;
         poly.style = new Style();
@@ -333,6 +334,8 @@ export class Polygon extends Shape
         p._polygon = new PolygonJs(verts, {});
         p.style.merge(this.style.explicitData() as any);
         p.metadata = { ...this.metadata };
+
+        p._inheritSid(this);
 
         // Scene registration is handled by Shape.copy() — _copy() is the pure clone.
         return p as this;
@@ -769,7 +772,7 @@ export class Polygon extends Shape
 
             const pieceOf = (region: Curve): Array<Curve> =>
             {
-                const r = boundary._copy().intersection(region);
+                const r = boundary._copy()._intersections(region)?.checkSingle() ?? null;
                 if (r === null) { return []; }
                 return (r instanceof Curve) ? [r] : r.toArray();
             };
@@ -880,19 +883,28 @@ export class Polygon extends Shape
      * planar; it is projected onto this polygon's plane first, so a shape drawn on a
      * parallel/coincident plane still works.
      *
-     * Mutates in place and returns `this` — use `poly.copy().intersection(other)` to keep the
-     * original. When the shapes do not overlap, or the boolean fails, the polygon is left
-     * unchanged and a warning is emitted. Interior holes on this polygon are dropped.
+     * NON-REPLACING: this Polygon is left exactly as it is; the shared area comes back as a NEW
+     * Polygon that is added to the active layer, so it is visible without an explicit
+     * addToScene(). Mark this Polygon tmp() to keep the result out of the scene. When the shapes
+     * do not overlap, or the boolean fails, the result is an unchanged copy and a warning is
+     * emitted. Interior holes on this polygon are dropped.
      *
      * @param other Closed Curve, Polygon, or ShapeCollection of them (applied in sequence).
      */
-    @sceneUpdate
-    intersection(other: Curve | Polygon | ShapeCollection<Curve | Polygon>): this
+    @sceneAdd
+    intersection(other: Curve | Polygon | ShapeCollection<Curve | Polygon>): Polygon
+    {
+        return this._copy()._intersection(other);
+    }
+
+    /** Mutating intersection: keeps only the shared area and returns `this`. The pure geometry
+     *  op, used internally - it never touches the scene. */
+    _intersection(other: Curve | Polygon | ShapeCollection<Curve | Polygon>): this
     {
         if (ShapeCollection.isShapeCollection(other))
         {
             (other as ShapeCollection<Curve | Polygon>).toArray()
-                .forEach(s => this.intersection(s as Curve | Polygon));
+                .forEach(s => this._intersection(s as Curve | Polygon));
             return this;
         }
         if (!(other instanceof Curve) && !(other instanceof Polygon))
@@ -1030,7 +1042,7 @@ export class Polygon extends Shape
         const boundary = Curve.Polyline(reseamed).close();
 
         const result = (op === 'difference') ? boundary.difference(knife)
-                     : (op === 'intersection') ? boundary.intersection(knife)
+                     : (op === 'intersection') ? (boundary._intersections(knife)?.checkSingle() ?? null)
                      :                           boundary.union(knife);
         if (result === null || result === undefined)
         {

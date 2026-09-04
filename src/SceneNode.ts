@@ -49,6 +49,8 @@ export interface SceneNodeShape {
     /** The shape's own name, when set. A node adopting the shape takes it (see getName). */
     name?(): string | undefined
     _node: SceneNode<any> | null
+    /** Serial id, stamped on adoption by setShape(). 0 until then. */
+    _sid?: number
     style: Style
     is2D(): boolean
     bbox(): { min(): { x: number; y: number; z: number }; max(): { x: number; y: number; z: number } } | undefined
@@ -71,6 +73,7 @@ export class SceneNode<S extends SceneNodeShape = Shape>
     private _children: SceneNode<S>[] = []; // Child containers (sub-groups / layers)
     private _parent: SceneNode<S> | null = null; // Back-reference to the parent container; null if this is the root
     private _activeLayer: SceneNode<S> | null = null; // Tracked on the root: where new shapes are added
+    private _sidProvider: (() => number) | null = null; // Tracked on the root: hands out shape serial ids
 
     constructor(name = 'container')
     {
@@ -206,8 +209,10 @@ export class SceneNode<S extends SceneNodeShape = Shape>
             return this;
         }
         const childNode = this._createChild(SceneNode.getName(s));
-        childNode.setShape(s as unknown as S);
+        // Attach BEFORE setting the shape: setShape() resolves the sid provider through
+        // root(), which only reaches the scene root once this node is in the tree.
         this.addChild(childNode);
+        childNode.setShape(s as unknown as S);
         return this;
     }
 
@@ -225,6 +230,10 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         if (this._shape) this._shape._node = null;
         this._shape = shape;
         shape._node = this;
+        // Adoption is where a shape earns its serial id. Assign once: re-parenting a shape
+        // between layers must not renumber it (addShape() takes the detach/re-attach branch
+        // for an already-noded shape, but setShape() can still be called directly).
+        if (!shape._sid) { shape._sid = this.sidProvider()?.() ?? 0; }
         return this;
     }
 
@@ -392,7 +401,7 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         });
     }
 
-    //// ACTIVE LAYER (tracked on the root) ////
+    //// HOST-TRACKED STATE (on the root) ////
 
     /** The layer new shapes are added to (scene decorators / copy() resolve this via
      *  `node.root().activeLayer()`). Set by the host modeler. */
@@ -405,6 +414,21 @@ export class SceneNode<S extends SceneNodeShape = Shape>
     setActiveLayer(node: SceneNode<S> | null): this
     {
         this._activeLayer = node;
+        return this;
+    }
+
+    /** Serial-id source for shapes adopted into this scene. Set by the host modeler (like
+     *  setActiveLayer), and read from the root so any node in the tree resolves the same
+     *  sequence. Null in a bare meshup scene with no host — shapes then keep sid 0. */
+    sidProvider(): (() => number) | null
+    {
+        return this.root()._sidProvider;
+    }
+
+    /** Set the sid provider (call on the root). Returns `this`. */
+    setSidProvider(fn: (() => number) | null): this
+    {
+        this._sidProvider = fn;
         return this;
     }
 
@@ -441,6 +465,17 @@ export class SceneNode<S extends SceneNodeShape = Shape>
     dashed(dash: number[] = [5, 5]): this
     {
         this.style.stroke = { dash };
+        return this;
+    }
+
+    /** Make this container's lines unbroken again — the counterpart of {@link dashed}.
+     *
+     *  Sets the empty dash pattern on this container's OWN style, explicitly, so it overrides
+     *  a dashed ancestor while leaving everything else (colour, width) cascading as before.
+     *  A shape under it that dashes itself still wins, as always. */
+    continuous(): this
+    {
+        this.style.stroke = { dash: [] };
         return this;
     }
 
@@ -625,6 +660,7 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         return {
             name: renameRoot ? 'Scene' : this.name,
             shape: (shape as any)?.id?.() ?? null,
+            sid: (shape as any)?._sid || undefined,
             style,
             children,
         };

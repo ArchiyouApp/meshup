@@ -49,10 +49,13 @@ describe('Polygon planar booleans', () =>
         const a = new Polygon(SQUARE);                          // 10 x 10 = 100
         const b = new Polygon(SQUARE).translate(5, 0, 0);       // shifted 5 in x
 
-        a.intersection(b);
-        expect(a.area()).toBeCloseTo(50, 1);                    // 5 x 10 overlap
-        expect(a.bbox().minX()).toBeCloseTo(5, 1);
-        expect(a.bbox().maxX()).toBeCloseTo(10, 1);
+        // non-replacing: the overlap comes back as a NEW Polygon, `a` is untouched
+        const overlap = a.intersection(b);
+        expect(overlap).not.toBe(a);
+        expect(overlap.area()).toBeCloseTo(50, 1);              // 5 x 10 overlap
+        expect(overlap.bbox().minX()).toBeCloseTo(5, 1);
+        expect(overlap.bbox().maxX()).toBeCloseTo(10, 1);
+        expect(a.area()).toBeCloseTo(100, 1);                   // receiver unchanged
     });
 
     it('intersection() with a closed Curve works the same as with a Polygon', () =>
@@ -60,8 +63,7 @@ describe('Polygon planar booleans', () =>
         const a = new Polygon(SQUARE);
         const knife = new Polygon(SQUARE).translate(5, 0, 0).toCurve();
 
-        a.intersection(knife);
-        expect(a.area()).toBeCloseTo(50, 1);
+        expect(a.intersection(knife).area()).toBeCloseTo(50, 1);
     });
 
     it('union() merges two overlapping polygons into one region', () =>
@@ -90,7 +92,8 @@ describe('Polygon planar booleans', () =>
         const a = new Polygon(SQUARE);
         const b = new Polygon(SQUARE).translate(100, 0, 0);
 
-        a.intersection(b);
+        // no overlap: the result is an unchanged copy, and `a` itself is untouched
+        expect(a.intersection(b).area()).toBeCloseTo(100, 1);
         expect(a.area()).toBeCloseTo(100, 1);
     });
 
@@ -100,8 +103,7 @@ describe('Polygon planar booleans', () =>
         const a = new Polygon(SQUARE).rotateX(90);
         const b = new Polygon(SQUARE).rotateX(90).translate(5, 0, 0);
 
-        a.intersection(b);
-        expect(a.area()).toBeCloseTo(50, 1);
+        expect(a.intersection(b).area()).toBeCloseTo(50, 1);
     });
 });
 

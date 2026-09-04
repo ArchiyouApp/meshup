@@ -1,5 +1,5 @@
-import { beforeAll, describe, it, expect } from 'vitest';
-import { initAsync, ShapeCollection } from '../../src/index';
+import { beforeAll, describe, it, expect, vi } from 'vitest';
+import { initAsync, ShapeCollection, SceneNode } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { Point } from '../../src/Point';
 import { Polygon } from '../../src/Polygon';
@@ -94,6 +94,32 @@ describe('Curve.vertices()', () =>
     {
         const c = Curve.Circle(5).isClosed() ? Curve.Arc([0, 0, 0], [5, 5, 0], [10, 0, 0]) : Curve.Line([0,0,0],[1,0,0]);
         expect(c.vertices().length).toBe(2);
+    });
+});
+
+describe('Curve.segments()', () =>
+{
+    // connect() glues the two curves with connector lines and combines the lot; the joints
+    // between connector and original come back as separate, zero-length spans. Those are no
+    // edges - before they were fed to Curve.Line(), which refuses a zero-length line.
+    it('skips the zero-length spans that connect() leaves at the joints', () =>
+    {
+        const roof = Curve.Line([0, 0, 2000], [4000, 0, 4500]);
+        const diagonal = Curve.Line([0, 0, 1800], [4000, 0, 4300]).connect(roof);
+
+        expect(() => diagonal.segments()).not.toThrow();
+        expect(diagonal.segments().length).toBe(4);
+        expect(diagonal.segments().toArray().every(s => (s.length() as number) > 0)).toBe(true);
+    });
+
+    it('selects an edge on a curve carrying zero-length spans', () =>
+    {
+        const roof = Curve.Line([0, 0, 2000], [4000, 0, 4500]);
+        const diagonal = Curve.Line([0, 0, 1800], [4000, 0, 4300]).connect(roof);
+
+        const right = diagonal.select('E||right');
+        expect(right).toBeDefined();
+        expect((right as any).length()).toBeCloseTo(200, 3);
     });
 });
 
@@ -418,6 +444,71 @@ describe('Curve.extend()', async () =>
         );
     });
 
+    /*  extendTo() used to measure the gap with the SAMPLED closestPoints(), whose accuracy is
+        set by its 30 seed samples spread over a probe far longer than the gap itself, refined
+        by an alternating-closest-point loop that converges slowly at shallow crossing angles.
+        The error therefore grew with the probe rather than shrinking with the extension, and a
+        brace extended to a wall line stopped several mm short of it. */
+    it('lands exactly on the target at a shallow crossing angle', () =>
+    {
+        // A brace meeting a vertical wall line at ~28°, from a real bent model
+        const brace = Curve.Line([176.33, 0, 1405.63], [1150.69, 0, 3226.22]);
+        const wall  = Curve.Line([0, 0, 0], [0, 0, 2500]);
+
+        brace.extendTo(wall);
+
+        expect(brace.start().x).toBeCloseTo(0, 3);
+        expect(brace.start().z).toBeCloseTo(1076.1577, 3);
+
+        // the far end must not have moved
+        expect(brace.end().x).toBeCloseTo(1150.69, 6);
+        expect(brace.end().z).toBeCloseTo(3226.22, 6);
+    });
+
+    it('lands exactly on the target across a range of crossing angles', () =>
+    {
+        const target = Curve.Line([0, 0, -5000], [0, 0, 5000]);
+
+        [20, 40, 60, 75, 85].forEach( deg =>
+        {
+            const r = deg * Math.PI / 180;
+            const c = Curve.Line(
+                [500, 0, 1000],
+                [500 + 1000 * Math.cos(r), 0, 1000 + 1000 * Math.sin(r)],
+            );
+            c.extendTo(target);
+            expect(c.start().x, `crossing at ${deg}deg`).toBeCloseTo(0, 3);
+        });
+    });
+
+    it('prefers a real crossing over a closer near-miss on the other end', () =>
+    {
+        // start ray (-x from [0,0,0]) genuinely crosses `crossed` 300 away;
+        // end ray (+z from [100,0,100]) only passes NEAR `nearMiss`, 4 along the ray.
+        const c = Curve.Polyline([[0,0,0],[100,0,0],[100,0,100]]);
+        const crossed  = Curve.Line([-300, 0, -50], [-300, 0, 50]);
+        const nearMiss = Curve.Line([200, 0, 104], [300, 0, 104]);
+
+        c.extendTo(new ShapeCollection<Curve>(crossed, nearMiss));
+
+        // the crossing end moved and landed on the target
+        expect(c.start().x).toBeCloseTo(-300, 3);
+        // the near-miss end stayed put
+        expect(c.end().z).toBeCloseTo(100, 6);
+    });
+
+    it('still falls back to the closest approach when nothing crosses', () =>
+    {
+        // the ray runs along z = 0 and the target starts at z = 10, so they never meet
+        const c = Curve.Line([0, 0, 0], [50, 0, 0]);
+        const target = Curve.Line([200, 0, 10], [200, 0, 100]);
+
+        c.extendTo(target);
+
+        expect(c.end().x).toBeCloseTo(200, 3);
+        expect(c.end().z).toBeCloseTo(0, 6);
+    });
+
     // An extension runs along the endpoint tangent, so the old endpoint stops being a corner
     // and must not survive as an extra segment. Length-only assertions miss this.
     it('consolidates the extension into the end segment instead of adding one', () =>
@@ -694,6 +785,106 @@ describe('Curve.union()', () =>
     }, 60_000);
 });
 
+describe('Curve.difference() / subtract()', () =>
+{
+    // 100 x 100 box centred on the origin: -50..50 in x and y, area 10000.
+    const box = (): Curve => Curve.Rect(100, 100);
+    /** 20 x 20 cutter centred on the box's top-right corner: bites away 10 x 10 */
+    const cornerCutter = (x: number, y: number): Curve => Curve.Rect(20, 20, [x, y, 0]);
+
+    it('notches a corner with a single cutter (mutates in place, returns this)', () =>
+    {
+        const c = box();
+        const out = c.subtract(cornerCutter(50, 50));
+        expect(out).toBe(c);                        // single region left -> this
+        expect(c.area()).toBeCloseTo(9900, 0);
+    });
+
+    it('takes several cutters as varargs', () =>
+    {
+        const c = box();
+        c.subtract(cornerCutter(-50, 50), cornerCutter(50, 50));
+        expect(c.area()).toBeCloseTo(9800, 0);      // two 10x10 bites
+    });
+
+    it('takes a ShapeCollection of cutters', () =>
+    {
+        const c = box();
+        const cutters = new ShapeCollection<Curve>(cornerCutter(-50, -50), cornerCutter(50, -50));
+        const out = c.subtract(cutters);
+        expect(out).toBe(c);
+        expect(c.area()).toBeCloseTo(9800, 0);
+    });
+
+    it('skips a cutter that is this very Curve (self-subtraction)', () =>
+    {
+        const c = box();
+        const out = c.subtract(c);
+        expect(out).toBe(c);
+        expect(c.area()).toBeCloseTo(10000, 0);     // untouched, not wiped out
+    });
+
+    // The real-world trap: layer('x').shapes() contains the very shape you are cutting,
+    // because it was built while that layer was active.
+    it('skips itself when it sits inside the cutter collection', () =>
+    {
+        const c = box();
+        const cutters = new ShapeCollection<Curve>(c, cornerCutter(50, 50));
+        const out = c.subtract(cutters);
+        expect(out).toBe(c);
+        expect(c.area()).toBeCloseTo(9900, 0);      // the other cutter still applied
+    });
+
+    it('skips members of a collection that are not Curves', () =>
+    {
+        const c = box();
+        const cutters = new ShapeCollection<any>(new Polygon([[0, 0, 0], [10, 0, 0], [10, 10, 0]]),
+                                                 cornerCutter(50, 50));
+        c.subtract(cutters as ShapeCollection<Curve>);
+        expect(c.area()).toBeCloseTo(9900, 0);
+    });
+
+    it('returns a ShapeCollection when a cutter splits the region in two', () =>
+    {
+        const c = box();
+        const res = c.subtract(Curve.Rect(200, 20));    // band straight across the middle
+        expect(res).toBeInstanceOf(ShapeCollection);
+        expect((res as ShapeCollection<Curve>).count()).toBe(2);
+    });
+
+    it('applies later cutters to the pieces of an earlier split', () =>
+    {
+        const c = box();
+        const res = c.subtract(Curve.Rect(200, 20),     // splits into two 100 x 40 halves
+                               cornerCutter(50, 50));   // notches the top half only
+        expect(res).toBeInstanceOf(ShapeCollection);
+        const pieces = res as ShapeCollection<Curve>;
+        expect(pieces.count()).toBe(2);
+        const total = pieces.toArray().reduce((sum, p) => sum + (p.area() ?? 0), 0);
+        expect(total).toBeCloseTo(7900, 0);             // 10000 - 2000 band - 100 notch
+    });
+
+    it('leaves the curve unchanged when a cutter misses', () =>
+    {
+        const c = box();
+        const out = c.subtract(cornerCutter(500, 500));
+        expect(out).toBe(c);
+        expect(c.area()).toBeCloseTo(10000, 0);
+    });
+
+    it('returns null when the cutters remove the whole region', () =>
+    {
+        expect(box().subtract(Curve.Rect(400, 400))).toBeNull();
+    });
+
+    it('returns the original Curve when there is nothing valid to cut with', () =>
+    {
+        const c = box();
+        expect(c.subtract(new ShapeCollection<Curve>())).toBe(c);
+        expect(c.area()).toBeCloseTo(10000, 0);
+    });
+});
+
 describe('Curve.cutoffBy()', () =>
 {
     // Regression: cutting an open line by a crossing line used to route through the
@@ -770,6 +961,33 @@ describe('Curve.intersect() / cutoffBy() off the XY plane', () =>
         expect(res.length()).toBeLessThan(fullLen);       // an actual cut happened
         expect(Math.abs(res.start().toArray()[1])).toBeLessThan(1e-6); // stays in XZ plane
         expect(Math.abs(res.end().toArray()[1])).toBeLessThan(1e-6);
+    });
+
+    /*  hypercurve plane-fits THIS curve to project the other into it, and for a straight line
+        that fit is ill-defined: an axis-aligned line comes back empty one way round and throws
+        ("open polyline failed (EmptyCurveString)") the other. intersect() has always tried the
+        swapped order for exactly this reason, but a single try/catch around both attempts meant
+        a throw on the first order took the working swap down with it. */
+    it('finds the crossing when one order of the pair fails outright', () =>
+    {
+        const alongX   = Curve.Line([0, 0, 0], [-3200, 0, 0]);
+        const vertical = Curve.Line([-300, 0, -50], [-300, 0, 50]);
+
+        const hits = alongX.intersect(vertical);
+        expect(hits).not.toBeNull();
+        expect(hits!.length).toBe(1);
+        expect(hits![0].x).toBeCloseTo(-300, 6);
+        expect(hits![0].z).toBeCloseTo(0, 6);
+
+        // and the same the other way round
+        expect(vertical.intersect(alongX)!.length).toBe(1);
+    });
+
+    it('reports an empty list (not null) when two curves genuinely do not cross', () =>
+    {
+        const a = Curve.Line([0, 0, 0], [100, 0, 0]);
+        const b = Curve.Line([0, 0, 50], [100, 0, 50]);
+        expect(a.intersect(b)).toEqual([]);
     });
 });
 
@@ -870,6 +1088,87 @@ describe('Curve.fillet()/chamfer() — per-corner `at`', () =>
     {
         const c = rect().fillet(3, 99)!;
         expect(c.area()).toBeCloseTo(400, 6);
+    });
+});
+
+describe('Curve.tangent()', () =>
+{
+    it('returns the normalised direction of a line', () =>
+    {
+        const t = Curve.Line([0, 0, 0], [100, 0, 0]).tangent()!;
+        expect(t.toArray()).toEqual([1, 0, 0]);
+        expect(t.length()).toBeCloseTo(1);
+    });
+
+    it('normalises a diagonal line', () =>
+    {
+        const t = Curve.Line([0, 0, 0], [10, 10, 10]).tangent()!;
+        const c = 1 / Math.sqrt(3);
+        expect(t.x).toBeCloseTo(c);
+        expect(t.y).toBeCloseTo(c);
+        expect(t.z).toBeCloseTo(c);
+    });
+
+    it('follows the direction the line was drawn in', () =>
+    {
+        const t = Curve.Line([100, 0, 0], [0, 0, 0]).tangent()!;
+        expect(t.toArray()).toEqual([-1, 0, 0]);
+    });
+
+    it('agrees with tangentAt() everywhere along a line', () =>
+    {
+        const c = Curve.Line([0, 0, 0], [100, 50, 0]);
+        const t = c.tangent()!;
+        [[0, 0, 0], [50, 25, 0], [100, 50, 0]].forEach(p =>
+        {
+            const at = c.tangentAt(p)!;
+            expect(at.x).toBeCloseTo(t.x);
+            expect(at.y).toBeCloseTo(t.y);
+            expect(at.z).toBeCloseTo(t.z);
+        });
+    });
+
+    it('answers for a polyline whose vertices are collinear', () =>
+    {
+        const t = Curve.Polyline([0, 0, 0], [50, 0, 0], [100, 0, 0]).tangent()!;
+        expect(t.toArray()).toEqual([1, 0, 0]);
+    });
+
+    it('does not consume the curve — asking twice gives the same answer', () =>
+    {
+        const c = Curve.Line([0, 0, 0], [100, 0, 0]);
+        expect(c.tangent()!.toArray()).toEqual([1, 0, 0]);
+        expect(c.tangent()!.toArray()).toEqual([1, 0, 0]);
+        expect(c.length()).toBeCloseTo(100);
+    });
+
+    it('returns null and points at tangentAt() for anything that curves', () =>
+    {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const curved = [
+            Curve.Arc([0, 0, 0], [50, 50, 0], [100, 0, 0], 'threepoint'),
+            Curve.Circle(50),
+            Curve.Rect(100, 50),
+            Curve.Polyline([0, 0, 0], [50, 50, 0], [100, 0, 0]),
+            Curve.Interpolated([[0, 0, 0], [50, 50, 0], [100, -50, 0], [150, 0, 0]]),
+        ];
+
+        curved.forEach(c =>
+        {
+            warn.mockClear();
+            expect(c.tangent()).toBeNull();
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(String(warn.mock.calls[0][0])).toContain('tangentAt');
+        });
+
+        warn.mockRestore();
+    });
+
+    it('leaves tangentAt() as the way to ask a curved shape', () =>
+    {
+        const c = Curve.Circle(50);
+        expect(c.tangentAt([50, 0, 0])).not.toBeNull();
     });
 });
 
@@ -993,5 +1292,43 @@ describe('Curve.perpendicularPointTo()', () =>
     {
         const c = Curve.Line([0, 0, 0], [100, 0, 0]);
         expect(() => c.perpendicularPointTo('nonsense' as any)).toThrow();
+    });
+});
+
+describe('Curve.intersection() / intersections() scene contract', () =>
+{
+    /*  Regression: the intersection of two closed Curves was built correctly but never entered
+        the scene, so a script that ended on `x = a.intersection(b)` simply saw nothing — and
+        addToScene() could not rescue it either, because the result carried no scene root. */
+    it('adds the result to the active layer and leaves both operands alone', () =>
+    {
+        const root = new SceneNode('root');
+        const a = Curve.Rect(100, 100);
+        const b = Curve.Rect(100, 100, [50, 0, 0]);
+        const shapes = root.addLayer('shapes', new ShapeCollection<Curve>(a, b));
+
+        const connectors = root.addLayer('connectors', new ShapeCollection<Curve>());
+        root.setActiveLayer(connectors);
+
+        const overlap = a.intersection(b) as Curve;
+        expect(overlap).toBeInstanceOf(Curve);
+        expect(overlap).not.toBe(a);
+
+        // the result is on the ACTIVE layer, not on the operands' own layer
+        expect(connectors.shapes().toArray()).toEqual([overlap]);
+        expect(shapes.shapes().toArray()).toEqual([a, b]);
+    });
+
+    it('keeps the results out of the scene when the source is tmp()', () =>
+    {
+        const root = new SceneNode('root');
+        const a = Curve.Rect(100, 100);
+        root.addLayer('shapes', a);
+        const layer = root.addLayer('connectors', new ShapeCollection<Curve>());
+        root.setActiveLayer(layer);
+
+        a.tmp();
+        a.intersection(Curve.Rect(100, 100, [50, 0, 0]));
+        expect(layer.shapes().toArray()).toEqual([]);
     });
 });

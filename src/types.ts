@@ -260,6 +260,9 @@ export interface SceneNodeData
 {
   name: string
   shape?: string | null // uuid of the held shape; null/undefined for layer/group containers
+  /** Serial id of the held shape: the order it entered the scene. Reproducible for the same
+   *  script+params, unlike `shape` (a fresh uuid every run). Absent for containers. */
+  sid?: number
   style: Partial<StyleData>
   children: SceneNodeData[]
 }

@@ -343,6 +343,91 @@ describe('setX/Y/Z/Component()', () =>
     });
 });
 
+// ── move() / moveTo() ─────────────────────────────────────────────────────────
+
+describe('move() / moveX/Y/Z()', () =>
+{
+    it('move() translates and returns this', () =>
+    {
+        const v = new Vector(1, 2, 3);
+        const ret = v.move([1, 1, 1]);
+        expect(ret).toBe(v);
+        expect(v.toArray()).toEqual([2, 3, 4]);
+    });
+
+    it('move() takes loose coordinates', () =>
+    {
+        const v = new Vector(1, 2, 3);
+        v.move(10, 0, 5);
+        expect(v.toArray()).toEqual([11, 2, 8]);
+    });
+
+    it('move() with a bare number offsets x only', () =>
+    {
+        const v = new Vector(1, 2, 3);
+        v.move(10);
+        expect(v.toArray()).toEqual([11, 2, 3]);
+    });
+
+    it('moveX/Y/Z() only touch their own axis and stay chainable', () =>
+    {
+        const v = new Vector(1, 2, 3);
+
+        expect(v.moveX(9)).toBe(v);
+        expect(v.toArray()).toEqual([10, 2, 3]);
+
+        v.moveY(18);
+        expect(v.toArray()).toEqual([10, 20, 3]);
+
+        v.moveZ(27);
+        expect(v.toArray()).toEqual([10, 20, 30]);
+    });
+
+    it('move() throws on an invalid parameter', () =>
+    {
+        expect(() => new Vector(1, 2, 3).move('nope' as any)).toThrow();
+    });
+});
+
+describe('moveTo() / moveToX/Y/Z()', () =>
+{
+    it('moveTo() sets the components and returns this', () =>
+    {
+        const v = new Vector(1, 2, 3);
+        const ret = v.moveTo([10, 20, 30]);
+        expect(ret).toBe(v);
+        expect(v.toArray()).toEqual([10, 20, 30]);
+    });
+
+    it('moveTo() takes loose coordinates', () =>
+    {
+        const v = new Vector(1, 2, 3);
+        v.moveTo(200, 475, 0);
+        expect(v.toArray()).toEqual([200, 475, 0]);
+    });
+
+    it('moveTo() accepts another Vector as target', () =>
+    {
+        const v = new Vector(1, 2, 3);
+        v.moveTo(new Vector(-5, -6, -7));
+        expect(v.toArray()).toEqual([-5, -6, -7]);
+    });
+
+    it('moveToX/Y/Z() only touch their own axis and stay chainable', () =>
+    {
+        const v = new Vector(1, 2, 3);
+
+        expect(v.moveToX(10)).toBe(v);
+        expect(v.toArray()).toEqual([10, 2, 3]);
+
+        v.moveToY(20);
+        expect(v.toArray()).toEqual([10, 20, 3]);
+
+        v.moveToZ(30);
+        expect(v.toArray()).toEqual([10, 20, 30]);
+    });
+});
+
 // ── rotate() / rotateZ() ──────────────────────────────────────────────────────
 
 describe('rotate()', () =>

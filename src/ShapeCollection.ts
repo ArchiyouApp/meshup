@@ -861,6 +861,15 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return this;
     }
 
+    /** Draw every Shape in this Collection as an unbroken line — the counterpart of
+     *  {@link dashed}. Sets the empty dash pattern EXPLICITLY on each shape, so it wins over
+     *  a dashed layer above them. */
+    continuous(): this
+    {
+        this._shapes.forEach(shape => (shape as any).continuous?.());
+        return this;
+    }
+
     /**
      * Line width in SCREEN PIXELS — not model units.
      *
@@ -1077,6 +1086,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         {
             if (!(shape instanceof Mesh)) { next.push(shape); return; }
             // Internal in-place difference (no scene-decorator side effects), then separate solids.
+            // A member that is also one of the cutters is skipped there (self-subtraction).
             (shape as any)._difference(otherMeshes);
             const parts = ((shape as any)._separateSolids() as ShapeCollection<Mesh>).toArray();
             if (parts.length > 1)
@@ -1172,10 +1182,12 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *    - Meshes yield the boolean-intersection volume Mesh (mesh∩mesh)
      *  When `other` is a collection, each of this collection's shapes is intersected with
      *  each of its shapes. Returns an empty ShapeCollection when there are no intersections. */
-    /** Intersect every shape with `other`, aggregating results. Replaces in place: the
-     *  collection's original shapes are removed from the scene and only the intersection
-     *  results remain (added to the source shapes' own layer, not the active layer). */
-    @colSceneReplace
+    /** Intersect every shape with `other`, aggregating results.
+     *
+     *  NON-REPLACING: the collection's own shapes stay in the scene exactly as they are; the
+     *  results are NEW shapes added to the active layer, so they are visible without an
+     *  explicit addToScene(). */
+    @colSceneAdd
     intersections(other: Curve | Mesh | ShapeCollection<any>): ShapeCollection<any>
     {
         return this._intersections(other);
@@ -1198,7 +1210,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     }
 
     /** Get only the first intersection (of possibly many) — a Curve or Mesh. Returns null
-     *  if none. See intersections() for how the collection is intersected with `other`. */
+     *  if none. Same non-replacing, added-to-the-active-layer contract as intersections(). */
+    @colSceneAdd
     intersection(other: Curve | Mesh | ShapeCollection<any>): Curve | Mesh | null
     {
         const all = this._intersections(other);
@@ -1221,26 +1234,28 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  or null when they do not intersect / the pair is unsupported. */
     private static _pairIntersection(shape: CollectableShape, other: any): ShapeCollection<any> | Mesh | Curve | null
     {
-        // Curve (or any shape exposing intersections()) → intersection Curves.
+        // Curve (or any shape exposing intersections()) → intersection Curves. Go through the
+        // undecorated _intersections(): the scene work is this collection's own decorator's job,
+        // the per-shape one must not add the same results a second time.
         if (typeof (shape as any).intersections === 'function')
         {
-            const hit = (shape as any).intersections(other) as ShapeCollection<Curve> | null;
+            const hit = (shape as any)._intersections(other) as ShapeCollection<Curve> | null;
             return (hit && hit.length) ? hit : null;
         }
-        // Mesh ∩ Mesh → boolean-intersection volume. Mesh.intersection() mutates in place,
-        // so work on a detached clone (not Mesh.copy(), which attaches a scene sibling) to
-        // keep the collection's meshes and the scene graph untouched.
+        // Mesh ∩ Mesh → boolean-intersection volume. Work on a detached clone (not Mesh.copy(),
+        // which attaches a scene sibling) with the mutating _intersection(), to keep the
+        // collection's meshes and the scene graph untouched.
         if (shape instanceof Mesh && other instanceof Mesh)
         {
             const clone = shape.inner()?.clone();
             if (!clone) return null;
-            const volume = Mesh.from(clone).intersection(other);
+            const volume = Mesh.from(clone)._intersection(other);
             return (volume?.inner()?.triangleCount() ?? 0) > 0 ? volume : null;
         }
         // Mesh ∩ Curve → delegate to the Curve so we still get intersection Curves.
         if (shape instanceof Mesh && typeof (other as any)?.intersections === 'function')
         {
-            const hit = (other as Curve).intersections(shape) as ShapeCollection<Curve> | null;
+            const hit = (other as Curve)._intersections(shape) as ShapeCollection<Curve> | null;
             return (hit && hit.length) ? hit : null;
         }
         return null;
@@ -2100,7 +2115,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             objects — core's Annotator owns them — and meshup never imports core. The host
             takes this method over at load time and assembles the document itself: geometry
             from here, annotations from the annotator, one frame and one stylesheet around
-            both (see core's modeler/svgLayers.ts). Drawing them here as well is what gave
+            both (see core's modeler/SVGExporter.ts). Drawing them here as well is what gave
             the two kernels two different answers for the same drawing.
 
             The extents are still published: they say what the line-work spans, which is what

@@ -249,7 +249,7 @@ describe('Collection.intersections() / intersection()', () =>
         expect(col.intersection(far)).toBeNull();
     });
 
-    it('replaces in place on the source shapes\' layer, not the active layer', () =>
+    it('is non-replacing: sources stay put and the results land on the active layer', () =>
     {
         // Reproduces the two-layer script: sources on 'bxs', cutter on the active 'cut' layer.
         const root = new SceneNode('root');
@@ -265,10 +265,11 @@ describe('Collection.intersections() / intersection()', () =>
         const hits = col.intersections(cutter);
 
         expect(hits.length).toBe(2);
-        // Results land on the source layer 'bxs' (originals detached), not the active 'cut' layer.
-        expect(bxsLayer.shapes().toArray()).toEqual(hits.toArray());
-        // The cut layer keeps only its cutter — no intersection results leaked onto it.
-        expect(cutLayer.shapes().toArray()).toEqual([cutter]);
+        // The sources are untouched and still on their own layer...
+        expect(bxsLayer.shapes().toArray()).toEqual([a, b]);
+        // ...and the results are NEW shapes on the active layer, next to the cutter.
+        expect(cutLayer.shapes().toArray()).toEqual([cutter, ...hits.toArray()]);
+        hits.toArray().forEach(h => { expect(h).not.toBe(a); expect(h).not.toBe(b); });
     });
 });
 

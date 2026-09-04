@@ -185,6 +185,23 @@ export class Point
     moveY(dy: number): Point { return this.move(0, dy, 0); }
     moveZ(dz: number): Point { return this.move(0, 0, dz); }
 
+    /** Move this Point onto `target`. A Point is dimensionless, so where Mesh.moveTo() and
+     *  Curve.moveTo() re-centre a bbox on the target, this is simply setting the coordinates.
+     *  Present for API parity: the same call reads the same on a Point, a Vertex and a Shape.
+     *  Takes loose coordinates too (`moveTo(200, 475, 0)`). */
+    moveTo(target: PointLike | number, py?: number, pz?: number): Point
+    {
+        const t = new Point(target as PointLike, py, pz);
+        this._x = t.x;
+        this._y = t.y;
+        this._z = t.z;
+        return this;
+    }
+
+    moveToX(x: number): Point { return this.setX(x); }
+    moveToY(y: number): Point { return this.setY(y); }
+    moveToZ(z: number): Point { return this.setZ(z); }
+
     //// RELATIONSHIPS WITH OTHER POINTS ////
 
     distance(to: PointLike | { distance?: Function, distanceTo?: Function }): number

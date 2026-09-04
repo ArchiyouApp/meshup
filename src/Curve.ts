@@ -181,6 +181,8 @@ export class Curve extends Shape
         newCurve._holes = this._holes.map(h => h._copy());
         newCurve.style.merge(this.style.explicitData() as any);
 
+        newCurve._inheritSid(this);
+
         // Scene registration is handled by Shape.copy() — _copy() is the pure clone.
         return newCurve as this;
     }
@@ -1306,8 +1308,40 @@ export class Curve extends Shape
         return this.pointAtLength(perc * length);
     }
 
+    /** The tangent direction of a STRAIGHT Curve, as a normalised Vector.
+     *
+     *  A straight Curve has one tangent along its whole length, so it needs no point to be
+     *  asked at. Anything that curves has a different tangent at every point of it: there is
+     *  no single answer to give, so `tangent()` warns and returns null and `tangentAt(point)`
+     *  is the method to use. Falling back to the start→end chord would be worse than nothing —
+     *  on an arc that direction is the curve's tangent nowhere except by accident, and on a
+     *  closed curve it is the zero vector.
+     *
+     *  Straightness is read from the native geometry (`isStraight()`), so a Polyline whose
+     *  vertices happen to be collinear answers too — it has one tangent just as a Line does.
+     */
+    tangent(): Vector|null
+    {
+        if(!this.isStraight())
+        {
+            console.warn(`Curve::tangent(): a ${this.subtype()} has a different tangent at every point of it. Use tangentAt(point) instead.`);
+            return null;
+        }
+
+        const dir = this.direction();
+        if(dir.length() === 0)
+        {
+            console.warn('Curve::tangent(): this Curve has zero length, so it has no tangent direction.');
+            return null;
+        }
+        return dir.normalize();
+    }
+
     /** Get the tangent direction at the closest point on the curve to the given point.
      *  Returns a normalised Vector, or null if the closest parameter cannot be found.
+     *
+     *  On a straight Curve the answer is the same everywhere — `tangent()` gives it without
+     *  needing a point.
      */
     tangentAt(point: PointLike): Vector|null
     {
@@ -1727,6 +1761,19 @@ export class Curve extends Shape
         return new ShapeCollection<Vertex>(...unique.map(p => new Vertex(p)));
     }
 
+    /** Split a degree-1 span into its individual line segments.
+     *  Coincident consecutive control points are skipped: joining curves (see connect()
+     *  and ShapeCollection.combine()) can leave zero-length pieces behind, and those are
+     *  no edges - Curve.Line() would refuse them anyway. */
+    private _lineSegmentsOfSpan(span: Curve): Curve[]
+    {
+        const cps = span.controlPoints();
+        return cps.slice(0, -1)
+                    .map((cp, i) => [cp, cps[i + 1]] as [Point, Point])
+                    .filter(([from, to]) => from.distance(to) >= Curve.ZERO_LENGTH_TOLERANCE)
+                    .map(([from, to]) => Curve.Line(from, to));
+    }
+
     /** Return all atomic segments of this Curve.
      *  - degree-1 spans (polylines) are split into individual line segments (N CPs → N-1 edges)
      *  - higher-degree spans (arcs, splines) are returned as-is, one per span
@@ -1739,8 +1786,7 @@ export class Curve extends Shape
             const inner = span.inner();
             if (inner.degree() === 1)
             {
-                const cps = span.controlPoints();
-                return cps.slice(0, -1).map((cp, i) => Curve.Line(cp, cps[i + 1]));
+                return this._lineSegmentsOfSpan(span);
             }
             return [span];
         });
@@ -1816,8 +1862,7 @@ export class Curve extends Shape
             const inner = span.inner();
             if (inner.degree() === 1)
             {
-                const cps = span.controlPoints();
-                return cps.slice(0, -1).map((cp, i) => Curve.Line(cp, cps[i + 1]));
+                return this._lineSegmentsOfSpan(span);
             }
             // Clone so combining/consuming the segment never frees this curve's span.
             return [Curve.fromCsgrs(inner.clone())];
@@ -2601,9 +2646,15 @@ export class Curve extends Shape
     }
 
     /** Extend this curve to another curve or shape collection.
-     *  Fires a probe ray from each end along its tangent direction and finds
-     *  the closest approach to `other` (= intersection for converging curves)
-     *  using ACI-refined closestPoints.  Extends the nearer end by that amount.
+     *  Fires a probe ray from each end along its tangent direction, finds where it meets
+     *  `other`, and extends the nearer end by that amount.
+     *
+     *  A REAL crossing always wins over a closest-approach guess, whichever end it is on:
+     *  the whole ray is searched for true intersections first, and only when nothing crosses
+     *  does it fall back to the nearest approach (which is what makes `extendTo()` work for
+     *  converging-but-not-meeting curves). Without that order a curve that genuinely crosses
+     *  a target 300 away could lose to the *other* end drifting within 4 of it, and the wrong
+     *  end would move.
      */
     extendTo(other: Curve | ShapeCollection<Curve>): this
     {
@@ -2613,54 +2664,61 @@ export class Curve extends Shape
 
         if (targets.length === 0) return this;
 
-        let bestDist = Infinity;
-        let bestSide: 'start' | 'end' = 'end';
-
         const startPt = new Point(this.start());
         const endPt   = new Point(this.end());
         const tangentEnd   = this.tangentAt(endPt)?.normalize();
-        const tangentStart = this.tangentAt(startPt)?.normalize();
+        // the 'start' side probes backwards, against the curve's own direction
+        const tangentStart = this.tangentAt(startPt)?.normalize()?.scale(-1);
 
-        targets.forEach(target =>
+        const nearestReach = (exactOnly: boolean): { dist: number, side: 'start'|'end' }|null =>
         {
-            // --- 'end' side ---
-            if (tangentEnd)
-            {
-                const d = this._rayIntersectDist(endPt, tangentEnd, target);
-                if (d !== null && d > 1e-6 && d < bestDist)
-                {
-                    bestDist = d;
-                    bestSide = 'end';
-                }
-            }
-            // --- 'start' side: ray goes in -tangent direction ---
-            if (tangentStart)
-            {
-                const revDir = tangentStart.copy().scale(-1);
-                const d = this._rayIntersectDist(startPt, revDir, target);
-                if (d !== null && d > 1e-6 && d < bestDist)
-                {
-                    bestDist = d;
-                    bestSide = 'start';
-                }
-            }
-        });
+            let bestDist = Infinity;
+            let bestSide: 'start' | 'end' = 'end';
 
-        if (bestDist === Infinity)
+            targets.forEach(target =>
+            {
+                ([['end', endPt, tangentEnd], ['start', startPt, tangentStart]] as const)
+                    .forEach(([side, from, dir]) =>
+                    {
+                        if(!dir){ return; }
+                        const d = this._rayReachDist(from, dir, target, exactOnly);
+                        if (d !== null && d > 1e-6 && d < bestDist)
+                        {
+                            bestDist = d;
+                            bestSide = side;
+                        }
+                    });
+            });
+
+            return (bestDist === Infinity) ? null : { dist: bestDist, side: bestSide };
+        };
+
+        const best = nearestReach(true) ?? nearestReach(false);
+
+        if (!best)
         {
             console.error('Curve::extendTo(): No valid extension found to target curves. Returning original curve.');
             return this;
         }
-        return this.extend(bestDist, bestSide);
+        return this.extend(best.dist, best.side);
     }
 
-    /** Project a ray (origin + unit dir) onto a target curve using a probe line +
-     *  ACI-refined closestPoints, returning the distance along the ray to the
-     *  closest approach point.  Returns null if no forward intersection is found.
-     * 
-     *  TODO: clean this up after AI
+    /** Distance along the ray (origin + unit dir) at which it reaches `target`.
+     *  Returns null when the ray does not reach it forwards.
+     *
+     *  Answered EXACTLY where it can be: hypercurve's native `intersect()` gives the true
+     *  crossing point, and the nearest one ahead of `origin` is the answer. Only when nothing
+     *  actually crosses does this fall back to the sampled closest approach — and callers that
+     *  want to know the difference pass `exactOnly`.
+     *
+     *  This used to go straight to `closestPoints()`, whose accuracy is set by its 30 seed
+     *  samples and its 15-iteration alternating-closest-point refinement. The probe is
+     *  deliberately far longer than the gap being measured, so those seeds land ~1/30th of the
+     *  PROBE apart and the refinement converges slowly wherever the crossing angle is shallow:
+     *  the error grew with the length of the probe rather than shrinking with the length of the
+     *  extension, leaving a beam extended to a wall line several mm short of it.
      */
-    private _rayIntersectDist(origin: Point, dir: Vector, target: Curve): number | null
+    private _rayReachDist(origin: Point, dir: Vector, target: Curve, exactOnly: boolean = false): number | null
     {
         // Probe long enough to reach well past the target
         const probeLen = this.length() * 10 + target.length() * 2 + 1000;
@@ -2672,13 +2730,25 @@ export class Curve extends Shape
                 origin.z + dir.z * probeLen,
             ),
         );
+
+        // Project onto the ray: t = (pt - origin) · dir
+        const along = (pt: Point): number => (pt.x - origin.x) * dir.x
+                                          + (pt.y - origin.y) * dir.y
+                                          + (pt.z - origin.z) * dir.z;
+
+        // 1. Exact: a true crossing, nearest one ahead of the origin
+        const hits = probe.intersect(target);
+        if (hits && hits.length)
+        {
+            const forward = hits.map(along).filter(t => t > 1e-6);
+            if (forward.length) { return Math.min(...forward); }
+        }
+        if (exactOnly) { return null; }
+
+        // 2. Nothing crosses: the closest approach is the best answer available
         const pair = probe.closestPoints(target);
         if (!pair) return null;
-        const [ptOnProbe] = pair;
-        // Project onto the ray: t = (ptOnProbe - origin) · dir
-        const t = (ptOnProbe.x - origin.x) * dir.x
-                + (ptOnProbe.y - origin.y) * dir.y
-                + (ptOnProbe.z - origin.z) * dir.z;
+        const t = along(pair[0]);
         return t > 0 ? t : null;
     }
 
@@ -2837,24 +2907,40 @@ export class Curve extends Shape
     */
     intersect(other:Curve):Array<Point>|null
     {
-        try
-        {
-            // hypercurve's native intersect projects `other` into this curve's plane via
-            // an exact similarity and returns the 3D hit points — no manual local-frame
-            // dance needed.
-            const hits = this.inner().intersect(other.inner());
-            if (hits && hits.length) { return hits.map(p => Point.from(p).round()); }
+        /*  hypercurve's native intersect projects `other` into THIS curve's plane via an exact
+            similarity and returns the 3D hit points. That plane is ill-defined for a straight
+            line, and the failure is not always a quiet one: an axis-aligned line comes back
+            empty one way round and THROWS ("open polyline failed (EmptyCurveString)") the
+            other, for the very same pair that the swapped order solves exactly.
 
-            // hypercurve projects `other` into THIS curve's plane, which is ill-defined for a
-            // straight line - so a real crossing can be missed one way round but found the other.
-            const hitsSwapped = other.inner().intersect(this.inner());
-            return (hitsSwapped || []).map(p => Point.from(p).round());
-        }
-        catch (e)
+            So each order is attempted on its own. A single try/catch around both — what this
+            used to be — let a throw on the first order swallow the swap that would have found
+            the crossing, and `Curve.Line([0,0,0],[-3200,0,0]).intersect(verticalLine)` reported
+            no intersection at all instead of the hit at x = -300. */
+        const attempt = (a: Curve, b: Curve): Array<Point>|null =>
         {
-            console.error('Curve::intersect(): Error:', e);
-            return null;
-        }
+            try
+            {
+                const hits = a.inner().intersect(b.inner());
+                return hits ? hits.map(p => Point.from(p).round()) : [];
+            }
+            catch (e)
+            {
+                return null; // this order cannot answer; the other one still might
+            }
+        };
+
+        const hits = attempt(this, other);
+        if (hits && hits.length) { return hits; }
+
+        const swapped = attempt(other, this);
+        if (swapped && swapped.length) { return swapped; }
+
+        // An order that answered "no hits" without failing is a real answer
+        if (hits || swapped) { return []; }
+
+        console.error('Curve::intersect(): could not compute intersections for this curve pair.');
+        return null;
     }
 
     /** Connect endpoints to endpoints of another Curve by creating Line
@@ -2927,13 +3013,19 @@ export class Curve extends Shape
     /** Perform a boolean operation against another Curve via hypercurve's exact
      *  NATIVE region engine (arcs/lines preserved, no tessellation). Both curves are
      *  closed regions; the other is mapped into this curve's plane by an exact
-     *  similarity. Returns result Curves (each with holes attached), or null. */
-    private _booleanOp(other: Curve, operation: 'union'|'difference'|'intersection'): ShapeCollection<Curve> | null
+     *  similarity. Returns result Curves (each with holes attached), or null.
+     *
+     *  `allowEmpty` separates the two things an empty region list can mean: by default an
+     *  empty result is reported as a failure (null), which is what the single-cutter ops
+     *  have always done; with `allowEmpty` it comes back as an EMPTY collection instead, so
+     *  a caller folding several cutters can tell "the cutter swallowed this piece" (empty)
+     *  from "the boolean broke" (null). */
+    private _booleanOp(other: Curve, operation: 'union'|'difference'|'intersection', allowEmpty: boolean = false): ShapeCollection<Curve> | null
     {
         try
         {
             const regions = this.inner().boolean(other.inner(), operation) as Array<any>;
-            if (!regions || regions.length === 0) { return null; }
+            if (!regions || regions.length === 0) { return allowEmpty ? new ShapeCollection<Curve>() : null; }
             const curves = regions.map(rg =>
             {
                 // Preserve this Curve's concrete class (e.g. a scene-bound SmartCurve
@@ -2974,15 +3066,87 @@ export class Curve extends Shape
         else { console.warn('Curve::union(): Boolean operation failed. Returning null.'); return null; }
     }
 
-    /** Boolean subtraction: this Curve minus the other Curve.
-     *  Both curves must be closed and coplanar.
-     *  Returns the exterior outlines of the resulting regions,
-     *  or null on error.
+    /** Boolean subtraction: this Curve minus one or more cutters.
+     *
+     *  Cutters can be single Curves, ShapeCollections of Curves, or any mix of the two, so
+     *  `band.difference(layer('rafters').shapes())` works like it does on Mesh and Polygon.
+     *  All curves must be closed and coplanar. Two kinds of cutter are skipped with a warning
+     *  rather than wrecking the result: members of a collection that are not Curves, and a
+     *  cutter that IS this very Curve — a layer collection routinely contains the very shape
+     *  you are cutting, and subtracting a region from itself leaves nothing.
+     *
+     *  Cutters are applied in order, each one to every piece produced so far, so a cutter that
+     *  splits the region in two is still followed correctly by the next cutter. A cutter whose
+     *  boolean fails is skipped (warning) and its piece kept, so one bad cutter in a collection
+     *  no longer costs you the whole result.
+     *
+     *  Returns the exterior outlines of the resulting regions: this Curve when a single region
+     *  is left (geometry replaced in place), a ShapeCollection<Curve> when the cut split it into
+     *  several (this Curve unchanged), or null when the cutters removed everything — or, for a
+     *  single cutter, when the boolean failed outright.
      */
     @sceneReplaceOrKeep
-    difference(other: Curve): Curve|ShapeCollection<Curve>|null
+    difference(...others: Array<Curve|ShapeCollection<Curve>>): Curve|ShapeCollection<Curve>|null
     {
-        return this._difference(other);
+        const cutters = this._collectCutters(others, 'difference');
+        return cutters.length ? this._differenceCutters(cutters) : this;
+    }
+
+    /** Flatten difference()/subtract() arguments into usable cutter Curves: unwrap
+     *  ShapeCollections, drop anything that is not a Curve, and drop this Curve itself. */
+    private _collectCutters(others: Array<Curve|ShapeCollection<Curve>>, label: string): Array<Curve>
+    {
+        const flat = others.flatMap(o =>
+            ShapeCollection.isShapeCollection(o) ? (o as ShapeCollection<any>).toArray() : [o]) as Array<any>;
+
+        const cutters = flat.filter(c => (c instanceof Curve) && c !== this) as Array<Curve>;
+        const selfHits = flat.filter(c => c === this).length;
+        const invalid = flat.length - cutters.length - selfHits;
+
+        if(selfHits)
+        {
+            console.warn(`Curve::${label}(): skipped ${selfHits} cutter(s) that are this very Curve — a Curve cannot be subtracted from itself. `
+                + `Tip: a layer collection contains the shape you are cutting too; build the cut shape on another layer or filter the cutters.`);
+        }
+        if(invalid){ console.warn(`Curve::${label}(): skipped ${invalid} cutter(s) that are not a Curve.`); }
+        if(!cutters.length){ console.warn(`Curve::${label}(): no valid cutters. Returning the original Curve.`); }
+
+        return cutters;
+    }
+
+    /** Apply every cutter, in order, to every piece produced so far. Pieces are the region
+     *  copies made by _booleanOp(); this Curve is only updated at the very end, so the
+     *  "single result replaces this / multiple results leave this alone" contract holds. */
+    private _differenceCutters(cutters: Array<Curve>): Curve|ShapeCollection<Curve>|null
+    {
+        let pieces: Array<Curve> = [this];
+        let applied = false;    // at least one boolean produced a result
+        let failed = false;     // at least one boolean failed outright
+
+        cutters.forEach(cutter =>
+        {
+            pieces = pieces.reduce((acc: Array<Curve>, piece) =>
+            {
+                const regions = piece._booleanOp(cutter, 'difference', true);
+                if(regions === null){ failed = true; return acc.concat(piece); }  // keep the piece
+                applied = true;
+                return acc.concat(regions.toArray());   // empty when the cutter swallowed the piece
+            }, []);
+        });
+
+        if(pieces.length === 0)
+        {
+            console.warn('Curve::difference(): the cutters removed the entire region. Returning null.');
+            return null;
+        }
+        if(pieces.length === 1)
+        {
+            // Nothing succeeded and something broke: the historic single-cutter failure result.
+            if(!applied && failed){ console.warn('Curve::difference(): Boolean operation failed. Returning null.'); return null; }
+            return (pieces[0] === this) ? this : this.update(pieces[0]);
+        }
+        console.warn(`Curve::difference(): Result are ${pieces.length} curves. Returning a ShapeCollection<Curve>`);
+        return new ShapeCollection<Curve>(...pieces);
     }
 
     /** Pure boolean difference geometry — no scene bookkeeping. Mutates in place and returns
@@ -3002,9 +3166,9 @@ export class Curve extends Shape
     }
 
     // Alias for difference (scene management runs via the decorated difference()).
-    subtract(other: Curve): Curve|ShapeCollection<Curve>|null
+    subtract(...others: Array<Curve|ShapeCollection<Curve>>): Curve|ShapeCollection<Curve>|null
     {
-        return this.difference(other);
+        return this.difference(...others);
     }
 
     /** Cut current Curve by other and keep the biggest part (inside other).
@@ -3159,18 +3323,32 @@ export class Curve extends Shape
             : new ShapeCollection<Curve>(...winner.curves);
     }
 
-    /** Get intersecting Curves with either closed Curves or Mesh */
-    intersections(other: Curve|Mesh): ShapeCollection<Curve>|null
+    /** Pure intersection geometry - never touches the scene. Used internally (by the public
+     *  intersection(s), by Polygon's boundary booleans and by ShapeCollection). */
+    _intersections(other: Curve|Mesh): ShapeCollection<Curve>|null
     {
-        return (other instanceof Mesh) 
-                    ? this._intersectionMesh(other) 
+        return (other instanceof Mesh)
+                    ? this._intersectionMesh(other)
                     : this._intersectionCurve(other);
     }
 
-    /** Get single intersection of Curve with another Curve or Mesh */
+    /** Get intersecting Curves with either closed Curves or Mesh.
+     *
+     *  NON-REPLACING: this Curve is left exactly as it is; the results are NEW Curves that are
+     *  added to the active layer, so they are visible without an explicit addToScene(). Mark
+     *  this Curve tmp() to keep the results out of the scene. */
+    @sceneAdd
+    intersections(other: Curve|Mesh): ShapeCollection<Curve>|null
+    {
+        return this._intersections(other);
+    }
+
+    /** Get single intersection of Curve with another Curve or Mesh. Same non-replacing,
+     *  added-to-the-active-layer contract as intersections(). */
+    @sceneAdd
     intersection(other: Curve|Mesh): Curve|ShapeCollection<Curve>|null
     {
-        return this.intersections(other)?.checkSingle() || null;
+        return this._intersections(other)?.checkSingle() || null;
     }
 
     /** Boolean intersection of this (closed) Curve with another (closed) Curve.
@@ -3947,6 +4125,19 @@ export class Curve extends Shape
     dashed(dash: number[] = [2, 2]): this
     {
         this.style.strokeDash = dash;
+        return this;
+    }
+
+    /** Draw this Curve as an unbroken line — the counterpart of {@link dashed}.
+     *
+     *  An empty dash pattern is what "no dashes" means throughout the pipeline (SVG omits
+     *  `stroke-dasharray`, glTF gets the all-ones 0xFFFF pattern), and setting it here marks
+     *  it EXPLICIT, so it wins in the style cascade: a curve on a `layer('diagram').dashed()`
+     *  can opt back out without the layer having to change. The name follows the DXF/CAD
+     *  linetype it exports as — CONTINUOUS. */
+    continuous(): this
+    {
+        this.style.strokeDash = [];
         return this;
     }
 

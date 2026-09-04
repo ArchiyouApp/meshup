@@ -285,6 +285,38 @@ export class Vector
     return this.setZ(value);
   }
 
+  /** Translate this Vector by the given offset - `add()` under the name the rest of the
+   *  library uses for a relative move, and taking loose coordinates (`move(10, 0, 5)`) too. */
+  move(pntOrDx: PointLike | number, dy?: number, dz?: number): this
+  {
+    if(!isPointLike(pntOrDx) && typeof pntOrDx !== 'number'){ throw new Error(`Vector::move(): Invalid parameter: ${pntOrDx}`); }
+    // IMPORTANT: isPointLike accepts numbers (for x coord only), so don't start with that check!
+    const d = (typeof dy === 'number' || typeof dz === 'number')
+                    ? new Point(pntOrDx, dy || 0, dz || 0)
+                    : Point.from(pntOrDx);
+    return this.add(d);
+  }
+
+  moveX(dx: number): this { return this.move(dx, 0, 0); }
+  moveY(dy: number): this { return this.move(0, dy, 0); }
+  moveZ(dz: number): this { return this.move(0, 0, dz); }
+
+  /** Set this Vector to `target`. A Vector is a direction rooted at the origin and has no
+   *  extent, so where Mesh.moveTo() and Curve.moveTo() re-centre a bbox on the target, this
+   *  simply sets the components. Present for API parity: the same call reads the same on a
+   *  Vector, a Point, a Vertex and a Shape.
+   *  Takes loose coordinates too (`moveTo(200, 475, 0)`). */
+  moveTo(target: PointLike | number, py?: number, pz?: number): this
+  {
+    const t = new Point(target as PointLike, py, pz);
+    this._inner = new Vector3Js(t.x, t.y, t.z);
+    return this;
+  }
+
+  moveToX(x: number): this { return this.setX(x); }
+  moveToY(y: number): this { return this.setY(y); }
+  moveToZ(z: number): this { return this.setZ(z); }
+
   /** Mirror through a plane defined by a point and normal */
   mirror(planePoint: PointLike, planeNormal: PointLike): this
   {

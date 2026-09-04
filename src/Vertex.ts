@@ -39,6 +39,7 @@ export class Vertex extends Shape
     const vertex = Object.create(Vertex.prototype) as Vertex;
     // Object.create bypasses the constructor, so manually initialize Shape fields
     (vertex as any)['_id'] = uuid();
+    (vertex as any)['_sid'] = 0;
     (vertex as any)['type'] = 'Vertex';
     vertex._node = null;
     vertex.style = new Style();
@@ -104,6 +105,20 @@ export class Vertex extends Shape
     );
     return this;
   }
+
+  /** Move this Vertex so it lands on `target`. A Vertex is dimensionless, so its bbox centre
+   *  is the vertex itself: where Mesh.moveTo()/Curve.moveTo() re-centre a bbox, this simply
+   *  sets the position. The normal is carried along untouched.
+   *  Takes loose coordinates too (`moveTo(200, 475, 0)`). */
+  override moveTo(target: PointLike | number, py?: number, pz?: number): this
+  {
+    const t = new Point(target as PointLike, py, pz);
+    return this.translate(t.x - this.x, t.y - this.y, t.z - this.z);
+  }
+
+  override moveToX(x: number): this { return this.translate(x - this.x, 0, 0); }
+  override moveToY(y: number): this { return this.translate(0, y - this.y, 0); }
+  override moveToZ(z: number): this { return this.translate(0, 0, z - this.z); }
 
   override rotate(angleDeg: number, axis: Axis | PointLike = 'z'): this
   {
@@ -191,6 +206,7 @@ export class Vertex extends Shape
   {
     const v = new Vertex([this.x, this.y, this.z], this.normal().toArray());
     v.style.merge(this.style.toData());
+    v._inheritSid(this);
     return v as this;
   }
 

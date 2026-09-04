@@ -144,8 +144,32 @@ describe('Mesh boolean operations', () =>
         const a = Mesh.Cube(10);
         const b = Mesh.Cube(10);
         b.translate([2, 2, 2]);
-        a.intersection(b);
-        expect(a.positions().length).toBeGreaterThan(0);
+        // non-replacing: the shared volume is a NEW Mesh, `a` keeps its own geometry
+        const volume = a.volume();
+        const shared = a.intersection(b);
+        expect(shared).not.toBe(a);
+        expect(shared.positions().length).toBeGreaterThan(0);
+        expect(shared.volume()).toBeLessThan(volume);
+        expect(a.volume()).toBeCloseTo(volume, 4);
+    });
+
+    it('difference() refuses to subtract a Mesh from itself', () =>
+    {
+        const a = Mesh.Cube(10);
+        const volume = a.volume();
+        a.difference(a);
+        expect(a.volume()).toBeCloseTo(volume as number, 3);    // untouched, not wiped out
+    });
+
+    // The real-world trap: layer('x').shapes() holds the very shape you are cutting,
+    // because it was built while that layer was active.
+    it('difference() skips itself when it sits inside the cutter collection', () =>
+    {
+        const a = Mesh.Cube(10);
+        const cutter = Mesh.Cube(10).translate([5, 5, 5]);
+        a.difference(new ShapeCollection<Mesh>(a, cutter));
+        expect(a.volume()).toBeGreaterThan(0);                  // the cube survives
+        expect(a.volume()).toBeLessThan(1000);                  // and the real cutter still bit
     });
 });
 

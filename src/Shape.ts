@@ -45,6 +45,19 @@ export abstract class Shape
     /** True when this shape's name was inherited from a copy() source; the host auto-namer
      *  may then rename it after the variable it is assigned to. */
     _nameInherited?: boolean;
+    /** Serial id: the order in which this shape entered the scene, stamped once on adoption
+     *  by SceneNode.setShape() from the provider the host installed on the scene root. 0
+     *  means never adopted (a detached or tmp() shape, or a bare meshup scene with no host).
+     *
+     *  Unlike `_id` — a fresh uuid on every run — this is reproducible: the same script with
+     *  the same params, kernel and meshup version numbers its shapes identically. It is NOT
+     *  reproducible across a change that adds or removes a shape, which shifts every sid
+     *  adopted after it, so it complements the scene path for cross-run identity rather than
+     *  replacing it. */
+    _sid: number = 0;
+    /** The sid of the shape this one was copied from, when it is a copy. Provenance only —
+     *  a copy always earns its own `_sid`. */
+    _sidFrom?: number;
     /** Sticky flag set by `tmp()`: while true, scene decorators and copy() do no scene
      *  bookkeeping for this shape and mark any shape derived from it `tmp()` too. */
     _suppressScene?: boolean;
@@ -116,7 +129,7 @@ export abstract class Shape
      *  every derived shape, so a tmp'd internal copy would suppress the real result too. */
     copy(): this
     {
-        const c = this._copy();
+        const c = this._copy();   // _copy() carries _sidFrom; the clone earns its own sid on adoption
         c._modeler = this._modeler;
         c._scene = this._node?.root() ?? this._scene;
         c._nameInherited = true;
@@ -143,6 +156,20 @@ export abstract class Shape
     id(): string
     {
         return this._id;
+    }
+
+    /** Serial id: the order this shape entered the scene, or 0 if it never did. See `_sid`. */
+    sid(): number
+    {
+        return this._sid;
+    }
+
+    /** Carry provenance from the source of a clone. The clone keeps sid 0 until it is
+     *  adopted, where it earns its own — this only records where it came from. */
+    _inheritSid(from: { _sid?: number, _sidFrom?: number }): this
+    {
+        this._sidFrom = from._sid || from._sidFrom;
+        return this;
     }
 
     node(): SceneNode | null

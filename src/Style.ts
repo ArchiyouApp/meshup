@@ -46,11 +46,8 @@ export type StyleData = {
     /**
      * A colour ramp along the shape, rendered as per-vertex colour.
      *
-     * Deliberately a TOP-LEVEL key rather than living inside `stroke`. `_explicit` tracks whole
-     * top-level keys, so setting a gradient under `stroke` would mark the entire stroke object
-     * explicit and push its default width/dash/cap/join into the style cascade, silently
-     * overriding whatever a parent layer had set. A top-level key also reads correctly for
-     * meshes, which have a gradient but no stroke.
+     * Deliberately a TOP-LEVEL key rather than living inside `stroke`: a gradient reads
+     * correctly for meshes, which have one but no stroke at all.
      *
      * Absent means no gradient. There is deliberately no entry in SHAPE_DEFAULT_STYLE — the
      * Style constructor only deep-copies `fill`, `stroke` and `point`, so a fourth nested
@@ -86,6 +83,16 @@ export class Style
     _style: StyleData;
     /** Tracks which top-level StyleData keys were explicitly set (not just defaults). */
     private _explicit = new Set<keyof StyleData>();
+    /** Same, one level down, for the grouped keys. These are tracked per SUB-KEY because
+     *  explicitData() feeds the style cascade: emitting a whole group the moment any one of
+     *  its members was set would carry SHAPE_DEFAULT_STYLE's values along as if the author
+     *  had chosen them — `.dashed()` (stroke.dash only) would drag the default red
+     *  stroke.color over a blue parent layer. */
+    private _explicitSub: Record<'fill' | 'stroke' | 'point', Set<string>> = {
+        fill:   new Set<string>(),
+        stroke: new Set<string>(),
+        point:  new Set<string>(),
+    };
 
     /** Parse any ColorInput and return a canonical '#rrggbb' hex string. Throws on invalid input. */
     private static _resolveColor(color: ColorInput): string
@@ -132,12 +139,34 @@ export class Style
         if (this._explicit.has('visible')) d.visible = this.visible;
         if (this._explicit.has('color')) d.color = this.color;
         if (this._explicit.has('opacity')) d.opacity = this.opacity;
-        if (this._explicit.has('fill')) d.fill = { ...this._style.fill };
-        if (this._explicit.has('stroke')) d.stroke = { ...this._style.stroke };
-        if (this._explicit.has('point')) d.point = { ...this._style.point };
+        const fill   = this._explicitGroup('fill');
+        const stroke = this._explicitGroup('stroke');
+        const point  = this._explicitGroup('point');
+        if (fill) d.fill = fill;
+        if (stroke) d.stroke = stroke;
+        if (point) d.point = point;
         if (this._explicit.has('gradient')) d.gradient = Style._cloneGradient(this._style.gradient);
         if (this._explicit.has('material')) d.material = this._style.material;
         return d;
+    }
+
+    /** The explicitly-set members of one grouped key, or null when it has none. Values are read
+     *  live from _style, so a sub-key later overwritten by the `color` shorthand reports the
+     *  colour that actually applies. */
+    private _explicitGroup<K extends 'fill' | 'stroke' | 'point'>(key: K): NonNullable<StyleData[K]> | null
+    {
+        const set = this._explicitSub[key];
+        if (set.size === 0) return null;
+
+        const src = (this._style[key] ?? {}) as Record<string, any>;
+        const out: Record<string, any> = {};
+        set.forEach(k =>
+        {
+            const v = src[k];
+            if (v === undefined) return;
+            out[k] = Array.isArray(v) ? [...v] : v; // dash is an array — hand out a copy
+        });
+        return Object.keys(out).length ? out as NonNullable<StyleData[K]> : null;
     }
 
     get visible(): boolean {
@@ -351,7 +380,7 @@ export class Style
             update.opacity = v.opacity;
         }
         this._style.fill = { ...this._style.fill, ...update };
-        this._explicit.add('fill');
+        Object.keys(update).forEach(k => this._explicitSub.fill.add(k));
     }
 
     get fillColor(): StyleColor {
@@ -360,7 +389,7 @@ export class Style
     set fillColor(v: ColorInput)
     {
         this._style.fill!.color = Style._resolveColor(v);
-        this._explicit.add('fill');
+        this._explicitSub.fill.add('color');
     }
 
     get fillOpacity(): number {
@@ -370,7 +399,7 @@ export class Style
     {
         if (!Style._isValidOpacity(v)) throw new RangeError(`Style.fillOpacity must be between 0 and 1, got: ${v}`);
         this._style.fill!.opacity = v;
-        this._explicit.add('fill');
+        this._explicitSub.fill.add('opacity');
     }
 
     //// STROKE ////
@@ -412,7 +441,7 @@ export class Style
             update.join = v.join;
         }
         this._style.stroke = { ...this._style.stroke, ...update };
-        this._explicit.add('stroke');
+        Object.keys(update).forEach(k => this._explicitSub.stroke.add(k));
     }
 
     get strokeColor(): StyleColor {
@@ -421,7 +450,7 @@ export class Style
     set strokeColor(v: ColorInput)
     {
         this._style.stroke!.color = Style._resolveColor(v);
-        this._explicit.add('stroke');
+        this._explicitSub.stroke.add('color');
     }
 
     get strokeOpacity(): number {
@@ -431,7 +460,7 @@ export class Style
     {
         if (!Style._isValidOpacity(v)) throw new RangeError(`Style.strokeOpacity must be between 0 and 1, got: ${v}`);
         this._style.stroke!.opacity = v;
-        this._explicit.add('stroke');
+        this._explicitSub.stroke.add('opacity');
     }
 
     get strokeWidth(): number {
@@ -442,7 +471,7 @@ export class Style
         if (typeof v !== 'number' || v < 0)
             throw new RangeError(`Style.strokeWidth must be a non-negative number, got: ${v}`);
         this._style.stroke!.width = v;
-        this._explicit.add('stroke');
+        this._explicitSub.stroke.add('width');
     }
 
     get strokeDash(): number[] {
@@ -453,7 +482,7 @@ export class Style
         if (!Array.isArray(v) || v.some(n => typeof n !== 'number' || n < 0))
             throw new TypeError(`Style.strokeDash must be an array of non-negative numbers`);
         this._style.stroke!.dash = v;
-        this._explicit.add('stroke');
+        this._explicitSub.stroke.add('dash');
     }
 
     get strokeCap(): 'butt' | 'round' | 'square' {
@@ -464,7 +493,7 @@ export class Style
         if (!['butt', 'round', 'square'].includes(v))
             throw new TypeError(`Style.strokeCap must be 'butt', 'round', or 'square', got: "${v}"`);
         this._style.stroke!.cap = v;
-        this._explicit.add('stroke');
+        this._explicitSub.stroke.add('cap');
     }
 
     get strokeJoin(): 'bevel' | 'round' | 'miter' {
@@ -475,7 +504,7 @@ export class Style
         if (!['bevel', 'round', 'miter'].includes(v))
             throw new TypeError(`Style.strokeJoin must be 'bevel', 'round', or 'miter', got: "${v}"`);
         this._style.stroke!.join = v;
-        this._explicit.add('stroke');
+        this._explicitSub.stroke.add('join');
     }
 
     //// POINT ////
@@ -502,7 +531,7 @@ export class Style
             update.shape = v.shape;
         }
         this._style.point = { ...this._style.point, ...update };
-        this._explicit.add('point');
+        Object.keys(update).forEach(k => this._explicitSub.point.add(k));
     }
 
     get pointSize(): number {
@@ -513,7 +542,7 @@ export class Style
         if (typeof v !== 'number' || v < 0)
             throw new RangeError(`Style.pointSize must be a non-negative number, got: ${v}`);
         this._style.point!.size = v;
-        this._explicit.add('point');
+        this._explicitSub.point.add('size');
     }
 
     /** Point marker color. Falls back to the shape's shared color when not set explicitly. */
@@ -523,7 +552,7 @@ export class Style
     set pointColor(v: ColorInput)
     {
         this._style.point!.color = Style._resolveColor(v);
-        this._explicit.add('point');
+        this._explicitSub.point.add('color');
     }
 
     /** Resolve the point marker color to an [r, g, b] triple (each 0–1) for GLTF. */
@@ -543,7 +572,7 @@ export class Style
         if (!['circle', 'square'].includes(v))
             throw new TypeError(`Style.pointShape must be 'circle' or 'square', got: "${v}"`);
         this._style.point!.shape = v;
-        this._explicit.add('point');
+        this._explicitSub.point.add('shape');
     }
 
     //// APPLY ////

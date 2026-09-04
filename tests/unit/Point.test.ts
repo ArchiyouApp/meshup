@@ -119,6 +119,52 @@ describe('Point.move()', () =>
     });
 });
 
+describe('Point.moveTo() / moveToX/Y/Z()', () =>
+{
+    it('moves the point onto an absolute target in-place', () =>
+    {
+        const p = new Point(1, 2, 3);
+        const result = p.moveTo([10, 20, 30]);
+        expect(p.toArray()).toEqual([10, 20, 30]);
+        expect(result).toBe(p); // returns this
+    });
+
+    it('accepts loose coordinates', () =>
+    {
+        const p = new Point(1, 2, 3);
+        p.moveTo(200, 475, 0);
+        expect(p.toArray()).toEqual([200, 475, 0]);
+    });
+
+    it('accepts another Point as target', () =>
+    {
+        const p = new Point(1, 2, 3);
+        p.moveTo(new Point(-5, -6, -7));
+        expect(p.toArray()).toEqual([-5, -6, -7]);
+    });
+
+    it('defaults the omitted axes to 0 for loose coordinates', () =>
+    {
+        const p = new Point(1, 2, 3);
+        p.moveTo(9);
+        expect(p.toArray()).toEqual([9, 0, 0]);
+    });
+
+    it('moveToX/Y/Z() only touch their own axis and stay chainable', () =>
+    {
+        const p = new Point(1, 2, 3);
+
+        expect(p.moveToX(10)).toBe(p);
+        expect(p.toArray()).toEqual([10, 2, 3]);
+
+        p.moveToY(20);
+        expect(p.toArray()).toEqual([10, 20, 3]);
+
+        p.moveToZ(30);
+        expect(p.toArray()).toEqual([10, 20, 30]);
+    });
+});
+
 describe('Point.setX/Y/Z()', () =>
 {
     it('sets individual coordinates in-place and stays chainable', () =>
