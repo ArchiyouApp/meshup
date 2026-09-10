@@ -91,8 +91,8 @@ pub fn transform_imported(curve: ImportedCurve, xform: &Xform)
             hcurve::transform_contour(&ct, &sim).map(ImportedCurve::Closed)
         },
         ImportedCurve::Path(path, closed) => path
-            .transform_similarity(&sim)
-            .map(|p| ImportedCurve::Path(p, closed))
+            .transform_similarity(&sim, &hcurve::policy())
+            .map(|p| ImportedCurve::Path(hcurve::done(p), closed))
             .map_err(|e| format!("path transform failed ({e:?})")),
     }
 }

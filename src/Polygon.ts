@@ -774,7 +774,9 @@ export class Polygon extends Shape
             {
                 const r = boundary._copy()._intersections(region)?.checkSingle() ?? null;
                 if (r === null) { return []; }
-                return (r instanceof Curve) ? [r] : r.toArray();
+                // Both operands are closed regions here, so the result is region outlines —
+                // the Vertex members an intersection can hold otherwise are not pieces.
+                return (r instanceof Curve) ? [r] : (r as ShapeCollection<any>).toArray().filter((c: any) => c instanceof Curve);
             };
             regionCurves = [...pieceOf(regionPlus), ...pieceOf(regionMinus)];
         }

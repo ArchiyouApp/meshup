@@ -29,6 +29,7 @@
 import { getCsgrs, ShapeCollection, Curve, Mesh } from './index';
 import type { SketchJs } from './wasm/meshup';
 import type { Axis } from './types';
+import type { DxfDoc } from './DxfDoc';
 
 export type ImportFormat =
     | 'svg' | 'geojson' | 'dxf'                         // 2D
@@ -216,6 +217,34 @@ export class Importer
             out.add(Curve.fromCurve3D(c));
         }
         return out;
+    }
+
+    /** Read a DXF as **flat entity records** — the drawing itself, not geometry to model with.
+     *
+     *  The counterpart to {@link Importer.fromDXF}, which normalises everything into curves:
+     *  that path answers "what shapes are in this file", and to do it it throws away
+     *  everything that is not geometry. This one keeps all of it — an ARC stays a centre, a
+     *  radius and two angles, a polyline keeps its bulges, every entity keeps its layer,
+     *  colour and linetype — and leaves interpreting it (block expansion, OCS, unit guessing)
+     *  to the caller, where it can be iterated on against real files.
+     *
+     *  Coordinates come back in DXF's own **Y-up** frame and the file's own units. Handles both
+     *  ASCII and binary DXF. */
+    static rawDXF(data: string | Uint8Array | ArrayBuffer): DxfDoc
+    {
+        const bytes = Importer._toBytes(data);
+        if(bytes.length === 0){ throw new Error('Importer.rawDXF(): empty DXF data.'); }
+
+        try
+        {
+            // A JSON string, not a mapped object: see `import_dxf_document` in curve_js.rs for
+            // why serde-wasm-bindgen cannot carry this shape.
+            return JSON.parse((getCsgrs() as any).importDxfDocument(bytes)) as DxfDoc;
+        }
+        catch(e)
+        {
+            throw new Error(`Importer.rawDXF(): DXF import failed: ${(e as Error)?.message ?? e}`);
+        }
     }
 
     /** Import a glTF 2.0 model (.glb or .gltf) as a merged Mesh.

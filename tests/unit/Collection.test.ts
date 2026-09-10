@@ -5,6 +5,7 @@ import { Curve } from '../../src/Curve';
 import { ShapeCollection as Collection } from '../../src/ShapeCollection';
 import { SceneNode } from '../../src/SceneNode';
 import { Point } from '../../src/Point';
+import { Vertex } from '../../src/Vertex';
 
 let cube1: Mesh;
 let cube2: Mesh;
@@ -363,5 +364,141 @@ describe('ShapeCollection.grid()', () =>
         const col = new Collection<Mesh>(Mesh.Cube(2));
         expect(col.copy().grid(2.9, 2, 1, 10).count()).toBe(4);
         expect(() => col.copy().grid(NaN, 2, 1, 10)).toThrow(/grid/);
+    });
+});
+
+describe('Collection group transforms', () =>
+{
+    /*  scale() has always resolved its origin ONCE for the whole collection, so the group scales
+        as one. rotate*() did not: with no origin it called each shape's own rotate(), which turns
+        about the WORLD ORIGIN — so a group of shapes could not be turned about itself at all, and
+        the two group transforms disagreed about what "no origin given" means. */
+    const pair = () => new Collection<Mesh>(
+        Mesh.Cube(10).moveTo(-50, 0, 0),
+        Mesh.Cube(10).moveTo(50, 0, 0));
+
+    // `+ 0` folds -0 into 0: a rotation lands components on -0 as readily as on 0
+    const at = (col: Collection<any>) => col.toArray().map(s => s.center().toArray().map((v: number) => Math.round(v) + 0));
+
+    it('turns the whole group about the collection centre by default', () =>
+    {
+        // the pair sits on the X axis around [0,0,0]; a quarter turn stands it on the Y axis
+        expect(at(pair().rotateZ(90))).toEqual([[0, -50, 0], [0, 50, 0]]);
+    });
+
+    it('turns about the collection centre even when that is not the world origin', () =>
+    {
+        const col = pair().move(100, 0, 0);          // centre now [100,0,0]
+        expect(at(col.rotateZ(90))).toEqual([[100, -50, 0], [100, 50, 0]]);
+    });
+
+    it('honours an explicit origin, on rotate() and rotateAround() alike', () =>
+    {
+        expect(at(pair().move(100, 0, 0).rotateZ(90, [0, 0, 0]))).toEqual([[0, 50, 0], [0, 150, 0]]);
+        expect(at(pair().move(100, 0, 0).rotateAround(90, 'z', [0, 0, 0]))).toEqual([[0, 50, 0], [0, 150, 0]]);
+    });
+
+    it('scales as a group about the same default, so the two agree', () =>
+    {
+        // about the collection centre [100,0,0]: the members move to ±100 of it, not of the origin
+        expect(at(pair().move(100, 0, 0).scale(2))).toEqual([[0, 0, 0], [200, 0, 0]]);
+    });
+
+    it('turns curves and solids the same way', () =>
+    {
+        const curves = new Collection<Curve>(
+            Curve.Rect(10, 10, [-50, 0, 0]), Curve.Rect(10, 10, [50, 0, 0])).move(100, 0, 0);
+
+        expect(at(curves.rotateZ(90))).toEqual([[100, -50, 0], [100, 50, 0]]);
+    });
+});
+
+describe('Collection.map()', () =>
+{
+    /*  map() used to always hand back a plain Array, so `verts.map(v => circle(15, v))` could
+        not be styled, named or moved as a group the way filter() and sort() results can. It now
+        answers with a ShapeCollection when EVERY result is a Shape, and stays an Array
+        otherwise — a value map like `col.map(s => s.bbox().maxZ())` is unchanged. */
+    const pair = () => new Collection<Mesh>(Mesh.Cube(10).moveTo(-50, 0, 0), Mesh.Cube(10).moveTo(50, 0, 0));
+
+    it('answers with a ShapeCollection when every result is a Shape', () =>
+    {
+        const mapped = pair().map(m => m.copy().moveZ(5));
+
+        expect(Collection.isShapeCollection(mapped)).toBe(true);
+        expect(mapped.length).toEqual(2);
+    });
+
+    it('lets collection methods chain off the result', () =>
+    {
+        const mapped = pair().map(m => m.copy()) as Collection<Mesh>;
+
+        expect(mapped.move(0, 0, 10).toArray().map(m => Math.round(m.center().z))).toEqual([10, 10]);
+    });
+
+    it('answers with a plain Array when the callback produces values', () =>
+    {
+        const maxZs = pair().map(m => m.bbox()!.maxZ());
+
+        expect(Array.isArray(maxZs)).toBe(true);
+        expect(maxZs.length).toEqual(2);
+    });
+
+    it('stays an Array when a single result is not a Shape, keeping the gap', () =>
+    {
+        const mixed = pair().map((m, i) => (i === 0 ? m.copy() : null));
+
+        expect(Array.isArray(mixed)).toBe(true);
+        expect(mixed.length).toEqual(2);
+        expect(mixed[1]).toBeNull();
+    });
+
+    it('maps an empty collection to an empty Array', () =>
+    {
+        // The static type still reads ShapeCollection here — with nothing to map there is no
+        // result to judge, so only the runtime value can tell you which one you got.
+        const mapped: unknown = new Collection<Mesh>().map(m => m.copy());
+
+        expect(Array.isArray(mapped)).toBe(true);
+        expect(mapped as Array<Mesh>).toHaveLength(0);
+    });
+
+    it('flattens collections the callback returns into one collection', () =>
+    {
+        const mapped = pair().map(m => new Collection<Mesh>(m.copy(), m.copy())) as unknown as Collection<Mesh>;
+
+        expect(Collection.isShapeCollection(mapped)).toBe(true);
+        expect(mapped.length).toEqual(4);
+    });
+});
+
+describe('Mesh.vertices() as a collection', () =>
+{
+    /*  Mesh.vertices() was an alias for positions(), so it answered with an Array of Points
+        while Curve/Polygon answered with a ShapeCollection of Vertices. Collection.vertices()
+        then fed those Points to add(), which drops non-Shapes — mesh vertices vanished. */
+    it('answers with a ShapeCollection of Vertices', () =>
+    {
+        const verts = Mesh.Cube(10).vertices();
+
+        expect(Collection.isShapeCollection(verts)).toBe(true);
+        expect(verts.length).toBeGreaterThan(0);
+        expect(verts.first()).toBeInstanceOf(Vertex);
+    });
+
+    it('keeps positions() as the raw Point accessor', () =>
+    {
+        const cube = Mesh.Cube(10);
+
+        expect(Array.isArray(cube.positions())).toBe(true);
+        expect(cube.positions()[0]).toBeInstanceOf(Point);
+        expect(cube.positions().length).toEqual(cube.vertices().length);
+    });
+
+    it('reports a Mesh\'s vertices through Collection.vertices()', () =>
+    {
+        const verts = new Collection<Mesh>(Mesh.Cube(10)).vertices();
+
+        expect(verts.length).toEqual(Mesh.Cube(10).positions().length);
     });
 });

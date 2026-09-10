@@ -589,7 +589,7 @@ export class GLTFBuilder
         if (item instanceof Mesh)
         {
             const n = name ?? 'mesh';
-            if (!item._mesh || item.vertices().length === 0) return this;
+            if (!item._mesh || item.positions().length === 0) return this;
             const { node, primitive, indices, positions, normals } = this._meshToGLTFNode(item, n);
             this.addSceneChild(node);
             this.queueMeshExtData(primitive, indices, positions, normals, item.style);
@@ -748,7 +748,7 @@ export class GLTFBuilder
             if (shape instanceof Mesh || shape.type === 'Mesh')
             {
                 const mesh = shape as unknown as Mesh;
-                if (!mesh._mesh || mesh.vertices().length === 0) return;
+                if (!mesh._mesh || mesh.positions().length === 0) return;
                 const { node: meshNode, primitive, indices, positions, normals } = this._meshToGLTFNode(mesh, name, cascadedStyle);
                 gltfNode.addChild(meshNode);
                 this.queueMeshExtData(primitive, indices, positions, normals, cascadedStyle);

@@ -22,7 +22,7 @@ const WASM_PATH = path.join(ROOT_DIR, 'src', 'wasm', 'meshup_bg.wasm');
 const sha256 = (buf: Uint8Array): string => crypto.createHash('sha256').update(buf).digest('hex');
 
 const source = fs.readFileSync(BINARY_TS_PATH, 'utf8');
-const match = source.match(/WASM_BASE64\s*=\s*"([A-Za-z0-9+/=]*)"/);
+const match = source.match(/WASM_BASE64(?:\s*:\s*string)?\s*=\s*"([A-Za-z0-9+/=]*)"/);
 
 if (!match)
 {

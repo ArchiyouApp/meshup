@@ -23,12 +23,12 @@ import { getQuality } from './quality';
 
 import { Vector3Js, VertexJs, Point3Js, PolygonJs, SketchJs, Curve3DJs } from "./wasm/meshup";
 
-import { ShapeCollection, getCsgrs, Mesh } from './index';
+import { ShapeCollection, getCsgrs, Mesh, Importer } from './index';
 import { Shape } from './Shape';
 import type { SceneNode } from './SceneNode';
 import { sceneReplace, sceneAdd, sceneUpdate, sceneCarry, sceneReplaceOrKeep, sceneLayer } from './sceneDecorators';
 import type { CsgrsModule, PointLike, Axis, BasePlane, CurveCornerSelection, OrientationXY, HlrStrategy,
-    SpanParams, SpanEllipse, SpanPoint } from './types';
+    SpanParams, SpanEllipse, SpanPoint, CurveData, PointData } from './types';
 import { resolveIsometryArgs, DEFAULT_ISOMETRY_CAM } from './projectionOptions';
 import type { IsometryOptions } from './projectionOptions';
 import { isPointLike, isBasePlane } from './types'
@@ -99,10 +99,23 @@ const REVOLVE_FLAT_RING_TOLERANCE = 1e-9;
 const REVOLVE_ZERO_ANGLE = 1e-9;
 
 
+/** What an intersection with a Curve can be made of: a Curve wherever the two shapes overlap
+ *  along a length, a Vertex wherever they only cross. */
+export type CurveIntersection = Curve | Vertex
+
 export class Curve extends Shape
 {
     /** Below this length a curve is considered degenerate (zero-length) and rejected. */
     static readonly ZERO_LENGTH_TOLERANCE = 1e-7;
+
+    /** Below this, a boolean's output region encloses nothing — see _isDegenerateRegion(). It is
+     *  an area/perimeter RATIO, not a size, so it means the same at any model scale. */
+    static readonly DEGENERATE_REGION_RATIO = 1e-6;
+
+    /** A gap narrower than this fraction of a shape's own size is not geometry — it is the
+     *  rounding the coordinates themselves carry (a few ULP), and nothing can be authored,
+     *  measured or manufactured at that width. See _cutoffClosedByRegion(). */
+    static readonly UNREPRESENTABLE_GAP_RATIO = 1e-15;
 
     // inherits: _id, _node, style, metadata from Shape
     /** The curve geometry — a native hypercurve-backed planar 3D curve. */
@@ -466,27 +479,25 @@ export class Curve extends Shape
         return Curve._arcFromThreePoints(Point.from(start), Point.from(mid), Point.from(end));
     }
 
-    /** Three-point arc: start, mid-point, end all lie on the arc. */
+    /** Three-point arc: start, mid-point, end all lie on the arc.
+     *
+     *  Straight to hypercurve, which builds a circular arc through three points natively and
+     *  rejects collinear input itself. There used to be a `_circumcenter` here, forty lines of
+     *  f64 perpendicular-bisector solving with a three-way determinant pivot — every number it
+     *  produced was then discarded, because the arc is built from the three points. */
     private static _arcFromThreePoints(A: Point, B: Point, C: Point): Curve
     {
-        // Vectors from A to B and A to C
-        const ab = Vector.from(B.x - A.x, B.y - A.y, B.z - A.z);
-        const ac = Vector.from(C.x - A.x, C.y - A.y, C.z - A.z);
-
-        // Plane normal (cross product of two edges)
-        const rawNormal = ab.copy().cross(ac);
-        if (rawNormal.length() < 1e-10)
-        {
-            throw new Error('Curve.Arc(): start, mid, and end are collinear — no arc can be defined.');
-        }
-        const normalUnit = rawNormal.normalize();
-
-        const { center, radius } = Curve._circumcenter(A, B, C, normalUnit);
-
-        return Curve._trimArcFromCircle(A, B, C, center, radius, normalUnit);
+        return Curve.fromCsgrs(getCsgrs().Curve3DJs.makeArc(A.toPoint3Js(), B.toPoint3Js(), C.toPoint3Js()));
     }
 
-    /** Tangent arc: start point, tangent direction at start, end point. */
+    /** Tangent arc: start point, tangent direction at start, end point.
+     *
+     *  The one genuinely TypeScript-side arc construction, because hypercurve has no
+     *  start/tangent/end constructor: this converts that spelling into the three-point one it
+     *  does have, by intersecting the normal at `A` with the perpendicular bisector of the
+     *  chord to find the centre, then reflecting a chord midpoint onto the circle to get a
+     *  through-point on the side the tangent bends towards. Only the through-point escapes —
+     *  the centre and radius are scaffolding, and the arc itself is hypercurve's. */
     private static _arcFromTangent(A: Point, tangent: Vector, C: Point): Curve
     {
         const tanUnit = tangent.normalize();
@@ -505,129 +516,31 @@ export class Curve extends Shape
         }
         const normalUnit = rawNormal.normalize();
 
-        // The center lies on the line through A perpendicular to the tangent in the plane.
-        // perpAtA = normal × tangent — points from A towards center
+        // The centre lies on the line through A perpendicular to the tangent in the plane, and
+        // on the perpendicular bisector of the chord. Solve for their meeting point.
         const perpAtA = normalUnit.copy().cross(tanUnit).normalize();
-
-        // Also the center must be equidistant from A and C → lies on perpendicular bisector of AC.
         const midAC = Vector.from((A.x + C.x) / 2, (A.y + C.y) / 2, (A.z + C.z) / 2);
-        const chordDir = chord.normalize();
-        const perpBisector = normalUnit.copy().cross(chordDir).normalize();
-
-        // Solve: A + t·perpAtA = midAC + s·perpBisector
-        // → t·perpAtA − s·perpBisector = midAC − A
-        const dx = midAC.x - A.x;
-        const dy = midAC.y - A.y;
-        const dz = midAC.z - A.z;
-
-        const d1 = perpAtA;
-        const d2neg = perpBisector.scale(-1);
-
-        const det_xy = d1.x * d2neg.y - d2neg.x * d1.y;
-        const det_xz = d1.x * d2neg.z - d2neg.x * d1.z;
-        const det_yz = d1.y * d2neg.z - d2neg.y * d1.z;
-
-        let t: number;
-        if (Math.abs(det_xy) >= Math.abs(det_xz) && Math.abs(det_xy) >= Math.abs(det_yz))
+        const perpBisector = normalUnit.copy().cross(chord.normalize()).normalize();
+        const t = _solveRayMeet(A, perpAtA, midAC, perpBisector);
+        if (t === null)
         {
-            t = (dx * d2neg.y - d2neg.x * dy) / det_xy;
-        }
-        else if (Math.abs(det_xz) >= Math.abs(det_yz))
-        {
-            t = (dx * d2neg.z - d2neg.x * dz) / det_xz;
-        }
-        else
-        {
-            t = (dy * d2neg.z - d2neg.y * dz) / det_yz;
+            throw new Error('Curve.Arc(): tangent and chord do not determine a centre.');
         }
 
         const center = new Point(A.x + t * perpAtA.x, A.y + t * perpAtA.y, A.z + t * perpAtA.z);
-        const radius = Math.sqrt((A.x - center.x) ** 2 + (A.y - center.y) ** 2 + (A.z - center.z) ** 2);
+        const radius = Math.hypot(A.x - center.x, A.y - center.y, A.z - center.z);
 
-        // Synthesise a mid-point on the correct side of the chord for direction resolution
-        const midChord = new Point((A.x + C.x) / 2, (A.y + C.y) / 2, (A.z + C.z) / 2);
-        const centerToMid = Vector.from(midChord.x - center.x, midChord.y - center.y, midChord.z - center.z);
-        const midOnArc = new Point(
-            center.x + centerToMid.normalize().scale(radius).x,
-            center.y + centerToMid.normalize().scale(radius).y,
-            center.z + centerToMid.normalize().scale(radius).z,
-        );
-
-        // Use the tangent cross chord to pick the arc side consistent with the tangent direction.
-        // If perpAtA (which points from A towards center) has a positive dot with center−A,
-        // the arc should go the "short way" through midOnArc. Otherwise flip.
+        // A point on the circle above the chord's midpoint, then the far one if the tangent
+        // bends the other way. Either is a valid "through" point for the three-point arc.
+        const toMid = Vector.from(midAC.x - center.x, midAC.y - center.y, midAC.z - center.z)
+            .normalize().scale(radius);
+        const near = new Point(center.x + toMid.x, center.y + toMid.y, center.z + toMid.z);
         const centerFromA = Vector.from(center.x - A.x, center.y - A.y, center.z - A.z);
-        const sameSide = centerFromA.dot(perpAtA) > 0;
+        const B = centerFromA.dot(perpAtA) > 0
+            ? near
+            : new Point(2 * center.x - near.x, 2 * center.y - near.y, 2 * center.z - near.z);
 
-        // B is the guide point that tells the trimmer which side of the circle to take
-        let B: Point;
-        if (sameSide)
-        {
-            // midOnArc is between A and C on the side the tangent bends towards
-            B = midOnArc;
-        }
-        else
-        {
-            // Reflect midOnArc through center to get the point on the opposite arc
-            B = new Point(
-                2 * center.x - midOnArc.x,
-                2 * center.y - midOnArc.y,
-                2 * center.z - midOnArc.z,
-            );
-        }
-
-        return Curve._trimArcFromCircle(A, B, C, center, radius, normalUnit);
-    }
-
-    /** Compute circumcenter and radius for three non-collinear points on a plane with given normal. */
-    private static _circumcenter(A: Point, B: Point, C: Point, normalUnit: Vector): { center: Point, radius: number }
-    {
-        const ab = Vector.from(B.x - A.x, B.y - A.y, B.z - A.z);
-        const ac = Vector.from(C.x - A.x, C.y - A.y, C.z - A.z);
-
-        const mAB = Vector.from((A.x + B.x) / 2, (A.y + B.y) / 2, (A.z + B.z) / 2);
-        const mAC = Vector.from((A.x + C.x) / 2, (A.y + C.y) / 2, (A.z + C.z) / 2);
-
-        const dAB = normalUnit.copy().cross(ab).normalize();
-        const dAC = normalUnit.copy().cross(ac).normalize();
-
-        const dx = mAC.x - mAB.x;
-        const dy = mAC.y - mAB.y;
-        const dz = mAC.z - mAB.z;
-
-        const det_xy = dAB.x * (-dAC.y) - (-dAC.x) * dAB.y;
-        const det_xz = dAB.x * (-dAC.z) - (-dAC.x) * dAB.z;
-        const det_yz = dAB.y * (-dAC.z) - (-dAC.y) * dAB.z;
-
-        let t: number;
-        if (Math.abs(det_xy) >= Math.abs(det_xz) && Math.abs(det_xy) >= Math.abs(det_yz))
-        {
-            t = (dx * (-dAC.y) - (-dAC.x) * dy) / det_xy;
-        }
-        else if (Math.abs(det_xz) >= Math.abs(det_yz))
-        {
-            t = (dx * (-dAC.z) - (-dAC.x) * dz) / det_xz;
-        }
-        else
-        {
-            t = (dy * (-dAC.z) - (-dAC.y) * dz) / det_yz;
-        }
-
-        const center = new Point(mAB.x + t * dAB.x, mAB.y + t * dAB.y, mAB.z + t * dAB.z);
-        const radius = Math.sqrt((A.x - center.x) ** 2 + (A.y - center.y) ** 2 + (A.z - center.z) ** 2);
-
-        return { center, radius };
-    }
-
-    /** Trim an arc A→(through B)→C from a full circle defined by center, radius, and normal.
-     *  B is a guide point that determines which side of the circle the arc follows.
-     */
-    private static _trimArcFromCircle(A: Point, B: Point, C: Point, _center: Point, _radius: number, _normalUnit: Vector): Curve
-    {
-        // hypercurve builds a circular arc natively through three points (start,
-        // through, end); no circle-trim/parameter juggling needed.
-        const csgrs = getCsgrs();
-        return Curve.fromCsgrs(csgrs.Curve3DJs.makeArc(A.toPoint3Js(), B.toPoint3Js(), C.toPoint3Js()));
+        return Curve._arcFromThreePoints(A, B, C);
     }
 
     /** Create a closed rectangle centered at a given position on an optional base plane.
@@ -1010,66 +923,21 @@ export class Curve extends Shape
         return true;
     }
 
-    /** Whether this (planar) curve crosses itself.
+        /** Whether the curve crosses itself away from its own shared vertices.
      *
-     *  The curve is tessellated into a polyline, projected onto its own plane, and
-     *  every pair of non-adjacent segments is tested for a proper crossing. Segments
-     *  that share an endpoint by construction (consecutive segments, and the closing
-     *  wrap-around pair of a closed curve) are skipped.
-     *
-     *  Useful to reject degenerate inputs before operations that assume a simple
-     *  (non-self-intersecting) curve — e.g. splitting a Polygon with a cutting curve.
-     *
-     *  Non-planar curves are not supported: a warning is emitted and `false` returned.
-     *
-     *  @param tolerance planar-fit tolerance passed to getOnPlane()
-     */
+     *  hypercurve decides this with the predicates its intersection kernel uses, so a bulge
+     *  that grazes a leg is found from the arc rather than from however finely it happened to
+     *  be sampled. This used to project onto the curve's plane and run an O(n²) crossing test
+     *  over a tessellation in TypeScript. */
     selfIntersecting(tolerance: number = 1e-6): boolean
     {
-        const plane = this.getOnPlane(tolerance);
-        if (!plane)
+        void tolerance; // decided exactly; there is no tolerance to spend
+        try { return this.inner().selfIntersects(undefined); }
+        catch (e)
         {
-            console.warn('Curve::selfIntersecting(): curve is not planar; self-intersection test is not applicable. Returning false.');
+            console.warn(`Curve::selfIntersecting(): ${e}. Returning false.`);
             return false;
         }
-
-        // Project onto the plane's in-plane axes → 2D (u, v). For line-only geometry the
-        // defining vertices ARE the curve, so use those: the crossing test is exact and the
-        // O(n²) pair loop runs over a handful of segments instead of hundreds of samples.
-        // Arc-bearing curves still need a tessellation to see a bulge crossing.
-        const source = this.inner().hasArcs() ? this.tessellate() : this.controlPoints();
-        let pts: Array<[number, number]> = source.map(p =>
-        {
-            const v = p.toVector();
-            return [v.dot(plane.x), v.dot(plane.y)] as [number, number];
-        });
-
-        const closed = this.isClosed();
-        // A closed curve repeats its start point at the end — drop the duplicate so the
-        // wrap-around segment (last → first) is formed via modulo indexing instead.
-        if (closed && pts.length > 1)
-        {
-            const [fx, fy] = pts[0];
-            const [lx, ly] = pts[pts.length - 1];
-            if (Math.hypot(fx - lx, fy - ly) < 1e-9) { pts = pts.slice(0, -1); }
-        }
-
-        const n = pts.length;
-        if (n < 4) { return false; } // need at least 2 non-adjacent segments to cross
-        const segCount = closed ? n : n - 1;
-
-        for (let i = 0; i < segCount; i++)
-        {
-            const a1 = pts[i];
-            const a2 = pts[(i + 1) % n];
-            for (let j = i + 2; j < segCount; j++)
-            {
-                // Skip the wrap-around pair of a closed curve (segment 0 and last share a vertex)
-                if (closed && i === 0 && j === segCount - 1) { continue; }
-                if (_seg2DProperlyIntersect(a1, a2, pts[j], pts[(j + 1) % n])) { return true; }
-            }
-        }
-        return false;
     }
 
     /** Get the plane of the Curve as { normal, x, y }.
@@ -1081,7 +949,7 @@ export class Curve extends Shape
         // A straight line is planar-ambiguous (it lies in infinitely many planes). The
         // WASM getOnPlane() always defaults such a line to the XY plane, which is wrong
         // when the line actually lies in another coordinate plane (e.g. XZ) — offset()
-        // then collapses it and intersect() finds no hits. Detect an axis-aligned
+        // then collapses it and the hit finder finds no crossings. Detect an axis-aligned
         // coordinate plane from a constant coordinate and use that instead. This runs
         // for both single (Nurbs) and compound representations of a straight line, since
         // offset() returns a degree-1 CompoundCurve.
@@ -1178,44 +1046,24 @@ export class Curve extends Shape
             console.warn('Curve.area(): curve is not planar — area is undefined.');
             return undefined;
         }
-        // hypercurve native engine: exact planar area, minus any interior holes.
+        // hypercurve's exact planar area, minus any interior holes. For polynomial and
+        // rational spans that is a Green integral in exact rationals, so an ellipse gives
+        // exactly pi*a*b.
+        //
+        // No fallback. There used to be a 3D shoelace over the tessellation here, which
+        // answered a *different question* — the area of the polygon through the sample points
+        // — and returned it under the same name, so a circle quietly came back short. An area
+        // that cannot be computed exactly is `undefined`, which every caller already handles.
         try
         {
-            const holesArea = this._holes.reduce((sum, hole) =>
-            {
-                try { return sum + Math.abs(hole.inner().area()); }
-                catch { return sum + (hole._boundaryArea() ?? 0); }
-            }, 0);
+            const holesArea = this._holes.reduce((sum, hole) => sum + Math.abs(hole.inner().area()), 0);
             return Math.max(0, Math.abs(this.inner().area()) - holesArea);
         }
         catch (e)
         {
-            console.warn('Curve.area(): hypercurve area failed, using fallback:', e);
+            console.warn('Curve.area(): hypercurve could not measure this curve:', e);
+            return undefined;
         }
-        const holesArea = this._holes.reduce((sum, hole) => sum + (hole._boundaryArea() ?? 0), 0);
-        return Math.max(0, this._boundaryArea() - holesArea);
-    }
-
-
-    /** Unsigned area enclosed by this curve's boundary only, ignoring interior holes.
-     *  3D shoelace over the tessellated boundary; plane-agnostic. */
-    private _boundaryArea(): number
-    {
-        const pts = this.tessellate();
-        const n = pts.length;
-        if (n < 3) return 0;
-        const v0 = pts[0];
-        let ax = 0, ay = 0, az = 0;
-        for (let i = 1; i < n - 1; i++)
-        {
-            const a = pts[i], b = pts[i + 1];
-            const ux = a.x - v0.x, uy = a.y - v0.y, uz = a.z - v0.z;
-            const vx = b.x - v0.x, vy = b.y - v0.y, vz = b.z - v0.z;
-            ax += uy * vz - uz * vy;
-            ay += uz * vx - ux * vz;
-            az += ux * vy - uy * vx;
-        }
-        return 0.5 * Math.sqrt(ax * ax + ay * ay + az * az);
     }
 
     /** Curves have no volume — returns undefined */
@@ -1928,7 +1776,18 @@ export class Curve extends Shape
 
         if(!vec){ throw new Error('Curve.translate(): Invalid translation input. Please use PointLike or valid offset coordinates.'); }
         this.update(this.inner().translate(vec.toVector3Js()));
+        this._holes.forEach(h => h.translate(vec));  // a hole travels with its boundary
         return this;
+    }
+
+    /** Move the BOUNDARY only, leaving any holes where they are.
+     *
+     *  The pivot shuffle inside rotateAround() / scale() / projectOnto() runs on this rather than
+     *  on translate(): those methods transform each hole themselves (about the same pivot), and a
+     *  hole that was also carried along by the shuffle would be transformed twice. */
+    private _translateBoundary(dx: number, dy: number, dz: number): this
+    {
+        return this.update(this.inner().translate(new Point(dx, dy, dz).toVector3Js()));
     }
 
     /** Move the curve so its bbox center lands at the given point */
@@ -1962,7 +1821,9 @@ export class Curve extends Shape
         return bb ? this.translate(0, 0, z - bb.center().z) : this;
     }
 
-    /** Rotate the given curve a specified angle (in degrees) around an axis through the world origin */
+    /** Rotate the given curve a specified angle (in degrees) around an axis through the WORLD
+     *  ORIGIN — the explicitly origin-based turn, as on Mesh and Polygon. Pass a pivot, or use
+     *  rotateAround() / rotateX() / rotateY() / rotateZ(), to turn about the curve's own centre. */
     override rotate(angle: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
     {
         return this.update(this.rotateAround(angle, axis, pivot));
@@ -1972,12 +1833,16 @@ export class Curve extends Shape
      *  Uses Rodrigues' rotation formula on control points — works for any axis.
      *  @param angleDeg - rotation angle in degrees
      *  @param axis     - 'x' | 'y' | 'z' or an arbitrary direction vector (PointLike)
-     *  @param pivot    - point the axis passes through (default: world origin)
+     *  @param pivot    - point the axis passes through (default: this Curve's own center)
      */
-    override rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
+    override rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot?: PointLike): this
     {
-        const p = Point.from(pivot);
-        this.translate([-p.x, -p.y, -p.z]);
+        // No pivot means the shape's own centre, as it does on Mesh and Polygon — so
+        // `circle(20).move(100, 100, 10).rotateX(90)` turns the circle where it stands instead
+        // of swinging it around the world origin. rotate() is the origin-based turn.
+        const p = pivot ? Point.from(pivot) : this.center();
+        const holes = this._holes;      // held aside: update() with a Curve would drop them
+        this._translateBoundary(-p.x, -p.y, -p.z);
 
         if (typeof axis === 'string')
         {
@@ -1994,11 +1859,12 @@ export class Curve extends Shape
             const axVec = Point.from(axis).toVector().normalize();
             const half = rad(angleDeg) / 2;
             const s = Math.sin(half);
-            this.rotateQuaternion(Math.cos(half), axVec.x * s, axVec.y * s, axVec.z * s);
+            this._rotateQuaternionBoundary(Math.cos(half), axVec.x * s, axVec.y * s, axVec.z * s);
         }
 
-        this.translate([p.x, p.y, p.z]);
-        this._holes = this._holes.map(h => { h.rotateAround(angleDeg, axis, pivot); return h; });
+        this._translateBoundary(p.x, p.y, p.z);
+        // the RESOLVED pivot, so a hole turns with its boundary instead of about its own centre
+        this._holes = holes.map(h => h.rotateAround(angleDeg, axis, p));
         return this;
     }
 
@@ -2006,6 +1872,17 @@ export class Curve extends Shape
      *  The quaternion is normalized internally, so non-unit input is safe.
      */
     override rotateQuaternion(wOrObj: number | {w: number, x: number, y: number, z: number}, x?: number, y?: number, z?: number): this
+    {
+        const holes = this._holes;
+        this._rotateQuaternionBoundary(wOrObj, x, y, z);
+        // Holes turn by the same quaternion about the same world origin, so the region keeps its
+        // shape — this is one rigid rotation of the whole thing, not a turn per curve.
+        this._holes = holes.map(h => h.rotateQuaternion(wOrObj as any, x, y, z));
+        return this;
+    }
+
+    /** Turn the BOUNDARY only — see _translateBoundary() for why the pivot shuffle needs this. */
+    private _rotateQuaternionBoundary(wOrObj: number | {w: number, x: number, y: number, z: number}, x?: number, y?: number, z?: number): this
     {
         if (typeof wOrObj === 'number')
         {
@@ -2127,15 +2004,28 @@ export class Curve extends Shape
     /** Scale Curve with a uniform factor or per-axis [sx, sy, sz] around an origin (default: center of this Curve) */
     override scale(factor: number | PointLike, origin?: PointLike): this
     {
-        const [sx, sy, sz] = (typeof factor === 'number') ? [factor, factor, factor] : [Point.from(factor).x, Point.from(factor).y, Point.from(factor).z];
         const o = origin ? Point.from(origin) : this.center();
+        const holes = this._holes;      // held aside: the boundary work below can replace them
+
+        this._scaleBoundary(factor, o);
+
+        // A hole scales with its boundary, about the SAME origin — otherwise it keeps its old
+        // size (or, scaled about its own centre, drifts out of the region it belongs to).
+        this._holes = holes.map(h => h.scale(factor, o));
+        return this;
+    }
+
+    /** Scale the BOUNDARY only, about an already-resolved origin. */
+    private _scaleBoundary(factor: number | PointLike, o: Point): this
+    {
+        const [sx, sy, sz] = (typeof factor === 'number') ? [factor, factor, factor] : [Point.from(factor).x, Point.from(factor).y, Point.from(factor).z];
         const uniform = Math.abs(sx - sy) < 1e-9 && Math.abs(sy - sz) < 1e-9;
         if (uniform)
         {
             // A uniform scale IS a similarity, which hypercurve applies natively.
-            this.translate([-o.x, -o.y, -o.z]);
+            this._translateBoundary(-o.x, -o.y, -o.z);
             this.update(this.inner().scale(sx));
-            this.translate([o.x, o.y, o.z]);
+            this._translateBoundary(o.x, o.y, o.z);
             return this;
         }
 
@@ -2156,10 +2046,10 @@ export class Curve extends Shape
                 console.warn(`Curve::scale(): exact non-uniform scale unavailable ("${e}"); resampling.`);
             }
         }
-        this.translate([-o.x, -o.y, -o.z]);
+        this._translateBoundary(-o.x, -o.y, -o.z);
         const pts = this.tessellate().map(p => [p.x * sx, p.y * sy, p.z * sz] as [number, number, number]);
         this.update(Curve.Polyline(pts));
-        this.translate([o.x, o.y, o.z]);
+        this._translateBoundary(o.x, o.y, o.z);
         return this;
     }
 
@@ -2188,8 +2078,11 @@ export class Curve extends Shape
         // A reflection is an isometry of the curve's plane, so only the plane moves — the
         // geometry in it is untouched and a mirrored circle stays a circle. This used to
         // reflect the tessellated boundary and rebuild a ~500-segment polyline.
+        const holes = this._holes;      // held aside: update() with a Curve drops them
         this.update(Curve.fromCsgrs(this.inner().mirror(n.toVector3Js(), planePos.toPoint3Js())));
-        this._holes = this._holes.map(h => h.mirror(dir, pos));
+        // the RESOLVED plane position, so a hole mirrors with its boundary rather than about its
+        // own centre — and captured first, or there would be no holes left to mirror
+        this._holes = holes.map(h => h.mirror(dir, planePos));
         return this;
     }
 
@@ -2251,8 +2144,9 @@ export class Curve extends Shape
         {
             const start = this.start();
             const signed = (start.x - origin.x) * n.x + (start.y - origin.y) * n.y + (start.z - origin.z) * n.z;
-            this.translate(-signed * n.x, -signed * n.y, -signed * n.z);
-            this._holes = this._holes.map(h => h.projectOnto(plane));
+            const holes = this._holes;
+            this._translateBoundary(-signed * n.x, -signed * n.y, -signed * n.z);
+            this._holes = holes.map(h => h.projectOnto(plane));  // each hole makes the same trip
             return this;
         }
 
@@ -2260,8 +2154,9 @@ export class Curve extends Shape
         // similarity. hypercurve's only general affine is on CurveRegion2, which needs a
         // closed curve; anything else resamples.
         const pts = this.tessellate().map(p => projectPoint(p));
+        const holes = this._holes;      // held aside: update() with a Curve drops them
         this.update(Curve.Polyline(pts.map(p => [p.x, p.y, p.z] as [number, number, number])));
-        this._holes = this._holes.map(h => h.projectOnto(plane));
+        this._holes = holes.map(h => h.projectOnto(plane));
         return this;
     }
 
@@ -2356,49 +2251,25 @@ export class Curve extends Shape
         return normal ? this._frameFromNormal(normal, tolerance) : null;
     }
 
-    /** Collapse runs of consecutive collinear line segments into single lines: interior
-     *  vertices whose incoming and outgoing directions match are redundant, so they are
-     *  dropped and the curve is rebuilt through the vertices that remain. This is what keeps
-     *  `extend()`/`toDegree1()` from leaving a curve split at a vertex that is not a corner.
+    /** Merge runs of adjacent, same-direction line segments into single segments.
      *
-     *  Only pure degree-1 curves are rebuilt: on a curve carrying arcs/splines the control
-     *  points are NURBS control points rather than on-curve vertices, so a polyline rebuild
-     *  through them would corrupt the geometry. Such curves are returned unchanged.
+     *  Collinearity is decided exactly by hypercurve, which compares the segments' supports
+     *  rather than measuring an angle against a tolerance. It also keeps what a tolerance test
+     *  gets wrong: arcs are preserved (this used to refuse any curve containing one), the
+     *  closed seam is considered like any other joint, and a collinear *reversal* is left
+     *  alone — a spike doubling back on itself is authored topology, not a redundant vertex.
      *
-     *  @param colinearTol - |sin(angle)| between adjacent directions below which they count
-     *                       as collinear (default 1e-3 ≈ 0.06°).
+     *  `colinearTol` is accepted and ignored; there is no tolerance to spend.
      */
     mergeColinearLines(colinearTol: number = 1e-3): this
     {
-        if (this.spans().toArray().some(s => (s.inner()?.degree() ?? 1) > 1)) { return this; }
-
-        const pts = this.controlPoints();
-        if (!pts || pts.length < 3) { return this; }
-
-        /** Unit direction from `from` to `to`, or null when they coincide. */
-        const dirOf = (from: Point, to: Point): Vector|null =>
+        void colinearTol;
+        try { return this.update(Curve.fromCsgrs(this.inner().mergeCollinear())); }
+        catch (e)
         {
-            const v = to.toVector().subtract(from);
-            return (v.length() > Curve.ZERO_LENGTH_TOLERANCE) ? v.normalize() : null;
-        };
-
-        // First and last vertices are always endpoints, never merge candidates. On a closed
-        // curve they are the seam, which is left alone.
-        const kept: Array<Point> = [pts[0]];
-        for (let i = 1; i < pts.length - 1; i++)
-        {
-            const inDir = dirOf(kept[kept.length - 1], pts[i]);
-            const outDir = dirOf(pts[i], pts[i + 1]);
-            if (!inDir || !outDir) { continue; } // duplicate vertex: drop it
-            // Parallel AND same-facing: an anti-parallel pair is a spike doubling back on
-            // itself, whose vertex is a real corner.
-            const parallel = inDir.copy().cross(outDir).length() <= colinearTol;
-            if (!(parallel && inDir.dot(outDir) > 0)) { kept.push(pts[i]); }
+            console.warn(`Curve::mergeColinearLines(): ${e}. Leaving the curve unchanged.`);
+            return this;
         }
-        kept.push(pts[pts.length - 1]);
-
-        if (kept.length === pts.length) { return this; } // nothing was redundant
-        return this.update(Curve.Polyline(kept));
     }
 
     /** Close this curve by adding a segment from end back to start.
@@ -2670,10 +2541,11 @@ export class Curve extends Shape
         // the 'start' side probes backwards, against the curve's own direction
         const tangentStart = this.tangentAt(startPt)?.normalize()?.scale(-1);
 
-        const nearestReach = (exactOnly: boolean): { dist: number, side: 'start'|'end' }|null =>
+        type Reach = { dist: number, side: 'start'|'end', target: Curve };
+
+        const nearestReach = (exactOnly: boolean): Reach|null =>
         {
-            let bestDist = Infinity;
-            let bestSide: 'start' | 'end' = 'end';
+            let best: Reach|null = null;
 
             targets.forEach(target =>
             {
@@ -2682,25 +2554,57 @@ export class Curve extends Shape
                     {
                         if(!dir){ return; }
                         const d = this._rayReachDist(from, dir, target, exactOnly);
-                        if (d !== null && d > 1e-6 && d < bestDist)
+                        if (d !== null && d > 1e-6 && (best === null || d < best.dist))
                         {
-                            bestDist = d;
-                            bestSide = side;
+                            best = { dist: d, side, target };
                         }
                     });
             });
 
-            return (bestDist === Infinity) ? null : { dist: bestDist, side: bestSide };
+            return best;
         };
 
-        const best = nearestReach(true) ?? nearestReach(false);
+        const crossing = nearestReach(true);
+        const best = crossing ?? nearestReach(false);
 
         if (!best)
         {
             console.error('Curve::extendTo(): No valid extension found to target curves. Returning original curve.');
             return this;
         }
+
+        // A real crossing is LANDED ON, not measured out to. hypercurve rebuilds the end segment
+        // with the crossing itself as its endpoint, so the extended curve genuinely touches the
+        // target. `extend(distance)` cannot: it places the tip at `anchor + direction x length`,
+        // which misses by a float residue — and since the booleans here are exact, a residue is
+        // a gap. A curve extended to a wall and then cut against it left a hair-thin bridge
+        // instead of separating, and no amount of extra accuracy in the measurement fixed it.
+        //
+        // The distance search above still decides WHICH end moves and to WHICH target; only the
+        // extension itself moves into the exact kernel. The sampled fallback (nothing crosses,
+        // just converging) has no crossing to land on and keeps the measured extend().
+        if (crossing)
+        {
+            const landed = this._landOnExactly(best.target, best.side);
+            if (landed) { return landed; }
+        }
         return this.extend(best.dist, best.side);
+    }
+
+    /** Extend one end so it ends EXACTLY on `target`, via hypercurve's
+     *  `extend_endpoint_to_point`. Null when the exact route declines — an arc end (no straight
+     *  continuation to intersect), a spline, non-coplanar operands, or nothing crossing ahead —
+     *  and the caller falls back to extending by the measured distance. */
+    private _landOnExactly(target: Curve, side: 'start'|'end'): this|null
+    {
+        try
+        {
+            return this.update(Curve.fromCsgrs(this.inner().extendToCurve(target.inner(), side)));
+        }
+        catch (e)
+        {
+            return null;
+        }
     }
 
     /** Distance along the ray (origin + unit dir) at which it reaches `target`.
@@ -2737,7 +2641,7 @@ export class Curve extends Shape
                                           + (pt.z - origin.z) * dir.z;
 
         // 1. Exact: a true crossing, nearest one ahead of the origin
-        const hits = probe.intersect(target);
+        const hits = probe._intersectPoints(target);
         if (hits && hits.length)
         {
             const forward = hits.map(along).filter(t => t > 1e-6);
@@ -2752,12 +2656,19 @@ export class Curve extends Shape
         return t > 0 ? t : null;
     }
 
-    /** Offset a Curve a given amount (+grows / −shrinks) with optional corner type. */
+    /** Offset a Curve a given amount (+grows / −shrinks).
+     *
+     *  `cornerType` decides how a convex corner is reconnected, and is honoured now — it used
+     *  to be accepted and dropped, so every corner behaved as `'smooth'`:
+     *  - `'sharp'` (default): the corner stays a point, mitred wherever a miter exists.
+     *  - `'round'`: an arc of radius `|distance|` centred on the original corner.
+     *  - `'smooth'`: mitred, but a corner sharper than ~29° — whose miter would run out past
+     *    four times the offset distance — is arced instead. The historical behaviour.
+     */
     @sceneUpdate
     offset(distance: number, cornerType:'sharp'|'round'|'smooth'='sharp'): Curve|null
     {
         if(!this.isPlanar()){ throw new Error(`Curve::offset(): Cannot offset a non-planar curve!`);}
-        void cornerType; // hypercurve offset uses miter/arc joins; corner style not selectable
 
         // NOTE: there used to be a fast path here that rebuilt a circle at radius + distance,
         // because the native offset returned a tessellated ring. The native offset now
@@ -2794,7 +2705,7 @@ export class Curve extends Shape
             // meshup convention: +distance always grows, −distance always shrinks,
             // regardless of winding. hypercurve offsets a fixed side, so pick the sign.
             const sign = this._offsetGrowSign();
-            const off = this.inner().offset(distance * sign);
+            const off = this.inner().offset(distance * sign, undefined, cornerType);
             return this.update(Curve.fromCsgrs(off));
         }
         catch (e)
@@ -2831,7 +2742,10 @@ export class Curve extends Shape
                 return b ? (b.width() + b.depth() + b.height()) : 0;
             };
             const s0 = size(this);
-            const s1 = size(Curve.fromCsgrs(this.inner().offset(1e-3)));
+            // Sharp for the probe regardless of what the caller asked: this only compares
+            // bbox sizes to read a direction, and mitred corners keep the probe closest to
+            // the original outline.
+            const s1 = size(Curve.fromCsgrs(this.inner().offset(1e-3, undefined, 'sharp')));
             return (s1 >= s0) ? 1 : -1;
         }
         catch { return 1; }
@@ -2902,10 +2816,17 @@ export class Curve extends Shape
     
     //// INTERACTION WITH OTHER CURVES ////
 
-    /** Get intersection points with other curve
-     *   Empty array if no intersections, null if error (e.g. invalid curve type)
+    /** The points where this curve crosses another — the raw hit finder.
+     *
+     *  INTERNAL: the public way to these points is `intersection(other).vertices()`, which
+     *  answers with scene-managed Vertices for every kind of pair (two open curves meet in
+     *  points; a curve crossing a closed one gives the piece inside, whose end vertices ARE
+     *  the crossings). `intersect()` is the brep-aligned replacing op, not this.
+     *
+     *  Empty array if the curves genuinely do not cross, null if neither operand order could
+     *  answer (see below) — a distinction the callers here rely on.
     */
-    intersect(other:Curve):Array<Point>|null
+    _intersectPoints(other:Curve):Array<Point>|null
     {
         /*  hypercurve's native intersect projects `other` into THIS curve's plane via an exact
             similarity and returns the 3D hit points. That plane is ill-defined for a straight
@@ -2921,8 +2842,15 @@ export class Curve extends Shape
         {
             try
             {
+                // NOT rounded. These points used to be snapped to POINT_TOLERANCE (1e-5) on the
+                // way out, on the theory that a tidy number is a safer one to carry forward.
+                // The opposite was true: hypercurve computes the crossing exactly, and the snap
+                // threw away up to 5e-6 of it — enough to leave `intersection()` reporting a
+                // bolt position that is not on either curve, and enough (until extendTo() stopped
+                // measuring reaches through these points) to leave an extended curve short of the
+                // shape it was extended to. A crossing that lands on 49.999999999999996 says so.
                 const hits = a.inner().intersect(b.inner());
-                return hits ? hits.map(p => Point.from(p).round()) : [];
+                return hits ? hits.map(p => Point.from(p)) : [];
             }
             catch (e)
             {
@@ -3035,16 +2963,72 @@ export class Curve extends Shape
                 // without auto-registering (the caller/editor places the results); we
                 // then swap in the region's geometry. Mirrors replicate()/array().
                 const exterior = this._copy();
-                exterior.update(rg.exterior as Curve3DJs);
-                exterior._holes = (rg.holes() as Array<Curve3DJs>).map(h => Curve.fromCsgrs(h));
+                exterior.update(Curve._withoutSeamVertices(rg.exterior as Curve3DJs));
+                exterior._holes = (rg.holes() as Array<Curve3DJs>)
+                                    .map(h => Curve.fromCsgrs(Curve._withoutSeamVertices(h)));
                 return exterior;
             });
-            return new ShapeCollection<Curve>(...curves);
+
+            // Along an edge the two shapes share, the boolean hands back a sliver that folds back
+            // on itself — real length, real bbox, no area. It is not a piece of the answer, and a
+            // caller taking the first result (or offsetting it) gets nothing usable from it.
+            const kept = curves.filter(c => !Curve._isDegenerateRegion(c));
+            if (kept.length === 0)
+            {
+                if (curves.length)
+                {
+                    console.warn(`Curve::${operation}(): the two shapes meet only along an edge — `
+                               + `what they share encloses no area. Returning ${allowEmpty ? 'nothing' : 'null'}.`);
+                }
+                return allowEmpty ? new ShapeCollection<Curve>() : null;
+            }
+            return new ShapeCollection<Curve>(...kept);
         }
         catch (e)
         {
             console.warn(`Curve::${operation}(): hypercurve boolean failed:`, e);
             return null;
+        }
+    }
+
+    /** Drop the vertices a boolean leaves in the middle of a straight run.
+     *
+     *  Where the cut travels along an edge the two shapes share, the region engine splits that
+     *  edge at the point the other boundary ended on and hands the result back as two collinear
+     *  segments — a corner that is not one. A cut quad came back with five vertices and five
+     *  edges, which is what a script counting corners sees. hypercurve CERTIFIES collinearity
+     *  rather than measuring it against a tolerance, and leaves arcs and genuine reversals
+     *  alone, so this removes only vertices that carry no shape. */
+    private static _withoutSeamVertices(region: Curve3DJs): Curve3DJs
+    {
+        try { return region.mergeCollinear(); }
+        catch (e) { return region; }    // not mergeable (a spline path): keep it as it came
+    }
+
+    /** Whether a region a boolean produced encloses nothing.
+     *
+     *  Two shapes that share an edge — a post whose top IS the roof line the diagonal sits on —
+     *  make the region engine emit a sliver along that edge: a path that runs out and back, with
+     *  a length of hundreds and an area of 1e-4. It is float noise wearing the shape of a region,
+     *  and it survives into `cutoffBy()`/`difference()` results as an extra piece.
+     *
+     *  Measured as the region's own isoperimetric ratio — area over the square of a quarter of
+     *  its perimeter — which is 1 for a square, ~0.79 for a circle, ~1e-5 for a hair-thin but
+     *  REAL sliver, and ~1e-9 for that noise. Being a ratio it is scale-free: the same test holds
+     *  whether the model is in millimetres or metres, which no absolute area threshold can do. */
+    private static _isDegenerateRegion(region: Curve): boolean
+    {
+        try
+        {
+            const perimeter = region.inner().length();
+            if (!(perimeter > 0)) { return true; }
+            // The exterior's own area, not area(): a region is degenerate on its own outline,
+            // whatever holes were hung on it.
+            return Math.abs(region.inner().area()) / ((perimeter / 4) ** 2) < Curve.DEGENERATE_REGION_RATIO;
+        }
+        catch (e)
+        {
+            return false;   // cannot tell: keep the region, as this has always done
         }
     }
 
@@ -3171,14 +3155,16 @@ export class Curve extends Shape
         return this.difference(...others);
     }
 
-    /** Cut current Curve by other and keep the biggest part (inside other).
-     *  Set keepSmallest=true to keep the smallest part instead.
+    /** Cut this Curve by another and keep the BIGGEST part of it — the same contract brep's
+     *  Shape.cutoffBy() has (split, then keep the largest piece). Set keepSmallest=true for the
+     *  smallest instead. Whatever kind of pair it is, the result is a part of THIS Curve.
      *
      *  - Open this Curve (e.g. a line): split at the intersection point(s) with other
      *    and keep the biggest/smallest segment.
-     *  - Closed this Curve + closed other: region boolean (intersection/difference).
      *  - Closed this Curve + open other (e.g. a line crossing it): split the closed
      *    curve along the cutter into two regions and keep the biggest/smallest by area.
+     *  - Closed this Curve + closed other: split into the part inside the cutter and the part
+     *    outside it, and keep the biggest/smallest by area.
      */
     @sceneReplaceOrKeep
     cutoffBy(other: Curve, keepSmallest?: boolean): Curve|ShapeCollection<Curve>|null
@@ -3193,8 +3179,111 @@ export class Curve extends Shape
         {
             return this._cutoffClosedByLine(other, keepSmallest);
         }
-        // Use the raw difference so its scene decorator doesn't fire inside cutoffBy.
-        return keepSmallest ? this._difference(other) : this._booleanOp(other, 'intersection')?.checkSingle() || null;
+        return this._cutoffClosedByRegion(other, keepSmallest);
+    }
+
+    /** Split this closed Curve into the part INSIDE a closed cutter and the part OUTSIDE it,
+     *  and keep whichever is bigger by area (or smaller, with keepSmallest).
+     *
+     *  This used to hand back the intersection outright — the part inside the cutter — and the
+     *  difference for keepSmallest, without ever comparing the two. Which piece you got had
+     *  nothing to do with size, so a post cut by the diagonal crossing its top corner came back
+     *  as the small overlap, and keepSmallest gave the big remainder: exactly inverted whenever
+     *  the cutter overlapped less than half the shape, which is the normal case. */
+    private _cutoffClosedByRegion(other: Curve, keepSmallest?: boolean): Curve|ShapeCollection<Curve>|null
+    {
+        // allowEmpty: an empty side is a real answer here ("the cutter misses / swallows this"),
+        // not the failure it is for a single-cutter difference().
+        const split = (cutter: Curve) => ({
+            inside: this._booleanOp(cutter, 'intersection', true),
+            outside: this._booleanOp(cutter, 'difference', true),
+        });
+
+        let { inside, outside } = split(other);
+
+        if(inside === null || outside === null)
+        {
+            console.warn('Curve::cutoffBy(): the region boolean failed — no cut performed. Returning original Curve.');
+            return this;
+        }
+        if(inside.length === 0 || outside.length === 0)
+        {
+            // The cutter misses this Curve, or covers all of it: there is nothing to choose
+            // between, and the whole Curve is both the biggest and the smallest part of itself.
+            console.warn('Curve::cutoffBy(): the cutter does not divide this Curve — no cut performed. Returning original Curve.');
+            return this;
+        }
+
+        const nudged = this._reCutAcrossAnUnrepresentableGap(other, inside, outside);
+        if(nudged){ ({ inside, outside } = nudged); }
+
+        // Every PIECE the cut produced, both sides together — the cutter can split the outside
+        // into several, and it is the biggest single piece that is wanted, not the bigger side.
+        // (Keeping a side would hand back the whole outside as a collection, whose first member
+        // is whichever piece the boolean happened to emit first.) brep's Shape.cutoffBy() splits
+        // and sorts its pieces the same way, as do the two branches beside this one.
+        const pieces = [...inside.toArray(), ...outside.toArray()]
+                            .sort((a, b) => (b.area() ?? 0) - (a.area() ?? 0));
+
+        const winner = keepSmallest ? pieces[pieces.length - 1] : pieces[0];
+
+        // _booleanOp() already built these as copies of this Curve, so the winner can be taken
+        // in place.
+        return this.update(winner);
+    }
+
+    /** Re-cut with the cutter grown by a few ULP of this Curve's own size, and take that result
+     *  only when it is demonstrably the same cut with the rounding taken out.
+     *
+     *  Two shapes that are meant to share an edge usually miss it by a rounding — a curve
+     *  extended, offset or projected onto another carries the last-bit residue of the frame it
+     *  was computed in, and lands a ULP to one side or the other. Every boolean here is exact, so
+     *  which side decides everything:
+     *
+     *  - residue OUTSIDE the shape: the cutter reaches across, the cut separates, all is well;
+     *  - residue INSIDE it: the two halves stay joined by a bridge 1e-13 wide and the "cut"
+     *    comes back as one pinched region;
+     *  - residue crossing the edge: the halves separate, but one keeps a zero-width tab along it,
+     *    so a cut quad reports five corners and five edges.
+     *
+     *  The width never matters to an exact boolean, only the sign — which is why making the
+     *  extension a million times more accurate did not fix this, and why a few ULP of growth does.
+     *  At that width two boundaries are not merely close, they are indistinguishable in f64, so
+     *  nothing real can be closed by it.
+     *
+     *  The nudged result is accepted on evidence, not on faith: it must find MORE pieces than the
+     *  exact cut (it separated what was joined), or the SAME pieces enclosing the same area with
+     *  FEWER corners (it removed a phantom tab). Anything else — a cutter that genuinely bites a
+     *  corner, or genuinely falls short — is left exactly as the exact boolean answered it. */
+    private _reCutAcrossAnUnrepresentableGap(
+        other: Curve,
+        inside: ShapeCollection<Curve>,
+        outside: ShapeCollection<Curve>)
+        : { inside: ShapeCollection<Curve>, outside: ShapeCollection<Curve> }|null
+    {
+        const hair = (this.bbox()?.maxSize() ?? 0) * Curve.UNREPRESENTABLE_GAP_RATIO;
+        if(!(hair > 0)){ return null; }
+
+        const grown = other._copy().tmp().offset(hair);
+        if(!grown){ return null; }
+
+        const nudgedInside = this._booleanOp(grown, 'intersection', true);
+        const nudgedOutside = this._booleanOp(grown, 'difference', true);
+        if(!nudgedInside?.length || !nudgedOutside?.length){ return null; }
+
+        const pieces = (...sets: Array<ShapeCollection<Curve>>): Array<Curve> =>
+                            sets.flatMap(set => set.toArray());
+        const areaOf = (ps: Array<Curve>) => ps.reduce((sum, p) => sum + (p.area() ?? 0), 0);
+        const cornersOf = (ps: Array<Curve>) => ps.reduce((sum, p) => sum + p.vertices().length, 0);
+
+        const exact = pieces(inside, outside);
+        const nudged = pieces(nudgedInside, nudgedOutside);
+        const takeIt = (nudged.length > exact.length)
+                        || (nudged.length === exact.length
+                            && cornersOf(nudged) < cornersOf(exact)
+                            && Math.abs(areaOf(nudged) - areaOf(exact)) <= areaOf(exact) * 1e-9);
+
+        return takeIt ? { inside: nudgedInside, outside: nudgedOutside } : null;
     }
 
     /** Split this closed Curve along an open cutter Curve into the two regions either
@@ -3202,7 +3291,7 @@ export class Curve extends Shape
      *  Mutates and returns this; returns this unchanged when the cutter doesn't cross it. */
     private _cutoffClosedByLine(other: Curve, keepSmallest?: boolean): Curve|null
     {
-        const hits = this.intersect(other);
+        const hits = this._intersectPoints(other);
         if(!hits || hits.length < 2)
         {
             console.warn('Curve::cutoffBy(): the cutter does not cross the closed curve (need 2 intersections) — no cut performed. Returning original Curve.');
@@ -3235,9 +3324,20 @@ export class Curve extends Shape
         const tA = params[0];
         const tB = params[params.length - 1];
 
+        /*  A boundary arc, or NOTHING when the window between the two params is empty.
+            The empty window is real: a crossing that lands on the seam — the vertex a closed
+            Curve starts and ends at — puts tA at d0 or tB at d1, and one of the second
+            region's two arcs then spans nothing. trim() answers a degenerate window with a
+            copy of the WHOLE curve (its catch-all for a range the native trim rejects), so
+            asking for it folded the entire boundary into that region: it came back bigger
+            than the region it was cut from and won "the biggest part", leaving the Curve
+            uncut. Hit by every post whose top corner IS the end of the roof line cutting it. */
+        const arc = (t0: number, t1: number): Array<Curve> =>
+                        ((t1 - t0) <= eps) ? [] : this.trim(t0, t1);
+
         // The two boundary arcs between the crossings; each closed by the chord (close()).
-        const region1 = this._closedRegionFromArc(this.trim(tA, tB));
-        const region2 = this._closedRegionFromArc([...this.trim(tB, d1), ...this.trim(d0, tA)]);
+        const region1 = this._closedRegionFromArc(arc(tA, tB));
+        const region2 = this._closedRegionFromArc([...arc(tB, d1), ...arc(d0, tA)]);
 
         if(!region1 || !region2)
         {
@@ -3277,7 +3377,24 @@ export class Curve extends Shape
      *  Returns this unchanged (with a warning) when the curves don't intersect. */
     private _cutoffOpen(other: Curve, keepSmallest?: boolean): Curve|ShapeCollection<Curve>|null
     {
-        const hits = this.intersect(other);
+        // The exact route first: hypercurve splits at the crossing POINTS themselves
+        // (trim_between_points), so a piece ends precisely on the cutter. The sampled route
+        // below maps each crossing to an arc-length parameter and trims there instead, which is
+        // as accurate as the parameter mapping — and leaves the piece a float residue off the
+        // cutter, which an exact boolean downstream reads as a gap.
+        const exact = this._splitAtExactly(other);
+        if(exact)
+        {
+            if(exact.length < 2)
+            {
+                console.warn('Curve::cutoffBy(): the curves do not cross away from the Curve\'s ends — no cut performed. Returning original Curve.');
+                return this;
+            }
+            const ordered = exact.sort((a, b) => b.length() - a.length());
+            return this.update(keepSmallest ? ordered[ordered.length - 1] : ordered[0]);
+        }
+
+        const hits = this._intersectPoints(other);
         if(!hits || hits.length === 0)
         {
             console.warn('Curve::cutoffBy(): the curves do not intersect — no cut performed. Returning original Curve.');
@@ -3323,47 +3440,258 @@ export class Curve extends Shape
             : new ShapeCollection<Curve>(...winner.curves);
     }
 
+    /** The pieces this Curve falls into when `cutter` crosses it, cut EXACTLY at the crossings
+     *  — hypercurve's trim_between_points, between this Curve's own endpoints and the exact
+     *  intersection points.
+     *
+     *  Null when the exact route declines (a spline on either side, non-coplanar operands, a
+     *  closed curve), and the caller falls back to the sampled parameter route. */
+    private _splitAtExactly(cutter: Curve): Array<Curve>|null
+    {
+        try
+        {
+            const pieces = this.inner().splitAtCurve(cutter.inner());
+            return pieces?.length ? pieces.map(p => Curve.fromCsgrs(p)) : null;
+        }
+        catch (e)
+        {
+            return null;
+        }
+    }
+
     /** Pure intersection geometry - never touches the scene. Used internally (by the public
      *  intersection(s), by Polygon's boundary booleans and by ShapeCollection). */
-    _intersections(other: Curve|Mesh): ShapeCollection<Curve>|null
+    _intersections(other: Curve|Mesh): ShapeCollection<CurveIntersection>|null
     {
         return (other instanceof Mesh)
                     ? this._intersectionMesh(other)
                     : this._intersectionCurve(other);
     }
 
-    /** Get intersecting Curves with either closed Curves or Mesh.
+    /** The geometry this Curve shares with another Curve or a Mesh: the Curve piece(s) where
+     *  they overlap along a length, the Vertices where they only cross. See _intersectionCurve()
+     *  for what each kind of pair answers.
      *
-     *  NON-REPLACING: this Curve is left exactly as it is; the results are NEW Curves that are
+     *  NON-REPLACING: this Curve is left exactly as it is; the results are NEW shapes that are
      *  added to the active layer, so they are visible without an explicit addToScene(). Mark
-     *  this Curve tmp() to keep the results out of the scene. */
+     *  this Curve tmp() to keep the results out of the scene. Use intersect() to replace this
+     *  Curve by the intersection instead. */
     @sceneAdd
-    intersections(other: Curve|Mesh): ShapeCollection<Curve>|null
+    intersections(other: Curve|Mesh): ShapeCollection<CurveIntersection>|null
     {
         return this._intersections(other);
     }
 
-    /** Get single intersection of Curve with another Curve or Mesh. Same non-replacing,
-     *  added-to-the-active-layer contract as intersections(). */
+    /** The single shared shape between this Curve and another Curve or Mesh — the singular of
+     *  intersections(), with the same non-replacing, added-to-the-active-layer contract.
+     *
+     *  `line.intersection(rect)` is the piece of line inside the rect, and its `vertices()` are
+     *  the two crossings — which is how you ask for intersection POINTS. Two open curves have
+     *  nothing but crossings, so they answer with those Vertices directly. */
     @sceneAdd
-    intersection(other: Curve|Mesh): Curve|ShapeCollection<Curve>|null
+    intersection(other: Curve|Mesh): CurveIntersection|ShapeCollection<CurveIntersection>|null
     {
         return this._intersections(other)?.checkSingle() || null;
     }
 
-    /** Boolean intersection of this (closed) Curve with another (closed) Curve.
-     *  Both curves must be closed and coplanar.
-     *  Returns the exterior outlines of the resulting regions,
-     *  or null on error.
+    /** Replace this Curve by its intersection with another Curve or Mesh, the way union() and
+     *  difference() replace it by their result — the mesh-kernel spelling of brep's intersect().
      *
-     *  NOTE: This is curve-vs-curve boolean intersection.
-     *        For intersection with a Mesh, use `intersection(mesh)` instead.
-     */
-    private _intersectionCurve(other: Curve): ShapeCollection<Curve> | null
+     *  A single Curve piece updates this Curve in place; anything else (the Vertices where two
+     *  open curves cross, or several pieces) is a new shape that takes this Curve's place in the
+     *  scene. Nothing shared leaves this Curve alone and returns null. Use intersections() /
+     *  intersection() to keep this Curve and get the result as a new shape. */
+    @sceneReplaceOrKeep
+    intersect(other: Curve|Mesh): CurveIntersection|ShapeCollection<CurveIntersection>|null
     {
-        if(!this.isClosed){ throw new Error('Curve::intersection(): Intersection requires closed curves for now!'); }
-        
-        return this._booleanOp(other, 'intersection');
+        const result = this._intersections(other)?.checkSingle() || null;
+
+        if(result instanceof Curve){ return this.update(result); }
+        if(result === null){ console.warn('Curve::intersect(): the shapes share nothing. Returning null.'); }
+        return result;
+    }
+
+    /** Intersection of this Curve with another Curve, dispatched on what the two curves ARE:
+     *
+     *  - closed + closed: a region boolean — the overlapping region outline(s), exactly, via
+     *    hypercurve's native engine.
+     *  - open + closed: the part(s) of the OPEN curve that lie inside the closed one, which is
+     *    the same answer a brep Edge ∩ Face gives. Symmetric, so `line.intersection(rect)` and
+     *    `rect.intersection(line)` both give the piece of line inside the rect. A curve that
+     *    only touches the region answers with the touch Vertices — there is no piece inside.
+     *  - open + open: two open curves share no length, only the Vertices where they cross.
+     *
+     *  So the result holds Curves wherever the shapes overlap along a length and Vertices
+     *  wherever they merely cross, which is what a brep Edge ∩ Wire answers with too.
+     *
+     *  NOTE: For intersection with a Mesh, use `intersection(mesh)` instead.
+     *
+     *  This used to run the region boolean unconditionally: the guard meant to stop that was
+     *  `if(!this.isClosed)` — the METHOD, always truthy, so it never fired — and hypercurve
+     *  then refused the open curve ("'this' is not a closed region"), making every
+     *  open-vs-closed intersection() come back null.
+     */
+    private _intersectionCurve(other: Curve): ShapeCollection<CurveIntersection> | null
+    {
+        if(!(other instanceof Curve)){ throw new Error('Curve::intersection(): Please supply a Curve or a Mesh!'); }
+
+        const thisClosed = this.isClosed();
+        const otherClosed = other.isClosed();
+
+        if(thisClosed && otherClosed){ return this._booleanOp(other, 'intersection'); }
+
+        if(thisClosed !== otherClosed)
+        {
+            const [open, region] = thisClosed ? [other, this] : [this, other];
+            return Curve._intersectionInsideRegion(open, region) ?? Curve._crossingVertices(open, region);
+        }
+
+        return Curve._crossingVertices(this, other);
+    }
+
+    /** The Vertices where two curves cross, for the pairs that share no length: two open curves,
+     *  or a curve that only touches a closed one. Null when they do not meet at all. */
+    private static _crossingVertices(a: Curve, b: Curve): ShapeCollection<Vertex>|null
+    {
+        const hits = [b, ...b._holes].flatMap(boundary => a._intersectPoints(boundary) ?? []);
+        return hits.length ? new ShapeCollection<Vertex>(...hits.map(p => new Vertex(p))) : null;
+    }
+
+    /** The part(s) of an OPEN curve that lie inside a CLOSED (region) curve: the open curve is
+     *  split at every crossing of the region boundary and the pieces whose midpoint falls
+     *  inside the region are kept. The 2D mirror of _intersectionMesh(), which does exactly
+     *  this against a solid.
+     *
+     *  Returns null when nothing of the curve is inside — including the case of a curve that
+     *  merely grazes the boundary. A curve that lies entirely within the region comes back as
+     *  a single copy of itself. */
+    private static _intersectionInsideRegion(open: Curve, region: Curve): ShapeCollection<Curve>|null
+    {
+        // The outline AND every hole in it: a hole boundary is a place where the curve leaves the
+        // region just as much as the outline is, and it is a separate Curve, so a split against
+        // the region knows nothing about it.
+        const pieces = Curve._cutAtBoundaries(open, [region, ...region._holes]);
+
+        const inside = pieces.filter(piece =>
+        {
+            const middle = piece.pointAtPerc(0.5);
+            return middle ? region.containsPoint(middle) : false;
+        });
+
+        if(!inside.length){ return null; }
+
+        // Keep the open curve's concrete class (e.g. a scene-bound subclass): the pieces come
+        // back as plain Curves whichever route cut them.
+        return new ShapeCollection<Curve>(...inside.map(piece =>
+        {
+            const kept = open._copy();
+            kept.update(piece.inner());
+            return kept;
+        }));
+    }
+
+    /** Cut an open Curve at every crossing with the given boundaries.
+     *
+     *  EXACTLY where hypercurve can: `splitAtCurve` trims at the crossing POINTS themselves, so
+     *  a piece ends precisely on the boundary. The sampled route below instead maps each crossing
+     *  onto the nearest arc-length PARAMETER and trims there, which leaves the piece's end a
+     *  float residue off the boundary it was cut at — small, but this is the geometry a script
+     *  reads back as `intersection(rect).vertices()` and places bolts on.
+     *
+     *  The sampled route is still there for the pairs the exact one declines: a spline on either
+     *  side (no line/arc segments to trim between), or a boundary on another plane. */
+    private static _cutAtBoundaries(open: Curve, boundaries: Array<Curve>): Array<Curve>
+    {
+        let exact: Array<Curve>|null = [open];
+        for(const boundary of boundaries)
+        {
+            const cut: Array<Curve> = [];
+            for(const piece of exact)
+            {
+                const split = piece._splitAtExactly(boundary);
+                if(!split){ exact = null; break; }
+                cut.push(...split);
+            }
+            if(!exact){ break; }
+            exact = cut;
+        }
+        if(exact){ return exact; }
+
+        const [d0, d1] = open.inner().knotsDomain();
+        const eps = (d1 - d0) * 1e-6;
+
+        // Crossings as parameters strictly inside the domain: a crossing AT an endpoint splits
+        // nothing off. De-duplicated, because a crossing on a boundary corner is reported twice.
+        const params: Array<number> = [];
+        for(const pt of boundaries.flatMap(boundary => open._intersectPoints(boundary) ?? []))
+        {
+            const t = open.paramClosestToPoint(pt);
+            if(t === null || t <= d0 + eps || t >= d1 - eps){ continue; }
+            if(params.every(p => Math.abs(p - t) > eps)){ params.push(t); }
+        }
+        params.sort((a, b) => a - b);
+
+        const breaks = [d0, ...params, d1];
+        const sampled: Array<Curve> = [];
+        for(let i = 0; i < breaks.length - 1; i++)
+        {
+            sampled.push(...open.trim(breaks[i], breaks[i + 1]));
+        }
+        return sampled.length ? sampled : [open];
+    }
+
+    /** Whether a point lies inside this closed Curve — inside its outline and outside any of
+     *  its holes. False for an open or non-planar Curve (a point cannot be 'inside' those),
+     *  and for a point off the Curve's plane.
+     *
+     *  Decided by a crossing count against the curve's tessellation in its own plane, so a
+     *  point sitting ON the boundary (within the chord tolerance) is not answered reliably.
+     *  It is meant for points that are clearly in or out, such as the segment midpoints of an
+     *  intersection. */
+    containsPoint(point: PointLike, tolerance: number = 1e-4): boolean
+    {
+        if(!this.isClosed())
+        {
+            console.warn('Curve::containsPoint(): the Curve is not closed, so it encloses nothing. Returning false.');
+            return false;
+        }
+        const plane = this.getOnPlane();
+        if(!plane)
+        {
+            console.warn('Curve::containsPoint(): the Curve is not planar, so it encloses nothing. Returning false.');
+            return false;
+        }
+
+        const ring = this.tessellate();
+        if(ring.length < 3){ return false; }
+
+        const origin = ring[0].toVector();
+        const local = (p: Point): [number, number] =>
+        {
+            const rel = p.toVector().subtract(origin);
+            return [rel.dot(plane.x), rel.dot(plane.y)];
+        };
+
+        const p = new Point(point);
+        const outOfPlane = Math.abs(p.toVector().subtract(origin).dot(plane.normal));
+        if(outOfPlane > Math.max(tolerance, 1e-4)){ return false; }
+
+        if(!Curve._pointInRing2D(local(p), ring.map(local))){ return false; }
+
+        return !this._holes.some(hole => hole.containsPoint(point, tolerance));
+    }
+
+    /** Even-odd crossing test of a 2D point against a closed 2D ring. */
+    private static _pointInRing2D([x, y]: [number, number], ring: Array<[number, number]>): boolean
+    {
+        let inside = false;
+        for(let i = 0, j = ring.length - 1; i < ring.length; j = i++)
+        {
+            const [xi, yi] = ring[i];
+            const [xj, yj] = ring[j];
+            if(((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)){ inside = !inside; }
+        }
+        return inside;
     }
 
     /** Intersect this Curve with a Mesh and return the trimmed sub-curve(s) as ShapeCollection<Curve>.
@@ -4284,6 +4612,32 @@ export class Curve extends Shape
                 + `${this.style.toSvgAttrs(true, styleOpts)}/>`;
         }
 
+        // Holes are intentionally NOT included here — `toSVGElem()` has never emitted them and
+        // callers rely on its exact output. Use `toPathData()` for the complete geometry.
+        const d = this._outlinePathData(true, fmt);
+        return `<path d="${d}"${classAttr} ${this.style.toSvgAttrs(this.isClosed(), styleOpts)}/>`;
+    }
+
+    /** Walk the native spans and emit SVG path-data for this curve's OUTLINE (no holes).
+     *  Shared by `toSVGElem()` and `toPathData()`; `flipY` decides the Y convention.
+     *
+     *  SVG's y axis points down, so `flipY` mirrors every model point on the way out. That
+     *  flip reverses handedness, which is why the arc writers below decide their sweep flag
+     *  from the projected points rather than from the span's own `ccw` — and why they stay
+     *  correct when a caller asks for the unflipped form. */
+    private _outlinePathData(
+        flipY: boolean,
+        fmt: (n: number) => number,
+    ): string
+    {
+        const to2D = flipY
+            ? (p: SpanPoint): [number, number] => [p[0], -p[1]]
+            : (p: SpanPoint): [number, number] => [p[0], p[1]];
+
+        // Half a turn at most per span: an SVG `A` whose endpoints coincide is dropped by
+        // renderers, so a full ellipse has to leave as two arcs rather than one.
+        const spans = this.exportSpans({ maxSweep: Math.PI });
+
         const pathParts: string[] = [];
         const L = (p: SpanPoint) => { const [x, y] = to2D(p); pathParts.push(`L${fmt(x)} ${fmt(y)}`); };
 
@@ -4311,7 +4665,7 @@ export class Curve extends Shape
          *  used to disappear from an exported path without a word. */
         const chordTo = (span: SpanParams): void =>
         {
-            console.warn(`Curve::toSVGElem(): span of kind '${span.kind}' cannot be written `
+            console.warn(`Curve::toPathData(): span of kind '${span.kind}' cannot be written `
                 + `as a path command; approximating it with a straight chord.`);
             L(span.end);
         };
@@ -4395,25 +4749,24 @@ export class Curve extends Shape
 
                 case 'spline':
                 {
-                    const pts = span.controlPoints.map(p => ({ x: p[0], y: p[1], z: p[2] }));
-                    const segs = _bsplineToBezierSegments(pts, span.knots, span.weights, span.degree);
-                    if (segs.length === 0) { chordTo(span); break; }
-
-                    const at = (p: { x: number; y: number; z: number }): [number, number] =>
-                        to2D([p.x, p.y, p.z]);
-                    segs.forEach(seg =>
+                    // hypercurve decomposed the span into Beziers exactly, on the way out.
+                    // This used to run Boehm knot insertion here in f64, and then read exactly
+                    // four control points out of each segment — so above degree three the
+                    // written cubic ENDED at the fourth control point rather than the last one,
+                    // and a quartic spline left as a broken chain that did not meet itself.
+                    if (span.beziers.length === 0) { chordTo(span); break; }
+                    span.beziers.forEach(net =>
                     {
-                        if (span.degree === 2)
-                        {
-                            const [, cp1, end] = seg.map(at);
-                            pathParts.push(`Q${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(end[0])} ${fmt(end[1])}`);
-                        }
-                        else
-                        {
-                            const [, cp1, cp2, end] = seg.map(at);
-                            pathParts.push(`C${fmt(cp1[0])} ${fmt(cp1[1])} ${fmt(cp2[0])} ${fmt(cp2[1])} `
-                                + `${fmt(end[0])} ${fmt(end[1])}`);
-                        }
+                        // One `Q`/`C` per Bezier. SVG has no command above cubic, so a higher
+                        // degree is written through its first three or four control points —
+                        // an approximation, and better than the nothing it used to write.
+                        const [, ...rest] = net.map(to2D);
+                        const [c1, c2, end] = rest.length >= 3
+                            ? [rest[0], rest[1], rest[rest.length - 1]]
+                            : [rest[0], null, rest[rest.length - 1]];
+                        pathParts.push(c2
+                            ? `C${fmt(c1[0])} ${fmt(c1[1])} ${fmt(c2[0])} ${fmt(c2[1])} ${fmt(end[0])} ${fmt(end[1])}`
+                            : `Q${fmt(c1[0])} ${fmt(c1[1])} ${fmt(end[0])} ${fmt(end[1])}`);
                     });
                     break;
                 }
@@ -4426,8 +4779,7 @@ export class Curve extends Shape
 
         if (this.isClosed()) pathParts.push('Z');
 
-        const d = pathParts.join(' ');
-        return `<path d="${d}"${classAttr} ${this.style.toSvgAttrs(this.isClosed(), styleOpts)}/>`;
+        return pathParts.join(' ');
     }
 
     /** The circle these spans describe, or null if they describe anything else.
@@ -4455,6 +4807,205 @@ export class Curve extends Shape
         return Math.abs(Math.abs(total) - Math.PI * 2) < 1e-9
             ? { center: first.center, radius: first.radius }
             : null;
+    }
+
+    /** This curve as SVG **path-data** — just the `d`, no element, no style attributes.
+     *
+     *  Differs from `toSVGElem()` in three ways that matter to a host renderer:
+     *   - a `Circle` comes back as real path-data (two 180° arc spans), where `toSVGElem()`
+     *     returns `<circle cx cy r/>` with no `d` at all;
+     *   - interior holes are included as additional `M…Z` subpaths;
+     *   - the Y convention is selectable. `flipY: true` (default) matches `toSVGElem()` and
+     *     SVG's y-down screen space for a y-up curve. Pass `flipY: false` when the curve is
+     *     ALREADY in y-down coordinates — that is also the form `Importer.fromSVG` reads back,
+     *     so `Curve.fromData(c.toData())` round-trips without a mirror (which would tessellate
+     *     arcs).
+     *
+     *  Lines and circular arcs are exact; splines are emitted as `Q`/`C` Béziers.
+     */
+    toPathData(opts: { flipY?: boolean; holes?: boolean } = {}): string
+    {
+        const flipY = opts.flipY ?? true;
+        const withHoles = opts.holes ?? true;
+
+        const fmt = (n: number) => +n.toFixed(6);
+        const to2D = flipY
+            ? (p: { x: number; y: number; z: number }): [number, number] => [p.x, -p.y]
+            : (p: { x: number; y: number; z: number }): [number, number] => [p.x, p.y];
+
+        const parts = [this._outlinePathData(flipY, fmt)];
+        if (withHoles)
+        {
+            this._holes.forEach(h => parts.push(h._outlinePathData(flipY, fmt)));
+        }
+        return parts.filter(p => p.length > 0).join(' ');
+    }
+
+    //// LIFETIME ////
+
+    /** Release the underlying kernel curve (and any holes) immediately.
+     *
+     *  wasm-bindgen registers a `FinalizationRegistry` for every kernel object, so this is not
+     *  required for correctness — but GC finalisation is non-deterministic and applies no
+     *  back-pressure on WASM linear memory. A host that keeps curves alive across a long
+     *  session (a CAD document rather than a one-shot script) should free them explicitly on
+     *  delete. Mirrors `Mesh.dispose()`.
+     *
+     *  After `dispose()` the curve is unusable: `inner()` will throw. */
+    dispose(): void
+    {
+        this._holes.forEach(h => h.dispose());
+        this._holes = [];
+
+        if (this._curve)
+        {
+            (this._curve as unknown as { free?: () => void }).free?.();
+            this._curve = undefined;
+        }
+    }
+
+    //// SERIALISATION ////
+
+    /** This curve as an exact, JSON-safe `CurveData`.
+     *
+     *  Each variant maps onto a native constructor, so `Curve.fromData(c.toData())` rebuilds
+     *  the geometry rather than a tessellation of it. Curves that no constructor can express —
+     *  compounds (boolean/offset/trim results), splines, ellipses — fall back to `Path`
+     *  (SVG path-data, y-down), which keeps lines and circular arcs exact.
+     *
+     *  **Known losses, via the `Path` fallback only:** Béziers are flattened to line segments
+     *  and elliptical arcs are skipped, because that is what `importSvgCurves` does on the way
+     *  back in. A spline therefore survives as a polyline. Build splines and ellipses from
+     *  their own parameters (`Interpolated` / `Ellipse` / `EllipticalArc`) if you need them to
+     *  round-trip exactly. */
+    toData(): CurveData
+    {
+        const P = (p: { x: number; y: number; z: number }): PointData => [p.x, p.y, p.z];
+        const holes = this._holes.length
+            ? { holes: this._holes.map(h => h.toData()) }
+            : {};
+
+        const cps = this.controlPoints();
+
+        switch (this.subtype())
+        {
+            case 'Line':
+            {
+                if (cps.length === 2) return { type: 'Line', start: P(cps[0]), end: P(cps[1]), ...holes };
+                break;
+            }
+
+            case 'Rect':
+            case 'Polyline':
+            {
+                // A `Rect` is a closed 4-segment polyline in hypercurve — there is no separate
+                // rect primitive, so a polyline rebuilds it exactly.
+                if (!this.inner().hasArcs())
+                {
+                    return { type: 'Polyline', points: cps.map(P), closed: this.isClosed(), ...holes };
+                }
+                break;
+            }
+
+            case 'Arc':
+            {
+                // controlPoints() gives span START points plus the final end — for an arc that
+                // is [start, end], with the bulge missing. Sample the parametric midpoint to
+                // recover a true three-point arc.
+                const [d0, d1] = Array.from(this.knotsDomain() ?? [0, 1]);
+                const mid = this.pointAtParam((d0 + d1) / 2);
+                return { type: 'Arc', start: P(cps[0]), mid: P(mid), end: P(cps[cps.length - 1]), ...holes };
+            }
+
+            case 'Circle':
+            {
+                const bb = this.bbox();
+                if (bb)
+                {
+                    const c = this.center();
+                    const n = this.normal();
+                    return {
+                        type: 'Circle',
+                        radius: (bb.max().x - bb.min().x) / 2,
+                        center: [c.x, c.y, c.z],
+                        normal: n ? [n.x, n.y, n.z] : [0, 0, 1],
+                        ...holes,
+                    };
+                }
+                break;
+            }
+        }
+
+        return { type: 'Path', d: this.toPathData({ flipY: false, holes: false }), ...holes };
+    }
+
+    /** Rebuild a curve written by `toData()`. Inverse of every variant it can emit, plus
+     *  `Interpolated` / `Ellipse` / `EllipticalArc`, which `toData()` never produces but a
+     *  caller that knows its own construction parameters can supply. */
+    static fromData(data: CurveData): Curve
+    {
+        const curve = Curve._fromDataOutline(data);
+        (data.holes ?? []).forEach(h => curve.addHole(Curve.fromData(h)));
+        return curve;
+    }
+
+    private static _fromDataOutline(data: CurveData): Curve
+    {
+        switch (data.type)
+        {
+            case 'Line':
+                return Curve.Line(data.start, data.end);
+
+            case 'Polyline':
+            {
+                // Curve.Polyline INFERS closure from last ≈ first (there is no flag), so a
+                // closed ring has to be handed back its repeated first point.
+                const pts = data.points.slice();
+                const first = pts[0];
+                const last = pts[pts.length - 1];
+                const isRepeated = first && last
+                    && Math.abs(first[0] - last[0]) < Curve.ZERO_LENGTH_TOLERANCE
+                    && Math.abs(first[1] - last[1]) < Curve.ZERO_LENGTH_TOLERANCE
+                    && Math.abs(first[2] - last[2]) < Curve.ZERO_LENGTH_TOLERANCE;
+                if (data.closed && !isRepeated) pts.push(first);
+                return Curve.Polyline(pts);
+            }
+
+            case 'Arc':
+                return Curve.Arc(data.start, data.mid, data.end, 'threepoint');
+
+            case 'Circle':
+                return Curve.Circle(data.radius, data.center, data.normal);
+
+            case 'Ellipse':
+                return Curve.Ellipse(data.radiusX, data.radiusY, data.center, data.rotation, data.normal);
+
+            case 'EllipticalArc':
+                return Curve.EllipticalArc(data.radiusX, data.radiusY, data.startAngle, data.endAngle,
+                    data.center, data.rotation, data.normal);
+
+            case 'Interpolated':
+                return Curve.Interpolated(data.points);
+
+            case 'Path':
+            {
+                // importSvgCurves keeps coordinates as-is (verified: a rect and a boolean result
+                // both come back with an identical bbox), so no mirror is needed — which matters,
+                // because mirroring would tessellate every arc away.
+                //
+                // The arc sweep-flag used to arrive inverted with respect to the SVG spec, and a
+                // regex flipped every one of them back here before handing the string over. That
+                // was hypercurve reading the flag as `clockwise` where the spec means
+                // "positive-angle direction"; it is fixed at the source now.
+                const svg = `<svg xmlns="http://www.w3.org/2000/svg"><path d="${data.d}"/></svg>`;
+                const curves = Importer.fromSVG(svg);
+                if (curves.length === 0)
+                {
+                    throw new Error(`Curve.fromData(): SVG path-data produced no curves: "${data.d}"`);
+                }
+                return curves.length === 1 ? curves.first() : Curve.Compound(curves.toArray());
+            }
+        }
     }
 
     /** Export this curve as a self-contained GLTF JSON string (LINE_STRIP). */
@@ -4501,216 +5052,34 @@ export class Curve extends Shape
     /** Collect the individual native spans (arcs/lines) of this curve for SVG export.
      *  Native geometry already stores each arc/line as a separate open segment, so a
      *  circle comes back as two open arcs — no closed-span splitting needed. */
-    private _getSvgSpans(): Curve[]
-    {
-        return this.spans().toArray();
-    }
 }
+
 
 /**
- * Decompose a B-spline into piecewise Bezier segments via Boehm's knot insertion.
+ * Where the ray `a + t·da` meets the ray `b + s·db`, as `t`. Null when they are parallel.
  *
- * For a degree-p B-spline with a clamped knot vector, each interior knot must
- * have multiplicity p for the curve to split into independent Bezier pieces.
- * After full insertion, every (p+1) consecutive control points define one Bezier segment.
- *
- * @returns Array of Bezier segments, each is an array of (degree+1) 3D points.
+ * Two coplanar 3D rays are a 2x2 solve once a coordinate plane is chosen, so this picks the
+ * projection with the largest determinant — the other two are the same equation seen edge-on
+ * and can be arbitrarily ill-conditioned.
  */
-function _bsplineToBezierSegments(
-    controlPoints: { x: number; y: number; z: number }[],
-    knots: number[],
-    weights: number[],
-    degree: number,
-): Array<Array<{ x: number; y: number; z: number }>>
+function _solveRayMeet(a: Point, da: Vector, b: Vector, db: Vector): number | null
 {
-    // Work in homogeneous coordinates for rational curves:  (w*x, w*y, w*z, w)
-    let pts = controlPoints.map((p, i) =>
+    const [dx, dy, dz] = [b.x - a.x, b.y - a.y, b.z - a.z];
+    const planes: Array<[number, number, number, number, number, number]> = [
+        [da.x, da.y, -db.x, -db.y, dx, dy],
+        [da.x, da.z, -db.x, -db.z, dx, dz],
+        [da.y, da.z, -db.y, -db.z, dy, dz],
+    ];
+    let best: [number, number] | null = null; // [|det|, t]
+    for (const [ax, ay, bx, by, rx, ry] of planes)
     {
-        const w = weights[i] ?? 1;
-        return { x: p.x * w, y: p.y * w, z: p.z * w, w };
-    });
-    let U = knots.slice(); // mutable copy
-
-    // Find distinct interior knots and insert each until multiplicity == degree
-    const p = degree;
-    const interiorKnots = _distinctInteriorKnots(U, p);
-
-    interiorKnots.forEach(({ value, multiplicity }) =>
-    {
-        const timesToInsert = p - multiplicity;
-        Array.from({ length: timesToInsert }, () =>
+        const det = ax * by - bx * ay;
+        if (best === null || Math.abs(det) > best[0])
         {
-            const result = _boehmInsert(pts, U, p, value);
-            pts = result.points;
-            U = result.knots;
-        });
-    });
-
-    // After full knot insertion, each Bezier segment spans (p+1) control points
-    // with overlap at boundary points.
-    const numSegments = (pts.length - 1) / p;
-
-    // A whole number is not optional here, it is what "decomposed into Bezier segments"
-    // means. When it was not one — degree 3 over 2 control points gives 0.333 —
-    // Array.from({ length: 0.333 }) quietly produced an empty list, so the span emitted no
-    // path commands at all and a cubic Bezier vanished from the exported file. Failing
-    // loudly and letting the caller fall back is the only acceptable outcome.
-    if (!Number.isInteger(numSegments) || numSegments < 1)
-    {
-        console.warn(`Curve: cannot decompose a degree-${p} spline over ${pts.length} control `
-            + `points into Bezier segments (${numSegments} of them); the knot vector and control `
-            + `net disagree. Falling back to an approximation.`);
-        return [];
-    }
-
-    return Array.from({ length: numSegments }, (_, i) =>
-        Array.from({ length: p + 1 }, (_, j) =>
-        {
-            const h = pts[i * p + j];
-            const invW = h.w !== 0 ? 1 / h.w : 1;
-            return { x: h.x * invW, y: h.y * invW, z: h.z * invW };
-        })
-    );
-}
-
-/** Get the distinct interior knots and their multiplicities. */
-function _distinctInteriorKnots(
-    knots: number[],
-    degree: number
-): Array<{ value: number; multiplicity: number }>
-{
-    const result: Array<{ value: number; multiplicity: number }> = [];
-    const n = knots.length;
-    // Interior knots are those strictly between the clamped ends
-    // For a clamped knot vector, the first (degree+1) and last (degree+1) knots are at the boundaries
-    const lo = knots[degree];
-    const hi = knots[n - degree - 1];
-
-    let i = degree + 1;
-    while (i < n - degree - 1) // perf: keep as loop (stateful index advance)
-    {
-        const val = knots[i];
-        if (val > lo && val < hi)
-        {
-            let mult = 0;
-            let j = i;
-            while (j < n - degree - 1 && Math.abs(knots[j] - val) < 1e-12) // perf: keep as loop
-            {
-                mult++;
-                j++;
-            }
-            result.push({ value: val, multiplicity: mult });
-            i = j;
-        }
-        else
-        {
-            i++;
+            best = [Math.abs(det), (rx * by - bx * ry) / det];
         }
     }
-    return result;
-}
-
-/**
- * Boehm's single knot insertion.
- * Insert knot value `u` once into the B-spline defined by `pts`, `knots`, `degree`.
- */
-function _boehmInsert(
-    pts: Array<{ x: number; y: number; z: number; w: number }>,
-    knots: number[],
-    degree: number,
-    u: number
-): { points: Array<{ x: number; y: number; z: number; w: number }>; knots: number[] }
-{
-    const n = pts.length;
-    const p = degree;
-
-    // Find knot span k such that knots[k] <= u < knots[k+1]
-    const kIdx = knots.slice(p, knots.length - 1).findIndex((kv, off) =>
-        kv <= u + 1e-12 && u < knots[p + off + 1] - 1e-12
-    );
-    const k = kIdx === -1 ? knots.length - p - 2 : p + kIdx;
-
-    // Compute new control points
-    const newPts = Array.from({ length: n + 1 }, (_, i) =>
-    {
-        if (i <= k - p)
-        {
-            return { ...pts[i] };
-        }
-        else if (i >= k + 1)
-        {
-            return { ...pts[i - 1] };
-        }
-        else
-        {
-            // k-p+1 <= i <= k
-            const denom = knots[i + p] - knots[i];
-            const alpha = denom > 1e-14 ? (u - knots[i]) / denom : 0;
-            return {
-                x: (1 - alpha) * pts[i - 1].x + alpha * pts[i].x,
-                y: (1 - alpha) * pts[i - 1].y + alpha * pts[i].y,
-                z: (1 - alpha) * pts[i - 1].z + alpha * pts[i].z,
-                w: (1 - alpha) * pts[i - 1].w + alpha * pts[i].w,
-            };
-        }
-    });
-
-    // Insert knot value into knot vector
-    const newKnots = [...knots.slice(0, k + 1), u, ...knots.slice(k + 1)];
-
-    return { points: newPts, knots: newKnots };
-}
-
-/** Append SVG arc (A) commands for a rational degree-2 NURBS span (circle/arc).
- *  Expects the span to already be projected onto XY. Uses (x, -y) for SVG coordinates.
- *  Uses the circumcircle of three sampled points to determine the radius,
- *  and the cross product to determine the sweep direction. */
-function _appendArcSvg(
-    span: Curve,
-    to2D: (p: { x: number; y: number; z: number }) => [number, number],
-    fmt: (n: number) => number,
-    pathParts: string[]
-): void
-{
-    const cps = span.controlPoints();
-    const [domain0, domain1] = Array.from(span.knotsDomain() ?? [0, 1]);
-    const midParam = (domain0 + domain1) / 2;
-    const startPt3 = cps[0];
-    const midPt3 = span.pointAtParam(midParam);
-    const endPt3 = cps[cps.length - 1];
-
-    const start2D = to2D(startPt3);
-    const mid2D = to2D(midPt3);
-    const end2D = to2D(endPt3);
-
-    const circ = _circumcircle2D(start2D[0], start2D[1], mid2D[0], mid2D[1], end2D[0], end2D[1]);
-
-    if (!circ)
-    {
-        // Degenerate (collinear) — fall back to a line
-        pathParts.push(`L${fmt(end2D[0])} ${fmt(end2D[1])}`);
-        return;
-    }
-
-    const r = fmt(circ.r);
-
-    const cross = (end2D[0] - start2D[0]) * (mid2D[1] - start2D[1])
-                - (end2D[1] - start2D[1]) * (mid2D[0] - start2D[0]);
-    const sweepFlag = cross > 0 ? 0 : 1;
-
-    const dx1 = start2D[0] - circ.cx, dy1 = start2D[1] - circ.cy;
-    const dx2 = end2D[0] - circ.cx, dy2 = end2D[1] - circ.cy;
-
-    const angleStart = Math.atan2(dy1, dx1);
-    const angleEnd = Math.atan2(dy2, dx2);
-
-    let sweepToEnd = sweepFlag === 1
-        ? (angleEnd - angleStart + 2 * Math.PI) % (2 * Math.PI)
-        : (angleStart - angleEnd + 2 * Math.PI) % (2 * Math.PI);
-
-    const largeArcFlag = sweepToEnd > Math.PI ? 1 : 0;
-
-    pathParts.push(`A${r} ${r} 0 ${largeArcFlag} ${sweepFlag} ${fmt(end2D[0])} ${fmt(end2D[1])}`);
+    return best && best[0] > 1e-12 && Number.isFinite(best[1]) ? best[1] : null;
 }
 
 /** Rodrigues' rotation: turn `v` by `angleDeg` around the unit direction `dir`. Done here
@@ -4796,40 +5165,4 @@ function _inPlaneClosestToZ(plane: { normal: Vector, x: Vector, y: Vector }): Ve
     return (inPlane.length() > REVOLVE_RELATIVE_TOLERANCE) ? inPlane.normalize() : plane.x.copy();
 }
 
-/** Test whether two 2D segments (p1→p2) and (p3→p4) properly cross — i.e. each
- *  segment straddles the line through the other. Collinear/endpoint-only touches
- *  are intentionally NOT counted, keeping the test robust against tessellation
- *  artifacts on near-tangent curves. */
-function _seg2DProperlyIntersect(
-    p1: [number, number], p2: [number, number],
-    p3: [number, number], p4: [number, number],
-): boolean
-{
-    const cross = (a: [number, number], b: [number, number], c: [number, number]) =>
-        (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
 
-    const d1 = cross(p3, p4, p1);
-    const d2 = cross(p3, p4, p2);
-    const d3 = cross(p1, p2, p3);
-    const d4 = cross(p1, p2, p4);
-
-    return (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0))
-         && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)));
-}
-
-/** Compute the circumcircle of three 2D points. Returns null if points are collinear. */
-function _circumcircle2D(
-    ax: number, ay: number,
-    bx: number, by: number,
-    cx: number, cy: number
-): { cx: number; cy: number; r: number } | null
-{
-    const D = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
-    if (Math.abs(D) < 1e-10) return null;
-    const a2 = ax * ax + ay * ay;
-    const b2 = bx * bx + by * by;
-    const c2 = cx * cx + cy * cy;
-    const ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / D;
-    const uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / D;
-    return { cx: ux, cy: uy, r: Math.sqrt((ax - ux) ** 2 + (ay - uy) ** 2) };
-}

@@ -134,10 +134,13 @@ export class Mesh extends Shape
         return Array.from(this._positionsIter());
     }
 
-    /** Get Vertices of Mesh. Alias for positions */
-    vertices(): Array<Point>
+    /** Get Vertices of Mesh — corner Vertices in a ShapeCollection, the way Curve.vertices()
+     *  and Polygon.vertices() answer. Use positions() for the raw Points: it skips building a
+     *  Vertex per corner, which matters on hot paths (export, bbox). */
+    @sceneCarry
+    vertices(): ShapeCollection<Vertex>
     {
-        return this.positions();
+        return new ShapeCollection<Vertex>(...this.positions().map(p => new Vertex(p)));
     }
 
     /** Get all positions of vertices of Mesh as an iterable */
@@ -664,7 +667,7 @@ export class Mesh extends Shape
 
         // Use unique-rounded vertices to avoid wasting checks on duplicates.
         const unique = new Map<string, Point>();
-        this.vertices().forEach(v =>
+        this.positions().forEach(v =>
         {
             const r = new Point(v).round(tolerance);
             unique.set(`${r.x},${r.y},${r.z}`, new Point(v));
@@ -725,7 +728,7 @@ export class Mesh extends Shape
     /** Check if the Mesh is valid (has vertices) */
     validate(): boolean
     {
-        const v = !!this._mesh && this.vertices().length > 0;
+        const v = !!this._mesh && this.positions().length > 0;
         if(!v){ console.warn('Mesh::validate(): Invalid Mesh!'); }
         return v;
     }
@@ -1283,6 +1286,14 @@ export class Mesh extends Shape
         return this._copy()._intersection(other);
     }
 
+    /** Keep only the volume this Mesh shares with another (boolean AND), replacing this Mesh by
+     *  it — the mutating counterpart of intersection(), spelled the way union() and difference()
+     *  are (and the way brep's intersect() is). */
+    intersect(other:Mesh): this
+    {
+        return this._intersection(other);
+    }
+
     /** Mutating intersection: keeps only the shared volume and returns `this`. The pure
      *  geometry op, used internally - it never touches the scene. */
     _intersection(other:Mesh): this
@@ -1809,7 +1820,7 @@ export class Mesh extends Shape
 
     toString(): string
     {
-        return `<Mesh id=${this.id()} vertices=${this.vertices().length} polygons=${this.polygons().length} ${this.nodeString()}>`;
+        return `<Mesh id=${this.id()} vertices=${this.positions().length} polygons=${this.polygons().length} ${this.nodeString()}>`;
     }
 
     toPolygons(): undefined|Array<PolygonJs>

@@ -189,7 +189,7 @@ export class OBbox
     {
         const unique = new Map<string, Point>();
 
-        m.vertices().forEach(vertex =>
+        m.positions().forEach(vertex =>
         {
             const rounded = new Point(vertex).round(POINT_TOLERANCE);
             unique.set(`${rounded.x},${rounded.y},${rounded.z}`, rounded);

@@ -221,22 +221,19 @@ describe('cross-format: DXF in, SVG out', () =>
     });
 
     /**
-     * UPSTREAM DEFECT (hypercurve), not meshup's: an imported SVG arc curves the wrong way.
+     * WAS an upstream defect: an imported SVG arc curved the wrong way.
      *
      * SVG 1.1 F.6.3 defines the sweep flag by the sign of the swept angle — fS = 1 forces
      * Δθ >= 0, i.e. counter-clockwise through the coordinate values as written. hypercurve
-     * instead passes the flag straight through as "clockwise", both when reading
-     * (`svg.rs: CircularArc2::try_from_center(start, end, center, sweep)`) and when writing
-     * (`svg.rs: let sweep = u8::from(arc.is_clockwise())`). It therefore round-trips against
-     * itself perfectly and disagrees with every other tool — and with meshup's own writer,
-     * which follows the spec.
+     * read it straight through as "clockwise", so it round-tripped against itself perfectly
+     * and disagreed with every other tool — and with meshup's own writer, which follows the
+     * spec. `M0 0 A25 25 0 0 1 40 0` bowed to y = +10 where it should bow to y = -10.
      *
-     * Concretely, `M0 0 A25 25 0 0 1 40 0` should bow to y = -10 and imports bowing to
-     * y = +10. The arc that leaves meshup is correct in any renderer; it is reading one back
-     * that mirrors it. Fixing it means a one-line change on each side in the hypercurve
-     * submodule, which is outside what this work was scoped to touch.
+     * Fixed in the fork (`hypercurve/src/svg.rs`, `svg_circular_arc` now negates the flag into
+     * its `clockwise` convention), which also retired the regex in `Curve.fromData` that used
+     * to flip every sweep flag back on the way in.
      */
-    it.fails('round-trips a bulged DXF polyline through SVG', () =>
+    it('round-trips a bulged DXF polyline through SVG', () =>
     {
         const fromDxf = Importer.load(BULGED_DXF).toArray()[0] as Curve;
         const svg = `<svg xmlns="http://www.w3.org/2000/svg">${fromDxf.toSVGElem()}</svg>`;
@@ -244,8 +241,8 @@ describe('cross-format: DXF in, SVG out', () =>
         expectSameShape(fromDxf, back);
     });
 
-    // The same upstream defect, stated exactly rather than through its symptom.
-    it.fails('reads the SVG sweep flag the way the spec defines it', () =>
+    // The same defect, stated exactly rather than through its symptom.
+    it('reads the SVG sweep flag the way the spec defines it', () =>
     {
         // Both centres are 15 from the chord midpoint (20, 0) for r = 25 over a chord of 40.
         // fS = 1 selects the centre that makes the swept angle positive — (20, 15) — so the

@@ -474,9 +474,25 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return new ShapeCollection<S>(...[...this._shapes].sort(callback));
     }
 
+    /** Array API — with one deliberate difference from `Array.prototype.map`: when EVERY result
+     *  is a Shape (or a ShapeCollection), the results come back as a ShapeCollection, so
+     *  collection methods stay chainable the way they do off filter() and sort() —
+     *  `verts.map(v => circle(15, v))` answers with a collection, not a bare Array.
+     *  A callback that produces values (numbers, strings, Points, arrays) still answers with a
+     *  plain Array, so `col.map(s => s.bbox().maxZ())` is unchanged. A single non-Shape result
+     *  (a `null` from an op that failed, say) keeps the whole thing an Array rather than
+     *  silently dropping that entry. An empty collection maps to an empty Array: there is
+     *  nothing to judge the result type by, so that one case is the exception the static type
+     *  cannot express — it still reads ShapeCollection. */
+    map<T extends CollectableShape>(callback: (shape: S, index: number, array: S[]) => T): ShapeCollection<T>
     map<T>(callback: (shape: S, index: number, array: S[]) => T): T[]
+    map<T>(callback: (shape: S, index: number, array: S[]) => T): T[] | ShapeCollection<any>
     {
-        return this._shapes.map(callback);
+        const results = this._shapes.map(callback);
+        // The same pair add() accepts, so anything that would land in a collection is wrapped
+        const allShapes = results.length > 0
+            && results.every((r: any) => Shape.isShape(r) || r?.isShapeClass?.() === true);
+        return allShapes ? new ShapeCollection(...(results as Array<any>)) : results;
     }
 
     reduce<T>(callback: (acc: T, shape: S, index: number, array: S[]) => T, initial: T): T
@@ -724,22 +740,23 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     rotateY(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'y', origin); }
     rotateZ(angleDeg: number, origin?: PointLike): this { return this.rotate(angleDeg, 'z', origin); }
 
-    rotate(angleDeg: number, axis: Axis = 'z', origin?: PointLike): this
+    /** Turn all Shapes in this collection as a group around an axis through `origin`
+     *  (default: the center of the collection) */
+    rotate(angleDeg: number, axis: Axis | PointLike = 'z', origin?: PointLike): this
     {
-        if (origin)
-        {
-            this._shapes.forEach(shape => shape.rotateAround?.(angleDeg, axis, origin));
-        }
-        else
-        {
-            this._shapes.forEach(shape => shape.rotate?.(angleDeg, axis));
-        }
-        return this;
+        return this.rotateAround(angleDeg, axis, origin);
     }
 
-    rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot: PointLike = { x: 0, y: 0, z: 0 }): this
+    /** Turn all Shapes in this collection as a group around an axis through `pivot`
+     *  (default: the center of the collection) */
+    rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot?: PointLike): this
     {
-        this._shapes.forEach(shape => shape.rotateAround?.(angleDeg, axis, pivot));
+        // NOTE: always resolve the pivot here, exactly as scale() resolves its origin, so the
+        // collection turns as a whole instead of every Shape spinning about its own center —
+        // and so a group of curves and a group of solids turn the same way (the shapes' own
+        // defaults differ: rotate() is origin-based, rotateAround() is centre-based).
+        const p = this._groupOrigin(pivot);
+        this._shapes.forEach(shape => shape.rotateAround?.(angleDeg, axis, p));
         return this;
     }
 
@@ -754,9 +771,17 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     {
         // NOTE: always resolve the origin here, so the collection scales as a whole
         // instead of every Shape scaling around its own center
-        const o = origin ?? (this.isEmpty() ? new Point(0, 0, 0) : this.center());
+        const o = this._groupOrigin(origin);
         this._shapes.forEach(shape => shape.scale?.(factor, o));
         return this;
+    }
+
+    /** The point a group transform turns or scales about: the one given, else the collection's
+     *  own center (the world origin when there is nothing to take a center of). Resolved ONCE
+     *  for the whole collection — that is what makes it a group transform. */
+    private _groupOrigin(origin?: PointLike): PointLike
+    {
+        return origin ?? (this.isEmpty() ? new Point(0, 0, 0) : this.center());
     }
 
     mirror(dir: Axis | PointLike, pos?: PointLike): this
@@ -993,6 +1018,16 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     {
         this._shapes.forEach(shape => (shape as any).tmp?.());
         if (this._layer) { this._layer.detach(); this._layer = null; }
+        return this;
+    }
+
+    /** Add every shape in this collection to the scene, clearing their sticky `tmp()` flag —
+     *  the collection twin of Shape.addToScene(). `name` names the COLLECTION, not each member
+     *  (naming every shape the same would make the scene unreadable). Returns `this`. */
+    addToScene(name?: string, scene?: SceneNode): this
+    {
+        this._shapes.forEach(shape => (shape as any).addToScene?.(undefined, scene));
+        if (name !== undefined) { this._name = name; }
         return this;
     }
 

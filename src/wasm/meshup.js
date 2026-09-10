@@ -650,6 +650,76 @@ export class Curve3DJs {
         return v1;
     }
     /**
+     * Split this open curve at every point where `cutter` crosses it, EXACTLY.
+     *
+     * The pieces are trimmed with hypercurve's `trim_between_points` between the curve's own
+     * endpoints and the exact crossings, so a piece ends precisely on the cutter instead of at
+     * the nearest sampled arc-length parameter. (`trim(t0, t1)` cannot do this: it maps a
+     * fraction of arc length onto f64 parameters, and the arc length of an arc is
+     * transcendental — there is no exact fraction to trim at.)
+     *
+     * Returns the pieces in order along the curve; a single piece means nothing crossed.
+     * @param {Curve3DJs} cutter
+     * @returns {Curve3DJs[]}
+     */
+    splitAtCurve(cutter) {
+        _assertClass(cutter, Curve3DJs);
+        const ret = wasm.curve3djs_splitAtCurve(this.__wbg_ptr, cutter.__wbg_ptr);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * Extend this open curve at `side` until it ends EXACTLY on `other`.
+     *
+     * The whole operation stays inside hypercurve's exact arithmetic: the crossing is found
+     * exactly, kept as a `Point2` with `Real` coordinates, and handed to
+     * `extend_endpoint_to_point`, which rebuilds the end segment with that point verbatim as
+     * its endpoint. The result therefore *touches* the other curve — not to 1e-6, not to
+     * 1e-12, but exactly.
+     *
+     * That distinction is the whole point. Measuring the reach in JavaScript and calling
+     * `extend(length)` lands the endpoint `anchor + direction * length`, which misses the
+     * crossing by a float residue; and since every boolean here is exact, a curve that stops a
+     * residue short of the shape it was extended to does not meet it at all — a cut along the
+     * two of them leaves a hair-thin bridge rather than separating the piece.
+     *
+     * Errors (so the caller can fall back) when: the curve is closed, either side is not
+     * line/arc geometry, the two are not coplanar, the end segment is an arc, or nothing
+     * crosses the probe ahead of the endpoint.
+     * @param {Curve3DJs} other
+     * @param {string} side
+     * @returns {Curve3DJs}
+     */
+    extendToCurve(other, side) {
+        _assertClass(other, Curve3DJs);
+        const ptr0 = passStringToWasm0(side, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.curve3djs_extendToCurve(this.__wbg_ptr, other.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return Curve3DJs.__wrap(ret[0]);
+    }
+    /**
+     * Merge runs of adjacent, same-direction line segments into one.
+     *
+     * Collinearity is certified exactly by hypercurve, which also handles the closed seam and
+     * leaves arcs and deliberate collinear reversals alone. An exact path has no native
+     * segment topology to merge, so it is returned unchanged.
+     * @returns {Curve3DJs}
+     */
+    mergeCollinear() {
+        const ret = wasm.curve3djs_mergeCollinear(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return Curve3DJs.__wrap(ret[0]);
+    }
+    /**
      * The arc-length parameter (in `[0, 1]`) at absolute length `len`.
      * @param {number} len
      * @returns {number}
@@ -660,6 +730,23 @@ export class Curve3DJs {
             throw takeFromExternrefTable0(ret[1]);
         }
         return ret[0];
+    }
+    /**
+     * Whether the curve crosses itself away from its shared vertices.
+     *
+     * Decided exactly by hypercurve, with the predicates its intersection kernel uses and an
+     * AABB prefilter — not by sampling. An exact path (conic / Bezier / spline) has no native
+     * self-contact query, so it is answered on its certified line projection, which is what
+     * the caller was doing for every curve.
+     * @param {number | null} [tol]
+     * @returns {boolean}
+     */
+    selfIntersects(tol) {
+        const ret = wasm.curve3djs_selfIntersects(this.__wbg_ptr, !isLikeNone(tol), isLikeNone(tol) ? 0 : tol);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] !== 0;
     }
     /**
      * Construct a smooth NURBS curve of `degree` (>= 2) interpolating the given 3D points.
@@ -917,11 +1004,6 @@ export class Curve3DJs {
         return ret >>> 0;
     }
     /**
-     * Extend the curve by `length` along its endpoint tangent(s).
-     *
-     * `side` is `"start"`, `"end"` or `"both"`. The extension is a straight span appended
-     * to the exact geometry, so the original spans survive — this used to rebuild the whole
-     * curve as a polyline through `controlPoints()`, collapsing any arc to a chord.
      * @param {number} length
      * @param {string} side
      * @returns {Curve3DJs}
@@ -1008,12 +1090,19 @@ export class Curve3DJs {
      * hypercurve declines (an authored corner it will not blend, or a self-intersecting
      * offset, which it does not trim), this falls back to offsetting a certified
      * projection, i.e. the previous behaviour.
+     * `corner` selects how convex corners are reconnected: `"sharp"` (default) keeps them
+     * points, `"round"` arcs every one, `"smooth"` mitres but arcs a spike. See
+     * [`hcurve::CornerStyle`] — it was accepted and discarded by the TypeScript layer until
+     * this parameter existed to carry it.
      * @param {number} distance
      * @param {number | null} [tol]
+     * @param {string | null} [corner]
      * @returns {Curve3DJs}
      */
-    offset(distance, tol) {
-        const ret = wasm.curve3djs_offset(this.__wbg_ptr, distance, !isLikeNone(tol), isLikeNone(tol) ? 0 : tol);
+    offset(distance, tol, corner) {
+        var ptr0 = isLikeNone(corner) ? 0 : passStringToWasm0(corner, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len0 = WASM_VECTOR_LEN;
+        const ret = wasm.curve3djs_offset(this.__wbg_ptr, distance, !isLikeNone(tol), isLikeNone(tol) ? 0 : tol, ptr0, len0);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -4282,6 +4371,45 @@ export function importDxfCurves(bytes) {
         throw takeFromExternrefTable0(ret[1]);
     }
     return CurveImportJs.__wrap(ret[0]);
+}
+
+/**
+ * Import a DXF drawing as **flat entity records** — the drawing, not geometry to model with.
+ *
+ * The counterpart to [`import_dxf_curves`], which answers "what curves are in this file".
+ * This one answers "what is in this file at all": every entity keeps its layer, colour,
+ * linetype and extrusion, an ARC stays a centre/radius/angles, a polyline keeps its bulges,
+ * and INSERTs are left unexpanded against the block table. Interpreting any of it — block
+ * expansion, OCS, unit guessing — is the caller's job, which is the point: those are the
+ * awkward parts, and they are better iterated on in TypeScript against real files.
+ *
+ * Returned as a **JSON string**, not through `serde-wasm-bindgen`. That serializer silently
+ * drops `#[serde(flatten)]` and internally-tagged enums, both of which `DxfDoc` uses for its
+ * entity kinds, so entities arrived as `{}`. `serde_json` + `JSON.parse` keeps them.
+ *
+ * Coordinates are exactly as the file has them: DXF's Y-up frame, in the file's own units.
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
+export function importDxfDocument(bytes) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.importDxfDocument(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
 }
 
 /**

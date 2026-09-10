@@ -328,12 +328,12 @@ export class Selector
     /** Get all vertices (Points) from a target */
     private _verticesFromTarget(target: ShapeCollection | Mesh | Curve): Array<Point>
     {
-        if (target instanceof Mesh) return target.vertices();
+        if (target instanceof Mesh) return target.positions();
         if (target instanceof Curve) return target.controlPoints();
         if (target instanceof ShapeCollection)
         {
             return [
-                ...target.meshes().toArray().flatMap(m => m.vertices()),
+                ...target.meshes().toArray().flatMap(m => m.positions()),
                 ...target.curves().toArray().flatMap(c => c.controlPoints()),
             ];
         }
@@ -396,7 +396,7 @@ export class Selector
 
         const points = targets.flatMap((t: any) =>
             (t instanceof Curve) ? t.vertices().toArray().map((v: Vertex) => v.toPoint())
-                                 : (t instanceof Mesh) ? t.vertices() : []);
+                                 : (t instanceof Mesh) ? t.positions() : []);
 
         const seen = new Set<string>();
         return points.filter((p: Point) =>

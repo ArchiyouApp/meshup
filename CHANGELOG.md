@@ -110,7 +110,67 @@ versions may contain breaking changes.
   `dashed ? 'DASHED' : 'CONTINUOUS'`. The brep kernel's `Shape` and `ShapeCollection` (in
   `@archiyou/core`) gained the same method, so a script does not have to know its kernel.
 
+- **`Shape.first()` — a single Shape answers with itself.** `cutoffBy()`, `difference()` and
+  `intersections()` hand back one Shape or a ShapeCollection depending on how the geometry falls,
+  and a script cannot know which in advance, so `post.cutoffBy(diagonal).first()` now reads either
+  way. brep's `Shape` has carried the method for this reason all along — as an empty stub that
+  returned `undefined`, which is fixed in `@archiyou/core` in the same change.
+
+- **`Curve.containsPoint()` — whether a point lies inside a closed Curve.** Inside the outline
+  and outside every hole in it, so a point in the hole of a `difference()` result is *out*. An
+  open or non-planar Curve encloses nothing and answers `false` (with a warning), as does a
+  point off the Curve's plane. It is decided by a crossing count over the Curve's tessellation
+  in its own plane, so a point sitting exactly ON the boundary is not answered reliably — this
+  is a test for points that are clearly in or out. `intersection()` uses it to decide which
+  pieces of a crossing curve are inside the region.
+
 ### Changed
+
+- **`ShapeCollection.rotate()` / `rotateX/Y/Z()` / `rotateAround()` turn the collection as a
+  GROUP, about its own centre — the same default `scale()` has always used.** With no pivot given
+  they called each member's own `rotate()`, which turns about the WORLD ORIGIN, so a group could
+  not be turned about itself at all: `parts.rotateZ(90)` swung a group standing at x = 1000 a
+  quarter turn round the origin, while `parts.scale(2)` grew it where it stood. The pivot is now
+  resolved ONCE for the whole collection (the collection's `center()`, or the world origin when
+  the collection is empty) and handed to every member — which is exactly what makes it a group
+  transform rather than every shape spinning on the spot.
+
+  ```js
+  parts.rotateZ(90);              // the group turns about its own centre
+  parts.rotateZ(90, [0, 0, 0]);   // ... about the world origin, as before
+  ```
+
+  `rotate()` is now an alias of `rotateAround()` on a collection (it always forwarded to it once
+  an origin was given), and it takes an arbitrary axis vector as well as 'x'/'y'/'z'.
+  `rotateQuaternion()` is unchanged: it has no pivot to resolve, and each kernel class keeps its
+  own centring behaviour there.
+
+- **BREAKING: `intersect()` now REPLACES the shape with the intersection, on Curves as well as
+  Meshes — it is no longer a getter for intersection points.** `intersect()` meant two unrelated
+  things depending on which kernel and which shape you had it on: on brep it replaces the shape
+  with the intersection (`subtract()`/`union()` semantics), while meshup's `Curve.intersect()`
+  returned an `Array<Point>` of crossings and left the curve alone. One name, two results, and
+  `Mesh` had no `intersect()` at all.
+
+  The mesh kernel now follows brep, and the three spellings mean one thing each on both kernels:
+
+  | call | does |
+  |---|---|
+  | `a.intersect(b)` | replaces `a` with what it shares with `b` (like `union()`, `subtract()`) |
+  | `a.intersection(b)` | leaves `a` alone; the shared shape is a NEW shape on the active layer |
+  | `a.intersections(b)` | the same, for all of the shared shapes |
+  | `a.intersects(b)` | boolean predicate, unchanged |
+
+  `Mesh.intersect()` is new (it delegates to the mutating `_intersection()` that `cutoffBy()` and
+  `overlapPerc()` already used). For a Curve, a single shared piece updates the Curve in place;
+  Vertices, or several pieces, take its place in the scene the way `difference()` does.
+
+  **There is no replacement point-getter, and none is needed**: the crossing points are the
+  `vertices()` of the intersection, because an intersection now answers with Vertices wherever
+  the two shapes only cross. What used to be `line.intersect(other)[0]` is
+  `line.intersection(other)` — a Vertex, which is a PointLike, so it can be handed straight to
+  `line()`, `polyline()`, `move()` and friends. Being a real shape it lands on the active layer:
+  add `.hide()` when it is only scaffolding for the next step.
 
 - **`Curve.difference()` / `Curve.subtract()` take collections, and refuse to subtract a Curve
   from itself.** They used to take exactly one `Curve`. Handing them a `ShapeCollection` —
@@ -162,7 +222,7 @@ versions may contain breaking changes.
   chord heuristic they already used.
 
 - **Metric queries no longer follow the display quality.** `length()`, `area()`, `bbox()`,
-  `intersect()` and the parameter-inversion table behind `pointAt` / `distance` /
+  `intersection()` and the parameter-inversion table behind `pointAt` / `distance` /
   `closestPoints` / `perpendicularPointTo` answer *where something is*, not *what it looks
   like*. They now sample at a fixed fine tolerance of their own, so asking for a draft preview
   does not move a `split()` point or shorten a measured length. Their polylines are transient —
@@ -184,6 +244,250 @@ versions may contain breaking changes.
   turns); circles reach it now, so arcs are sampled through `point_at_sweep_fraction` instead.
 
 ### Fixed
+
+- **The piece of a curve inside a closed one is cut at the boundary, not near it.**
+  `intersection(rect)` trimmed the curve at the arc-length PARAMETER nearest each crossing rather
+  than at the crossing itself, so the piece's ends sat a few 1e-15 off the outline they were cut
+  at — and that is exactly the geometry a script reads back as `intersection(rect).vertices()` to
+  place a bolt on. It now cuts through hypercurve's `trim_between_points`, at the crossings, and
+  does so for every boundary of the region: a hole is a place the curve leaves it just as the
+  outline is.
+
+  Doing that needed one more thing from the kernel. A straight line lies in infinitely many
+  planes and is fitted to one of them — a line along X is fitted to XY, its z being constant —
+  so it could not take an XZ elevation as a cutter even though it lies squarely in it. The exact
+  split and the exact extension now put both curves in ONE frame, this curve's when the partner
+  maps into it and the partner's when it does not. The answer is the same geometry either way,
+  carried in a frame both are exact in.
+
+- **Intersection points are no longer rounded to a 1e-5 grid.** Every hit came back through
+  `Point.round()` at `POINT_TOLERANCE`, on the theory that a tidy number is a safer one to carry
+  forward. The opposite was true: hypercurve computes the crossing exactly, and the snap threw
+  away up to **5e-6** of it — so `intersection()` reported a point that was not on either curve,
+  and a bolt placed there sat beside the joint rather than in it. A crossing at x = 137.70011 on
+  a line of slope 1/3 now answers z = 45.900036666666665, which is the crossing; it used to
+  answer 45.90004.
+
+  Nothing has to be tidied for it: a crossing that lands on a round number still reads as one
+  (two lines meeting at 50 answer 50, not 49.999999999999996). It is the crossings that do not
+  that were being moved. This was also the source of `extendTo()`'s old 1e-6 miss, since the
+  reach was measured to the rounded point — that route is exact now for other reasons, but the
+  rounding is gone from every caller.
+
+- **Coplanar curves now share one canonical frame, so what hypercurve computes exactly stays
+  exact on the way out.** Each curve carried a frame derived from its own points — origin at its
+  first vertex, x along its first edge — and hypercurve's exactness is exactness *within* a
+  frame. Two coplanar curves therefore had two different frames, and every operation that put
+  them together (`extendToCurve`, `splitAtCurve`, every boolean) had to map one into the other
+  through an f64 similarity first. That mapping rounds by about one ULP of the coordinates, and
+  in an exact kernel a ULP on the wrong side is a gap: a curve extended onto another landed
+  1e-13 past it or 1e-13 short of it, and the cut that followed either separated cleanly or came
+  back as one pinched region, on a coin toss.
+
+  When a curve's plane normal IS a world axis — plan, elevation and section work — its frame is
+  now the canonical frame of that plane: exact unit axes, the origin at the plane's foot from the
+  world origin. `to_local`/`to_world` become coordinate selection plus an exact offset, two
+  coplanar curves carry the same frame bit for bit, and the map between them is the identity.
+  `extendTo()` across such a plane now lands with a miss of **exactly zero** (it was 2.8e-14 to
+  9.2e-14 with the exact extension alone, and 5.5e-7 before that). A tilted plane keeps its
+  fitted frame: its normal cannot be snapped to an axis without inventing geometry.
+
+  A straight line is planar-ambiguous — it lies in infinitely many planes, and a line held at
+  both x = 0 and y = 200 fits itself to the y-plane while the curve being extended onto it sits
+  in the x-plane. Those two frames are not related by a planar similarity at all, so the exact
+  route used to decline and fall back to the measured extension. Such a target is now expressed
+  in the other curve's frame through world coordinates, which asks the question that matters —
+  are its points in THIS plane? — and keeps the extension exact.
+
+- **`cutoffBy()` re-cuts across a gap the coordinates cannot express.** Even with an exact
+  extension and canonical frames, geometry that arrives by another route — an offset, a
+  projection, a tilted plane, an imported outline — can still miss a shared edge by a ULP. To an
+  exact boolean the width is irrelevant and only the side matters: a residue inside the shape
+  leaves the two halves joined by a bridge 1e-13 wide, and one crossing the edge leaves a
+  zero-width tab, so a cut quad reports five corners. Neither is a cut.
+
+  A closed-vs-closed cut is now also tried with the cutter grown by a few ULP of the shape's own
+  size (`UNREPRESENTABLE_GAP_RATIO`), and the nudged answer is taken only on evidence: it must
+  find MORE pieces than the exact cut (it separated what was joined), or the same pieces
+  enclosing the same area with FEWER corners (it removed a phantom tab). A cutter that genuinely
+  bites a corner, or genuinely falls short, is left exactly as the exact boolean answered it.
+  Nothing real can be closed at that width — two boundaries a ULP apart are not close, they are
+  indistinguishable in f64.
+
+  Measured on the shape this came from: cutting the URBENT post by its brace over seven beam
+  widths and two brace rules, 14 of 14 now answer with the 4-vertex, 4-edge quad. Before the
+  exact extension, 1 of 14 did.
+
+- **A three-point arc through a mid point diametrically opposite its own chord no longer bulges
+  the wrong way.** For an exact semicircle the sweep's sign carries no information —
+  `atan2(0, negative)` answers +pi whichever way the arc runs — and `arc_3pt` took that +pi
+  without consulting the mid point, so `makeArc((0,0), (5,5), (10,0))` came back through
+  (5, −5). It went unseen because a curve's frame used to be derived from its own points, and in
+  that frame the +pi choice happened to be the right one; canonical frames removed the
+  coincidence. The direction now comes from the side the mid point is on, which is the only thing
+  that distinguishes the two halves of a circle.
+
+- **`extendTo()` now lands ON its target, through hypercurve, instead of extending by a measured
+  length that always fell a little short.** It measured the reach to the crossing and called
+  `extend(length)`, which places the tip at `anchor + direction x length` — never exactly the
+  crossing. Worse, the crossing it measured to had been rounded to `POINT_TOLERANCE` (1e-5)
+  first, so for any crossing that did not happen to fall on that grid the endpoint missed the
+  target by up to **1e-6**. An axis-aligned target rounded to itself and looked perfect, which
+  is why only some extensions were off.
+
+  A residue that size is not cosmetic here: every boolean in this kernel is exact, so a curve
+  that stops short of the shape it was extended to does not meet it at all. Cutting the two
+  against each other left them joined by a wedge that thin — one 8-vertex region where there
+  should have been two 4-vertex ones — and no amount of extra accuracy in the measurement fixed
+  it: gaps of 1e-7, 1e-9 and 1e-12 all pinch identically. Only landing exactly on the point does.
+
+  The extension now happens inside hypercurve's exact arithmetic (new `Curve3DJs::extendToCurve`):
+  the crossing is found exactly, kept as a `Point2` with `Real` coordinates and handed to
+  `extend_endpoint_to_point`, which rebuilds the end segment with that point verbatim as its
+  endpoint. TypeScript still decides *which* end moves and to *which* target; only the extension
+  itself moved into the kernel. Measured on the shapes it was found on:
+
+  | | before | after |
+  |---|---|---|
+  | axis-aligned target | 2.8e-14 | 2.8e-14 |
+  | oblique target | 5.5e-7 | 2.8e-14 |
+  | brace onto a wall line (URBENT) | 1.3e-6 | 9.2e-14 |
+  | target crossing off the 1e-5 grid | 1.0e-6 | **0** |
+
+  What that left was the f64 round trip through the curve's own 3D frame — about one ULP of the
+  coordinates — which the canonical plane frames above then removed for any curve on a world-axis
+  plane, taking the miss to exactly zero.
+
+  Unchanged: an end that is an ARC has no straight continuation to intersect, and a target that
+  never crosses (converging curves) has no crossing to land on. Both keep the measured
+  extension, as does anything the exact route declines — a spline, a non-coplanar target.
+
+- **`cutoffBy()` cuts an open Curve exactly at the cutter.** The open branch mapped each crossing
+  to an arc-length parameter and trimmed there, so the piece ended wherever that parameter landed
+  — the mapping runs on the tessellation. The pieces are now trimmed at the crossing POINTS
+  themselves, by hypercurve's `trim_between_points` (new `Curve3DJs::splitAtCurve`), so a piece
+  ends precisely on the cutter. `trim(t0, t1)` is unchanged and still arc-length based: the arc
+  length of an arc is transcendental, so there is no exact fraction to trim at — which is why
+  the exact route is point-based.
+
+- **`cutoffBy()` keeps the biggest PIECE, not the bigger side.** With a cutter that genuinely
+  separates a closed Curve, the outside is two pieces and the inside one; comparing the two
+  *sides* by total area returned the whole outside side as a collection, whose first member was
+  whichever piece the boolean happened to emit first — so `post.cutoffBy(brace).first()` handed
+  back the small offcut. Every piece from both sides is now measured and the biggest single one
+  wins, as brep's `Shape.cutoffBy()` and the two branches beside it already did.
+
+- **A boolean no longer hands back the no-area sliver it leaves along an edge the two shapes
+  share.** Where a post's top edge IS the roof line its diagonal is built on, hypercurve's region
+  engine emits, alongside the real result, a region that runs out along that shared edge and back:
+  length 376, bbox 150 x 114, **area 0.00008**. It survived into the result as an extra piece —
+  and as the FIRST one, so `post.cutoffBy(diagonal).first()` handed back a curve enclosing
+  nothing, which then offset and extruded into rubbish.
+
+  Every region a boolean produces is now checked for enclosing anything at all, by its own
+  isoperimetric ratio — area over the square of a quarter of its perimeter. That is 1 for a
+  square, 0.79 for a circle, 1e-5 for a hair-thin but REAL sliver (0.001 across 400), and 1e-9
+  for this noise; regions below 1e-6 are dropped. Being a ratio it is scale-free, so it means the
+  same whether the model is in millimetres or metres — which no absolute area threshold does.
+
+  When *every* region is degenerate, the shapes genuinely share no area: two rects touching along
+  one edge now answer `intersection()` with null and a warning that says so, rather than with a
+  sliver standing in for the shared line.
+
+- **`Curve.cutoffBy()` keeps the BIGGEST part when both curves are closed — it used to hand back
+  whichever part happened to be inside the cutter.** The closed-vs-closed branch never compared
+  the two pieces: it returned the intersection (the part inside the cutter) by default and the
+  difference for `keepSmallest`, so the pair was inverted whenever the cutter covered less than
+  half the shape — the normal case. A post outline cut by the diagonal crossing its top corner
+  came back as the small corner overlap instead of the post below it:
+
+  ```js
+  post.copy().cutoffBy(diagonal);        // the post minus the knee, not the knee
+  post.copy().cutoffBy(diagonal, true);  // ... and now the knee
+  ```
+
+  The two parts (inside the cutter, outside it) are now measured by area and the bigger one wins,
+  which is what `Mesh.cutoffBy()`, `Polygon.cutoffBy()` and brep's `Shape.cutoffBy()` have always
+  done, and what the open-curve and closed-cut-by-line branches next to it already did. A cutter
+  that misses the Curve, or swallows it whole, leaves it unchanged with a warning rather than
+  returning null.
+
+- **A hole no longer stays behind when its Curve is moved, keeps its old size when the Curve is
+  scaled, or vanishes when the Curve is mirrored.** The interior holes a `difference()` leaves on
+  a Curve are Curves of their own hanging off the boundary, and only some of the transforms
+  carried them: `rotate*()`, `mirror()` and `projectOnto()` did, `translate()` and `scale()` did
+  not. So `rect(100,100).difference(rect(20,20)).move(500, 0, 0)` moved the outline to x = 500 and
+  left its hole at the origin, and `scale(2)` doubled the outline around a hole that stayed 20 wide
+  (`area()`, which subtracts the holes, went wrong with it).
+
+  `mirror()` was worse than it looked: it mapped over `this._holes` *after* an `update()` that
+  had already replaced that array with the (empty) holes of the new boundary curve, so the hole
+  was not left behind but lost outright. The resampling branches of `scale()` and `projectOnto()`
+  went through the same `update()`. Every transform now holds the holes aside first, and passes
+  each one the RESOLVED pivot / plane / origin so it follows its boundary instead of turning about
+  its own centre.
+
+  The pivot shuffle inside `rotateAround()`, `scale()` and `projectOnto()` — shift to the pivot,
+  transform, shift back — now runs on the boundary alone (`_translateBoundary()`), so a hole is
+  never transformed twice, once by the shuffle and once by its own call.
+
+  Still not carried, and unchanged here: `offset()`, `fillet()`, `chamfer()`, `mergeCollinear()`
+  and `closePath()` drop the holes of the curve they rebuild. Offsetting or filleting a region
+  *with* its holes is a feature rather than a fix — the hole would have to offset inward by the
+  same amount.
+
+- **`Curve.rotateX()` / `rotateY()` / `rotateZ()` / `rotateAround()` turn about the curve's own
+  centre when no pivot is given, not about the world origin.**
+  `circle(20).move(100, 100, 10).rotateX(90)` stood the circle up *and* swung it around the world
+  origin, landing it at y = −10, z = 100 — while the box modelled next to it turned where it
+  stood, because `Mesh.rotateAround()` and `Polygon.rotateAround()` have always defaulted their
+  pivot to `this.center()`. The same script line meant one thing for a solid and another for the
+  outline beside it, and the mesh kernel disagreed with brep (whose `rotateX/Y/Z` default to the
+  shape centre too). It was pinned as divergence #3 in `@archiyou/core`'s
+  `kernel-divergences.test.ts`, now deleted.
+
+  ```js
+  circle(20).move(100, 100, 10).rotateX(90);            // turns where it stands
+  circle(20).move(100, 100, 10).rotateX(90, [0, 0, 0]); // ... about the world origin
+  circle(20).move(100, 100, 10).rotate(90, 'x');        // rotate() IS the origin-based turn
+  ```
+
+  `rotate()` is unchanged and stays the explicitly origin-based turn on Curve, Mesh and Polygon
+  alike; pass a pivot to any of the others to say where the axis goes. A hole now turns about its
+  boundary's pivot rather than about its own centre — the recursive call passed the *unresolved*
+  pivot, so a `difference()` hole would have spun away from its boundary the moment the default
+  was used.
+
+  Scripts that leaned on the old default — turning a group of curves about the origin by rotating
+  each one — need the pivot spelled out: `shape.rotateX(90, [0, 0, 0])`.
+
+- **`intersection()` of an open Curve with a closed one now gives the piece of curve inside it,
+  instead of always `null`.** `line.intersection(rect)` — a line crossing a closed rect — is the
+  plainest case there is, and it answered nothing at all: `_intersectionCurve()` ran hypercurve's
+  region boolean for *every* curve pair, and the guard meant to stop that was `if(!this.isClosed)`
+  — the **method**, always truthy, so it never fired. hypercurve then refused the open operand
+  (*"'this' is not a closed region"*) and the whole call came back null.
+
+  The pair is now dispatched on what the two curves are:
+
+  - closed + closed: the region boolean, exactly as before.
+  - open + closed: the part(s) of the open curve **inside** the closed one — the same answer a
+    brep `Edge` ∩ `Face` gives. The curve is split at every crossing of the region boundary,
+    *including the boundary of any hole*, and the pieces whose midpoint is inside are kept, so a
+    line through a holed rect comes back as two pieces with the hole left out. A curve entirely
+    inside comes back whole; one entirely outside is `null`. Symmetric: `rect.intersection(line)`
+    gives the same piece of line.
+  - open + open: two open curves share no length, only the **Vertices** where they cross — which
+    is what a brep `Edge` ∩ `Edge` answers with too. A curve that merely touches a closed one
+    answers with the touch Vertices for the same reason.
+
+  ```js
+  r = rect(10, 20);
+  l = line([-100, 0, 0], [100, 10, 0]);
+  l.intersection(r);              // Curve — the ~10 long piece of the line inside the rect (was null)
+  l.intersection(r).vertices();   // the two crossing points, [-5, 4.75] and [5, 5.25]
+  l.intersection(otherLine);      // Vertex — two open curves have nothing but their crossing
+  ```
 
 - **`segments()` no longer throws on a curve that `connect()` has joined.** Joining two curves
   glues them with connector lines and combines the lot; every joint comes back as a separate,
@@ -209,13 +513,14 @@ versions may contain breaking changes.
   ray is searched for true intersections first. Before, a curve that genuinely crossed a target
   300 away could lose to its *other* end drifting within 4 of it, and the wrong end moved.
 
-- **`Curve.intersect()` no longer reports "no intersection" for a pair it can actually solve.**
+- **Curve crossings are no longer reported as "no intersection" for a pair that can actually be
+  solved.** (In the hit finder behind `intersection()`, `cutoffBy()` and `extendTo()`.)
   hypercurve plane-fits THIS curve to project the other into it, and that fit is ill-defined
   for a straight line: an axis-aligned line comes back empty one way round and *throws*
-  (`open polyline failed (EmptyCurveString)`) the other. `intersect()` has always retried with
+  (`open polyline failed (EmptyCurveString)`) the other. The finder has always retried with
   the operands swapped for exactly this reason, but a single `try/catch` wrapped **both**
   attempts, so a throw on the first order swallowed the swap that would have found the hit.
-  `Curve.Line([0,0,0],[-3200,0,0]).intersect(verticalLineAtX)` logged an error and returned
+  `Curve.Line([0,0,0],[-3200,0,0]).intersection(verticalLineAtX)` logged an error and returned
   null instead of the crossing at x = -300. Each order is now attempted on its own; null is
   returned only when neither can answer.
 

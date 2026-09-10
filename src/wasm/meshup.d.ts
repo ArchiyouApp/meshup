@@ -113,9 +113,58 @@ export class Curve3DJs {
    */
   controlPoints(): Point3Js[];
   /**
+   * Split this open curve at every point where `cutter` crosses it, EXACTLY.
+   *
+   * The pieces are trimmed with hypercurve's `trim_between_points` between the curve's own
+   * endpoints and the exact crossings, so a piece ends precisely on the cutter instead of at
+   * the nearest sampled arc-length parameter. (`trim(t0, t1)` cannot do this: it maps a
+   * fraction of arc length onto f64 parameters, and the arc length of an arc is
+   * transcendental — there is no exact fraction to trim at.)
+   *
+   * Returns the pieces in order along the curve; a single piece means nothing crossed.
+   */
+  splitAtCurve(cutter: Curve3DJs): Curve3DJs[];
+  /**
+   * Extend this open curve at `side` until it ends EXACTLY on `other`.
+   *
+   * The whole operation stays inside hypercurve's exact arithmetic: the crossing is found
+   * exactly, kept as a `Point2` with `Real` coordinates, and handed to
+   * `extend_endpoint_to_point`, which rebuilds the end segment with that point verbatim as
+   * its endpoint. The result therefore *touches* the other curve — not to 1e-6, not to
+   * 1e-12, but exactly.
+   *
+   * That distinction is the whole point. Measuring the reach in JavaScript and calling
+   * `extend(length)` lands the endpoint `anchor + direction * length`, which misses the
+   * crossing by a float residue; and since every boolean here is exact, a curve that stops a
+   * residue short of the shape it was extended to does not meet it at all — a cut along the
+   * two of them leaves a hair-thin bridge rather than separating the piece.
+   *
+   * Errors (so the caller can fall back) when: the curve is closed, either side is not
+   * line/arc geometry, the two are not coplanar, the end segment is an arc, or nothing
+   * crosses the probe ahead of the endpoint.
+   */
+  extendToCurve(other: Curve3DJs, side: string): Curve3DJs;
+  /**
+   * Merge runs of adjacent, same-direction line segments into one.
+   *
+   * Collinearity is certified exactly by hypercurve, which also handles the closed seam and
+   * leaves arcs and deliberate collinear reversals alone. An exact path has no native
+   * segment topology to merge, so it is returned unchanged.
+   */
+  mergeCollinear(): Curve3DJs;
+  /**
    * The arc-length parameter (in `[0, 1]`) at absolute length `len`.
    */
   paramAtLength(len: number): number;
+  /**
+   * Whether the curve crosses itself away from its shared vertices.
+   *
+   * Decided exactly by hypercurve, with the predicates its intersection kernel uses and an
+   * AABB prefilter — not by sampling. An exact path (conic / Bezier / spline) has no native
+   * self-contact query, so it is answered on its certified line projection, which is what
+   * the caller was doing for every curve.
+   */
+  selfIntersects(tol?: number | null): boolean;
   /**
    * Construct a smooth NURBS curve of `degree` (>= 2) interpolating the given 3D points.
    *
@@ -241,13 +290,6 @@ export class Curve3DJs {
    * where both used to report 1 from the line approximation.
    */
   degree(): number;
-  /**
-   * Extend the curve by `length` along its endpoint tangent(s).
-   *
-   * `side` is `"start"`, `"end"` or `"both"`. The extension is a straight span appended
-   * to the exact geometry, so the original spans survive — this used to rebuild the whole
-   * curve as a polyline through `controlPoints()`, collapsing any arc to a chord.
-   */
   extend(length: number, side: string): Curve3DJs;
   /**
    * Fillet (round) interior corners with an arc of the given `radius`.
@@ -292,8 +334,12 @@ export class Curve3DJs {
    * hypercurve declines (an authored corner it will not blend, or a self-intersecting
    * offset, which it does not trim), this falls back to offsetting a certified
    * projection, i.e. the previous behaviour.
+   * `corner` selects how convex corners are reconnected: `"sharp"` (default) keeps them
+   * points, `"round"` arcs every one, `"smooth"` mitres but arcs a spike. See
+   * [`hcurve::CornerStyle`] — it was accepted and discarded by the TypeScript layer until
+   * this parameter existed to carry it.
    */
-  offset(distance: number, tol?: number | null): Curve3DJs;
+  offset(distance: number, tol?: number | null, corner?: string | null): Curve3DJs;
   /**
    * Boolean against another closed curve (`union`/`intersection`/`difference`/
    * `xor`), computed on **native geometry** (arcs/lines preserved, nothing
@@ -1009,6 +1055,24 @@ export function getTessellationQuality(): Float64Array;
 export function importDxfCurves(bytes: Uint8Array): CurveImportJs;
 
 /**
+ * Import a DXF drawing as **flat entity records** — the drawing, not geometry to model with.
+ *
+ * The counterpart to [`import_dxf_curves`], which answers "what curves are in this file".
+ * This one answers "what is in this file at all": every entity keeps its layer, colour,
+ * linetype and extrusion, an ARC stays a centre/radius/angles, a polyline keeps its bulges,
+ * and INSERTs are left unexpanded against the block table. Interpreting any of it — block
+ * expansion, OCS, unit guessing — is the caller's job, which is the point: those are the
+ * awkward parts, and they are better iterated on in TypeScript against real files.
+ *
+ * Returned as a **JSON string**, not through `serde-wasm-bindgen`. That serializer silently
+ * drops `#[serde(flatten)]` and internally-tagged enums, both of which `DxfDoc` uses for its
+ * entity kinds, so entities arrived as `{}`. `serde_json` + `JSON.parse` keeps them.
+ *
+ * Coordinates are exactly as the file has them: DXF's Y-up frame, in the file's own units.
+ */
+export function importDxfDocument(bytes: Uint8Array): string;
+
+/**
  * Import an SVG document into native planar curves. Lines, circular arcs and Béziers are
  * all kept exact — a `C` command arrives as a `CubicBezier2` span, not as chords.
  * Unsupported path commands (elliptical arcs with rx ≠ ry) are skipped and surfaced via
@@ -1069,6 +1133,7 @@ export interface InitOutput {
   readonly curve3djs_controlPoints: (a: number) => [number, number];
   readonly curve3djs_degree: (a: number) => number;
   readonly curve3djs_extend: (a: number, b: number, c: number, d: number) => [number, number, number];
+  readonly curve3djs_extendToCurve: (a: number, b: number, c: number, d: number) => [number, number, number];
   readonly curve3djs_fillet: (a: number, b: number, c: number, d: number) => [number, number, number];
   readonly curve3djs_getOnPlane: (a: number) => [number, number];
   readonly curve3djs_hasArcs: (a: number) => number;
@@ -1084,8 +1149,9 @@ export interface InitOutput {
   readonly curve3djs_makeInterpolated: (a: number, b: number, c: number) => [number, number, number];
   readonly curve3djs_makeLine: (a: number, b: number) => [number, number, number];
   readonly curve3djs_makePolyline: (a: number, b: number, c: number) => [number, number, number];
+  readonly curve3djs_mergeCollinear: (a: number) => [number, number, number];
   readonly curve3djs_mirror: (a: number, b: number, c: number) => [number, number, number];
-  readonly curve3djs_offset: (a: number, b: number, c: number, d: number) => [number, number, number];
+  readonly curve3djs_offset: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
   readonly curve3djs_paramAtLength: (a: number, b: number) => [number, number, number];
   readonly curve3djs_paramClosestToPoint: (a: number, b: number) => [number, number, number];
   readonly curve3djs_pointAt: (a: number, b: number) => [number, number, number];
@@ -1096,8 +1162,10 @@ export interface InitOutput {
   readonly curve3djs_scaleNonUniform: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
   readonly curve3djs_segmentCount: (a: number) => number;
   readonly curve3djs_segmentTessellations: (a: number, b: number, c: number) => [number, number, number];
+  readonly curve3djs_selfIntersects: (a: number, b: number, c: number) => [number, number, number];
   readonly curve3djs_spanParams: (a: number) => [number, number, number];
   readonly curve3djs_spans: (a: number) => [number, number, number, number];
+  readonly curve3djs_splitAtCurve: (a: number, b: number) => [number, number, number, number];
   readonly curve3djs_subtype: (a: number) => [number, number];
   readonly curve3djs_tangentAt: (a: number, b: number) => [number, number, number];
   readonly curve3djs_tessellate: (a: number, b: number, c: number) => [number, number, number, number];
@@ -1111,6 +1179,7 @@ export interface InitOutput {
   readonly edgeprojectionresultjs_visiblePolylines: (a: number) => any;
   readonly getTessellationQuality: () => [number, number];
   readonly importDxfCurves: (a: number, b: number) => [number, number, number];
+  readonly importDxfDocument: (a: number, b: number) => [number, number, number, number];
   readonly importSvgCurves: (a: number, b: number) => [number, number, number];
   readonly matrix4js_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
   readonly matrix4js_toArray: (a: number) => [number, number];

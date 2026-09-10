@@ -147,6 +147,13 @@ export type SpanParams =
         knots: number[];
         weights: number[];
         rational: boolean;
+        /** The span's exact Bezier decomposition: one affine control net per knot interval,
+         *  each of `degree + 1` points. Empty when hypercurve declines it.
+         *
+         *  Carried alongside the control net rather than instead of it: a DXF SPLINE entity
+         *  wants the authored net and knot vector, a renderer wants Bezier segments it can
+         *  write as `Q`/`C`. */
+        beziers: SpanPoint[][];
         start: SpanPoint;
         end: SpanPoint;
     }
@@ -258,6 +265,7 @@ export interface SceneNodeGraphNode
  *  Identity rules mirror the viewer's path-map builder (see SceneNode.toData/path). */
 export interface SceneNodeData
 {
+  id?: string // stable node id; survives rename/reorder (see SceneNode.id())
   name: string
   shape?: string | null // uuid of the held shape; null/undefined for layer/group containers
   /** Serial id of the held shape: the order it entered the scene. Reproducible for the same
@@ -265,6 +273,58 @@ export interface SceneNodeData
   sid?: number
   style: Partial<StyleData>
   children: SceneNodeData[]
+}
+
+//// GEOMETRY SERIALISATION ////
+
+/** A point on the wire: plain `[x, y, z]`. Deliberately not `Point` — this must survive
+ *  `JSON.stringify` and `structuredClone` with no class identity. */
+export type PointData = [number, number, number];
+
+/** Exact, JSON-safe description of a `Curve`.
+ *
+ *  Every variant maps 1:1 onto a native constructor, so `Curve.fromData(c.toData())`
+ *  reproduces the original geometry — not a tessellation of it. The variants are
+ *  exactly the curve kinds hypercurve can construct:
+ *  `makeLine / makePolyline / makeArc / makeCircle / makeEllipse / makeEllipticalArc /
+ *  makeInterpolated`.
+ *
+ *  `Path` is the total fallback for everything else — compounds (boolean/offset results),
+ *  splines and trimmed curves. It carries SVG path-data and is rebuilt through
+ *  `importSvgCurves`, which keeps lines and circular arcs **exact**. Its known losses are
+ *  Béziers (flattened to line segments) and elliptical arcs (skipped) — the same losses
+ *  `Importer.fromSVG` documents.
+ */
+export type CurveData =
+  | { type: 'Line'; start: PointData; end: PointData; holes?: CurveData[] }
+  | { type: 'Polyline'; points: PointData[]; closed: boolean; holes?: CurveData[] }
+  | { type: 'Arc'; start: PointData; mid: PointData; end: PointData; holes?: CurveData[] }
+  | { type: 'Circle'; radius: number; center: PointData; normal: PointData; holes?: CurveData[] }
+  | { type: 'Ellipse'; radiusX: number; radiusY: number; rotation: number;
+      center: PointData; normal: PointData; holes?: CurveData[] }
+  | { type: 'EllipticalArc'; radiusX: number; radiusY: number; rotation: number;
+      startAngle: number; endAngle: number;
+      center: PointData; normal: PointData; holes?: CurveData[] }
+  | { type: 'Interpolated'; points: PointData[]; degree: number; holes?: CurveData[] }
+  | { type: 'Path'; d: string; holes?: CurveData[] };
+
+/** One shape inside a serialised scene: its identity, its geometry and its explicit style. */
+export interface SceneShapeData
+{
+  id: string
+  name?: string
+  geometry: CurveData
+  style?: Partial<StyleData>
+}
+
+/** A whole serialised scene: the node tree plus the geometry its leaves reference.
+ *  Shapes are stored flat and referenced by id from `root`, so a shape held by two
+ *  nodes is written once. */
+export interface SceneDocData
+{
+  version: 1
+  root: SceneNodeData
+  shapes: SceneShapeData[]
 }
 
 /** Some style or visibility data that can not be converted into format directly

@@ -11,8 +11,8 @@ use crate::hcurve;
 use crate::wasm::point_js::Point3Js;
 use crate::wasm::vector_js::Vector3Js;
 use hypercurve::{
-    BooleanOp, Contour2, Curve2, CurveFamily2, CurveGeometry2, CurvePath2, CurvePolicy,
-    CurveString2, LineSeg2, Point2, Segment2, Similarity2,
+    BooleanOp, Contour2, Curve2, CurveFamily2, CurveGeometry2,
+    CurvePath2, CurveString2, LineSeg2, Point2, Segment2, Similarity2,
 };
 use nalgebra::{Point3, Vector3};
 use wasm_bindgen::prelude::*;
@@ -202,7 +202,58 @@ impl Frame
             normalize_or(projected, perpendicular_to(n))
         };
         let y = n.cross(&x).normalize();
-        Ok(Self { origin, x, y, n })
+        Ok(Self { origin, x, y, n }.canonical())
+    }
+
+    /// The canonical frame of the plane a curve is about to be built on, and the local
+    /// coordinates of the point it was centred on. Callers that used to place their geometry at
+    /// the frame's own origin (a circle at local `(0, 0)`) place it at these coordinates instead.
+    fn plane_at(point: Point3<Real>, normal: Vector3<Real>) -> (Self, [f64; 2])
+    {
+        let frame = Self::from_center_normal(point, normal).canonical();
+        let local = frame.to_local(&point);
+        (frame, local)
+    }
+
+    /// Snap a frame that sits on a WORLD-AXIS plane onto the canonical frame of that plane.
+    ///
+    /// Every curve otherwise derives a frame from its own points — origin at its first vertex,
+    /// x along its first edge — so two curves drawn on the same plane carry *different* frames,
+    /// and mapping one into the other (`similarity_from`) is an f64 rotation and translation.
+    /// hypercurve's exactness is exactness WITHIN a frame; everything that crosses that bridge
+    /// picks up a rounding of about one ULP of the coordinates. Small, but not nothing: it is
+    /// what left a curve extended onto another one landing 1e-13 to the wrong side of it, and an
+    /// exact boolean reads any wrong-side residue as a gap — the cut then leaves the two halves
+    /// joined by a bridge that thin instead of separating them.
+    ///
+    /// When the plane's normal IS a world axis — plan, elevation and section work, which is
+    /// most of it — this makes the bridge the identity: the axes are exact unit vectors, the
+    /// origin is the plane's foot from the world origin, and `to_local`/`to_world` become
+    /// coordinate selection plus an exact offset. Two coplanar curves then carry the same frame
+    /// bit for bit and map into each other exactly, with no residue to land on the wrong side of.
+    ///
+    /// A tilted plane is left exactly as it was: its normal cannot be snapped to an axis without
+    /// inventing geometry, and two curves fitted to it would disagree in the last bits anyway.
+    /// The sign of the normal is preserved — flipping it would flip the frame's handedness, and
+    /// with it the winding of every closed curve built in it.
+    fn canonical(self) -> Self
+    {
+        const AXIS_TOL: Real = 1.0e-9;
+
+        let axes = [Vector3::x(), Vector3::y(), Vector3::z()];
+        let Some(axis) = axes.into_iter().find(|a| (self.n - a * self.n.dot(a)).norm() <= AXIS_TOL)
+        else
+        {
+            return self;
+        };
+
+        let n = axis * if self.n.dot(&axis) < 0.0 { -1.0 } else { 1.0 };
+        let x = perpendicular_to(n);    // deterministic in n, and an exact unit axis for this n
+        let y = n.cross(&x);            // already unit: the cross of two orthogonal unit axes
+        // The plane's foot from the world origin. For n = ±Z that is (0, 0, z), so a point's
+        // local coordinates are two of its own world coordinates, exactly.
+        let origin = Point3::origin() + n * n.dot(&(self.origin - Point3::origin()));
+        Self { origin, x, y, n }
     }
 
     fn to_local(&self, p: &Point3<Real>) -> [f64; 2]
@@ -357,6 +408,25 @@ impl Curve3DJs
         Self { frame, geom: Geom::Closed(ct), world_pts: None }
     }
 
+    /// Build a closed curve from a boolean result, normalising it first.
+    ///
+    /// hypercurve's region boolean can return a contour carrying a segment that stands for a
+    /// single point — an intersection landing on an existing vertex comes back with its two
+    /// endpoints a few last bits apart. Stored verbatim, that duplicate travels into every
+    /// consumer while meshup's own accessors hide it: `Curve.segments()` filters edges under
+    /// 1e-7 and `Curve.vertices()` collapses points within 1e-6, so the curve reports four
+    /// clean vertices and offsets to seven.
+    ///
+    /// Normalising here, at the one place boolean output crosses into `Curve3DJs`, keeps the
+    /// duplicate out of the representation entirely rather than asking each consumer to
+    /// tolerate it. [`hcurve::normalize_contour`] returns `None` when there is nothing to fix
+    /// or when the repair cannot be made exact, and the original is kept in both cases.
+    fn from_closed_normalized(frame: Frame, ct: Contour2) -> Self
+    {
+        let ct = hcurve::normalize_contour(&ct).unwrap_or(ct);
+        Self::from_closed(frame, ct)
+    }
+
     /// Build an open curve from a frame and a local curve string.
     fn from_open(frame: Frame, cs: CurveString2) -> Self
     {
@@ -414,6 +484,16 @@ impl Curve3DJs
     fn span_params_of(&self, curve: &Curve2) -> SpanParamsJs
     {
         self.span_params_raw(curve).validated()
+    }
+
+    /// A spline span's exact Bezier decomposition, lifted into world coordinates.
+    fn beziers_of(&self, curve: &Curve2) -> Vec<Vec<[f64; 3]>>
+    {
+        hcurve::spline_bezier_spans(curve.geometry())
+            .unwrap_or_default()
+            .iter()
+            .map(|net| net.iter().map(|p| self.w3p(p)).collect())
+            .collect()
     }
 
     fn span_params_raw(&self, curve: &Curve2) -> SpanParamsJs
@@ -508,6 +588,7 @@ impl Curve3DJs
                 rational: n.weights().iter().any(|w| {
                     w.to_f64_lossy().is_none_or(|v| (v - 1.0).abs() > 1.0e-12)
                 }),
+                beziers: self.beziers_of(curve),
                 start,
                 end,
             },
@@ -518,6 +599,7 @@ impl Curve3DJs
                 knots: reals(s.knots()),
                 weights: vec![1.0; s.control_points().len()],
                 rational: false,
+                beziers: self.beziers_of(curve),
                 start,
                 end,
             },
@@ -537,6 +619,7 @@ impl Curve3DJs
                     rational: b.weights().iter().any(|w| {
                         w.to_f64_lossy().is_none_or(|v| (v - 1.0).abs() > 1.0e-12)
                     }),
+                    beziers: self.beziers_of(curve),
                     start,
                     end,
                 }
@@ -563,7 +646,7 @@ impl Curve3DJs
     {
         let path = self.closed_path()?;
         let sim = target.similarity_from(&self.frame)?;
-        path.transform_similarity(&sim).ok()
+        path.transform_similarity(&sim, &hcurve::policy()).ok().map(hcurve::done)
     }
 
     /// This curve's exact spans, expressed in `target`'s local coordinates.
@@ -573,7 +656,9 @@ impl Curve3DJs
         let spans = self.exact_spans().ok()?;
         let path = hcurve::join_curves(spans).ok()?;
         let sim = target.similarity_from(&self.frame)?;
-        path.transform_similarity(&sim).ok().map(|p| p.curves().to_vec())
+        path.transform_similarity(&sim, &hcurve::policy())
+            .ok()
+            .map(|p| hcurve::done(p).curves().to_vec())
     }
 
     /// This curve's NURBS carrier, when it is exactly one spline span.
@@ -810,6 +895,14 @@ enum SpanParamsJs
         knots: Vec<f64>,
         weights: Vec<f64>,
         rational: bool,
+        /// The span's exact Bezier decomposition: one affine control net per knot interval,
+        /// each of `degree + 1` points. Empty when hypercurve declines it.
+        ///
+        /// Carried alongside the control net rather than instead of it, because the two answer
+        /// different questions: a DXF SPLINE entity wants the authored net and knot vector, and
+        /// a renderer wants Bezier segments it can write as `Q`/`C`. The renderer used to
+        /// derive these itself, by running Boehm knot insertion in f64 on the JavaScript side.
+        beziers: Vec<Vec<[f64; 3]>>,
         start: [f64; 3],
         end: [f64; 3],
     },
@@ -897,7 +990,9 @@ impl Curve3DJs
             nurbs.control_points().to_vec(),
             nurbs.weights().to_vec(),
             nurbs.knots().to_vec(),
+            &hcurve::policy(),
         )
+        .map(hcurve::done)
         .map_err(|e| err(format!("makeInterpolated: {e:?}")))?;
         let path = CurvePath2::try_new(vec![curve])
             .map_err(|e| err(format!("makeInterpolated: {e:?}")))?;
@@ -909,8 +1004,8 @@ impl Curve3DJs
     #[wasm_bindgen(js_name = makeCircle)]
     pub fn make_circle(radius: f64, center: &Point3Js, normal: &Vector3Js) -> Result<Curve3DJs, JsValue>
     {
-        let frame = Frame::from_center_normal(center.inner, normal.inner);
-        let ct = hcurve::circle(0.0, 0.0, radius).map_err(err)?;
+        let (frame, [cx, cy]) = Frame::plane_at(center.inner, normal.inner);
+        let ct = hcurve::circle(cx, cy, radius).map_err(err)?;
         Ok(Curve3DJs::from_closed(frame, ct))
     }
 
@@ -926,8 +1021,8 @@ impl Curve3DJs
         normal: &Vector3Js,
     ) -> Result<Curve3DJs, JsValue>
     {
-        let frame = Frame::from_center_normal(center.inner, normal.inner);
-        let path = hcurve::ellipse(radius_x, radius_y, rotation, 0.0, 0.0).map_err(err)?;
+        let (frame, [cx, cy]) = Frame::plane_at(center.inner, normal.inner);
+        let path = hcurve::ellipse(radius_x, radius_y, rotation, cx, cy).map_err(err)?;
         Ok(Curve3DJs::from_path(frame, path, true))
     }
 
@@ -946,9 +1041,9 @@ impl Curve3DJs
         normal: &Vector3Js,
     ) -> Result<Curve3DJs, JsValue>
     {
-        let frame = Frame::from_center_normal(center.inner, normal.inner);
+        let (frame, [cx, cy]) = Frame::plane_at(center.inner, normal.inner);
         let closed = (end_angle - start_angle).abs() >= std::f64::consts::TAU - 1.0e-9;
-        let path = hcurve::elliptical_arc(radius_x, radius_y, rotation, 0.0, 0.0, start_angle, end_angle)
+        let path = hcurve::elliptical_arc(radius_x, radius_y, rotation, cx, cy, start_angle, end_angle)
             .map_err(err)?;
         Ok(Curve3DJs::from_path(frame, path, closed))
     }
@@ -1051,15 +1146,20 @@ impl Curve3DJs
     /// hypercurve declines (an authored corner it will not blend, or a self-intersecting
     /// offset, which it does not trim), this falls back to offsetting a certified
     /// projection, i.e. the previous behaviour.
+    /// `corner` selects how convex corners are reconnected: `"sharp"` (default) keeps them
+    /// points, `"round"` arcs every one, `"smooth"` mitres but arcs a spike. See
+    /// [`hcurve::CornerStyle`] — it was accepted and discarded by the TypeScript layer until
+    /// this parameter existed to carry it.
     #[wasm_bindgen(js_name = offset)]
-    pub fn offset(&self, distance: f64, tol: Option<f64>) -> Result<Curve3DJs, JsValue>
+    pub fn offset(&self, distance: f64, tol: Option<f64>, corner: Option<String>) -> Result<Curve3DJs, JsValue>
     {
         let q = tess_quality(tol);
+        let style = hcurve::CornerStyle::parse(corner.as_deref());
         let native = match &self.geom
         {
-            Geom::Open(cs) => hcurve::offset_open(cs, distance)
+            Geom::Open(cs) => hcurve::offset_open(cs, distance, style)
                 .map(|off| Curve3DJs::from_open(self.frame.clone(), off)),
-            Geom::Closed(ct) => hcurve::offset_closed(ct, distance)
+            Geom::Closed(ct) => hcurve::offset_closed(ct, distance, style)
                 .map(|off| Curve3DJs::from_closed(self.frame.clone(), off)),
             Geom::Path(pg) => match hcurve::offset_path(&pg.path, distance, PARALLEL_VERIFICATION_TOL)
             {
@@ -1080,7 +1180,10 @@ impl Curve3DJs
             // parallel does not trim) falls back to offsetting its line projection.
             Err(_) if matches!(self.geom, Geom::Path(_)) =>
             {
-                self.to_polyline_curve(&q)?.offset(distance, tol)
+                // The corner style has to travel with the fallback: a caller who asked for
+                // sharp corners must not silently get smooth ones because their curve took the
+                // line-projection route.
+                self.to_polyline_curve(&q)?.offset(distance, tol, corner)
             }
             // Native line/arc geometry gets no such fallback, deliberately. hypercurve
             // certifies exact equidistance when offsetting an arc, so an arc whose centre
@@ -1269,7 +1372,11 @@ impl Curve3DJs
         // Exact reversal for a mixed-family path.
         if let Geom::Path(pg) = &self.geom
         {
-            let rev = pg.path.reversed().map_err(|e| err(format!("reverse: {e:?}")))?;
+            let rev = pg
+                .path
+                .reversed(&hcurve::policy())
+                .map(hcurve::done)
+                .map_err(|e| err(format!("reverse: {e:?}")))?;
             return Ok(Curve3DJs::from_path(self.frame.clone(), rev, pg.closed));
         }
         let segs: Vec<Segment2> = self
@@ -1654,13 +1761,15 @@ impl Curve3DJs
         {
             Geom::Closed(ct) =>
             {
-                let chamfered = chamfer_op(ct, setback, only).map_err(err)?;
-                Ok(Curve3DJs::from_closed(self.frame.clone(), chamfered))
+                let segs = hcurve::chamfer_segments(ct.segments(), setback, true, only).map_err(err)?;
+                let c = Contour2::try_new(segs).map_err(|e| err(format!("Curve3DJs::chamfer: {e:?}")))?;
+                Ok(Curve3DJs::from_closed(self.frame.clone(), c))
             }
             Geom::Open(cs) =>
             {
-                let chamfered = chamfer_op(cs, setback, only).map_err(err)?;
-                Ok(Curve3DJs::from_open(self.frame.clone(), chamfered))
+                let segs = hcurve::chamfer_segments(cs.segments(), setback, false, only).map_err(err)?;
+                let c = CurveString2::try_new(segs).map_err(|e| err(format!("Curve3DJs::chamfer: {e:?}")))?;
+                Ok(Curve3DJs::from_open(self.frame.clone(), c))
             }
             // Chamfer the line approximation of an exact conic path.
             Geom::Path(_) => self.to_line_curve()?.chamfer(setback, at),
@@ -1723,6 +1832,286 @@ impl Curve3DJs
     /// `side` is `"start"`, `"end"` or `"both"`. The extension is a straight span appended
     /// to the exact geometry, so the original spans survive — this used to rebuild the whole
     /// curve as a polyline through `controlPoints()`, collapsing any arc to a chord.
+    /// The straight span that continues `boundary` by `length`, beyond its end or before its
+    /// start.
+    ///
+    /// A line span is continued exactly, from its own delta, so the two are certifiably
+    /// collinear and the merge that follows can retire the old endpoint. Anything else falls
+    /// back to the curve's world-space endpoint tangent, which is the only direction available
+    /// for an arc or a Bezier and is collinear with nothing by construction anyway.
+    fn extension_of(&self, boundary: &Curve2, length: f64, at_end: bool)
+        -> Result<LineSeg2, JsValue>
+    {
+        if let Some(native) = match boundary.geometry()
+        {
+            CurveGeometry2::Line(l) =>
+                hcurve::extend_line(&Segment2::Line(l.clone()), length, at_end),
+            _ => None,
+        }
+        {
+            return Ok(native);
+        }
+
+        let t = self.tangent_at(if at_end { 1.0 } else { 0.0 })?;
+        let anchor = if at_end { boundary.end() } else { boundary.start() }.clone();
+        let world = self.frame.to_world(seg_local(&anchor));
+        let dir = Vector3::new(t.inner.x, t.inner.y, t.inner.z) * (length as Real);
+        let tip = if at_end { world + dir } else { world - dir };
+        let local = self.frame.to_local(&tip);
+        let far = hcurve::point(local[0], local[1]).map_err(err)?;
+        let (a, b) = if at_end { (anchor, far) } else { (far, anchor) };
+        LineSeg2::try_new(a, b).map_err(|e| err(format!("extend: {e:?}")))
+    }
+
+    /// The line/arc segments of another curve, expressed EXACTLY in this curve's frame.
+    ///
+    /// `spans_in_frame` maps the other curve through an exact similarity, so the segments come
+    /// back with their `Real` coordinates intact — no tessellation, no f64 round trip. `None`
+    /// when the two are not coplanar, or when the other curve is not line/arc geometry (a
+    /// spline has no `Segment2` form; those callers keep their sampled route).
+    fn segments_in_frame(&self, other: &Curve3DJs) -> Option<CurveString2>
+    {
+        let mapped = other.spans_in_frame(&self.frame).and_then(|spans| {
+            let segments = spans
+                .iter()
+                .map(|span| match span.geometry()
+                {
+                    CurveGeometry2::Line(l) => Some(Segment2::Line(l.clone())),
+                    CurveGeometry2::CircularArc(a) => Some(Segment2::Arc(a.clone())),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            CurveString2::try_new(segments).ok()
+        });
+        mapped.or_else(|| self.straight_segments_via_world(other))
+    }
+
+    /// Express a STRAIGHT target in this curve's frame by way of world coordinates.
+    ///
+    /// A straight line lies in infinitely many planes and each curve fits its own: a line held at
+    /// both x = 0 and y = 200 is fitted to the y-plane, while the curve being extended onto it
+    /// sits in the x-plane. The two frames are then not related by a planar similarity at all, so
+    /// `spans_in_frame` declines — correctly, as far as it can tell — even though every point of
+    /// the target lies squarely in this curve's plane. Going through world coordinates asks the
+    /// question that actually matters: are the target's points in MY plane? For a canonical frame
+    /// that mapping is exact, so the extension stays exact too.
+    ///
+    /// Lines only. An arc is never planar-ambiguous — its plane is the one it curves in — so a
+    /// frame mismatch there is a real one, and declining is the right answer.
+    fn straight_segments_via_world(&self, other: &Curve3DJs) -> Option<CurveString2>
+    {
+        const PLANE_TOL: Real = 1.0e-9;
+
+        let native = other.native_segments()?;
+        let in_my_plane = |p: &Point3<Real>| {
+            (p - self.frame.origin).dot(&self.frame.n).abs() <= PLANE_TOL
+        };
+
+        let mut segments = Vec::with_capacity(native.len());
+        for segment in native
+        {
+            let Segment2::Line(line) = segment
+            else
+            {
+                return None;
+            };
+            let a = other.frame.to_world(seg_local(line.start()));
+            let b = other.frame.to_world(seg_local(line.end()));
+            if !in_my_plane(&a) || !in_my_plane(&b)
+            {
+                return None;
+            }
+            let (pa, pb) = (self.frame.to_local(&a), self.frame.to_local(&b));
+            segments.push(Segment2::Line(
+                LineSeg2::try_new(
+                    hcurve::point(pa[0], pa[1]).ok()?,
+                    hcurve::point(pb[0], pb[1]).ok()?,
+                )
+                .ok()?,
+            ));
+        }
+        CurveString2::try_new(segments).ok()
+    }
+
+    /// This curve and a partner expressed in ONE frame, together with the frame they are in.
+    ///
+    /// Normally that is this curve's own frame, with the partner mapped into it. When the partner
+    /// cannot be mapped there, the pair is tried the other way round — this curve in the
+    /// PARTNER's frame — because the obstacle is usually not that they are non-coplanar but that
+    /// one of them is planar-ambiguous. A straight line lies in infinitely many planes and is
+    /// fitted to one of them; a line along X is fitted to XY (its z is constant) and then cannot
+    /// take an XZ elevation as a cutter, even though the line lies squarely in it. Working in the
+    /// cutter's frame instead costs nothing: the result is the same geometry, carried in a frame
+    /// that both curves are exact in.
+    fn in_one_frame(&self, other: &Curve3DJs, what: &str)
+        -> Result<(Frame, CurveString2, CurveString2), JsValue>
+    {
+        let own = |c: &Curve3DJs| {
+            c.native_segments()
+                .and_then(|segments| CurveString2::try_new(segments.to_vec()).ok())
+        };
+
+        if let (Some(mine), Some(theirs)) = (own(self), self.segments_in_frame(other))
+        {
+            return Ok((self.frame.clone(), mine, theirs));
+        }
+        if let (Some(mine), Some(theirs)) = (other.segments_in_frame(self), own(other))
+        {
+            return Ok((other.frame.clone(), mine, theirs));
+        }
+        Err(err(format!("Curve3DJs::{what}(): the two are not coplanar line/arc geometry")))
+    }
+
+    /// A probe that continues this curve's end segment along its OWN exact support, far enough
+    /// to reach anything nearby. Built by hypercurve from the segment's exact delta, so the
+    /// probe's carrier line IS the segment's carrier line — which is what makes a crossing
+    /// found on the probe a point the segment itself can be extended to.
+    fn support_probe(&self, native: &[Segment2], at_end: bool, reach: f64)
+        -> Result<CurveString2, JsValue>
+    {
+        let index = if at_end { native.len().saturating_sub(1) } else { 0 };
+        let segment = native
+            .get(index)
+            .ok_or_else(|| JsValue::from_str("Curve3DJs::extendToCurve(): empty curve"))?;
+        let probe = hcurve::extend_line(segment, reach, at_end).ok_or_else(|| {
+            JsValue::from_str(
+                "Curve3DJs::extendToCurve(): the end to extend is an arc, which has no straight continuation",
+            )
+        })?;
+        CurveString2::try_new(vec![Segment2::Line(probe)])
+            .map_err(|e| err(format!("Curve3DJs::extendToCurve(): probe failed ({e:?})")))
+    }
+
+    /// Extend this open curve at `side` until it ends EXACTLY on `other`.
+    ///
+    /// The whole operation stays inside hypercurve's exact arithmetic: the crossing is found
+    /// exactly, kept as a `Point2` with `Real` coordinates, and handed to
+    /// `extend_endpoint_to_point`, which rebuilds the end segment with that point verbatim as
+    /// its endpoint. The result therefore *touches* the other curve — not to 1e-6, not to
+    /// 1e-12, but exactly.
+    ///
+    /// That distinction is the whole point. Measuring the reach in JavaScript and calling
+    /// `extend(length)` lands the endpoint `anchor + direction * length`, which misses the
+    /// crossing by a float residue; and since every boolean here is exact, a curve that stops a
+    /// residue short of the shape it was extended to does not meet it at all — a cut along the
+    /// two of them leaves a hair-thin bridge rather than separating the piece.
+    ///
+    /// Errors (so the caller can fall back) when: the curve is closed, either side is not
+    /// line/arc geometry, the two are not coplanar, the end segment is an arc, or nothing
+    /// crosses the probe ahead of the endpoint.
+    #[wasm_bindgen(js_name = extendToCurve)]
+    pub fn extend_to_curve(&self, other: &Curve3DJs, side: &str) -> Result<Curve3DJs, JsValue>
+    {
+        if self.closed()
+        {
+            return Err(JsValue::from_str("Curve3DJs::extendToCurve(): cannot extend a closed curve"));
+        }
+        let at_end = match side
+        {
+            "end" => true,
+            "start" => false,
+            other => return Err(err(format!("Curve3DJs::extendToCurve(): unknown side '{other}'"))),
+        };
+
+        let (frame, cs, target) = self.in_one_frame(other, "extendToCurve")?;
+        let native = cs.segments();
+
+        // Long enough to reach past the target, on the same rule the sampled route used.
+        let reach = hcurve::length_open(&cs, &metric_quality()).map_err(err)? * 10.0
+            + hcurve::length_open(&target, &metric_quality()).map_err(err)? * 2.0
+            + 1000.0;
+        let probe = self.support_probe(native, at_end, reach)?;
+
+        let anchor = if at_end
+        {
+            native.last().map(Segment2::end)
+        }
+        else
+        {
+            native.first().map(Segment2::start)
+        }
+        .ok_or_else(|| JsValue::from_str("Curve3DJs::extendToCurve(): empty curve"))?
+        .clone();
+
+        // Nearest crossing ahead of the endpoint. Every hit on the probe is ahead of it by
+        // construction (the probe starts at the endpoint and runs outward), so only a hit AT
+        // the endpoint — the curve already touching — is dropped. Ordering is a choice, not a
+        // coordinate: comparing in f64 costs the answer nothing.
+        let hits = hcurve::intersect_open_exact(&probe, &target).map_err(err)?;
+        let nearest = hits
+            .into_iter()
+            .filter_map(|hit| {
+                let d = hit.distance_squared(&anchor).to_f64_lossy()?;
+                (d > 0.0).then_some((d, hit))
+            })
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(_, hit)| hit)
+            .ok_or_else(|| {
+                JsValue::from_str("Curve3DJs::extendToCurve(): nothing crosses ahead of that end")
+            })?;
+
+        let extended = hcurve::extend_to_point(&cs, nearest, at_end).map_err(err)?;
+        Ok(Curve3DJs::from_open(frame, extended))
+    }
+
+    /// Split this open curve at every point where `cutter` crosses it, EXACTLY.
+    ///
+    /// The pieces are trimmed with hypercurve's `trim_between_points` between the curve's own
+    /// endpoints and the exact crossings, so a piece ends precisely on the cutter instead of at
+    /// the nearest sampled arc-length parameter. (`trim(t0, t1)` cannot do this: it maps a
+    /// fraction of arc length onto f64 parameters, and the arc length of an arc is
+    /// transcendental — there is no exact fraction to trim at.)
+    ///
+    /// Returns the pieces in order along the curve; a single piece means nothing crossed.
+    #[wasm_bindgen(js_name = splitAtCurve)]
+    pub fn split_at_curve(&self, cutter: &Curve3DJs) -> Result<Vec<Curve3DJs>, JsValue>
+    {
+        if self.closed()
+        {
+            return Err(JsValue::from_str("Curve3DJs::splitAtCurve(): cannot split a closed curve"));
+        }
+        let (frame, cs, knife) = self.in_one_frame(cutter, "splitAtCurve")?;
+        let native = cs.segments();
+
+        let start = native.first().map(Segment2::start).expect("non-empty").clone();
+        let end = native.last().map(Segment2::end).expect("non-empty").clone();
+
+        // Order the crossings along the curve. The parameter is only used to sort them; the
+        // points themselves stay exact, and it is those that the trims cut at.
+        let mut hits: Vec<(f64, Point2)> = hcurve::intersect_open_exact(&cs, &knife)
+            .map_err(err)?
+            .into_iter()
+            .filter_map(|hit| {
+                let t = hcurve::param_closest_to_point(native, &hit).ok()?;
+                (t > 0.0 && t < 1.0).then_some((t, hit))
+            })
+            .collect();
+        hits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        hits.dedup_by(|a, b| (a.0 - b.0).abs() <= 1.0e-12);
+
+        let mut cuts: Vec<Point2> = Vec::with_capacity(hits.len() + 2);
+        cuts.push(start);
+        cuts.extend(hits.into_iter().map(|(_, hit)| hit));
+        cuts.push(end);
+
+        let mut pieces = Vec::with_capacity(cuts.len() - 1);
+        for pair in cuts.windows(2)
+        {
+            match hcurve::trim_between_points(&cs, &pair[0], &pair[1])
+            {
+                Ok(piece) => pieces.push(Curve3DJs::from_open(frame.clone(), piece)),
+                // A zero-length window (two crossings at one point) is not a piece.
+                Err(_) =>
+                {}
+            }
+        }
+        if pieces.is_empty()
+        {
+            return Err(JsValue::from_str("Curve3DJs::splitAtCurve(): no piece survived the split"));
+        }
+        Ok(pieces)
+    }
+
     #[wasm_bindgen(js_name = extend)]
     pub fn extend(&self, length: f64, side: &str) -> Result<Curve3DJs, JsValue>
     {
@@ -1739,35 +2128,22 @@ impl Curve3DJs
         };
 
         let mut spans = self.exact_spans().map_err(err)?;
-        // Tangents come from the world-space endpoints, then drop into local coordinates.
+        // Only the TIP goes through world coordinates. The extension's other end is the exact
+        // point the curve already ends at, reused verbatim — round-tripping it through
+        // `to_world` and back left a sub-picometre gap that hypercurve could not certify as
+        // zero, so `join_curves` bridged it with a connector line and every extended curve
+        // carried a degenerate span. Nothing noticed, because the caller's collinear merge was
+        // a TypeScript pass that dropped coincident vertices as a side effect.
         if at_end
         {
-            let t = self.tangent_at(1.0)?;
-            let end = self.frame.to_world(seg_local(spans.last().map_or_else(
-                || unreachable!("non-empty by construction"),
-                |c| c.end(),
-            )));
-            let tip = end + Vector3::new(t.inner.x, t.inner.y, t.inner.z) * (length as Real);
-            let seg = LineSeg2::try_new(
-                hcurve::point(self.frame.to_local(&end)[0], self.frame.to_local(&end)[1]).map_err(err)?,
-                hcurve::point(self.frame.to_local(&tip)[0], self.frame.to_local(&tip)[1]).map_err(err)?,
-            )
-            .map_err(|e| err(format!("extend: {e:?}")))?;
+            let last = spans.last().map_or_else(|| unreachable!("non-empty"), Clone::clone);
+            let seg = self.extension_of(&last, length, true)?;
             spans.push(Curve2::from(seg));
         }
         if at_start
         {
-            let t = self.tangent_at(0.0)?;
-            let start = self.frame.to_world(seg_local(spans.first().map_or_else(
-                || unreachable!("non-empty by construction"),
-                |c| c.start(),
-            )));
-            let tip = start - Vector3::new(t.inner.x, t.inner.y, t.inner.z) * (length as Real);
-            let seg = LineSeg2::try_new(
-                hcurve::point(self.frame.to_local(&tip)[0], self.frame.to_local(&tip)[1]).map_err(err)?,
-                hcurve::point(self.frame.to_local(&start)[0], self.frame.to_local(&start)[1]).map_err(err)?,
-            )
-            .map_err(|e| err(format!("extend: {e:?}")))?;
+            let first = spans.first().map_or_else(|| unreachable!("non-empty"), Clone::clone);
+            let seg = self.extension_of(&first, length, false)?;
             spans.insert(0, Curve2::from(seg));
         }
         let path = hcurve::join_curves(spans).map_err(err)?;
@@ -1875,6 +2251,51 @@ impl Curve3DJs
         Curve3DJs { frame: self.frame.clone(), geom: self.geom.clone(), world_pts: self.world_pts.clone() }
     }
 
+    /// Merge runs of adjacent, same-direction line segments into one.
+    ///
+    /// Collinearity is certified exactly by hypercurve, which also handles the closed seam and
+    /// leaves arcs and deliberate collinear reversals alone. An exact path has no native
+    /// segment topology to merge, so it is returned unchanged.
+    #[wasm_bindgen(js_name = mergeCollinear)]
+    pub fn merge_collinear(&self) -> Result<Curve3DJs, JsValue>
+    {
+        match &self.geom
+        {
+            Geom::Closed(ct) =>
+            {
+                let segs = hcurve::merge_collinear(ct.segments(), true).map_err(err)?;
+                let c = Contour2::try_new(segs)
+                    .map_err(|e| err(format!("Curve3DJs::mergeCollinear: {e:?}")))?;
+                Ok(Curve3DJs::from_closed(self.frame.clone(), c))
+            }
+            Geom::Open(cs) =>
+            {
+                let segs = hcurve::merge_collinear(cs.segments(), false).map_err(err)?;
+                let c = CurveString2::try_new(segs)
+                    .map_err(|e| err(format!("Curve3DJs::mergeCollinear: {e:?}")))?;
+                Ok(Curve3DJs::from_open(self.frame.clone(), c))
+            }
+            Geom::Path(_) => Ok(self.clone_js()),
+        }
+    }
+
+    /// Whether the curve crosses itself away from its shared vertices.
+    ///
+    /// Decided exactly by hypercurve, with the predicates its intersection kernel uses and an
+    /// AABB prefilter — not by sampling. An exact path (conic / Bezier / spline) has no native
+    /// self-contact query, so it is answered on its certified line projection, which is what
+    /// the caller was doing for every curve.
+    #[wasm_bindgen(js_name = selfIntersects)]
+    pub fn self_intersects(&self, tol: Option<f64>) -> Result<bool, JsValue>
+    {
+        match &self.geom
+        {
+            Geom::Closed(ct) => hcurve::self_intersects(ct.segments(), true).map_err(err),
+            Geom::Open(cs) => hcurve::self_intersects(cs.segments(), false).map_err(err),
+            Geom::Path(_) => self.to_polyline_curve(&tess_quality(tol))?.self_intersects(tol),
+        }
+    }
+
     /// Whether the geometry is curved anywhere — a circular arc, or any conic / Bezier /
     /// spline span. Named for the line/arc case it was introduced for; on an exact path it
     /// answers the same underlying question ("is this more than straight line work?"), which
@@ -1958,7 +2379,8 @@ impl Curve3DJs
             {
                 let path = pg
                     .path
-                    .transform_similarity(&sim)
+                    .transform_similarity(&sim, &hcurve::policy())
+                    .map(hcurve::done)
                     .map_err(|e| err(format!("Curve3DJs::scale: {e:?}")))?;
                 Geom::Path(PathGeom::new(path, pg.closed))
             }
@@ -2078,11 +2500,11 @@ impl Curve3DJs
         Ok(regions
             .into_iter()
             .map(|nr| {
-                let exterior = Curve3DJs::from_closed(self.frame.clone(), nr.exterior);
+                let exterior = Curve3DJs::from_closed_normalized(self.frame.clone(), nr.exterior);
                 let holes = nr
                     .holes
                     .into_iter()
-                    .map(|h| Curve3DJs::from_closed(self.frame.clone(), h))
+                    .map(|h| Curve3DJs::from_closed_normalized(self.frame.clone(), h))
                     .collect();
                 BooleanRegion3DJs { exterior, holes }
             })
@@ -2181,126 +2603,6 @@ fn err(e: String) -> JsValue
     JsValue::from_str(&e)
 }
 
-/// A contour/curve-string that supports hypercurve's exact per-vertex chamfer.
-/// Abstracts over the closed ([`Contour2`]) and open ([`CurveString2`]) cases,
-/// which share the geometry but differ in vertex range (open curves have two free
-/// endpoints that are not corners) and result type.
-trait CornerTarget: Clone
-{
-    fn corner_segments(&self) -> &[Segment2];
-    /// Closed targets treat every vertex as a corner and wrap the previous
-    /// segment; open targets only chamfer interior vertices (`1..segments`) and
-    /// never wrap.
-    fn is_closed_corner_target() -> bool;
-    fn chamfer_corner(&self, vi: usize, tp: &Point2, tn: &Point2, pol: &CurvePolicy) -> Option<Self>;
-}
-
-impl CornerTarget for Contour2
-{
-    fn corner_segments(&self) -> &[Segment2] { self.segments() }
-    fn is_closed_corner_target() -> bool { true }
-    fn chamfer_corner(&self, vi: usize, tp: &Point2, tn: &Point2, pol: &CurvePolicy) -> Option<Self>
-    {
-        self.chamfer_vertex_by_points(vi, tp, tn, pol)
-            .ok()
-            .and_then(|r| hcurve::decided(r).ok())
-    }
-}
-
-impl CornerTarget for CurveString2
-{
-    fn corner_segments(&self) -> &[Segment2] { self.segments() }
-    fn is_closed_corner_target() -> bool { false }
-    fn chamfer_corner(&self, vi: usize, tp: &Point2, tn: &Point2, pol: &CurvePolicy) -> Option<Self>
-    {
-        self.chamfer_vertex_by_points(vi, tp, tn, pol)
-            .ok()
-            .and_then(|r| hcurve::decided(r).ok())
-    }
-}
-
-/// Chamfer (bevel) every interior line–line corner of a contour/curve-string by
-/// `amount` (setback along each edge). Corners where it does not fit, or that
-/// involve an arc, are left unchanged. Uses hypercurve's exact vertex chamfer,
-/// computing the tangent points here. Works for closed contours (every vertex) and
-/// open curve strings (interior vertices only — the two free endpoints are not
-/// corners). (Fillets use [`hcurve::fillet_segments`] instead — a `from_bulge` arc
-/// avoids the exactly-equidistant-center that hypercurve's vertex fillet demands.)
-/// `only`: when `Some`, restrict chamfering to those corner (vertex) indices; every other
-/// corner is left sharp. `None` chamfers every fitting corner. An empty slice is a no-op.
-fn chamfer_op<T: CornerTarget>(target: &T, amount: f64, only: Option<&[usize]>) -> Result<T, String>
-{
-    if !(amount.is_finite() && amount > 0.0)
-    {
-        return Ok(target.clone());
-    }
-    if only.is_some_and(|sel| sel.is_empty())
-    {
-        return Ok(target.clone());
-    }
-    let pol = hcurve::boolean_policy();
-    let mut cur = target.clone();
-    let n = cur.corner_segments().len();
-    let closed = T::is_closed_corner_target();
-
-    let norm = |v: (f64, f64)| -> (f64, f64) {
-        let m = (v.0 * v.0 + v.1 * v.1).sqrt();
-        if m > 1e-12 { (v.0 / m, v.1 / m) } else { (0.0, 0.0) }
-    };
-    let dot = |a: (f64, f64), b: (f64, f64)| a.0 * b.0 + a.1 * b.1;
-    let dist = |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
-    let l = |p: &Point2| seg_local(p);
-
-    // Vertex vi is the junction of segment `vi-1` and segment `vi`. Closed: every
-    // vertex `0..n` (vertex 0 wraps to the last segment). Open: interior vertices
-    // `1..n` only (endpoints are not corners). Process high -> low so chamfering one
-    // corner does not shift lower, unprocessed indices.
-    let first = if closed { 0 } else { 1 };
-    for vi in (first..n).rev()
-    {
-        if only.is_some_and(|sel| !sel.contains(&vi))
-        {
-            continue; // not one of the requested corners — leave it sharp
-        }
-        let segs = cur.corner_segments();
-        let m = segs.len();
-        if vi >= m
-        {
-            continue;
-        }
-        let prev_seg = &segs[if closed { (vi + m - 1) % m } else { vi - 1 }];
-        let cur_seg = &segs[vi];
-        if !matches!(prev_seg, Segment2::Line(_)) || !matches!(cur_seg, Segment2::Line(_))
-        {
-            continue; // only line–line corners
-        }
-        let v = { let p = cur_seg.start(); (l(p)[0], l(p)[1]) };
-        let p = { let q = prev_seg.start(); (l(q)[0], l(q)[1]) };
-        let q = { let e = cur_seg.end(); (l(e)[0], l(e)[1]) };
-
-        let u = norm((p.0 - v.0, p.1 - v.1)); // toward previous vertex
-        let w = norm((q.0 - v.0, q.1 - v.1)); // toward next vertex
-        let half = dot(u, w).clamp(-1.0, 1.0).acos() / 2.0; // half interior angle
-        if half < 1.0e-3 || half > std::f64::consts::FRAC_PI_2 - 1.0e-6
-        {
-            continue; // straight / degenerate
-        }
-
-        let d = amount;
-        if d > dist(p, v) - 1e-9 || d > dist(v, q) - 1e-9
-        {
-            continue;
-        }
-        let tp = hcurve::point(v.0 + u.0 * d, v.1 + u.1 * d)?;
-        let tn = hcurve::point(v.0 + w.0 * d, v.1 + w.1 * d)?;
-        if let Some(c) = cur.chamfer_corner(vi, &tp, &tn, &pol)
-        {
-            cur = c;
-        }
-    }
-    Ok(cur)
-}
-
 fn parse_op(op: &str) -> Result<BooleanOp, JsValue>
 {
     match op
@@ -2393,4 +2695,27 @@ pub fn import_dxf_curves(bytes: &[u8]) -> Result<CurveImportJs, JsValue>
     let (imported, warnings) = crate::io::dxf_curves::import_dxf_curves(bytes)
         .map_err(|e| err(format!("DXF import failed: {e:?}")))?;
     Ok(CurveImportJs { curves: imported_to_curves(imported), warnings })
+}
+
+/// Import a DXF drawing as **flat entity records** — the drawing, not geometry to model with.
+///
+/// The counterpart to [`import_dxf_curves`], which answers "what curves are in this file".
+/// This one answers "what is in this file at all": every entity keeps its layer, colour,
+/// linetype and extrusion, an ARC stays a centre/radius/angles, a polyline keeps its bulges,
+/// and INSERTs are left unexpanded against the block table. Interpreting any of it — block
+/// expansion, OCS, unit guessing — is the caller's job, which is the point: those are the
+/// awkward parts, and they are better iterated on in TypeScript against real files.
+///
+/// Returned as a **JSON string**, not through `serde-wasm-bindgen`. That serializer silently
+/// drops `#[serde(flatten)]` and internally-tagged enums, both of which `DxfDoc` uses for its
+/// entity kinds, so entities arrived as `{}`. `serde_json` + `JSON.parse` keeps them.
+///
+/// Coordinates are exactly as the file has them: DXF's Y-up frame, in the file's own units.
+#[cfg(feature = "dxf-io")]
+#[wasm_bindgen(js_name = importDxfDocument)]
+pub fn import_dxf_document(bytes: &[u8]) -> Result<String, JsValue>
+{
+    let doc = crate::io::dxf_entities::import_dxf_entities(bytes)
+        .map_err(|e| err(format!("DXF import failed: {e:?}")))?;
+    serde_json::to_string(&doc).map_err(|e| err(format!("DXF document serialisation failed: {e}")))
 }

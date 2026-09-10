@@ -299,7 +299,8 @@ fn spline_curve(spline: &dxf::entities::Spline) -> Result<CurvePath2, String> {
         ));
     }
 
-    let nurbs = NurbsCurve2::try_new(degree, ctrl, weights, knots)
+    let nurbs = NurbsCurve2::try_new(degree, ctrl, weights, knots, &hcurve::policy())
+        .map(hcurve::done)
         .map_err(|e| format!("NURBS construction failed ({e:?})"))?;
     CurvePath2::try_new(vec![nurbs.into()]).map_err(|e| format!("spline path failed ({e:?})"))
 }
@@ -378,8 +379,8 @@ fn push_path(
         return;
     }
     match xform.to_similarity() {
-        Ok(sim) => match path.transform_similarity(&sim) {
-            Ok(t) => out.push(ImportedCurve::Path(t, closed)),
+        Ok(sim) => match path.transform_similarity(&sim, &hcurve::policy()) {
+            Ok(t) => out.push(ImportedCurve::Path(hcurve::done(t), closed)),
             Err(e) => ctx.notes.push(format!("skipped a curve: transform failed ({e:?})")),
         },
         Err(e) => ctx.notes.push(format!("skipped a curve: {e}")),

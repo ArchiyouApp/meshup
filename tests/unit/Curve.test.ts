@@ -2,6 +2,7 @@ import { beforeAll, describe, it, expect, vi } from 'vitest';
 import { initAsync, ShapeCollection, SceneNode } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { Point } from '../../src/Point';
+import { Vertex } from '../../src/Vertex';
 import { Polygon } from '../../src/Polygon';
 import { Mesh } from '../../src/Mesh';
 import { save } from '../../src/utils';
@@ -676,6 +677,23 @@ describe('Curve.selfIntersecting()', () =>
     {
         expect(Curve.Line([0, 0, 0], [10, 0, 10]).selfIntersecting()).toBe(false);
     });
+
+    it('sees an arc that crosses a leg, not just the chord through it', () =>
+    {
+        // The arc bows to y = 10, over the leg at y = 5 that closes the shape; its chord from
+        // (0,0) to (20,0) misses that leg entirely. Decided from the arc itself — the answer
+        // used to depend on whether a tessellation vertex happened to land past the leg.
+        const over = Curve.fromData({ type: 'Path', d: 'M0 0 A10 10 0 0 0 20 0 L20 5 L-5 5 Z' });
+        expect(over.inner().hasArcs()).toBe(true);
+        expect(over.selfIntersecting()).toBe(true);
+    });
+
+    it('leaves an arc that stays clear of its own legs alone', () =>
+    {
+        const clear = Curve.fromData({ type: 'Path', d: 'M0 0 A10 10 0 0 0 20 0 L20 -5 L-5 -5 Z' });
+        expect(clear.inner().hasArcs()).toBe(true);
+        expect(clear.selfIntersecting()).toBe(false);
+    });
 });
 
 describe('Curve.union()', () =>
@@ -932,6 +950,127 @@ describe('Curve.cutoffBy()', () =>
         expect(Math.abs(res.bbox()!.minY())).toBeLessThan(1e-6); // stays in the XZ plane
     });
 
+    /*  Regression: cutting a CLOSED curve by a CLOSED one never compared the two pieces. The
+        intersection (the part inside the cutter) was handed back as "the biggest part" and the
+        difference as "the smallest", so the pair was inverted whenever the cutter covered less
+        than half the shape — which is the normal case. A post cut by the diagonal crossing its
+        top corner came back as the small corner overlap instead of the post below it.
+        Mesh.cutoffBy(), Polygon.cutoffBy() and brep's Shape.cutoffBy() all keep the largest of
+        the pieces they split into; this now does too. */
+    it('keeps the bigger of the two parts when the cutter is a closed region', () =>
+    {
+        const post = () => Curve.RectBetween([0, 0, 0], [100, 0, 2000]);     // area 200000, XZ
+        const diagonal = Curve.RectBetween([-50, 0, 1800], [400, 0, 2100]);  // overlaps the top 200
+
+        const kept = post().cutoffBy(diagonal) as Curve;
+        expect(kept.area()).toBeCloseTo(180000, 3);     // the post below the diagonal
+        expect(kept.bbox()!.maxZ()).toBeCloseTo(1800, 6);
+
+        const cut = post().cutoffBy(diagonal, true) as Curve;
+        expect(cut.area()).toBeCloseTo(20000, 3);       // the corner the diagonal covers
+        expect(cut.bbox()!.minZ()).toBeCloseTo(1800, 6);
+
+        expect(kept.area()! + cut.area()!).toBeCloseTo(200000, 3);
+    });
+
+    /*  Regression: two shapes that SHARE an edge — a post whose top is the roof line the diagonal
+        sits on — make the region engine emit a sliver along that edge: a path that runs out and
+        back, length 376, area 0.00008. It came back as an extra piece of the cut, and as the FIRST
+        one, so `post.cutoffBy(diagonal).first()` handed a script a curve enclosing nothing. */
+    it('drops the no-area sliver a boolean leaves along a shared edge', () =>
+    {
+        // The URBENT knee, from the script it was found in: a post whose top edge IS the roof
+        // line, cut by the diagonal built on that same line. The post − diagonal difference came
+        // back as TWO regions: the post below the diagonal (area 628446) and a sliver along the
+        // shared edge (length 376, area 0.00008) — which, being first, is what `.first()` gave.
+        const SPAN = 5436, HEIGHT = 3087, RIDGE = 0.25, WALL_TOP = 2263, BEAM_W = 150;
+        const slopeRatio = HEIGHT / ((1 - RIDGE) * SPAN);
+        const startHeight = HEIGHT - RIDGE * SPAN * slopeRatio;
+
+        const roofLine = Curve.Polyline(
+            [0, 0, startHeight],
+            [SPAN * RIDGE, 0, startHeight + RIDGE * SPAN * slopeRatio],
+            [SPAN, 0, startHeight + RIDGE * SPAN * slopeRatio - (1 - RIDGE) * SPAN * slopeRatio])
+            .translate(0, 0, WALL_TOP);
+        const roofLeft = roofLine.edges().first() as Curve;
+        const wallLeft = Curve.Line([0, 0, 0], roofLine.start());
+
+        const post = wallLeft.copy().move(BEAM_W).extendTo(roofLeft).connect(wallLeft);
+        const diagonal = roofLeft.copy()
+            .move(roofLeft.direction().normalize().rotateY(90).scale(BEAM_W))
+            .extendTo(wallLeft).connect(roofLeft);
+
+        const cut = post.copy().cutoffBy(diagonal);
+
+        expect(cut).toBeInstanceOf(Curve);                  // ONE piece, not the piece + a sliver
+        expect((cut as Curve).area()).toBeCloseTo(628446, 0);
+        // and it is a real region, not a fold: a quarter of its perimeter squared is the same
+        // order as its area
+        expect((cut as Curve).area()! / ((cut as Curve).length() / 4) ** 2).toBeGreaterThan(0.1);
+    });
+
+    /*  Regression: a cutter crossing the closed Curve at its SEAM — the vertex it starts and
+        ends at — left the Curve uncut. The seam puts one crossing at param d0, so one of the
+        two arcs making up the second region spans nothing, and trim() answers an empty window
+        with a copy of the whole curve. That region came back as the entire boundary plus the
+        corner, measured BIGGER than the region it was cut from, and won "keep the biggest
+        part". The URBENT sloped-roof case: the ridge post is built up to roofLine.end(), so
+        its top corner is exactly where the cutting roof line stops. */
+    it('cuts a closed Curve whose seam vertex is where the cutter ends', () =>
+    {
+        const SPAN = 4000, HEIGHT = 2000, WALL = 2500, BEAM_W = 200;
+        const roofLine = Curve.Line([0, 0, 0], [SPAN, 0, HEIGHT]).translate(0, 0, WALL);
+        // The post's top corner IS roofLine.end(), and connect() makes it the seam
+        const wallRight = Curve.Line([SPAN, 0, 0], roofLine.end());
+        const post = wallRight.copy().move(-BEAM_W).extendTo(roofLine).connect(wallRight);
+        expect(post.area()).toBeCloseTo(BEAM_W * (WALL + HEIGHT), 3);   // 900000, uncut
+
+        const cut = post.copy().cutoffBy(roofLine) as Curve;
+
+        expect(cut).toBeInstanceOf(Curve);
+        expect(cut.isClosed()).toBe(true);
+        // the corner above the roof line (a 200 x 100 triangle) is gone
+        expect(cut.area()).toBeCloseTo(900000 - 10000, 3);
+        expect(cut.vertices().length).toBe(4);
+        // its top now follows the roof line: the inner side stops 100 below the ridge
+        expect(cut.bbox()!.maxZ()).toBeCloseTo(WALL + HEIGHT, 6);
+        expect((post.copy().cutoffBy(roofLine, true) as Curve).area()).toBeCloseTo(10000, 3);
+    });
+
+    it('keeps a thin but REAL overlap', () =>
+    {
+        // 0.001 thick over 400 long: the degeneracy test is a scale-free area/perimeter ratio,
+        // so this survives (ratio 1e-5) where the boolean noise above (ratio 1e-9) does not
+        const plate = Curve.RectBetween([0, 0, 0], [400, 0, 200]);
+        const overlap = plate.copy().intersection(Curve.RectBetween([0, 0, 199.999], [400, 0, 500])) as Curve;
+
+        expect(overlap).toBeInstanceOf(Curve);
+        expect(overlap.area()).toBeCloseTo(0.4, 3);
+    });
+
+    it('reports two shapes that only touch along an edge as sharing nothing', () =>
+    {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const below = Curve.RectBetween([0, 0, 0], [100, 0, 100]);
+        const above = Curve.RectBetween([0, 0, 100], [100, 0, 200]);   // shares the z=100 edge
+
+        expect(below.copy().intersection(above)).toEqual(null);
+        warn.mockRestore();
+    });
+
+    it('leaves the Curve alone when a closed cutter misses it or covers all of it', () =>
+    {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const post = () => Curve.RectBetween([0, 0, 0], [100, 0, 2000]);
+
+        expect((post().cutoffBy(Curve.RectBetween([500, 0, 0], [600, 0, 100])) as Curve).area())
+            .toBeCloseTo(200000, 3);                    // misses: was null before
+        expect((post().cutoffBy(Curve.RectBetween([-500, 0, -500], [600, 0, 3000])) as Curve).area())
+            .toBeCloseTo(200000, 3);                    // swallows it whole
+        expect(warn).toHaveBeenCalled();
+        warn.mockRestore();
+    });
+
     it('keeps the smallest region (triangle) when keepSmallest=true, and the two sum to the whole', () =>
     {
         const cutter = () => Curve.Line([-20, 0, -20], [120, 0, 120]).moveZ(10);
@@ -942,11 +1081,148 @@ describe('Curve.cutoffBy()', () =>
     });
 });
 
-describe('Curve.intersect() / cutoffBy() off the XY plane', () =>
+describe('Curve.extendTo() lands exactly on its target', () =>
+{
+    /*  Regression: extendTo() measured the reach to the crossing and called extend(length),
+        which places the tip at `anchor + direction x length` — always a float residue off the
+        target, and up to 1e-6 off because the hit it measured to had been rounded to
+        POINT_TOLERANCE (1e-5) first. Since every boolean here is exact, that residue is a GAP:
+        a brace extended to a wall and then cut against it left a hair-thin bridge instead of
+        separating the piece, and no amount of extra accuracy in the measurement fixed it —
+        1e-7, 1e-9 and 1e-12 gaps all pinch identically.
+
+        The extension now runs inside hypercurve: the crossing is found exactly, kept as a
+        Point2 with Real coordinates, and the end segment is REBUILT with that point as its
+        endpoint (extend_endpoint_to_point). */
+    const distanceToLine = (p: Point, a: Point, b: Point): number =>
+    {
+        const ab = b.toVector().subtract(a.toVector());
+        const ap = p.toVector().subtract(a.toVector());
+        return ap.cross(ab).length() / ab.length();
+    };
+
+    it('reaches an oblique target instead of stopping a millionth short', () =>
+    {
+        const line = Curve.Line([10, 0, 10], [100, 0, 110]);
+        const target = Curve.Line([200, 0, -50], [200, 0, 500]);
+
+        line.extendTo(target);
+
+        // was 5.5e-7 off the target line
+        expect(distanceToLine(new Point(line.end()), new Point(target.start()), new Point(target.end())))
+            .toBeLessThan(1e-12);
+        expect(line.end().x).toBeCloseTo(200, 10);
+    });
+
+    it('lands on a crossing that no 1e-5 grid can express', () =>
+    {
+        const target = Curve.Line([137.70011, 0, -50], [137.70011, 0, 500]);
+        const line = Curve.Line([0, 0, 0], [30, 0, 10]);
+
+        line.extendTo(target);
+
+        expect(line.end().x).toEqual(137.70011);        // exactly, not to 6 decimals
+    });
+
+    it('extends the near end of an URBENT-shaped brace onto its wall line', () =>
+    {
+        const wall = Curve.Line([0, 0, 0], [0, 0, 4321]);
+        const brace = Curve.Line([56.06, 0, 3170.9], [643.49, 0, 4770.6]);
+
+        brace.extendTo(wall);
+
+        expect(distanceToLine(new Point(brace.start()), new Point(wall.start()), new Point(wall.end())))
+            .toBeLessThan(1e-12);                       // was 1.3e-6
+    });
+
+    it('keeps the measured extension where nothing crosses, and for an arc end', () =>
+    {
+        // converging but never meeting: the closest approach is the only answer there is
+        const converging = Curve.Line([0, 0, 0], [100, 0, 10]);
+        converging.extendTo(Curve.Line([300, 0, 300], [400, 0, 320]));
+        expect(converging.length()).toBeGreaterThan(300);
+
+        // an arc end has no straight continuation to intersect, so the exact route declines
+        // and the sampled one still extends it
+        const arc = Curve.Arc([0, 0, 0], [50, 0, 30], [100, 0, 0]);
+        arc.extendTo(Curve.Line([200, 0, -100], [200, 0, 100]));
+        expect(arc.end().x).toBeCloseTo(200, 5);
+    });
+
+    it('cuts the URBENT post by its brace into ONE clean quad', () =>
+    {
+        // The shape the whole chain exists for, built the way the script builds it: the brace is
+        // offset, trimmed and extended to the wall line the post stands on, so the two share
+        // that edge. Before, the extension stopped 6.6e-7 short of the wall line, the two halves
+        // of the post stayed joined by a wedge that thin, and the "cut" came back as a single
+        // 8-vertex region — `.first()` on it handed the script a shape enclosing a sliver.
+        const SPAN = 5436, HEIGHT = 3087, RIDGE = 0.25;
+        const WALL_TOP = 2263, WALL_HEIGHT = 2000, BEAM_W = 150, BLOCKING_INSET = 30;
+        const slopeRatio = HEIGHT / ((1 - RIDGE) * SPAN);
+        const leftSlope = RIDGE * SPAN * slopeRatio;
+        const startHeight = HEIGHT - leftSlope;
+
+        const roofLine = Curve.Polyline(
+            [0, 0, startHeight],
+            [SPAN * RIDGE, 0, startHeight + leftSlope],
+            [SPAN, 0, startHeight + leftSlope - (1 - RIDGE) * SPAN * slopeRatio])
+            .translate(0, 0, WALL_TOP);
+        const roofLeft = roofLine.edges().first() as Curve;
+        const wallLeft = Curve.Line([0, 0, 0], roofLine.start());
+        const centre = Curve.Line([RIDGE * SPAN, 0, 0], [RIDGE * SPAN, 0, WALL_HEIGHT + HEIGHT + 500]);
+        const one = (c: any): Curve => (c instanceof ShapeCollection) ? c.checkSingle() as Curve : c as Curve;
+
+        const post = wallLeft.copy().move(BEAM_W).extendTo(roofLeft).connect(wallLeft);
+        const blocking = one(roofLeft.copy()
+            .move(roofLeft.direction().normalize().rotateY(90).scale(BLOCKING_INSET))
+            .extendTo(wallLeft).cutoffBy(centre));
+        // the script's own choice of brace end: the nearer of "1000 along the roof" and "a third
+        // of the way up it"
+        const byLength = roofLeft.pointAtLength(1000)!;
+        const byPerc = roofLeft.pointAtPerc(0.33)!;
+        const from = roofLeft.start();
+        const braceEnd = (byLength.distance(from) > byPerc.distance(from)) ? byPerc : byLength;
+        const braceLine = Curve.Line(roofLeft.start().copy().translate(0, 0, -1000), braceEnd);
+        const braceCut = () => one(braceLine.copy().cutoffBy(blocking));
+        const brace = (braceCut().offset(BEAM_W) as Curve)
+                        .extendTo(blocking).extendTo(wallLeft)
+                        .connect(braceCut());
+
+        // the brace now REACHES the wall line (x = 0) instead of stopping 6.6e-7 short of it
+        expect(Math.max(...brace.vertices().toArray().map(v => Math.abs(v.x)).filter(x => x < 1)))
+            .toBeLessThan(1e-9);
+
+        const cut = post.copy().cutoffBy(brace) as Curve;
+
+        expect(cut).toBeInstanceOf(Curve);
+        expect(cut.vertices().length).toEqual(4);
+        expect(cut.edges().length).toEqual(4);
+        expect(cut.area()).toBeCloseTo(460880.15, 1);
+    });
+});
+
+describe('Curve.cutoffBy() cuts an open Curve exactly at the cutter', () =>
+{
+    /*  The open branch used to map each crossing to an arc-length parameter and trim there —
+        as accurate as the parameter mapping, which runs on the tessellation. The pieces are now
+        trimmed at the crossing POINTS themselves (hypercurve's trim_between_points). */
+    it('starts the kept piece exactly on the cutter', () =>
+    {
+        const line = Curve.Line([0, 0, 0], [300, 0, 100]);
+        const cutter = Curve.Line([137.70011, 0, -50], [137.70011, 0, 500]);
+
+        const kept = line.cutoffBy(cutter) as Curve;
+
+        expect(kept.start().x).toEqual(137.70011);      // exactly on the cutter
+        expect(kept.end().x).toBeCloseTo(300, 9);       // ... and the far end is untouched
+    });
+});
+
+describe('Curve crossings / cutoffBy() off the XY plane', () =>
 {
     // Regression: curvo's curve intersection runs in the XY plane (ignoring Z), so a
     // planar curve in another coordinate plane (here XZ) previously found no hits and
-    // cutoffBy() did nothing. intersect() now transforms into the curve's local XY
+    // cutoffBy() did nothing. The hit finder now transforms into the curve's local XY
     // frame, flattens residual out-of-plane noise, intersects, and maps back.
     it('finds intersections and cuts an offset line lying in the XZ plane', () =>
     {
@@ -955,7 +1231,7 @@ describe('Curve.intersect() / cutoffBy() off the XY plane', () =>
         const off = ln.copy().offset(-10) as Curve;
         const fullLen = off.length();
 
-        expect(off.intersect(cutter)!.length).toBeGreaterThan(0);
+        expect(off.intersections(cutter)!.length).toBeGreaterThan(0);
 
         const res = off.cutoffBy(cutter) as Curve;
         expect(res.length()).toBeLessThan(fullLen);       // an actual cut happened
@@ -965,29 +1241,31 @@ describe('Curve.intersect() / cutoffBy() off the XY plane', () =>
 
     /*  hypercurve plane-fits THIS curve to project the other into it, and for a straight line
         that fit is ill-defined: an axis-aligned line comes back empty one way round and throws
-        ("open polyline failed (EmptyCurveString)") the other. intersect() has always tried the
-        swapped order for exactly this reason, but a single try/catch around both attempts meant
-        a throw on the first order took the working swap down with it. */
+        ("open polyline failed (EmptyCurveString)") the other. The hit finder has always tried
+        the swapped order for exactly this reason, but a single try/catch around both attempts
+        meant a throw on the first order took the working swap down with it. */
     it('finds the crossing when one order of the pair fails outright', () =>
     {
         const alongX   = Curve.Line([0, 0, 0], [-3200, 0, 0]);
         const vertical = Curve.Line([-300, 0, -50], [-300, 0, 50]);
 
-        const hits = alongX.intersect(vertical);
-        expect(hits).not.toBeNull();
-        expect(hits!.length).toBe(1);
-        expect(hits![0].x).toBeCloseTo(-300, 6);
-        expect(hits![0].z).toBeCloseTo(0, 6);
+        const hit = alongX.intersection(vertical) as Vertex;
+        expect(hit).toBeInstanceOf(Vertex);
+        expect(hit.x).toBeCloseTo(-300, 6);
+        expect(hit.z).toBeCloseTo(0, 6);
 
         // and the same the other way round
-        expect(vertical.intersect(alongX)!.length).toBe(1);
+        expect((vertical.intersection(alongX) as Vertex).x).toBeCloseTo(-300, 6);
     });
 
-    it('reports an empty list (not null) when two curves genuinely do not cross', () =>
+    it('reports no crossings when two curves genuinely do not cross', () =>
     {
         const a = Curve.Line([0, 0, 0], [100, 0, 0]);
         const b = Curve.Line([0, 0, 50], [100, 0, 50]);
-        expect(a.intersect(b)).toEqual([]);
+        expect(a.intersections(b)).toEqual(null);
+        // the internal hit finder keeps the distinction the retry logic above needs: an empty
+        // list is "they do not cross", null is "neither operand order could answer"
+        expect((a as any)._intersectPoints(b)).toEqual([]);
     });
 });
 
@@ -1292,6 +1570,290 @@ describe('Curve.perpendicularPointTo()', () =>
     {
         const c = Curve.Line([0, 0, 0], [100, 0, 0]);
         expect(() => c.perpendicularPointTo('nonsense' as any)).toThrow();
+    });
+});
+
+describe('Curve.intersection() of an open Curve with a closed one', () =>
+{
+    /*  Regression: `line.intersection(rect)` always came back null. _intersectionCurve() ran the
+        region boolean for every curve pair, guarded by `if(!this.isClosed)` — the METHOD, always
+        truthy — so hypercurve was handed an open curve and refused it ("'this' is not a closed
+        region"). An open curve meeting a closed one has a perfectly good answer: the piece of it
+        inside the region, which is what a brep Edge ∩ Face gives too. */
+    it('returns the piece of the line inside the rect', () =>
+    {
+        const r = Curve.Rect(10, 20);
+        const l = Curve.Line([-100, 0, 0], [100, 10, 0]);
+        const inside = l.copy().intersection(r) as Curve;
+
+        expect(inside).toBeInstanceOf(Curve);
+        // the line spans the 10-wide rect, rising 0.5 over it
+        expect(inside.length()).toBeCloseTo(Math.sqrt(10 ** 2 + 0.5 ** 2), 4);
+        expect(inside.start().x).toBeCloseTo(-5, 4);
+        expect(inside.end().x).toBeCloseTo(5, 4);
+        // ... and the original line is untouched
+        expect(l.length()).toBeCloseTo(Math.sqrt(200 ** 2 + 10 ** 2), 4);
+    });
+
+    it('answers the same either way round', () =>
+    {
+        const r = Curve.Rect(10, 20);
+        const l = Curve.Line([-100, 0, 0], [100, 10, 0]);
+        expect((r.copy().intersection(l) as Curve).length())
+            .toBeCloseTo((l.copy().intersection(r) as Curve).length(), 6);
+    });
+
+    it('gives a copy of the whole curve when it lies entirely inside', () =>
+    {
+        const inside = Curve.Line([-1, 0, 0], [1, 0, 0]).intersection(Curve.Rect(10, 20)) as Curve;
+        expect(inside.length()).toBeCloseTo(2, 6);
+    });
+
+    it('returns null when the curve stays outside', () =>
+    {
+        expect(Curve.Line([-100, -100, 0], [-50, -100, 0]).intersection(Curve.Rect(10, 20))).toEqual(null);
+    });
+
+    it('cuts an arc region exactly (a chord of a circle)', () =>
+    {
+        const through = Curve.Line([-50, 0, 0], [50, 0, 0]).intersection(Curve.Circle(10)) as Curve;
+        expect(through.length()).toBeCloseTo(20, 6);
+    });
+
+    it('keeps one piece per entry into a concave region', () =>
+    {
+        // C-shape: at y=15 the region is only the 0..10 back of the C, the notch is outside
+        const cShape = Curve.Polyline([0, 0, 0], [30, 0, 0], [30, 10, 0], [10, 10, 0],
+                                      [10, 20, 0], [30, 20, 0], [30, 30, 0], [0, 30, 0]).close();
+        const pieces = Curve.Line([-10, 15, 0], [40, 15, 0]).intersections(cShape) as ShapeCollection<Curve>;
+        expect(pieces.length).toEqual(1);
+        expect(pieces.first().length()).toBeCloseTo(10, 4);
+    });
+
+    it('leaves out the part running through a hole', () =>
+    {
+        const holed = Curve.Rect(100, 100).difference(Curve.Rect(20, 20)) as Curve;
+        const pieces = Curve.Line([-60, 0, 0], [60, 0, 0]).intersections(holed) as ShapeCollection<Curve>;
+        expect(pieces.length).toEqual(2);
+        pieces.toArray().forEach(p => expect(p.length()).toBeCloseTo(40, 4));
+    });
+
+    it('works off the XY plane', () =>
+    {
+        const rXZ = Curve.Rect(10, 20).rotateX(90);
+        const inside = Curve.Line([-100, 0, 0], [100, 0, 10]).intersection(rXZ) as Curve;
+        expect(inside.length()).toBeCloseTo(Math.sqrt(10 ** 2 + 0.5 ** 2), 4);
+    });
+
+    it('gives the crossing Vertices for two open Curves — they share no length', () =>
+    {
+        const a = Curve.Line([0, 0, 0], [10, 0, 0]);
+        const b = Curve.Line([5, -5, 0], [5, 5, 0]);
+        const hit = a.intersection(b) as Vertex;
+        expect(hit).toBeInstanceOf(Vertex);
+        expect(hit.x).toBeCloseTo(5, 6);
+    });
+
+    it('gives the touch Vertex when a curve only grazes the region', () =>
+    {
+        // ends exactly on the rect's right edge, coming from outside: nothing is inside it
+        const touch = Curve.Line([100, 0, 0], [5, 0, 0]).intersection(Curve.Rect(10, 20)) as Vertex;
+        expect(touch).toBeInstanceOf(Vertex);
+        expect(touch.x).toBeCloseTo(5, 6);
+    });
+
+    it('reads the intersection POINTS off the result with vertices()', () =>
+    {
+        // the piece inside the rect starts and ends where the line crosses the outline
+        const inside = Curve.Line([-100, 0, 0], [100, 10, 0]).intersection(Curve.Rect(10, 20)) as Curve;
+        expect(inside.vertices().toArray().map(v => Math.round(v.x))).toEqual([-5, 5]);
+    });
+});
+
+describe('Curve.intersect() — replacing, like union() and difference()', () =>
+{
+    it('replaces the line by the piece inside the rect, in place', () =>
+    {
+        const root = new SceneNode('root');
+        const l = Curve.Line([-100, 0, 0], [100, 10, 0]);
+        const layer = root.addLayer('shapes', l);
+
+        const result = l.intersect(Curve.Rect(10, 20));
+
+        expect(result).toBe(l);                                     // same Curve, new geometry
+        expect(l.length()).toBeCloseTo(Math.sqrt(10 ** 2 + 0.5 ** 2), 4);
+        expect(layer.shapes().toArray()).toEqual([l]);              // and it stays in the scene
+    });
+
+    it('takes the crossed line out of the scene for the Vertex two open curves share', () =>
+    {
+        const root = new SceneNode('root');
+        const l = Curve.Line([0, 0, 0], [100, 0, 0]);
+        const layer = root.addLayer('shapes', l);
+        root.setActiveLayer(layer);
+
+        const hit = l.intersect(Curve.Line([50, -50, 0], [50, 50, 0])) as Vertex;
+
+        expect(hit).toBeInstanceOf(Vertex);
+        expect(hit.x).toBeCloseTo(50, 6);
+        expect(layer.shapes().toArray()).toEqual([hit]);            // the line gave way to it
+    });
+
+    it('leaves the Curve alone when the two share nothing', () =>
+    {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const l = Curve.Line([0, 0, 0], [100, 0, 0]);
+        expect(l.intersect(Curve.Rect(10, 20, [0, 500, 0]))).toEqual(null);
+        expect(l.length()).toBeCloseTo(100, 6);
+        warn.mockRestore();
+    });
+});
+
+/** Coordinates rounded to whole numbers, with -0 folded into 0 and toArray()'s optional z
+ *  defaulted — for asserting on positions that should land on round values. */
+const roundedCoords = (p: { toArray(): [number, number, number?] }): Array<number> =>
+    p.toArray().map(v => Math.round(v ?? 0) + 0);
+
+describe('Curve rotation pivots', () =>
+{
+    /*  Regression: Curve.rotateAround() defaulted its pivot to the WORLD ORIGIN while Mesh and
+        Polygon defaulted to the shape's own centre, so the same script line meant one thing for
+        a box and another for the circle next to it — `circle(20).move(100,100,10).rotateX(90)`
+        swung the circle around the origin instead of standing it up where it was. Pinned as
+        divergence #3 in @archiyou/core's kernel-divergences.test.ts, now deleted. */
+    it('turns a moved circle about its own centre', () =>
+    {
+        const c = Curve.Circle(20).move(100, 100, 10);
+        const turned = c.copy().rotateX(90);
+
+        expect(roundedCoords(turned.center())).toEqual([100, 100, 10]);
+        // ... and it really turned: the circle now stands in the XZ plane
+        const n = turned.normal()!;
+        expect([Math.abs(n.x), Math.abs(n.y), Math.abs(n.z)].map(v => +v.toFixed(6))).toEqual([0, 1, 0]);
+    });
+
+    it('honours an explicit pivot, and rotate() stays the origin-based turn', () =>
+    {
+        const c = () => Curve.Circle(20).move(100, 100, 10);
+        expect(roundedCoords(c().rotateZ(90, [0, 0, 0]).center())).toEqual([-100, 100, 10]);
+        expect(roundedCoords(c().rotate(90, 'z').center())).toEqual([-100, 100, 10]);
+    });
+
+    it('keeps a hole in place relative to its boundary', () =>
+    {
+        const holed = Curve.Rect(100, 100, [200, 0, 0]).difference(Curve.Rect(20, 20, [230, 0, 0])) as Curve;
+        const turned = holed.copy().rotateZ(90);
+
+        // the boundary turns about its own centre, and the hole turns about the SAME pivot —
+        // the offset hole ends up a quarter turn round, not left behind at its own centre
+        expect(roundedCoords(turned.center())).toEqual([200, 0, 0]);
+        expect(roundedCoords(turned.holes()[0].center())).toEqual([200, 30, 0]);
+    });
+});
+
+describe('Shape.first()', () =>
+{
+    /*  cutoffBy() / difference() / intersections() answer with one Curve or with a
+        ShapeCollection depending on the geometry, and a script cannot know which in advance —
+        so `post.cutoffBy(diagonal).first()` has to read either way. */
+    it('answers a single Curve with itself', () =>
+    {
+        const c = Curve.Line([0, 0, 0], [10, 0, 0]);
+        expect(c.first()).toBe(c);
+    });
+
+    it('lets one line read a cut that may or may not have split', () =>
+    {
+        const rect = () => Curve.RectBetween([0, 0, 0], [100, 0, 100]);
+        const oneP = rect().cutoffBy(Curve.RectBetween([-10, 0, 80], [110, 0, 200]))!.first() as Curve;
+        expect(oneP.area()).toBeCloseTo(8000, 3);
+    });
+});
+
+describe('Curve holes travel with their boundary', () =>
+{
+    /*  A hole (from difference()) is a Curve of its own hanging off the boundary. rotate*(),
+        mirror() and projectOnto() transformed it, but translate() and scale() did not — so
+        `holed.move(500, 0, 0)` left the hole behind at the old spot, and a scaled region kept a
+        hole of the original size. Worse, mirror() and the resampling paths ran their update()
+        with a Curve, which REPLACES _holes with the (empty) holes of that curve, so the hole was
+        not merely left behind but dropped entirely. */
+    const holed = () => Curve.Rect(100, 100).difference(Curve.Rect(20, 20, [30, 0, 0])) as Curve;
+    const holeAt = (c: Curve) => roundedCoords(c.holes()[0].center());
+
+    it('starts with one hole, off to one side', () =>
+    {
+        expect(holed().holes().length).toEqual(1);
+        expect(holeAt(holed())).toEqual([30, 0, 0]);
+        expect(holed().area()).toBeCloseTo(100 * 100 - 20 * 20, 6);
+    });
+
+    it('follows a move', () =>
+    {
+        expect(holeAt(holed().move(500, 0, 0))).toEqual([530, 0, 0]);
+        expect(holeAt(holed().moveTo(500, 10, 0))).toEqual([530, 10, 0]);
+    });
+
+    it('scales with the boundary, about the same origin', () =>
+    {
+        const scaled = holed().scale(2);
+        expect(holeAt(scaled)).toEqual([60, 0, 0]);
+        expect(scaled.holes()[0].bbox()!.width()).toBeCloseTo(40, 6);
+        expect(scaled.area()).toBeCloseTo(4 * (100 * 100 - 20 * 20), 4);
+
+        // ... including the non-uniform path, which takes a different route through hypercurve
+        const flat = holed().scale([2, 1, 1]);
+        expect(holeAt(flat)).toEqual([60, 0, 0]);
+        expect(flat.area()).toBeCloseTo(2 * (100 * 100 - 20 * 20), 4);
+    });
+
+    it('mirrors with the boundary, across the same plane', () =>
+    {
+        expect(holed().mirror('x').holes().length).toEqual(1);
+        expect(holeAt(holed().mirror('x'))).toEqual([-30, 0, 0]);
+        expect(holeAt(holed().mirrorX())).toEqual([-30, 0, 0]);
+    });
+
+    it('survives a rigid round trip through layflat()', () =>
+    {
+        const there = holed().rotateX(45).layflat();
+        expect(holeAt(there)).toEqual([30, 0, 0]);
+        expect(there.area()).toBeCloseTo(100 * 100 - 20 * 20, 4);
+    });
+
+    it('is not transformed twice by the pivot bookkeeping', () =>
+    {
+        // rotateAround()/scale() shift to the pivot and back on the BOUNDARY only; a hole that
+        // was carried along by that shuffle as well would end up displaced by the pivot
+        expect(holeAt(holed().move(200, 0, 0).rotateZ(90))).toEqual([200, 30, 0]);
+        expect(holeAt(holed().move(200, 0, 0).scale(2))).toEqual([260, 0, 0]);
+        expect(holeAt(holed().move(200, 0, 0).rotateAround(90, [0, 0, 1]))).toEqual([200, 30, 0]);
+    });
+});
+
+describe('Curve.containsPoint()', () =>
+{
+    it('tells inside from outside for a closed Curve', () =>
+    {
+        const r = Curve.Rect(10, 20);
+        expect(r.containsPoint([0, 0, 0])).toBe(true);
+        expect(r.containsPoint([4.9, 9.9, 0])).toBe(true);
+        expect(r.containsPoint([5.1, 0, 0])).toBe(false);
+        expect(r.containsPoint([0, 0, 5])).toBe(false);      // off the plane
+    });
+
+    it('excludes holes', () =>
+    {
+        const holed = Curve.Rect(100, 100).difference(Curve.Rect(20, 20)) as Curve;
+        expect(holed.containsPoint([0, 0, 0])).toBe(false);  // in the hole
+        expect(holed.containsPoint([40, 0, 0])).toBe(true);
+    });
+
+    it('is false for an open Curve', () =>
+    {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        expect(Curve.Line([0, 0, 0], [10, 0, 0]).containsPoint([5, 0, 0])).toBe(false);
+        warn.mockRestore();
     });
 });
 

@@ -271,6 +271,9 @@ Things are the radar:
 
 - `Polygon.offset()` and holes
 - `ShapeCollection.offset()` only offsets `Curve`
+- `ShapeCollection.map()` answers with a `ShapeCollection` only when EVERY result is a
+  Shape; one non-Shape result (a `null` from a failed op, a number, a `Point`) keeps the
+  whole result a plain Array
 - `Sketch.loft()` does not work
 -  no PLY import yet
 - `Mesh.edges()` classifies an edge by the angle between adjacent face normals, so a

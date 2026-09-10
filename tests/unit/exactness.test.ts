@@ -222,22 +222,24 @@ describe('exactness: offset', () =>
         expect(arcs(o)).toBe(true);
     });
 
-    // UPSTREAM BLOCKER. hypercurve certifies exact equidistance when offsetting an arc, so
-    // an arc whose centre came out of an f64 boolean is declined with `RadiusMismatch` —
-    // for every sign and every distance. There is no native answer, and lowering to line
-    // work first runs the exact offset over thousands of segments (seconds per call), so
-    // offset() reports rather than silently paying that.
+    // WAS an upstream blocker: hypercurve certified exact equidistance when offsetting an
+    // arc, so an arc whose centre came out of a boolean was declined with `RadiusMismatch`
+    // for every sign and every distance, and the only route was `toDegree1()` first.
     //
-    // Note this was previously "working" only by accident: subtype() called a two-circle
-    // union 'Circle', so offset() took a fast path that rebuilt it as ONE circle of
-    // radius+distance — a different shape entirely, which no assertion caught.
-    // Explicit workaround for callers: `union.toDegree1().offset(d)`.
-    it.fails('offsetting a boolean-derived arc works natively', () =>
+    // Fixed by the hypercurve update. The centre of a boolean-derived arc is still a
+    // complicated exact expression, but deciding it no longer has to happen under STRICT
+    // alone — `hcurve::boolean_policy` asks for the authorized 512-bit terminal, which runs
+    // only after a complete strict pass fails, and answers on the same exact carrier.
+    it('offsetting a boolean-derived arc works natively', () =>
     {
         const a = Curve.Circle(100);
         const b = a.copy().translate(150, 0, 0);
         const union = a.union(b) as Curve;
-        expect(union.copy().offset(20)).not.toBeNull();
+        const grown = union.copy().offset(20);
+        expect(grown).not.toBeNull();
+        // Natively, not by lowering to line work: the arcs are still arcs.
+        expect(arcs(grown!)).toBe(true);
+        expect(Math.abs(grown!.area()!)).toBeGreaterThan(Math.abs(union.area()!));
     });
 
     it('a boolean result can still be offset explicitly via toDegree1()', () =>
@@ -392,7 +394,10 @@ describe('exactness: metrics', () =>
 
     it('intersecting a circle with a diameter line hits both poles', () =>
     {
-        const hits = circle().intersect(Curve.Line([-100, 0, 0], [100, 0, 0]))!;
+        // the diameter line meets the circle along the chord inside it; its end vertices are
+        // the two crossings
+        const chord = circle().intersection(Curve.Line([-100, 0, 0], [100, 0, 0])) as Curve;
+        const hits = chord.vertices().toArray();
         expect(hits.length).toBe(2);
         for (const h of hits) { expect(Math.abs(h.x)).toBeCloseTo(R, 9); }
     });
