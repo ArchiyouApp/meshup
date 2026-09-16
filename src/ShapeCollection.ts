@@ -1115,6 +1115,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      */
     union(other?: Mesh | ShapeCollection<Mesh>): Mesh | Curve | ShapeCollection<any> | null
     {
+        // Shapes of another kernel fuse through that kernel's own collection (see select())
+        const foreign = this._shapes.filter(s => ShapeCollection.isForeignShape(s));
+        if (foreign.length && other === undefined)
+        {
+            const ForeignCollection = (foreign[0] as any)._modeler?.classes?.ShapeCollection;
+            if (typeof ForeignCollection === 'function') return new ForeignCollection(...foreign).union();
+        }
         if (other === undefined) return this._unionByType();
 
         const meshesToUnion = this.meshes().toArray();
