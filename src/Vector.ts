@@ -332,10 +332,13 @@ export class Vector
     return this.subtract([n.x, n.y, n.z]);
   }
 
+  /** Rotate about `axis` (a direction through the origin) by `angle` in DEGREES — like every
+   *  other rotation in Archiyou (Shape.rotateX(), Curve.revolve(), the brep Vector). This used
+   *  to take radians, which no script expected. */
   rotate(axis: PointLike, angle: number): this
   {
     if(!isPointLike(axis)){ throw new Error('Vector::rotate(): Invalid axis. Please supply a PointLike instance.'); }
-    this._inner = this._inner.rotate(new Point(axis).toVector3Js(), angle);
+    this._inner = this._inner.rotate(new Point(axis).toVector3Js(), angle * Math.PI / 180);
     return this;
   }
 
@@ -353,19 +356,19 @@ export class Vector
   /** Rotate around X-axis by given degrees */
   rotateX(angleDeg: number): this
   {
-    return this.rotate([1, 0, 0], angleDeg * Math.PI / 180);
+    return this.rotate([1, 0, 0], angleDeg);
   }
 
   /** Rotate around Y-axis by given degrees */
   rotateY(angleDeg: number): this
   {
-    return this.rotate([0, 1, 0], angleDeg * Math.PI / 180);
+    return this.rotate([0, 1, 0], angleDeg);
   }
 
   /** Rotate around Z-axis by given degrees */
   rotateZ(angleDeg: number): this
   {
-    return this.rotate([0, 0, 1], angleDeg * Math.PI / 180);
+    return this.rotate([0, 0, 1], angleDeg);
   }
 
   //// COPY ////

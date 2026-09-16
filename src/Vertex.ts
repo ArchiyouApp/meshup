@@ -206,6 +206,7 @@ export class Vertex extends Shape
   {
     const v = new Vertex([this.x, this.y, this.z], this.normal().toArray());
     v.style.merge(this.style.toData());
+    v.metadata = { ...this.metadata }; // copy metadata (name, subtype), like Mesh and Polygon do
     v._inheritSid(this);
     return v as this;
   }

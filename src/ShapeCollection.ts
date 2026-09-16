@@ -157,6 +157,28 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return obj instanceof ShapeCollection;
     }
 
+    /** A collection from another kernel sharing this scene (a brep ShapeCollection): a
+     *  shape-class object that hands out its members through toArray(). */
+    static isForeignCollection(obj: any): boolean
+    {
+        return !!obj && typeof obj === 'object'
+            && !ShapeCollection.isShapeCollection(obj)
+            && obj.isShapeClass?.() === true
+            && obj.isShapeCollection?.() === true
+            && typeof obj.toArray === 'function';
+    }
+
+    /** A single shape from another kernel sharing this scene (a brep Solid, Edge, …): it
+     *  declares itself with isShapeClass() and says it is not a collection. (Not "has no
+     *  toArray()": a brep Vertex answers toArray() with its coordinates.) */
+    static isForeignShape(obj: any): boolean
+    {
+        return !!obj && typeof obj === 'object'
+            && !Shape.isShape(obj)
+            && obj.isShapeClass?.() === true
+            && obj.isShapeCollection?.() !== true;
+    }
+
     static generate<S extends CollectableShape>(count: number, generator: (index: number) => S): ShapeCollection<S>
     {
         return new ShapeCollection<S>(...new Array(count).fill(null).map((_, i) => generator(i)));
@@ -203,24 +225,27 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
         shapes.forEach(shapeArg =>
         {
-            if (Shape.isShape(shapeArg))
+            // A shape of THIS kernel, or of any other kernel that lives in the same scene
+            // (brep shapes implement isShapeClass() for exactly this — see the array branch).
+            // Collections answer isShapeClass() too, so they are kept out here and flattened below.
+            if (Shape.isShape(shapeArg) || ShapeCollection.isForeignShape(shapeArg))
             {
                 this._shapes.push(shapeArg as S);
             }
-            else if (Array.isArray(shapeArg) || ShapeCollection.isShapeCollection(shapeArg))
+            else if (Array.isArray(shapeArg) || ShapeCollection.isShapeCollection(shapeArg) || ShapeCollection.isForeignCollection(shapeArg))
             {
                 if (ShapeCollection.isShapeCollection(shapeArg) && shapeArg._name && shapeArg._name !== 'collection')
                 {
                     namedCols.push(shapeArg);
                 }
-                const addShapes: S[] = ShapeCollection.isShapeCollection(shapeArg)
-                    ? shapeArg.toArray() as unknown as S[]
-                    : (shapeArg as any[])
+                const addShapes: S[] = Array.isArray(shapeArg)
+                    ? (shapeArg as any[])
                         .filter(s => {
                             // HACKY: If you want to force any instance to be accepted as a shape, 
                             // implement isShapeClass() on it to return true, and ShapeCollection will accept it. 
                             return Shape.isShape(s) || s.isShapeClass?.();
-                        }) as S[];
+                        }) as S[]
+                    : (shapeArg as any).toArray() as S[];     // this kernel's collection or another's — flattened either way
 
                 this._shapes.push(...addShapes);
             }
@@ -438,6 +463,38 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     @sceneCarry
     select(what: string)
     {
+        // Shapes from another kernel answer the same selector language themselves; the meshup
+        // Selector only reads meshup geometry, so hand those the string and gather the hits.
+        const foreign = this._shapes.filter(s => ShapeCollection.isForeignShape(s));
+        if (foreign.length)
+        {
+            const hits = new ShapeCollection<any>();
+            // Selecting is a question about the GROUP (the left-most edge of these four), so ask
+            // the other kernel's own collection class when the host exposes it; per shape only
+            // as a fallback.
+            const ForeignCollection = (foreign[0] as any)._modeler?.classes?.ShapeCollection;
+            if (typeof ForeignCollection === 'function')
+            {
+                const r = new ForeignCollection(...foreign).select?.(what);
+                if (r) hits.add(r);
+            }
+            else
+            {
+                foreign.forEach(s =>
+                {
+                    const r = (s as any).select?.(what);
+                    if (r) hits.add(r);
+                });
+            }
+            const own = this._shapes.filter(s => !ShapeCollection.isForeignShape(s));
+            if (own.length)
+            {
+                const r = new Selector(what).execute(new ShapeCollection(own) as unknown as ShapeCollection<Shape>);
+                if (r) hits.add(r);
+            }
+            Selector.warnIfEmpty(what, hits);
+            return hits.checkSingle();
+        }
         // Selector targets concrete meshup Shapes; S is only constrained to CollectableShape
         const result = new Selector(what).execute(this as unknown as ShapeCollection<Shape>);
         Selector.warnIfEmpty(what, result);
@@ -2213,7 +2270,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     {
         const meshes = this._shapes
             .map(curve => (curve as any).toMesh?.())
-            .filter((mesh: any) => mesh?.validate?.()) as Mesh[];
+            // a shape from another kernel is its own mesh (brep Shape.toMesh() returns itself)
+            .filter((mesh: any) => ShapeCollection.isForeignShape(mesh) || mesh?.validate?.()) as Mesh[];
         return new ShapeCollection<Mesh>(...meshes);
     }
 

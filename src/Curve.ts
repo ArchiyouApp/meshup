@@ -193,6 +193,7 @@ export class Curve extends Shape
         newCurve._curve = this._curve?.clone();
         newCurve._holes = this._holes.map(h => h._copy());
         newCurve.style.merge(this.style.explicitData() as any);
+        newCurve.metadata = { ...this.metadata }; // copy metadata (name, subtype), like Mesh and Polygon do
 
         newCurve._inheritSid(this);
 

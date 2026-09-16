@@ -432,6 +432,15 @@ describe('moveTo() / moveToX/Y/Z()', () =>
 
 describe('rotate()', () =>
 {
+    it('rotate(axis, angle) takes degrees, like rotateX/Y/Z and every other Archiyou rotation', () =>
+    {
+        const v = new Vector(3, 0, 4);
+        v.rotate([0, 1, 0], -90);
+        expect(v.x).toBeCloseTo(-4);
+        expect(v.z).toBeCloseTo(3);
+        expect(new Vector(1, 0, 0).rotated([0, 0, 1], 90).y).toBeCloseTo(1);
+    });
+
     it('rotateZ(90) rotates +X to +Y', () =>
     {
         const v = new Vector(1, 0, 0);
