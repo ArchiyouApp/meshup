@@ -467,6 +467,7 @@ export class Mesh extends Shape
     /** Center of mass */
     center(): Point
     {
+        if (this._isEmpty()) return new Point(0, 0, 0); // massProperties() on an empty mesh traps the WASM
         const props = this.inner()?.massProperties(1);
         // A flat mesh (a polygon turned into a mesh, a laid-out face) has no volume, so its mass
         // centre is not defined and the kernel's answer for it is arbitrary. The centre a script
@@ -512,9 +513,16 @@ export class Mesh extends Shape
         return this.polygons().toArray().reduce((sum, poly) => sum + poly.area(), 0);
     }
 
+    /** No polygons at all: the result of merging nothing, or a failed operation. */
+    _isEmpty(): boolean
+    {
+        return (this.toPolygons()?.length ?? 0) === 0;
+    }
+
     /** Volume */
     volume(): number|undefined
     {
+        if (this._isEmpty()) return 0; // massProperties() on an empty mesh traps the WASM ("unreachable")
         return this.inner()?.massProperties(1)?.mass;
     }
 

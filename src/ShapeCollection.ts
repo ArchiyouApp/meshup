@@ -1092,6 +1092,14 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     /** Merge all polygons into one Mesh (without booleans) */
     merge(): any
     {
+        // Shapes of another kernel have no polygons to merge: fuse them through that kernel's
+        // own collection, as union() does (a brep collection answers with the fused Solid)
+        const foreign = this._shapes.filter(s => ShapeCollection.isForeignShape(s));
+        if (foreign.length)
+        {
+            const ForeignCollection = (foreign[0] as any)._modeler?.classes?.ShapeCollection;
+            if (typeof ForeignCollection === 'function') return new ForeignCollection(...foreign).union();
+        }
         const allPolygons = this._shapes
             .filter(shape => shape instanceof Mesh)
             .flatMap(shape =>
