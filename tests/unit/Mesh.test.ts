@@ -491,3 +491,16 @@ describe('Selector — edges on a Mesh', () =>
         expect(edge.type).toBe('Curve');
     });
 });
+
+describe('center() of a flat mesh', () =>
+{
+    it('is the area centroid, not the undefined mass centre', () =>
+    {
+        // a right triangle as a zero-volume mesh: centroid at the mean of its corners
+        const tri = new Polygon([[0, 0, 0], [90, 0, 0], [0, 30, 0]]).toMesh();
+        expect(tri.volume() ?? 0).toBeCloseTo(0, 6);
+        expect(tri.center().round(1e-6).toArray()).toEqual([30, 10, 0]);
+        // and a solid keeps its mass centre
+        expect(Mesh.Cube(10).move(5, 0, 0).center().round(1e-6).toArray()).toEqual([5, 0, 0]);
+    });
+});

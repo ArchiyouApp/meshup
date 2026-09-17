@@ -343,15 +343,36 @@ export class Polygon extends Shape
 
     //// GEOMETRY ////
 
-    /** Centroid of the polygon (average of vertex positions) */
+    /** The area centroid of the polygon — what "centre" means for a face, and the same answer
+     *  the brep kernel gives for a Face. (This used to average the vertex ring, which counted a
+     *  repeated closing vertex twice and pulled the centre off for anything but a symmetric
+     *  ring: a 100×50 plane reported (−10, −5).) Falls back to the vertex mean for a degenerate
+     *  polygon with no area. */
     center(): Point
     {
-        const verts = this.vertices().toArray();
-        const sx = verts.reduce((acc, v) => acc + v.x, 0);
-        const sy = verts.reduce((acc, v) => acc + v.y, 0);
-        const sz = verts.reduce((acc, v) => acc + v.z, 0);
-        const n = verts.length;
-        return new Point(sx / n, sy / n, sz / n);
+        const ring = this.vertices().toArray();
+        const same = (a: { x: number, y: number, z: number }, b: { x: number, y: number, z: number }) =>
+            Math.abs(a.x - b.x) < TOLERANCE && Math.abs(a.y - b.y) < TOLERANCE && Math.abs(a.z - b.z) < TOLERANCE;
+        const verts = (ring.length > 1 && same(ring[0], ring[ring.length - 1])) ? ring.slice(0, -1) : ring;
+        let ax = 0, ay = 0, az = 0, total = 0;
+        for (let i = 1; i + 1 < verts.length; i++)
+        {
+            const [a, b, c] = [verts[0], verts[i], verts[i + 1]];
+            const ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
+            const wx = c.x - a.x, wy = c.y - a.y, wz = c.z - a.z;
+            const area = 0.5 * Math.hypot(uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx);
+            if (!(area > 0)) continue;
+            ax += area * (a.x + b.x + c.x) / 3;
+            ay += area * (a.y + b.y + c.y) / 3;
+            az += area * (a.z + b.z + c.z) / 3;
+            total += area;
+        }
+        if (total > 0) return new Point(ax / total, ay / total, az / total);
+        const n = verts.length || 1;
+        return new Point(
+            verts.reduce((acc, v) => acc + v.x, 0) / n,
+            verts.reduce((acc, v) => acc + v.y, 0) / n,
+            verts.reduce((acc, v) => acc + v.z, 0) / n);
     }
 
     /** Axis-aligned bounding box of this polygon */
@@ -1258,7 +1279,12 @@ export class Polygon extends Shape
             const q = (dot <= -1 + TOLERANCE)
                 ? { x: 1, y: 0, z: 0, w: 0 }
                 : normal.copy().rotationBetween(up);
+            // about the polygon's own centre, as Mesh.layflat() turns about Mesh.center() — so the
+            // shape stays where it was instead of swinging around the world origin
+            const c = this.center();
+            this.translate(-c.x, -c.y, -c.z);
             this.rotateQuaternion(q);
+            this.translate(c.x, c.y, c.z);
         }
 
         return this.translate(0, 0, -this.bbox().minZ());

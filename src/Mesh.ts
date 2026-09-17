@@ -467,8 +467,41 @@ export class Mesh extends Shape
     /** Center of mass */
     center(): Point
     {
-        // ...existing code...
-        return new Point(this.inner()?.massProperties(1)?.centerOfMass);
+        const props = this.inner()?.massProperties(1);
+        // A flat mesh (a polygon turned into a mesh, a laid-out face) has no volume, so its mass
+        // centre is not defined and the kernel's answer for it is arbitrary. The centre a script
+        // means for a flat shape is the AREA centroid — which is also what the brep kernel
+        // answers for a Face, so layflat() pivots agree across kernels.
+        if (!props || !(Math.abs(props.mass) > TOLERANCE))
+        {
+            const centroid = this._areaCentroid();
+            if (centroid) return centroid;
+        }
+        return new Point(props?.centerOfMass);
+    }
+
+    /** Area-weighted centroid of all polygons (each polygon fan-triangulated), or null for an
+     *  empty mesh. */
+    _areaCentroid(): Point | null
+    {
+        let ax = 0, ay = 0, az = 0, total = 0;
+        this.polygons().toArray().forEach(poly =>
+        {
+            const v = poly.vertices().toArray();
+            for (let i = 1; i + 1 < v.length; i++)
+            {
+                const [a, b, c] = [v[0], v[i], v[i + 1]];
+                const ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
+                const wx = c.x - a.x, wy = c.y - a.y, wz = c.z - a.z;
+                const area = 0.5 * Math.hypot(uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx);
+                if (!(area > 0)) continue;
+                ax += area * (a.x + b.x + c.x) / 3;
+                ay += area * (a.y + b.y + c.y) / 3;
+                az += area * (a.z + b.z + c.z) / 3;
+                total += area;
+            }
+        });
+        return total > 0 ? new Point(ax / total, ay / total, az / total) : null;
     }
 
     
