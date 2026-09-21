@@ -187,15 +187,25 @@ export class OBbox
     /** Build an OBbox from all vertices of a Mesh. */
     static fromMesh(m: Mesh): OBbox
     {
-        const unique = new Map<string, Point>();
+        // Straight off the flat position buffer: a triangulated mesh repeats every corner many
+        // times, and making (and rounding) a Point per repeat before deduplicating was most of
+        // the cost of obbox() - it dominated make.partList(). Only unique corners become Points.
+        const buffer = m.inner()?.positions() ?? new Float64Array(0);
+        const tol = POINT_TOLERANCE;
+        const seen = new Set<string>();
+        const unique: Array<Point> = [];
 
-        m.positions().forEach(vertex =>
+        for (let i = 0; i < buffer.length; i += 3) // perf: keep as loop
         {
-            const rounded = new Point(vertex).round(POINT_TOLERANCE);
-            unique.set(`${rounded.x},${rounded.y},${rounded.z}`, rounded);
-        });
+            const kx = Math.round(buffer[i] / tol), ky = Math.round(buffer[i + 1] / tol), kz = Math.round(buffer[i + 2] / tol);
+            const key = `${kx},${ky},${kz}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            unique.push(new Point(kx * tol, ky * tol, kz * tol)); // same values Point.round() gives
+        }
 
-        return OBbox.fromPoints(Array.from(unique.values()))._fromShape(m);
+        if (unique.length === 0) return OBbox.empty()._fromShape(m);
+        return OBbox._onFrame(unique, OBbox._pcaAxes(unique))._fromShape(m);
     }
 
     /** Build an OBbox from a tessellated Curve.

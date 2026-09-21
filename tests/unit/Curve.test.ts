@@ -1894,3 +1894,108 @@ describe('Curve.intersection() / intersections() scene contract', () =>
         expect(layer.shapes().toArray()).toEqual([]);
     });
 });
+
+describe('Curve.cutoff()', () =>
+{
+    it('cuts an open line at the plane and keeps the biggest part', () =>
+    {
+        const kept = Curve.Line([0, 0, 0], [100, 0, 0]).cutoff('x', 30) as Curve;
+        expect(kept.length()).toBeCloseTo(70, 6);
+        expect(kept.start().toArray()).toEqual([30, 0, 0]);
+    });
+
+    it('keeps the smallest part when smallest=true', () =>
+    {
+        const kept = Curve.Line([0, 0, 0], [100, 0, 0]).cutoff('x', 30, true) as Curve;
+        expect(kept.length()).toBeCloseTo(30, 6);
+    });
+
+    it('cuts a diagonal 3D line', () =>
+    {
+        const line = Curve.Line([0, 0, 0], [100, 100, 100]);
+        const total = line.length();
+        const kept = line.cutoff('z', 25) as Curve;
+        expect(kept.length()).toBeCloseTo(total * 0.75, 4);
+        expect(kept.start().z).toBeCloseTo(25, 6);
+    });
+
+    it('cuts a closed curve in the XY plane by area', () =>
+    {
+        const rect = () => Curve.RectBetween([0, 0, 0], [100, 100, 0]);
+        expect((rect().cutoff('x', 30) as Curve).area()).toBeCloseTo(7000, 3);
+        expect((rect().cutoff('x', 30, true) as Curve).area()).toBeCloseTo(3000, 3);
+    });
+
+    it('cuts a closed curve in a vertical plane', () =>
+    {
+        const rect = Curve.RectBetween([0, 0, 0], [100, 0, 100]);
+        expect((rect.cutoff('z', 40) as Curve).area()).toBeCloseTo(6000, 3);
+    });
+
+    it('cuts a closed curve in a tilted plane at the requested coordinate', () =>
+    {
+        const h = 100 / Math.SQRT2; // a 100 x 100 square tilted 45 degrees about the x axis
+        const square = Curve.Polyline([0, 0, 0], [100, 0, 0], [100, h, h], [0, h, h]).close();
+        const kept = square.cutoff('z', 0.3 * h) as Curve;
+        expect(kept.area()).toBeCloseTo(7000, 3);
+        expect(kept.bbox()!.min().z).toBeCloseTo(0.3 * h, 6);
+    });
+
+    it('cuts a closed curve with arcs', () =>
+    {
+        // 100 x 100 with corners rounded at r = 20: the full area is 10000 - (4 - PI) * 400
+        const rounded = Curve.RectBetween([0, 0, 0], [100, 100, 0]).fillet(20)!;
+        const kept = rounded.cutoff('x', 50) as Curve;
+        expect(kept.area()).toBeCloseTo((10000 - (4 - Math.PI) * 400) / 2, 3);
+    });
+
+    it('leaves the Curve unchanged when the plane misses it', () =>
+    {
+        const line = Curve.Line([0, 0, 0], [100, 0, 0]);
+        expect((line.cutoff('y', 5) as Curve).length()).toBeCloseTo(100, 6);
+        expect((line.cutoff('x', 150) as Curve).length()).toBeCloseTo(100, 6);
+    });
+
+    it('throws for an invalid axis', () =>
+    {
+        expect(() => Curve.Line([0, 0, 0], [100, 0, 0]).cutoff('w' as any, 30)).toThrow();
+    });
+});
+
+describe('Curve.trim()', () =>
+{
+    it('with an axis is cutoff()', () =>
+    {
+        expect((Curve.Line([0, 0, 0], [100, 0, 0]).trim('x', 30) as Curve).length()).toBeCloseTo(70, 6);
+        expect((Curve.Line([0, 0, 0], [100, 0, 0]).trim('x', 30, true) as Curve).length()).toBeCloseTo(30, 6);
+    });
+
+    it('with another Curve is cutoffBy(), keepSmallest included', () =>
+    {
+        const cutter = () => Curve.Line([0, 0, 0], [100, 100, 0]);
+        expect((Curve.Line([50, -100, 0], [50, 100, 0]).trim(cutter()) as Curve).length()).toBeCloseTo(150, 3);
+        expect((Curve.Line([50, -100, 0], [50, 100, 0]).trim(cutter(), true) as Curve).length()).toBeCloseTo(50, 3);
+    });
+
+    it('with two positions keeps the part between them, in place', () =>
+    {
+        const line = Curve.Line([0, 0, 0], [100, 0, 0]);
+        const res = line.trim(0.25, 0.75);
+        expect(res).toBe(line);
+        expect(line.length()).toBeCloseTo(50, 6);
+        expect(line.start().toArray()).toEqual([25, 0, 0]);
+
+        expect(Curve.Line([0, 0, 0], [100, 0, 0]).trim(0.75, 0.25).length()).toBeCloseTo(50, 6);
+    });
+
+    it('with two equal positions leaves the Curve unchanged', () =>
+    {
+        expect(Curve.Line([0, 0, 0], [100, 0, 0]).trim(0.5, 0.5).length()).toBeCloseTo(100, 6);
+    });
+
+    it('throws for positions outside 0..1 or a missing second position', () =>
+    {
+        expect(() => Curve.Line([0, 0, 0], [100, 0, 0]).trim(0.2, 1.5)).toThrow();
+        expect(() => (Curve.Line([0, 0, 0], [100, 0, 0]) as any).trim(0.2)).toThrow();
+    });
+});

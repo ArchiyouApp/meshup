@@ -4,7 +4,7 @@ All notable changes to `@archiyou/meshup` are documented here.
 This project follows [semantic versioning](https://semver.org/); while on 0.x, minor
 versions may contain breaking changes.
 
-## Unreleased
+## 0.4.0 — 2026-09-21
 
 ### Added
 
@@ -124,7 +124,32 @@ versions may contain breaking changes.
   is a test for points that are clearly in or out. `intersection()` uses it to decide which
   pieces of a crossing curve are inside the region.
 
+- **`Curve.cutoff(at, coord, smallest)` — the Curve twin of `Mesh.cutoff()` and
+  `Polygon.cutoff()`.** The plane `{ <at> = coord }` meets the Curve's own plane in a line, and
+  the Curve is cut by that line the way `cutoffBy()` cuts it: the biggest piece is kept (by
+  length for an open Curve, by area for a closed one), the smallest with `smallest=true`. A
+  straight Curve is cut in the plane that also holds the axis; a non-planar Curve is left
+  unchanged with a warning.
+
+- **`trim()` on every shape: another shape, an axis, or (on a Curve) two positions.** `Mesh`,
+  `Polygon` and `Curve` all answer `trim(other, keepSmallest?)` as `cutoffBy()` and
+  `trim(at, coord?, smallest?)` as `cutoff()`, the same as brep's `Shape.trim()` in Archiyou.
+  A Curve also takes `trim(t0, t1)`, see below.
+
+  ```js
+  post.trim(roofLine);        // cutoffBy()
+  post.trim('z', 2400);       // cutoff()
+  beam.trim(0.1, 0.9);        // Curve only: keep 10%..90% of the length
+  ```
+
 ### Changed
+
+- **`Curve.trim(t0, t1)` trims in place and returns the Curve.** It used to return a NEW Curve
+  in an array (always one) and leave the Curve as it was, unlike `cutoff()` and `cutoffBy()`,
+  which it now sits beside as a third form of `trim()`. The positions are fractions of the
+  length in [0, 1], as they always were (the old doc comment said knot domain, which was wrong),
+  and are now checked: anything outside [0, 1] throws. Equal positions leave the Curve
+  unchanged with a warning.
 
 - **`ShapeCollection.rotate()` / `rotateX/Y/Z()` / `rotateAround()` turn the collection as a
   GROUP, about its own centre — the same default `scale()` has always used.** With no pivot given
@@ -242,6 +267,31 @@ versions may contain breaking changes.
   form, which cannot represent a half turn — every interior parameter of a 180° arc collapses
   onto its end point. Harmless while that sampler only saw ellipses (pre-split into quarter
   turns); circles reach it now, so arcs are sampled through `point_at_sweep_fraction` instead.
+
+- **`elevation()` and `section()` take a method and an options object, the way `isometry()`
+  does**, on `Mesh` and on `ShapeCollection`. The options are the same `ProjectionOptions` for
+  all three projections, with their defaults in `PROJECTION_DEFAULTS`.
+
+  ```js
+  model.elevation('front', 'exact', { hiddenLines: true });
+  model.section([0, 0, 1200], [0, 0, 1], 'raycast', { samples: 64 });
+  model.elevation('left', undefined, { featureAngle: 20 });   // default method
+  ```
+
+  The positional forms keep working, trailing `{ strategy, fallback }` object included: saved
+  scripts call them. They are marked deprecated in the type signatures.
+
+- **`ShapeCollection._iso(cam, options)` and `_elevation(from, options)` take the method and
+  settings as one object** — `{ method, hiddenLines, includeHiddenShapes, samples,
+  featureAngle, fallback }` — instead of positional arguments and a trailing `view` object. A
+  setting left out or given as `undefined` takes its default.
+
+- **One set of projection defaults.** `EDGE_PROJECTION_DEFAULTS` asked for 32 samples while
+  every projection entry point used 16, and its default plane normal `[1,1,1]` was not even
+  parallel to its default view direction `[-1,-1,1]`. It now holds the defaults the entry points
+  use (16 samples, 10°, a plane facing away from the default camera), and they read them from
+  there instead of repeating the numbers. Only a direct `Mesh._projectEdges()` or
+  `_projectEdgesSection()` call that leaves settings out sees a difference.
 
 ### Fixed
 

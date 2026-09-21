@@ -1170,6 +1170,20 @@ export class Polygon extends Shape
         return this._keepPiece(pieces.toArray(), smallest);
     }
 
+    /** Trim this polygon with an axis-aligned plane — the same as cutoff(). */
+    trim(at: Axis, coord?: number, smallest?: boolean): this;
+    /** Trim this polygon with another Curve or Polygon — the same as cutoffBy(). */
+    trim(other: Curve | Polygon, keepSmallest?: boolean): this;
+    /** Trim this polygon, like Mesh.trim(), Curve.trim() and brep's Shape.trim():
+     *  - `trim(other, keepSmallest?)`: cut by a Curve or Polygon and keep a piece — see cutoffBy().
+     *  - `trim(at, coord?, smallest?)`: cut by the plane `{ <at> = coord }` — see cutoff(). */
+    trim(otherOrAt: Curve | Polygon | Axis, keepOrCoord?: boolean | number, smallest?: boolean): this
+    {
+        return isAxis(otherOrAt)
+            ? this.cutoff(otherOrAt, keepOrCoord as number | undefined, smallest)
+            : this.cutoffBy(otherOrAt, keepOrCoord as boolean | undefined);
+    }
+
     //// 3D OPERATIONS ////
 
     /**

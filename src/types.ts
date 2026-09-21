@@ -2,6 +2,7 @@ import { Vector } from './Vector'
 import { Vertex } from './Vertex';
 import { Point } from './Point';
 import { StyleData } from './Style';
+import { PROJECTION_DEFAULTS, PROJECTION_LEGACY_ARGS } from './constants';
 
 import { 
   Point3Js,
@@ -229,9 +230,9 @@ export interface ProjectEdgeOptions
   strategy?: HlrStrategy; // which HLR algorithm to run (default: ISOMETRY_HLR_STRATEGY_DEFAULT)
 }
 
-/** Trailing options accepted by the projection entry points
- *  ({@link Mesh.isometry}, `elevation`, `section` and their collection
- *  equivalents) in place of a further positional argument.
+/** The trailing `view` object of the legacy positional projection signatures — see
+ *  {@link resolveProjectionArgs}. The current signatures take a method and
+ *  {@link ProjectionOptions} instead.
  */
 export interface ProjectionViewOptions
 {
@@ -241,6 +242,107 @@ export interface ProjectionViewOptions
    *  strategy does not apply to this scene, instead of throwing. Default `false`, so a
    *  strategy that cannot run says so rather than silently changing. */
   fallback?: boolean;
+}
+
+/** The settings of a hidden-line projection, independent of which algorithm runs it: the
+ *  `options` of `isometry(cam, method, options)`, `elevation(from, method, options)` and
+ *  `section(pivot, normal, method, options)`.
+ *
+ *  Grouping them in an object is what keeps the call readable once there are five of them,
+ *  and what lets options be added without growing a positional tail. The defaults are
+ *  {@link PROJECTION_DEFAULTS}.
+ */
+export interface ProjectionOptions
+{
+  /** Keep occluded edges in a `'hidden'` group. Default `false`. */
+  hiddenLines?: boolean;
+  /** Include shapes whose style marks them invisible. Default `false`. Only a collection
+   *  has shapes to leave out; a single shape ignores this. */
+  includeHiddenShapes?: boolean;
+  /** Minimum dihedral angle (degrees) for an edge to count as a crease.
+   *  Range `[0, 180]`, monotonic — higher drops more edges. Default `10`.
+   *
+   *  This is the main performance control on tessellated surfaces: at a low
+   *  threshold nearly every triangle edge of a sphere survives, and whichever
+   *  solver runs next does that many times more work. */
+  featureAngle?: number;
+  /** Visibility samples per edge. **`'raycast'` only** — the other methods
+   *  compute occlusion rather than sampling it, and ignore this. Default `16`. */
+  samples?: number;
+  /** For `'clip'` and `'painter'`: fall back to `'exact'` with a warning
+   *  when the scene does not meet their requirements, instead of throwing.
+   *  Default `false`, so a method that cannot run says so. */
+  fallback?: boolean;
+}
+
+/** {@link ProjectionOptions} plus the method, with every default filled in. */
+export interface ResolvedProjectionOptions extends Required<ProjectionOptions>
+{
+  /** Which hidden-line algorithm runs. */
+  method: HlrStrategy;
+}
+
+/** A setting that the legacy positional projection signatures take by position. */
+export type ProjectionLegacyArg = 'hiddenLines' | 'includeHiddenShapes' | 'samples' | 'featureAngle';
+
+/** Fill in the defaults of a projection's settings. A setting given as `undefined` or `null`
+ *  takes its default too, so a caller can pass its own optional values straight through. */
+export function resolveProjectionOptions(options: Partial<ResolvedProjectionOptions> = {}): ResolvedProjectionOptions
+{
+  const given = Object.entries(options).filter(([, value]) => value != null);
+  return { ...PROJECTION_DEFAULTS, ...Object.fromEntries(given) };
+}
+
+/**
+ * Resolve any call form of a projection into one options object. `args` are the arguments
+ * after the ones that say where to look from: `cam` for `isometry()`, `from` for
+ * `elevation()`, `pivot` and `normal` for `section()`.
+ *
+ * ```ts
+ * isometry([-1,-1,1], 'exact', { hiddenLines: true })   // current
+ * isometry([-1,-1,1], undefined, { hiddenLines: true }) // current, default method
+ * isometry([-1,-1,1], { method: 'exact' })              // options only
+ * isometry([-1,-1,1], true, false, 16, 10)              // legacy positional
+ * ```
+ *
+ * The forms are told apart by the first of `args`: a string names a method, an object carries
+ * options, and anything else is the legacy positional form — its settings in `legacyOrder`,
+ * then a trailing {@link ProjectionViewOptions} object. That order is not the same everywhere
+ * (see {@link MESH_PROJECTION_LEGACY_ARGS}), which is why the caller passes it.
+ *
+ * The legacy positional form must keep working: scripts saved in the Archiyou script
+ * database call it, and those are user content that cannot be migrated by editing this
+ * repository.
+ */
+export function resolveProjectionArgs(
+  args: any[],
+  legacyOrder: ReadonlyArray<ProjectionLegacyArg> = PROJECTION_LEGACY_ARGS,
+): ResolvedProjectionOptions
+{
+  const [first, second] = args;
+  const isOptions = (value: any): boolean => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+  // elevation('front', 'exact', { ... }), or the method left out: elevation('front', undefined, { ... })
+  // No legacy form has an object in second place, so the second can only be options.
+  if (typeof first === 'string' || (first == null && isOptions(second)))
+  {
+    return resolveProjectionOptions({ ...second, method: first ?? second?.method });
+  }
+
+  // elevation('front', { method: 'exact', ... })
+  if (isOptions(first))
+  {
+    return resolveProjectionOptions(first);
+  }
+
+  // elevation('front', hiddenLines, includeHiddenShapes, samples, featureAngle, view)
+  //
+  // The trailing `view` object is how the method was selected before it had a positional
+  // slot; honour it so call sites written against that form keep working too.
+  const settings = Object.fromEntries(legacyOrder.map((name, i) => [name, args[i]]));
+  const trailing = args[legacyOrder.length];
+  const view: ProjectionViewOptions = isOptions(trailing) ? trailing : {};
+  return resolveProjectionOptions({ ...settings, method: view.strategy, fallback: view.fallback });
 }
 
 //// SCENE NODE TYPES ////

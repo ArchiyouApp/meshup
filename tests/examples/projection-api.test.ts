@@ -1,12 +1,13 @@
 /**
- * The `isometry(cam, method, { options })` signature.
+ * The projection signatures: `isometry(cam, method, options)`,
+ * `elevation(from, method, options)` and `section(pivot, normal, method, options)`.
  *
  * The settings are grouped in an object so the call stays readable once there
  * are five of them, and so options can be added without growing a positional
  * tail.
  *
- * The older positional form is still accepted and must stay that way: scripts
- * saved in the Archiyou script database call it, and those are user content
+ * The older positional forms are still accepted and must stay that way: scripts
+ * saved in the Archiyou script database call them, and those are user content
  * that cannot be migrated by editing this repository. Both forms are pinned
  * here, and pinned to agree with each other.
  */
@@ -15,6 +16,8 @@ import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
 import { ShapeCollection } from '../../src/ShapeCollection';
+import { resolveProjectionArgs } from '../../src/types';
+import { PROJECTION_DEFAULTS, MESH_PROJECTION_LEGACY_ARGS } from '../../src/constants';
 
 /** Compare two projections by their line work, ignoring object identity. */
 function shape(result: ShapeCollection<any>): string
@@ -124,6 +127,150 @@ describe('isometry: the legacy positional form still works', () =>
         const viaMethod = Mesh.Box(100, 100, 100)
             .isometry([-1, -1, 1], 'exact', { hiddenLines: true });
         expect(shape(viaView)).toBe(shape(viaMethod));
+    });
+});
+
+describe('resolveProjectionArgs: every call form resolves to one options object', () =>
+{
+    it('reads a method and its options', () =>
+    {
+        expect(resolveProjectionArgs(['raycast', { hiddenLines: true, samples: 64 }]))
+            .toEqual({ ...PROJECTION_DEFAULTS, method: 'raycast', hiddenLines: true, samples: 64 });
+    });
+
+    it('reads an options object with the method inside', () =>
+    {
+        expect(resolveProjectionArgs([{ method: 'clip', fallback: true }]))
+            .toEqual({ ...PROJECTION_DEFAULTS, method: 'clip', fallback: true });
+    });
+
+    it('reads the legacy positional form, trailing view object included', () =>
+    {
+        expect(resolveProjectionArgs([true, false, 32, 20, { strategy: 'painter', fallback: true }]))
+            .toEqual({ method: 'painter', hiddenLines: true, includeHiddenShapes: false,
+                samples: 32, featureAngle: 20, fallback: true });
+    });
+
+    it('takes the defaults for settings left out or given as undefined', () =>
+    {
+        expect(resolveProjectionArgs([])).toEqual(PROJECTION_DEFAULTS);
+        expect(resolveProjectionArgs(['exact', { samples: undefined, featureAngle: undefined }]))
+            .toEqual(PROJECTION_DEFAULTS);
+        expect(resolveProjectionArgs([undefined, undefined, 64]))
+            .toEqual({ ...PROJECTION_DEFAULTS, samples: 64 });
+    });
+
+    it('reads options after a method that is left out', () =>
+    {
+        expect(resolveProjectionArgs([undefined, { hiddenLines: true, method: 'raycast' }]))
+            .toEqual({ ...PROJECTION_DEFAULTS, hiddenLines: true, method: 'raycast' });
+    });
+
+    it('reads the legacy positional form in the order the caller gives', () =>
+    {
+        //                                  hidden, samples, angle, view
+        expect(resolveProjectionArgs([true, 32, 20, { strategy: 'raycast' }], MESH_PROJECTION_LEGACY_ARGS))
+            .toEqual({ ...PROJECTION_DEFAULTS, method: 'raycast', hiddenLines: true, samples: 32, featureAngle: 20 });
+    });
+});
+
+/** Run `fn` while recording the options of every call to one of Mesh's kernel projections. */
+function recordKernelOptions(method: '_projectEdges' | '_projectEdgesSection', fn: () => void): any[]
+{
+    const seen: any[] = [];
+    const original = (Mesh as any).prototype[method];
+    (Mesh as any).prototype[method] = function (options: any, occluders?: any)
+    {
+        seen.push(options);
+        return original.call(this, options, occluders);
+    };
+    try
+    {
+        fn();
+    }
+    finally
+    {
+        (Mesh as any).prototype[method] = original;
+    }
+    return seen;
+}
+
+const twoBoxes = () => new ShapeCollection<any>(Mesh.Box(20, 20, 20), Mesh.Box(20, 20, 20).move(60, 0, 0));
+
+describe('elevation(from, method, options)', () =>
+{
+    it('hands the method and its options to the kernel on Mesh', () =>
+    {
+        const seen = recordKernelOptions('_projectEdges', () =>
+            Mesh.Box(20, 20, 20).elevation('front', 'raycast', { samples: 123, featureAngle: 7 }));
+        expect(seen.map(o => [o.strategy, o.samples, o.featureAngle])).toEqual([['raycast', 123, 7]]);
+    });
+
+    it('hands the method and its options to the kernel on ShapeCollection', () =>
+    {
+        const seen = recordKernelOptions('_projectEdges', () =>
+            twoBoxes().elevation('front', 'raycast', { samples: 123, featureAngle: 7 }));
+        expect(seen.length).toBeGreaterThan(0);
+        seen.forEach(o => expect([o.strategy, o.samples, o.featureAngle]).toEqual(['raycast', 123, 7]));
+    });
+
+    it('takes the default method when it is left out', () =>
+    {
+        const seen = recordKernelOptions('_projectEdges', () =>
+            Mesh.Box(20, 20, 20).elevation('front', undefined, { samples: 123 }));
+        expect(seen.map(o => [o.strategy, o.samples])).toEqual([['exact', 123]]);
+    });
+
+    it('reports a method that cannot run, unless told to fall back', () =>
+    {
+        const notched = Mesh.Box(40, 40, 40).subtract(Mesh.Box(20, 20, 20).move(20, 20, 20));
+        const scene = () => new ShapeCollection<any>(notched.copy(), Mesh.Box(20, 20, 20).move(80, 0, 0));
+
+        expect(() => scene().elevation('front', 'clip')).toThrow(/convex/i);
+        expect(scene().elevation('front', 'clip', { fallback: true }).length).toBeGreaterThan(0);
+    });
+});
+
+describe('elevation: the legacy positional form still works', () =>
+{
+    it('reads a Mesh elevation without includeHiddenShapes, as it always was', () =>
+    {
+        //                                                                 hidden, samples, angle
+        const seen = recordKernelOptions('_projectEdges', () =>
+            Mesh.Box(20, 20, 20).elevation('front', false, 123, 7, { strategy: 'raycast' }));
+        expect(seen.map(o => [o.strategy, o.samples, o.featureAngle])).toEqual([['raycast', 123, 7]]);
+    });
+
+    it('agrees with the new form on Mesh and on ShapeCollection', () =>
+    {
+        expect(shape(Mesh.Box(100, 50, 20).elevation('left', true, 16, 10)))
+            .toBe(shape(Mesh.Box(100, 50, 20).elevation('left', 'exact', { hiddenLines: true })));
+        expect(shape(twoBoxes().elevation('front', true, false, 16, 10)))
+            .toBe(shape(twoBoxes().elevation('front', 'exact', { hiddenLines: true })));
+    });
+});
+
+describe('section(pivot, normal, method, options)', () =>
+{
+    it('hands the method and its options to the kernel on Mesh and on ShapeCollection', () =>
+    {
+        const onMesh = recordKernelOptions('_projectEdgesSection', () =>
+            Mesh.Box(20, 20, 20).section([0, 0, 0], [0, 0, 1], 'raycast', { samples: 321, featureAngle: 11 }));
+        const onCollection = recordKernelOptions('_projectEdgesSection', () =>
+            twoBoxes().section([0, 0, 0], [0, 0, 1], 'raycast', { samples: 321, featureAngle: 11 }));
+
+        expect(onMesh.map(o => [o.strategy, o.samples, o.featureAngle])).toEqual([['raycast', 321, 11]]);
+        expect(onCollection.map(o => [o.strategy, o.samples, o.featureAngle])).toEqual([['raycast', 321, 11]]);
+    });
+
+    it('agrees with the legacy positional form', () =>
+    {
+        //                                                          hidden, samples, angle
+        expect(shape(Mesh.Box(20, 20, 20).section([0, 0, 0], [0, 0, 1], true, 16, 10)))
+            .toBe(shape(Mesh.Box(20, 20, 20).section([0, 0, 0], [0, 0, 1], 'exact', { hiddenLines: true })));
+        //                                                        hidden, includeHidden, samples, angle
+        expect(shape(twoBoxes().section([0, 0, 0], [0, 0, 1], true, false, 16, 10)))
+            .toBe(shape(twoBoxes().section([0, 0, 0], [0, 0, 1], 'exact', { hiddenLines: true })));
     });
 });
 

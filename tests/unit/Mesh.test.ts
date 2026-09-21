@@ -492,6 +492,23 @@ describe('Selector — edges on a Mesh', () =>
     });
 });
 
+describe('Mesh.trim()', () =>
+{
+    it('with an axis is cutoff()', () =>
+    {
+        // Mesh.Cube(10) is centred on the origin: x runs -5..5
+        expect(Mesh.Cube(10).trim('x', -2).volume()).toBeCloseTo(700, 3);
+        expect(Mesh.Cube(10).trim('x', -2, true).volume()).toBeCloseTo(300, 3);
+    });
+
+    it('with another Mesh is cutoffBy(), keepSmallest included', () =>
+    {
+        const cutter = () => Mesh.Cube(10).move(7, 0, 0); // overlaps x 2..5
+        expect(Mesh.Cube(10).trim(cutter()).volume()).toBeCloseTo(700, 3);
+        expect(Mesh.Cube(10).trim(cutter(), true).volume()).toBeCloseTo(300, 3);
+    });
+});
+
 describe('center() of a flat mesh', () =>
 {
     it('is the area centroid, not the undefined mass centre', () =>

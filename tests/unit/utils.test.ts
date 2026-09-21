@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { rad, deg, toBase64, fromBase64 } from '../../src/utils';
 
 describe('rad', () =>
@@ -79,5 +79,23 @@ describe('toBase64 / fromBase64', () =>
         const encoded = toBase64(original);
         const decoded = fromBase64(encoded);
         expect(new TextDecoder().decode(decoded)).toBe(original);
+    });
+
+    // Regression: without Buffer (browser, web worker) every byte was spread into one
+    // String.fromCharCode() call, and a GLTF export of a real model overflowed the stack.
+    it('encodes a large buffer without Buffer, the way a browser does', () =>
+    {
+        const bytes = new Uint8Array(4_000_000).map((_, i) => (i * 7) % 256);
+        const expected = Buffer.from(bytes).toString('base64');
+
+        vi.stubGlobal('Buffer', undefined);
+        try
+        {
+            expect(toBase64(bytes)).toBe(expected);
+        }
+        finally
+        {
+            vi.unstubAllGlobals();
+        }
     });
 });

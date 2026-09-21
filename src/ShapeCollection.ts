@@ -10,9 +10,9 @@
  * 
  */
 
-import type { Axis, BasePlane, PointLike, ProjectEdgeOptions, RaycastHit, HlrStrategy, ProjectionViewOptions } from './types';
-import { resolveIsometryArgs, DEFAULT_ISOMETRY_CAM } from './projectionOptions';
-import type { IsometryOptions } from './projectionOptions';
+import type { Axis, BasePlane, PointLike, ProjectEdgeOptions, RaycastHit, HlrStrategy, ProjectionViewOptions,
+    ProjectionOptions, ResolvedProjectionOptions } from './types';
+import { resolveProjectionArgs, resolveProjectionOptions } from './types';
 
 import { Vector } from './Vector';
 import { Vertex } from './Vertex';
@@ -29,7 +29,7 @@ import { colSceneAdd, colSceneLayer, colSceneReplace, sceneCarry } from './scene
 import { MeshJs } from './wasm/meshup';
 import { GLTFBuilder } from './GLTFBuilder';
 
-import { TOLERANCE, ISOMETRY_HLR_STRATEGY_DEFAULT } from './constants';
+import { TOLERANCE, ISOMETRY_HLR_STRATEGY_DEFAULT, ISOMETRY_CAM_DEFAULT, EDGE_PROJECTION_DEFAULTS } from './constants';
 import { gridCounts } from './utils';
 
 /** A Shape that SVG can draw as a FACE: a Mesh or a Polygon lying on a plane parallel to XY.
@@ -241,8 +241,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
                 const addShapes: S[] = Array.isArray(shapeArg)
                     ? (shapeArg as any[])
                         .filter(s => {
-                            // HACKY: If you want to force any instance to be accepted as a shape, 
-                            // implement isShapeClass() on it to return true, and ShapeCollection will accept it. 
+                            // HACKY: If you want to force any instance to be accepted as a shape,
+                            // implement isShapeClass() on it to return true, and ShapeCollection will accept it.
                             return Shape.isShape(s) || s.isShapeClass?.();
                         }) as S[]
                     : (shapeArg as any).toArray() as S[];     // this kernel's collection or another's — flattened either way
@@ -1089,7 +1089,17 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     }
 
 
-    /** Merge all polygons into one Mesh (without booleans) */
+    /** Merge all polygons into one Mesh (without booleans).
+     *
+     *  The merged Mesh TAKES THE PLACE of the collection's shapes in the scene: a merge is a
+     *  replacement, not an extra shape beside the originals. Without that the result was a
+     *  brand-new Mesh that belonged to no scene at all, so `c.merge().color('red')` built the
+     *  geometry and then showed nothing — and `.addToScene()` on it was a silent no-op too,
+     *  because the fresh Mesh carried no scene to go back to.
+     *
+     *  Use `_merged()` for the geometry alone: internal callers that merge scene shapes only to
+     *  project them must not pull those shapes out of the scene. */
+    @colSceneReplace
     merge(): any
     {
         // Shapes of another kernel have no polygons to merge: fuse them through that kernel's
@@ -1100,6 +1110,12 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             const ForeignCollection = (foreign[0] as any)._modeler?.classes?.ShapeCollection;
             if (typeof ForeignCollection === 'function') return new ForeignCollection(...foreign).union();
         }
+        return this._merged();
+    }
+
+    /** Merge all polygons into one Mesh, leaving the scene alone (private). */
+    _merged(): Mesh
+    {
         const allPolygons = this._shapes
             .filter(shape => shape instanceof Mesh)
             .flatMap(shape =>
@@ -1560,15 +1576,15 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  caller is told, rather than quietly getting a different drawing than the
      *  one they asked for; pass `fallback: true` to downgrade with a warning.
      */
-    private static _resolveStrategy(meshes: Mesh[], view: ProjectionViewOptions): HlrStrategy
+    private static _resolveStrategy(meshes: Mesh[], requested: HlrStrategy | undefined, fallback: boolean = false): HlrStrategy
     {
-        const strategy = view.strategy ?? ISOMETRY_HLR_STRATEGY_DEFAULT;
+        const strategy = requested ?? ISOMETRY_HLR_STRATEGY_DEFAULT;
         if (strategy !== 'clip' && strategy !== 'painter') return strategy;
 
         const reason = ShapeCollection._perShapeBlocker(meshes);
         if (!reason) return strategy;
 
-        if (view.fallback)
+        if (fallback)
         {
             console.warn(`ShapeCollection: '${strategy}' does not apply here (${reason}) — falling back to '${ISOMETRY_HLR_STRATEGY_DEFAULT}'.`);
             return ISOMETRY_HLR_STRATEGY_DEFAULT;
@@ -1804,7 +1820,9 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         curves: Curve[] = [],
     ): ShapeCollection<any>
     {
-        const merged = new ShapeCollection<Mesh>(...meshes).merge() as Mesh;
+        // _merged(): these meshes are in the scene and only merged to be projected as one -
+        // merge() would replace them in the scene, deleting the model we are drawing.
+        const merged = new ShapeCollection<Mesh>(...meshes)._merged();
         const options = ShapeCollection._makeProjectionOptions(
             viewDir,
             planeNormal,
@@ -1922,37 +1940,32 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return Mesh._flattenProjectionToScreen(iso, planeNormal);
     }
 
-    //// ISOMETRY ////
+    //// PROJECTIONS ////
 
     /** Isometric projection of the collection, added to the active scene layer. */
-    isometry(cam?: PointLike, method?: HlrStrategy, options?: IsometryOptions): ShapeCollection<any>;
+    isometry(cam?: PointLike, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<any>;
     /** @deprecated Positional form. Kept working for saved scripts; prefer
      *  `isometry(cam, method, { ... })`. */
     isometry(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
              samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<any>;
     @colSceneAdd
-    isometry(cam: PointLike = DEFAULT_ISOMETRY_CAM, ...args: any[]): ShapeCollection<any>
+    isometry(cam: PointLike = ISOMETRY_CAM_DEFAULT, ...args: any[]): ShapeCollection<any>
     {
-        const o = resolveIsometryArgs(args);
-        return this._iso(cam, o.hiddenLines, o.includeHiddenShapes, o.samples, o.featureAngle,
-            { strategy: o.method, fallback: o.fallback });
+        return this._iso(cam, resolveProjectionArgs(args));
     }
 
     /** Internal isometric projection — skips scene management (no @scene* decorators fire), so
      *  it's safe to call from other ops and from exporters. The public isometry()/iso() wrap this
      *  with @colSceneAdd / @colSceneLayer('iso') to add the projection to the scene; calling those
-     *  from an exporter pollutes the scenegraph of every later export in the same run. */
-    _iso(
-        cam: PointLike = [-1, -1, 1],
-        hiddenLines: boolean = false,
-        includeHiddenShapes: boolean = false,
-        samples: number = 16,
-        featureAngle: number=10,
-        view: ProjectionViewOptions = {},
-    ): ShapeCollection<any>
+     *  from an exporter pollutes the scenegraph of every later export in the same run.
+     *
+     *  @param options The method and the {@link ProjectionOptions}; whatever is left out, or given
+     *    as `undefined`, takes its default from {@link PROJECTION_DEFAULTS}. */
+    _iso(cam: PointLike = ISOMETRY_CAM_DEFAULT, options: Partial<ResolvedProjectionOptions> = {}): ShapeCollection<any>
     {
-        const meshes = this._visibleProjectionMeshes(includeHiddenShapes);
-        const curves = this._visibleProjectionCurves(includeHiddenShapes);
+        const o = resolveProjectionOptions(options);
+        const meshes = this._visibleProjectionMeshes(o.includeHiddenShapes);
+        const curves = this._visibleProjectionCurves(o.includeHiddenShapes);
         if (!meshes.length && !curves.length)
         {
             return new ShapeCollection<any>();
@@ -1960,17 +1973,17 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         // A lone mesh with no linear shapes has the fast single-mesh path.
         if (meshes.length === 1 && !curves.length)
         {
-            return meshes[0].isometry(cam, hiddenLines, false, samples, featureAngle, view);
+            return meshes[0].isometry(cam, o.method, o);
         }
 
         const camDirVec = Point.from(cam).toVector().normalize();
         const planeNormal = camDirVec.copy(); // .reverse() removed. Now works. TODO: check why;
 
-        const strategy = ShapeCollection._resolveStrategy(meshes, view);
+        const strategy = ShapeCollection._resolveStrategy(meshes, o.method, o.fallback);
         if (strategy === 'clip' || strategy === 'painter')
         {
             return ShapeCollection._projectPerShape(
-                meshes, camDirVec, planeNormal, hiddenLines, featureAngle, strategy, curves);
+                meshes, camDirVec, planeNormal, o.hiddenLines, o.featureAngle, strategy, curves);
         }
 
         // Technique: project the merged solid first, then add touching-face
@@ -1982,34 +1995,31 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             meshes,
             camDirVec,
             planeNormal,
-            hiddenLines,
-            samples,
-            featureAngle,
+            o.hiddenLines,
+            o.samples,
+            o.featureAngle,
             strategy,
             curves,
         );
     }
-        
 
     /** Isometric projection of the collection, added to a dedicated 'iso' scene layer. */
-    iso(cam?: PointLike, method?: HlrStrategy, options?: IsometryOptions): ShapeCollection<any>;
+    iso(cam?: PointLike, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<any>;
     /** @deprecated Positional form — see {@link isometry}. */
     iso(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
         samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<any>;
     @colSceneLayer('iso')
-    iso(cam: PointLike = DEFAULT_ISOMETRY_CAM, ...args: any[]): ShapeCollection<any>
+    iso(cam: PointLike = ISOMETRY_CAM_DEFAULT, ...args: any[]): ShapeCollection<any>
     {
-        const o = resolveIsometryArgs(args);
-        return this._iso(cam, o.hiddenLines, o.includeHiddenShapes, o.samples, o.featureAngle,
-            { strategy: o.method, fallback: o.fallback });
+        return this._iso(cam, resolveProjectionArgs(args));
     }
 
     isoTest(
-        cam: PointLike = [-1, -1, 1],
+        cam: PointLike = ISOMETRY_CAM_DEFAULT,
         hiddenLines: boolean = false,
         includeHiddenShapes: boolean = false,
-        samples: number = 16,
-        featureAngle: number = 10,
+        samples: number = EDGE_PROJECTION_DEFAULTS.samples,
+        featureAngle: number = EDGE_PROJECTION_DEFAULTS.featureAngle,
     ): ShapeCollection<any>
     {
         const meshes = this._visibleProjectionMeshes(includeHiddenShapes);
@@ -2019,7 +2029,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         }
         if (meshes.length === 1)
         {
-            return meshes[0].isometry(cam, hiddenLines, false, samples, featureAngle);
+            return meshes[0].isometry(cam, ISOMETRY_HLR_STRATEGY_DEFAULT, { hiddenLines, samples, featureAngle });
         }
 
         const camDirVec = Point.from(cam).toVector().normalize();
@@ -2039,57 +2049,52 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  using the merged-solid pass plus contact-face add-back. Added to a dedicated
      *  'elevation' scene layer. See {@link Mesh.elevation} for parameter semantics.
      */
+    elevation(from?: PointLike | BasePlane, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<any>;
+    /** @deprecated Positional form. Kept working for saved scripts; prefer
+     *  `elevation(from, method, { ... })`. */
+    elevation(from?: PointLike | BasePlane, hiddenLines?: boolean, includeHiddenShapes?: boolean,
+              samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<any>;
     @colSceneLayer('elevation')
-    elevation(
-        from: PointLike | BasePlane = 'front',
-        hiddenLines: boolean = false,
-        includeHiddenShapes: boolean = false,
-        samples: number = 16,
-        featureAngle: number = 10,
-        view: ProjectionViewOptions = {},
-    ): ShapeCollection<any>
+    elevation(from: PointLike | BasePlane = 'front', ...args: any[]): ShapeCollection<any>
     {
-        return this._elevation(from, hiddenLines, includeHiddenShapes, samples, featureAngle, view);
+        return this._elevation(from, resolveProjectionArgs(args));
     }
 
-    /** Internal elevation projection — skips scene management, like {@link _iso}. */
-    _elevation(
-        from: PointLike | BasePlane = 'front',
-        hiddenLines: boolean = false,
-        includeHiddenShapes: boolean = false,
-        samples: number = 16,
-        featureAngle: number = 10,
-        view: ProjectionViewOptions = {},
-    ): ShapeCollection<any>
+    /** Internal elevation projection — skips scene management, like {@link _iso}.
+     *
+     *  @param options The method and the {@link ProjectionOptions}; whatever is left out, or given
+     *    as `undefined`, takes its default from {@link PROJECTION_DEFAULTS}. */
+    _elevation(from: PointLike | BasePlane = 'front', options: Partial<ResolvedProjectionOptions> = {}): ShapeCollection<any>
     {
-        const meshes = this._visibleProjectionMeshes(includeHiddenShapes);
+        const o = resolveProjectionOptions(options);
+        const meshes = this._visibleProjectionMeshes(o.includeHiddenShapes);
         if (!meshes.length)
         {
             return new ShapeCollection<any>();
         }
-        const curves = this._visibleProjectionCurves(includeHiddenShapes);
+        const curves = this._visibleProjectionCurves(o.includeHiddenShapes);
         if (meshes.length === 1 && !curves.length)
         {
-            return meshes[0].elevation(from, hiddenLines, samples, featureAngle, view);
+            return meshes[0].elevation(from, o.method, o);
         }
 
         const viewDir = Mesh._resolveViewDirection(from);
         const planeNormal = viewDir.copy().reverse();
 
-        const strategy = ShapeCollection._resolveStrategy(meshes, view);
+        const strategy = ShapeCollection._resolveStrategy(meshes, o.method, o.fallback);
         if (strategy === 'clip' || strategy === 'painter')
         {
             return ShapeCollection._projectPerShape(
-                meshes, viewDir, planeNormal, hiddenLines, featureAngle, strategy, curves);
+                meshes, viewDir, planeNormal, o.hiddenLines, o.featureAngle, strategy, curves);
         }
 
         return ShapeCollection._projectMergedProjectionWithContactFaces(
             meshes,
             viewDir,
             planeNormal,
-            hiddenLines,
-            samples,
-            featureAngle,
+            o.hiddenLines,
+            o.samples,
+            o.featureAngle,
             strategy,
             curves,
         );
@@ -2098,32 +2103,30 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     /** Architectural section across every Mesh in this collection.
      *  See {@link Mesh.section} for parameter semantics.
      */
-    section(
-        pivot: PointLike,
-        normal: PointLike | BasePlane = [0, 0, 1],
-        hiddenLines: boolean = false,
-        includeHiddenShapes: boolean = false,
-        samples: number = 16,
-        featureAngle: number = 10,
-        view: ProjectionViewOptions = {},
-    ): ShapeCollection<any>
+    section(pivot: PointLike, normal?: PointLike | BasePlane, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<any>;
+    /** @deprecated Positional form. Kept working for saved scripts; prefer
+     *  `section(pivot, normal, method, { ... })`. */
+    section(pivot: PointLike, normal?: PointLike | BasePlane, hiddenLines?: boolean, includeHiddenShapes?: boolean,
+            samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<any>;
+    section(pivot: PointLike, normal: PointLike | BasePlane = [0, 0, 1], ...args: any[]): ShapeCollection<any>
     {
-        const meshes = this._visibleProjectionMeshes(includeHiddenShapes);
+        const o = resolveProjectionArgs(args);
+        const meshes = this._visibleProjectionMeshes(o.includeHiddenShapes);
         if (!meshes.length)
         {
             return new ShapeCollection<any>();
         }
         if (meshes.length === 1)
         {
-            return meshes[0].section(pivot, normal, hiddenLines, samples, featureAngle, view);
+            return meshes[0].section(pivot, normal, o.method, o);
         }
 
         // A section cuts the assembly into one solid, so there are no separate
         // shapes left to order — the per-shape strategies have nothing to do
         // here and Mesh.section resolves them to 'exact'.
         return new ShapeCollection<Mesh>(...meshes)
-            .merge()
-            .section(pivot, normal, hiddenLines, samples, featureAngle, view);
+            ._merged() // scene-free merge: the source meshes must stay in the scene
+            .section(pivot, normal, o.method, o);
     }
 
     //// OUTPUTS ////

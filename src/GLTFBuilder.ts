@@ -589,8 +589,10 @@ export class GLTFBuilder
         if (item instanceof Mesh)
         {
             const n = name ?? 'mesh';
-            if (!item._mesh || item.positions().length === 0) return this;
-            const { node, primitive, indices, positions, normals } = this._meshToGLTFNode(item, n);
+            if (!item._mesh) return this;
+            const buffer = item.toBuffer(); // triangulated once, reused below
+            if (buffer.positions.length === 0) return this;
+            const { node, primitive, indices, positions, normals } = this._meshToGLTFNode(item, n, undefined, buffer);
             this.addSceneChild(node);
             this.queueMeshExtData(primitive, indices, positions, normals, item.style);
         }
@@ -748,8 +750,10 @@ export class GLTFBuilder
             if (shape instanceof Mesh || shape.type === 'Mesh')
             {
                 const mesh = shape as unknown as Mesh;
-                if (!mesh._mesh || mesh.positions().length === 0) return;
-                const { node: meshNode, primitive, indices, positions, normals } = this._meshToGLTFNode(mesh, name, cascadedStyle);
+                if (!mesh._mesh) return;
+                const buffer = mesh.toBuffer(); // triangulated once, reused below
+                if (buffer.positions.length === 0) return;
+                const { node: meshNode, primitive, indices, positions, normals } = this._meshToGLTFNode(mesh, name, cascadedStyle, buffer);
                 gltfNode.addChild(meshNode);
                 this.queueMeshExtData(primitive, indices, positions, normals, cascadedStyle);
             }
@@ -790,9 +794,9 @@ export class GLTFBuilder
     //// PRIVATE: GEOMETRY BUILDERS ////
 
     /** Assemble a GltfNode for a Mesh from its raw toBuffer() data. */
-    private _meshToGLTFNode(mesh: Mesh, name = 'mesh', style?: Style): { node: GltfNode; primitive: Primitive; indices: Uint32Array; positions: Float32Array; normals: Float32Array }
+    private _meshToGLTFNode(mesh: Mesh, name = 'mesh', style?: Style, buffer?: ReturnType<Mesh['toBuffer']>): { node: GltfNode; primitive: Primitive; indices: Uint32Array; positions: Float32Array; normals: Float32Array }
     {
-        const { positions: posRaw, normals: normRaw, indices } = mesh.toBuffer();
+        const { positions: posRaw, normals: normRaw, indices } = buffer ?? mesh.toBuffer();
         const count = posRaw.length / 3;
         const posF32 = new Float32Array(count * 3);
         const normF32 = new Float32Array(count * 3);

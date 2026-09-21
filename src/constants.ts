@@ -1,6 +1,7 @@
 //// GLOBAL SETTINGS ////
 
 import type { StyleData } from './Style';
+import type { ResolvedProjectionOptions } from './types';
 
 export const TOLERANCE = 1e-5; // general tolerance for geometric comparisons, in world units
 
@@ -70,12 +71,21 @@ export const BBOX_SIDE_TO_BOUND = {
 // Follow BREP terminology for subshapes. Face = Polygon, Wire = Curve
 export const SELECTOR_SHAPES = ['mesh', 'curve', 'face', 'edge', 'wire','vertex'];
 
+/** Where the camera sits when a projection names none: front-left and above, the classic
+ *  isometric view. A direction from the origin toward the viewer. */
+export const ISOMETRY_CAM_DEFAULT: [number, number, number] = [-1, -1, 1];
+
+/** What {@link Mesh._projectEdges} fills in for a setting the caller leaves out. The
+ *  projection entry points (`isometry()`, `elevation()`, `section()`) take their numbers from
+ *  here too, so there is one default per setting. */
 export const EDGE_PROJECTION_DEFAULTS = {
-    viewDirection: [-1, -1, 1], // direction to project along (e.g. camera view direction)
-    planeNormal: [1,1,1], // normal of the projection plane
-    featureAngle: 10, // degrees. Max angle between adjacent faces to be considered a "feature edge" and projected.
-    samples: 32, // number of rays to cast per edge for hidden-line removal
+    viewDirection: ISOMETRY_CAM_DEFAULT, // direction toward the viewer
+    planeNormal: [1, 1, -1], // normal of the projection plane, facing away from the viewer
+    planeOrigin: [0, 0, 0],
+    featureAngle: 10, // degrees. Minimum dihedral angle for an edge to count as a crease and be projected.
+    samples: 16, // visibility samples per edge for hidden-line removal ('raycast' only)
 }
+
 /** Every hidden-line-removal algorithm, in the order they were added.
  *  See {@link HlrStrategy} for what each one does.
  */
@@ -104,6 +114,26 @@ export const EDGE_PROJECTION_LIMITS = {
     minSamples: 2,
     maxSamples: 4096,
 } as const;
+
+/** Every setting of `isometry()`, `elevation()` and `section()` that the caller leaves out.
+ *  See {@link ProjectionOptions}. */
+export const PROJECTION_DEFAULTS: ResolvedProjectionOptions = {
+    method: ISOMETRY_HLR_STRATEGY_DEFAULT,
+    hiddenLines: false,
+    includeHiddenShapes: false,
+    featureAngle: EDGE_PROJECTION_DEFAULTS.featureAngle,
+    samples: EDGE_PROJECTION_DEFAULTS.samples,
+    fallback: false,
+};
+
+/** The settings of the legacy positional projection signatures, in their order — followed by
+ *  a trailing {@link ProjectionViewOptions} object. Every collection projection and
+ *  `isometry()` on a single shape take them like this. */
+export const PROJECTION_LEGACY_ARGS = ['hiddenLines', 'includeHiddenShapes', 'samples', 'featureAngle'] as const;
+
+/** The legacy positional settings of `Mesh.elevation()` and `Mesh.section()`. A single mesh has
+ *  no hidden shapes to leave out, and these two never took `includeHiddenShapes`. */
+export const MESH_PROJECTION_LEGACY_ARGS = ['hiddenLines', 'samples', 'featureAngle'] as const;
 
 export const SHAPE_DEFAULT_STYLE: StyleData = {
     visible: true,

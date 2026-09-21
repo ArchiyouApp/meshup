@@ -577,6 +577,23 @@ describe('Polygon.cutoffBy()', () =>
     });
 });
 
+describe('Polygon.trim()', () =>
+{
+    const plane = (): Polygon => Polygon.planeBetween([0, 0, 0], [100, 100, 0]);
+
+    it('with an axis is cutoff()', () =>
+    {
+        expect(plane().trim('x', 30).area()).toBeCloseTo(7000, 0);
+        expect(plane().trim('x', 30, true).area()).toBeCloseTo(3000, 0);
+    });
+
+    it('with a Curve is cutoffBy(), keepSmallest included', () =>
+    {
+        expect(plane().trim(Curve.Line([30, -50, 0], [30, 150, 0])).area()).toBeCloseTo(7000, 0);
+        expect(plane().trim(Curve.Line([30, -50, 0], [30, 150, 0]), true).area()).toBeCloseTo(3000, 0);
+    });
+});
+
 describe('Polygon.difference() / subtract()', () =>
 {
     // 100 x 100 box on XY, corner at origin (0..100 in x and y).

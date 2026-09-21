@@ -503,17 +503,16 @@ describe('Example: Isometric projection with hidden lines', async () =>
         (Mesh as any).prototype.section = function (
             pivot: any,
             normal: any,
-            hiddenLines: boolean,
-            samples: number,
-            featureAngle: number,
+            method: any,
+            options: any,
         )
         {
             void pivot;
             void normal;
-            void hiddenLines;
+            void method;
             seen.push({
-                samples,
-                featureAngle,
+                samples: options?.samples,
+                featureAngle: options?.featureAngle,
                 bboxWidth: this.bbox()?.width() ?? 0,
             });
             return new ShapeCollection();

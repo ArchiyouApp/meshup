@@ -89,9 +89,8 @@ export type { SceneNodeGraphNode, SceneNodeData, SceneDocData, SceneShapeData,
     CurveData, PointData } from './types';
 export { GLTFBuilder } from './GLTFBuilder';
 export { Importer } from './Importer';
-export type { ImportFormat, ImportOptions } from './Importer';
-export type { DxfDoc, DxfHeaderData, DxfLayerData, DxfBlockData, DxfEntityData, DxfKindData,
-    DxfVertexData } from './DxfDoc';
+export type { ImportFormat, ImportOptions, DxfDoc, DxfHeaderData, DxfLayerData, DxfBlockData,
+    DxfEntityData, DxfKindData, DxfVertexData } from './Importer';
 export type { StyleData } from './Style';
 
 /*  The pieces below used to be reachable only through deep subpath imports

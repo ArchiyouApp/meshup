@@ -141,7 +141,7 @@ describe('HLR strategies: cost on assembly geometry', () =>
 
                     const t0 = performance.now();
                     const projected = model._iso(
-                        c.cam, false, false, c.samples, c.featureAngle, { strategy });
+                        c.cam, { method: strategy, samples: c.samples, featureAngle: c.featureAngle });
                     const ms = performance.now() - t0;
 
                     measurement = { ms: Math.round(ms * 10) / 10, curves: projected.length ?? 0 };
@@ -198,7 +198,7 @@ function project(c: Case, strategy: HlrStrategy): ShapeCollection<any>
 {
     // _iso is the undecorated projection: it does not add to the scenegraph, so
     // repeated measurements do not grow the scene and skew later ones.
-    return c.build()._iso(c.cam, false, false, c.samples, c.featureAngle, { strategy });
+    return c.build()._iso(c.cam, { method: strategy, samples: c.samples, featureAngle: c.featureAngle });
 }
 
 /**

@@ -58,7 +58,7 @@ describe('isometry: linear shapes', () =>
         const bsw = Mesh.Box(300, 50, 50).wireframe().dashed();
         const mixed = new ShapeCollection<any>(bs, bsw);
 
-        const iso = mixed._iso([-1, -1, 1], false, false, 16, 10);
+        const iso = mixed._iso([-1, -1, 1]);
 
         // Without linear-shape support this collection projected only the solid.
         expect(iso.length).toBeGreaterThan(0);
@@ -72,7 +72,7 @@ describe('isometry: linear shapes', () =>
     {
         // A collection of only Meshes must be unaffected by any of this.
         const solids = new ShapeCollection<any>(Mesh.Box(100, 100, 100), Mesh.Box(50, 50, 50).move(200));
-        const iso = solids._iso([-1, -1, 1], false, false, 16, 10);
+        const iso = solids._iso([-1, -1, 1]);
         expect(iso.length).toBe(18); // two boxes, 9 visible edges each
     });
 
@@ -84,7 +84,7 @@ describe('isometry: linear shapes', () =>
         const line = Curve.Line([-300, 0, 0], [300, 0, 0]);
         const scene = new ShapeCollection<any>(box, line);
 
-        const iso = scene._iso([0, -1, 0], true, false, 16, 10);
+        const iso = scene._iso([0, -1, 0], { hiddenLines: true });
         const hidden = iso.group('hidden');
 
         // Some part of the line must come back hidden — the box is in the way.
@@ -96,7 +96,7 @@ describe('isometry: linear shapes', () =>
     {
         // No solids at all: nothing to occlude, everything survives.
         const scene = Mesh.Box(100, 100, 100).wireframe();
-        const iso = scene._iso([-1, -1, 1], false, false, 16, 10);
+        const iso = scene._iso([-1, -1, 1]);
         expect(iso.length).toBeGreaterThan(0);
     });
 
@@ -108,7 +108,7 @@ describe('isometry: linear shapes', () =>
                 Mesh.Box(100, 100, 100),
                 Mesh.Box(60, 60, 60).move(200).wireframe().dashed(),
             );
-            const iso = scene._iso([-1, -1, 1], false, false, 16, 10, { strategy });
+            const iso = scene._iso([-1, -1, 1], { method: strategy });
             expect(dashedCount(iso), `${strategy}: wireframe missing`).toBeGreaterThan(0);
             await save(OUTPUT_DIR + `mixed.${strategy}.svg`, iso.toSVG());
         }
@@ -124,7 +124,7 @@ describe('isometry: style inheritance', () =>
             Mesh.Box(100, 100, 100).color('red'),
             Mesh.Box(100, 100, 100).move(300).color('green'),
         );
-        const iso = scene._iso([-1, -1, 1], false, false, 16, 10, { strategy: 'clip' });
+        const iso = scene._iso([-1, -1, 1], { method: 'clip' });
         const found = colours(iso);
         expect(found.has('#ff0000')).toBe(true);
         expect(found.has('#008000')).toBe(true);
@@ -138,14 +138,14 @@ describe('isometry: style inheritance', () =>
             Mesh.Box(100, 100, 100).color('red'),
             Mesh.Box(100, 100, 100).move(300).color('red'),
         );
-        expect(colours(same._iso([-1, -1, 1], false, false, 16, 10)).has('#ff0000')).toBe(true);
+        expect(colours(same._iso([-1, -1, 1])).has('#ff0000')).toBe(true);
 
         // ...but when they disagree, guessing would be worse than not styling.
         const mixed = new ShapeCollection<any>(
             Mesh.Box(100, 100, 100).color('red'),
             Mesh.Box(100, 100, 100).move(300).color('green'),
         );
-        expect(colours(mixed._iso([-1, -1, 1], false, false, 16, 10)).size).toBe(0);
+        expect(colours(mixed._iso([-1, -1, 1])).size).toBe(0);
     });
 });
 
@@ -180,6 +180,6 @@ describe('Shape.resetStyle', () =>
             Mesh.Box(100, 100, 100).color('red').resetStyle(),
             Mesh.Box(100, 100, 100).move(300).color('red').resetStyle(),
         );
-        expect(colours(scene._iso([-1, -1, 1], false, false, 16, 10)).size).toBe(0);
+        expect(colours(scene._iso([-1, -1, 1])).size).toBe(0);
     });
 });

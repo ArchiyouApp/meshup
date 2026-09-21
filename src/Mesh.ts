@@ -9,10 +9,8 @@
  * 
  */
 
-import type { CsgrsModule, Axis, BasePlane, OrientationXY, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions, HlrStrategy, ProjectionViewOptions } from './types';
-import { resolveIsometryArgs, DEFAULT_ISOMETRY_CAM } from './projectionOptions';
-import type { IsometryOptions } from './projectionOptions';
-import { isAxis, isBasePlane, isPointLike } from './types';
+import type { CsgrsModule, Axis, BasePlane, OrientationXY, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions, HlrStrategy, ProjectionViewOptions, ProjectionOptions } from './types';
+import { isAxis, isBasePlane, isPointLike, resolveProjectionArgs } from './types';
 
 import { Curve, getCsgrs } from './index';
 import { Shape } from './Shape';
@@ -34,7 +32,7 @@ import { Selector } from './Selector';
 
 // Settings
 import { TOLERANCE, EDGE_PROJECTION_DEFAULTS, EDGE_PROJECTION_LIMITS,
-    ISOMETRY_HLR_STRATEGY_DEFAULT, BASE_PLANE_NAME_TO_PLANE } from './constants';
+    ISOMETRY_HLR_STRATEGY_DEFAULT, ISOMETRY_CAM_DEFAULT, MESH_PROJECTION_LEGACY_ARGS, BASE_PLANE_NAME_TO_PLANE } from './constants';
 import { getQuality } from './quality';
 
     
@@ -1503,6 +1501,20 @@ export class Mesh extends Shape
             `Mesh.cutoff(): plane '${at}=${coord}' does not split this mesh — nothing cut off.`);
     }
 
+    /** Trim this mesh with an axis-aligned plane — the same as cutoff(). */
+    trim(at: Axis, coord?: number, smallest?: boolean): this;
+    /** Trim this mesh with another Mesh, Polygon or plane — the same as cutoffBy(). */
+    trim(other: Mesh | Polygon | PlaneJs, keepSmallest?: boolean): this;
+    /** Trim this mesh, like Polygon.trim(), Curve.trim() and brep's Shape.trim():
+     *  - `trim(other, keepSmallest?)`: cut by a Mesh, Polygon or plane and keep a piece — see cutoffBy().
+     *  - `trim(at, coord?, smallest?)`: cut by the plane `{ <at> = coord }` — see cutoff(). */
+    trim(otherOrAt: Mesh | Polygon | PlaneJs | Axis, keepOrCoord?: boolean | number, smallest?: boolean): this
+    {
+        return isAxis(otherOrAt)
+            ? this.cutoff(otherOrAt, keepOrCoord as number | undefined, smallest)
+            : this.cutoffBy(otherOrAt, keepOrCoord as boolean | undefined);
+    }
+
     /**
      * Separate this Mesh into its genuinely-separate solid parts (e.g. after a subtract whose
      * cut passes through and splits the solid). Returns a ShapeCollection<Mesh> with one entry
@@ -1882,10 +1894,13 @@ export class Mesh extends Shape
     /** Return raw mesh geometry buffers for GLTF assembly by GLTFBuilder. */
     toBuffer(): { positions: Float64Array; normals: Float64Array; indices: Uint32Array }
     {
+        // ONE toArrays(): positions(), normals() and indices() each triangulate the whole mesh
+        // on the wasm side, so asking for them separately triangulated it three times.
+        const arrays = this._mesh?.toArrays() as { positions: Float64Array; normals: Float64Array; indices: Uint32Array } | undefined;
         return {
-            positions: this._mesh?.positions() ?? new Float64Array(0),
-            normals:   this._mesh?.normals()   ?? new Float64Array(0),
-            indices:   new Uint32Array(this._mesh?.indices() ?? new Uint32Array(0)),
+            positions: arrays?.positions ?? new Float64Array(0),
+            normals:   arrays?.normals   ?? new Float64Array(0),
+            indices:   new Uint32Array(arrays?.indices ?? new Uint32Array(0)),
         };
     }
 
@@ -2503,42 +2518,36 @@ export class Mesh extends Shape
 
     /** Isometric projection with optional hidden lines
      *
-     * @param cam normalizaed 3D position of the camera (default: [-1,-1,1], a common isometric view direction)
-     * @param hiddenLines Whether to keep hidden projected edges in the result (default: false)
-     * @param includeHiddenShapes Single meshes have no hidden-shape filtering; accepted for API consistency and ignored.
-     * @param samples Number of samples of edges to determine visibility (default: 16)
-     * @param featureAngle Minimum dihedral angle (degrees) at which an edge is treated
-     *   as a feature crease and kept. Range `[0, 180]`, monotonic — higher values drop
-     *   more edges. Default 10° keeps almost every triangle edge on smooth tessellated
-     *   surfaces (spheres, cylinders), which makes the HLR ray-cast pass the dominant
-     *   cost; raise it for large curved meshes.
+     * @param cam Direction from the origin toward the viewer. Default `[-1,-1,1]`,
+     *   see {@link ISOMETRY_CAM_DEFAULT}.
+     * @param method Which hidden-line algorithm to run. Defaults to `'exact'`
+     *   (see {@link ISOMETRY_HLR_STRATEGY_DEFAULT}); `'raycast'` is the original
+     *   sampling solver. A single mesh has no shapes to order, so the per-shape
+     *   methods `'clip'` and `'painter'` reduce to `'exact'` here.
+     * @param options Projection settings — see {@link ProjectionOptions}. A single
+     *   mesh has no hidden shapes to filter and no per-shape method to fall back
+     *   from, so `includeHiddenShapes` and `fallback` are accepted and ignored.
      *
      * @return ShapeCollection with groups:
      *   - `'visible'`: unoccluded projected edges
-     *   - `'hidden'`: occluded edges (only present when `hiddenLines=true`)
+     *   - `'hidden'`: occluded edges (only present when `hiddenLines` is set)
      *   - `'silhouette'`: subset of `'visible'` forming the outer contour
      *     (silhouette + open-mesh boundary edges) as classified by the Rust HLR
-     *
-     * @param view Trailing options, chiefly `strategy` — which HLR algorithm to
-     *   run. Defaults to `'exact'` (see `ISOMETRY_HLR_STRATEGY_DEFAULT`);
-     *   `'raycast'` is the original sampling solver. A single mesh has no shapes
-     *   to order, so the per-shape strategies `'clip'` and `'painter'` reduce to
-     *   `'exact'` here.
      */
-    isometry(cam?: PointLike, method?: HlrStrategy, options?: IsometryOptions): ShapeCollection<Shape>;
+    isometry(cam?: PointLike, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<Shape>;
     /** @deprecated Positional form. Kept working for saved scripts; prefer
      *  `isometry(cam, method, { ... })`. */
     isometry(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
              samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<Shape>;
     @sceneLayer('iso')
-    isometry(cam: PointLike = DEFAULT_ISOMETRY_CAM, ...args: any[]): ShapeCollection<Shape>
+    isometry(cam: PointLike = ISOMETRY_CAM_DEFAULT, ...args: any[]): ShapeCollection<Shape>
     {
-        const o = resolveIsometryArgs(args);
+        const o = resolveProjectionArgs(args);
 
         // from cam position to origin
         const camDirVec = (isPointLike(cam))
                         ? Point.from(cam).toVector().normalize()
-                        : Vector.from(DEFAULT_ISOMETRY_CAM as number[]).normalize();
+                        : Vector.from(ISOMETRY_CAM_DEFAULT).normalize();
         const planeNormal = camDirVec.copy().reverse();
 
         const iso = this._projectEdges(
@@ -2557,11 +2566,11 @@ export class Mesh extends Shape
     }
 
     /** Shorthand alias for {@link isometry}. */
-    iso(cam?: PointLike, method?: HlrStrategy, options?: IsometryOptions): ShapeCollection<Shape>;
+    iso(cam?: PointLike, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<Shape>;
     /** @deprecated Positional form — see {@link isometry}. */
     iso(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
         samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<Shape>;
-    iso(cam: PointLike = DEFAULT_ISOMETRY_CAM, ...args: any[]): ShapeCollection<Shape>
+    iso(cam: PointLike = ISOMETRY_CAM_DEFAULT, ...args: any[]): ShapeCollection<Shape>
     {
         return (this.isometry as any)(cam, ...args);
     }
@@ -2596,7 +2605,7 @@ export class Mesh extends Shape
             ...((options instanceof Object) ? options: {}) };
 
         const [ vx, vy, vz ] = Point.from(optionsWithDefaults.viewDirection).toArray();
-        const [ ox, oy, oz ] = Point.from(optionsWithDefaults.planeOrigin!).toArray();
+        const [ ox, oy, oz ] = Point.from(optionsWithDefaults.planeOrigin).toArray();
         const [ nx, ny, nz ] = Point.from(optionsWithDefaults.planeNormal).toArray();
         const rawFeatureAngle = Number(optionsWithDefaults.featureAngle);
         const rawSamples = Number(optionsWithDefaults.samples);
@@ -2769,23 +2778,22 @@ export class Mesh extends Shape
      *  @param from  Camera-side direction. Either a `BasePlane` name
      *               ('front', 'back', 'left', 'right', 'top', 'bottom',
      *               'xy', 'xz', 'yz') or a `PointLike` direction.
-     *  @param hiddenLines Keep hidden projected edges (default false).
-     *  @param samples HLR ray samples per edge (default 16).
-     *  @param featureAngle Min crease angle in degrees to keep an edge (default 10).
-     *    Range `[0, 180]`; monotonic. Increase on smooth tessellated geometry to
-     *    drop near-flat triangle edges before HLR sampling.
+     *  @param method Which hidden-line algorithm to run. Defaults to `'exact'`; the
+     *    per-shape methods `'clip'` and `'painter'` reduce to `'exact'` on a single mesh.
+     *  @param options Projection settings — see {@link ProjectionOptions}.
+     *    `includeHiddenShapes` and `fallback` have nothing to act on for a single mesh.
      *  @returns ShapeCollection with groups 'visible', 'silhouette' (outer
      *    contour, subset of 'visible'), and 'hidden' (only if requested).
      */
+    elevation(from?: PointLike | BasePlane, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<Shape>;
+    /** @deprecated Positional form. Kept working for saved scripts; prefer
+     *  `elevation(from, method, { ... })`. */
+    elevation(from?: PointLike | BasePlane, hiddenLines?: boolean, samples?: number,
+              featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<Shape>;
     @sceneLayer('elevation')
-    elevation(
-        from: PointLike | BasePlane = 'front',
-        hiddenLines: boolean = false,
-        samples: number = 16,
-        featureAngle: number = 10,
-        view: ProjectionViewOptions = {},
-    ): ShapeCollection<Shape>
+    elevation(from: PointLike | BasePlane = 'front', ...args: any[]): ShapeCollection<Shape>
     {
+        const o = resolveProjectionArgs(args, MESH_PROJECTION_LEGACY_ARGS);
         const camDirVec = Mesh._resolveViewDirection(from);
         const planeNormal = camDirVec.copy().reverse();
 
@@ -2794,12 +2802,12 @@ export class Mesh extends Shape
                 viewDirection: camDirVec.toArray(),
                 planeNormal:   planeNormal.toArray(),
                 planeOrigin:   [0, 0, 0],
-                featureAngle:  featureAngle,
-                samples:       samples,
-                strategy:      Mesh._singleMeshStrategy(view.strategy),
+                featureAngle:  o.featureAngle,
+                samples:       o.samples,
+                strategy:      Mesh._singleMeshStrategy(o.method),
             } as ProjectEdgeOptions);
 
-        if (!hiddenLines) elev.removeGroup('hidden');
+        if (!o.hiddenLines) elev.removeGroup('hidden');
 
         return Mesh._flattenProjectionToScreen(elev, planeNormal);
     }
@@ -2813,10 +2821,10 @@ export class Mesh extends Shape
      *  @param pivot Any point on the section plane.
      *  @param normal Section plane normal (BasePlane name or PointLike).
      *                Default `[0,0,1]` (horizontal cut).
-     *  @param hiddenLines Keep hidden projected edges (default false).
-     *  @param samples HLR ray samples per edge (default 16).
-     *  @param featureAngle Min crease angle in degrees (default 10). Range `[0, 180]`,
-     *    monotonic; raise to drop near-flat tessellation edges on smooth surfaces.
+     *  @param method Which hidden-line algorithm to run. Defaults to `'exact'`; the
+     *    per-shape methods `'clip'` and `'painter'` reduce to `'exact'` on a single mesh.
+     *  @param options Projection settings — see {@link ProjectionOptions}.
+     *    `includeHiddenShapes` and `fallback` have nothing to act on for a single mesh.
      *  @returns ShapeCollection with groups 'cut', 'visible', 'silhouette'
      *    (outer contour, subset of 'visible'), and 'hidden' (if requested).
      *
@@ -2825,16 +2833,15 @@ export class Mesh extends Shape
      *           non-trivial Z component. Vertical sections (normal in XY
      *           plane) currently produce a degenerate cut profile.
      */
+    section(pivot: PointLike, normal?: PointLike | BasePlane, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<Shape>;
+    /** @deprecated Positional form. Kept working for saved scripts; prefer
+     *  `section(pivot, normal, method, { ... })`. */
+    section(pivot: PointLike, normal?: PointLike | BasePlane, hiddenLines?: boolean, samples?: number,
+            featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<Shape>;
     @sceneLayer('section')
-    section(
-        pivot: PointLike,
-        normal: PointLike | BasePlane = [0, 0, 1],
-        hiddenLines: boolean = false,
-        samples: number = 16,
-        featureAngle: number = 10,
-        view: ProjectionViewOptions = {},
-    ): ShapeCollection<Shape>
+    section(pivot: PointLike, normal: PointLike | BasePlane = [0, 0, 1], ...args: any[]): ShapeCollection<Shape>
     {
+        const o = resolveProjectionArgs(args, MESH_PROJECTION_LEGACY_ARGS);
         const sectionNormal = Mesh._resolveViewDirection(normal);
         const pivotPoint    = Point.from(pivot);
 
@@ -2842,12 +2849,12 @@ export class Mesh extends Shape
             {
                 pivot: pivotPoint,
                 normal: sectionNormal,
-                featureAngle,
-                samples,
-                strategy: Mesh._singleMeshStrategy(view.strategy),
+                featureAngle: o.featureAngle,
+                samples: o.samples,
+                strategy: Mesh._singleMeshStrategy(o.method),
             });
 
-        if (!hiddenLines) result.removeGroup('hidden');
+        if (!o.hiddenLines) result.removeGroup('hidden');
 
         // Projection plane faces the viewer (= -sectionNormal). Flatten using
         // that as planeNormal so the result lands on XY screen-oriented.

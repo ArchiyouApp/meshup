@@ -268,7 +268,16 @@ export function toBase64(data: string | Uint8Array | Float32Array | Float64Array
     {
         return Buffer.from(bytes).toString('base64');
     }
-    return btoa(String.fromCharCode(...bytes));
+    // In chunks: spreading every byte into one String.fromCharCode() call passes them as
+    // arguments, and a buffer of more than roughly a hundred thousand bytes overflows the
+    // stack ("Maximum call stack size exceeded") - a GLTF export of any real model did.
+    const CHUNK = 0x8000;
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += CHUNK)
+    {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK) as unknown as number[]);
+    }
+    return btoa(binary);
 }
 
 /** Decode a base64 string back to a Uint8Array */

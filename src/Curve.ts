@@ -18,7 +18,7 @@
  * 
  */
 
-import { ANGLE_COMPARE_TOLERANCE, BASE_PLANE_NAME_TO_PLANE } from './constants';
+import { ANGLE_COMPARE_TOLERANCE, BASE_PLANE_NAME_TO_PLANE, TOLERANCE, ISOMETRY_CAM_DEFAULT } from './constants';
 import { getQuality } from './quality';
 
 import { Vector3Js, VertexJs, Point3Js, PolygonJs, SketchJs, Curve3DJs } from "./wasm/meshup";
@@ -28,10 +28,8 @@ import { Shape } from './Shape';
 import type { SceneNode } from './SceneNode';
 import { sceneReplace, sceneAdd, sceneUpdate, sceneCarry, sceneReplaceOrKeep, sceneLayer } from './sceneDecorators';
 import type { CsgrsModule, PointLike, Axis, BasePlane, CurveCornerSelection, OrientationXY, HlrStrategy,
-    SpanParams, SpanEllipse, SpanPoint, CurveData, PointData } from './types';
-import { resolveIsometryArgs, DEFAULT_ISOMETRY_CAM } from './projectionOptions';
-import type { IsometryOptions } from './projectionOptions';
-import { isPointLike, isBasePlane } from './types'
+    ProjectionOptions, ProjectionViewOptions, SpanParams, SpanEllipse, SpanPoint, CurveData, PointData } from './types';
+import { isPointLike, isBasePlane, isAxis, resolveProjectionArgs } from './types'
 import { Point } from './Point';
 import { Vector } from './Vector';
 import { Vertex } from './Vertex';
@@ -2752,28 +2750,59 @@ export class Curve extends Shape
         catch { return 1; }
     }
 
-    /** Trim the curve to a sub-curve between parameters t0 and t1.
-     *  Returns an array of Curves (typically one for inside trim).
-     *  Parameters are in the curve's knot domain (see knotsDomain()).
-     */
-    trim(t0: number, t1: number): Array<Curve>;
-    /** Trim this curve against another Curve — alias for cutoffBy(). */
+    /** Keep the part of this Curve between two positions along its length, given as fractions
+     *  of the length in [0, 1] (`trim(0.25, 0.75)` keeps the middle half). Mutates in place
+     *  and returns `this`; the result is always an open Curve. */
+    trim(t0: number, t1: number): this;
+    /** Trim this Curve with an axis-aligned plane — the same as cutoff(). */
+    trim(at: Axis, coord?: number, smallest?: boolean): Curve | ShapeCollection<Curve> | null;
+    /** Trim this Curve with another Curve — the same as cutoffBy(). */
     trim(other: Curve, keepSmallest?: boolean): Curve | ShapeCollection<Curve> | null;
-    trim(t0OrOther: number | Curve, t1OrKeep?: number | boolean): Array<Curve> | Curve | ShapeCollection<Curve> | null
+    /** Trim this Curve, like Mesh.trim(), Polygon.trim() and brep's Shape.trim(), and more:
+     *  - `trim(other, keepSmallest?)`: cut by another Curve and keep a piece — see cutoffBy().
+     *  - `trim(at, coord?, smallest?)`: cut by the plane `{ <at> = coord }` — see cutoff().
+     *  - `trim(t0, t1)`: keep the part between two positions along the length (fractions in
+     *    [0, 1]). Mutates in place and returns `this`. */
+    trim(otherOrAtOrT0: Curve | Axis | number, keepOrCoordOrT1?: boolean | number, smallest?: boolean): Curve | ShapeCollection<Curve> | null
     {
-        // When given a Curve cutter, trim behaves as an alias for cutoffBy().
-        if (t0OrOther instanceof Curve)
+        if (otherOrAtOrT0 instanceof Curve)
         {
-            return this.cutoffBy(t0OrOther, t1OrKeep as boolean | undefined);
+            return this.cutoffBy(otherOrAtOrT0, keepOrCoordOrT1 as boolean | undefined);
+        }
+        if (isAxis(otherOrAtOrT0))
+        {
+            return this.cutoff(otherOrAtOrT0, keepOrCoordOrT1 as number | undefined, smallest);
         }
 
+        const [t0, t1] = [otherOrAtOrT0, keepOrCoordOrT1];
+        if (!Curve._isFraction(t0) || !Curve._isFraction(t1))
+        {
+            throw new Error(`Curve::trim(): Invalid arguments '${t0}', '${t1}'. Use another Curve, an axis ('x', 'y' or 'z') and a coordinate, or two positions between 0 and 1.`);
+        }
+        if (Math.abs(t1 - t0) < TOLERANCE)
+        {
+            console.warn(`Curve::trim(): positions ${t0} and ${t1} leave nothing to keep — nothing trimmed. Returning original Curve.`);
+            return this;
+        }
+        return this.update(this._trimByParam(Math.min(t0, t1), Math.max(t0, t1)));
+    }
+
+    private static _isFraction(t: unknown): t is number
+    {
+        return typeof t === 'number' && t >= 0 && t <= 1;
+    }
+
+    /** Pure trim() between two positions (fractions of the length): new, unattached Curves,
+     *  this Curve untouched. An array, empty when the native trim fails. */
+    private _trimmed(t0: number, t1: number): Array<Curve>
+    {
         try
         {
-            return [this._trimByParam(t0OrOther, t1OrKeep as number)];
+            return [this._trimByParam(t0, t1)];
         }
         catch (e)
         {
-            console.error('Curve::trim(): Error:', e);
+            console.error('Curve::_trimmed(): Error:', e);
             return [];
         }
     }
@@ -3170,6 +3199,90 @@ export class Curve extends Shape
     @sceneReplaceOrKeep
     cutoffBy(other: Curve, keepSmallest?: boolean): Curve|ShapeCollection<Curve>|null
     {
+        return this._cutoffBy(other, keepSmallest);
+    }
+
+    /** Cut off this Curve with the axis-aligned plane `{ <at> = coord }` and keep one piece —
+     *  the Curve twin of Mesh.cutoff() and Polygon.cutoff(). Keeps the biggest piece by default
+     *  (by length for an open Curve, by area for a closed one); `smallest=true` keeps the
+     *  smallest.
+     *
+     *  The plane meets the Curve's own plane in a line, and the Curve is cut by that line the
+     *  way cutoffBy() cuts it, with the same result: this Curve updated in place, or a
+     *  ShapeCollection when the kept part of an open Curve is several pieces. Returns the Curve
+     *  unchanged (with a warning) when the plane does not split it.
+     *
+     *  @param at        World axis of the cutting plane's normal ('x' | 'y' | 'z').
+     *  @param coord     Position of the plane along `at` (default 0).
+     *  @param smallest  Keep the smallest piece instead of the biggest.
+     */
+    @sceneReplaceOrKeep
+    cutoff(at: Axis, coord: number = 0, smallest: boolean = false): Curve|ShapeCollection<Curve>|null
+    {
+        if(!isAxis(at)){ throw new Error(`Curve::cutoff(): Invalid axis '${at}'. Use 'x', 'y', or 'z'.`); }
+
+        const bb = this.bbox();
+        if(!bb || coord <= bb.min()[at] || coord >= bb.max()[at])
+        {
+            console.warn(`Curve::cutoff(): plane '${at}=${coord}' does not split this Curve — nothing cut off. Returning original Curve.`);
+            return this;
+        }
+
+        const cutter = this._axisPlaneCutter(at, coord);
+        if(!cutter)
+        {
+            console.warn(`Curve::cutoff(): this Curve is not planar, so a plane '${at}=${coord}' does not cut it along a line — nothing cut off. Returning original Curve.`);
+            return this;
+        }
+        return this._cutoffBy(cutter, smallest);
+    }
+
+    /** The line where the plane `{ <at> = coord }` meets this Curve's plane, long enough to
+     *  cross the whole Curve. A straight Curve lies in many planes: it is taken in the one that
+     *  also holds the axis, so the line runs straight across it. Null for a non-planar Curve.
+     *  The caller has checked that the plane passes through the Curve's bbox, which also rules
+     *  out a Curve plane parallel to the cutting plane. */
+    private _axisPlaneCutter(at: Axis, coord: number): Curve|null
+    {
+        const axis = Vector.from(at);
+        let normal: Vector|null = null;
+        if(this.isStraight())
+        {
+            const dir = this.direction().normalize();
+            normal = dir.copy().cross(axis);
+            if(normal.length() < TOLERANCE) // the Curve runs along the axis: any plane holding it
+            {
+                normal = dir.copy().cross(Math.abs(dir.x) < 0.9 ? Vector.from(1, 0, 0) : Vector.from(0, 1, 0));
+            }
+            normal.normalize();
+        }
+        else
+        {
+            normal = this.getOnPlane()?.normal ?? null;
+        }
+        if(!normal){ return null; }
+
+        const lineDir = normal.copy().cross(axis);
+        if(lineDir.length() < TOLERANCE){ return null; }
+        lineDir.normalize();
+
+        // A point of the Curve's plane on the cutting plane: from a point of the Curve, walk
+        // along the in-plane direction that climbs the axis fastest. Setting the coordinate on
+        // the Curve's center instead would leave the Curve's plane whenever that is tilted.
+        const climb = axis.copy().subtract(normal.copy().scale(normal.dot(axis)));
+        const origin = Vector.from(this.start());
+        const base = origin.add(climb.scale((coord - origin[at]) / climb[at]));
+
+        const size = this.bbox()!.size();
+        const far = (Math.hypot(size.x, size.y, size.z) || 1) * 4;
+        return Curve.Line(
+            base.copy().subtract(lineDir.copy().scale(far)),
+            base.copy().add(lineDir.copy().scale(far)));
+    }
+
+    /** Pure cutoffBy() geometry — no scene bookkeeping, so cutoff() can cut through it. */
+    private _cutoffBy(other: Curve, keepSmallest?: boolean): Curve|ShapeCollection<Curve>|null
+    {
         // Region boolean only makes sense for closed curves; an open curve is
         // instead split at its intersection points (like a brep Edge/Wire cutoffBy).
         if(!this.isClosed())
@@ -3328,13 +3441,13 @@ export class Curve extends Shape
         /*  A boundary arc, or NOTHING when the window between the two params is empty.
             The empty window is real: a crossing that lands on the seam — the vertex a closed
             Curve starts and ends at — puts tA at d0 or tB at d1, and one of the second
-            region's two arcs then spans nothing. trim() answers a degenerate window with a
+            region's two arcs then spans nothing. _trimmed() answers a degenerate window with a
             copy of the WHOLE curve (its catch-all for a range the native trim rejects), so
             asking for it folded the entire boundary into that region: it came back bigger
             than the region it was cut from and won "the biggest part", leaving the Curve
             uncut. Hit by every post whose top corner IS the end of the roof line cutting it. */
         const arc = (t0: number, t1: number): Array<Curve> =>
-                        ((t1 - t0) <= eps) ? [] : this.trim(t0, t1);
+                        ((t1 - t0) <= eps) ? [] : this._trimmed(t0, t1);
 
         // The two boundary arcs between the crossings; each closed by the chord (close()).
         const region1 = this._closedRegionFromArc(arc(tA, tB));
@@ -3422,7 +3535,7 @@ export class Curve extends Shape
         const segments: Array<{ curves: Array<Curve>, length: number }> = [];
         for(let i = 0; i < breaks.length - 1; i++)
         {
-            const curves = this.trim(breaks[i], breaks[i + 1]);
+            const curves = this._trimmed(breaks[i], breaks[i + 1]);
             if(curves.length === 0) continue;
             segments.push({ curves, length: curves.reduce((sum, c) => sum + c.length(), 0) });
         }
@@ -3636,7 +3749,7 @@ export class Curve extends Shape
         const sampled: Array<Curve> = [];
         for(let i = 0; i < breaks.length - 1; i++)
         {
-            sampled.push(...open.trim(breaks[i], breaks[i + 1]));
+            sampled.push(...open._trimmed(breaks[i], breaks[i + 1]));
         }
         return sampled.length ? sampled : [open];
     }
@@ -3748,7 +3861,7 @@ export class Curve extends Shape
             // Check if the midpoint is inside the mesh
             if(meshInner?.containsVertex(midPoint.toPoint3Js()))
             {
-                const trimmed = this.trim(t0, t1);
+                const trimmed = this._trimmed(t0, t1);
                 results.push(...trimmed);
             }
         }
@@ -4423,30 +4536,27 @@ export class Curve extends Shape
      *  @param method Which hidden-line algorithm the projection runs. Only
      *    matters when there are solids to hide things; kept for signature
      *    parity with {@link Mesh.isometry}.
-     *  @param options Projection settings — see `IsometryOptions`.
+     *  @param options Projection settings — see {@link ProjectionOptions}.
      */
-    isometry(cam?: PointLike, method?: HlrStrategy, options?: IsometryOptions): ShapeCollection<any>;
+    isometry(cam?: PointLike, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<any>;
     /** @deprecated Positional form. Kept working for saved scripts; prefer
      *  `isometry(cam, method, { ... })`. */
     isometry(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
-             samples?: number, featureAngle?: number, view?: any): ShapeCollection<any>;
+             samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<any>;
     @sceneLayer('iso')
-    isometry(cam: PointLike = DEFAULT_ISOMETRY_CAM, ...args: any[]): ShapeCollection<any>
+    isometry(cam: PointLike = ISOMETRY_CAM_DEFAULT, ...args: any[]): ShapeCollection<any>
     {
         // Undecorated `_iso`: this method already carries @sceneLayer, and
         // running both would add the projection to the scene twice.
-        const o = resolveIsometryArgs(args);
-        return new ShapeCollection<any>(this._copy())._iso(
-            cam, o.hiddenLines, o.includeHiddenShapes, o.samples, o.featureAngle,
-            { strategy: o.method, fallback: o.fallback });
+        return new ShapeCollection<any>(this._copy())._iso(cam, resolveProjectionArgs(args));
     }
 
     /** Shorthand alias for {@link isometry}. */
-    iso(cam?: PointLike, method?: HlrStrategy, options?: IsometryOptions): ShapeCollection<any>;
+    iso(cam?: PointLike, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<any>;
     /** @deprecated Positional form — see {@link isometry}. */
     iso(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
-        samples?: number, featureAngle?: number, view?: any): ShapeCollection<any>;
-    iso(cam: PointLike = DEFAULT_ISOMETRY_CAM, ...args: any[]): ShapeCollection<any>
+        samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<any>;
+    iso(cam: PointLike = ISOMETRY_CAM_DEFAULT, ...args: any[]): ShapeCollection<any>
     {
         return (this.isometry as any)(cam, ...args);
     }
