@@ -112,4 +112,21 @@ describe('ShapeCollection.flatten()', () =>
         expect(col.length).toEqual(2);
         expect(col.toArray().every(m => m.bbox().max().z === 0)).toEqual(true);
     });
+
+    it('takes the members of a brep shape that flattens to a collection', () =>
+    {
+        /*  On the brep kernel a merged section is a Shell, and Shell.flatten() answers with a
+            brep ShapeCollection of Faces — which has neither _flatKey() nor id(), so keying it
+            threw "s.id is not a function" and broke a document pipeline that ran
+            collection(section, openings).flatten(). Brep shapes key on _flatKey() / _id. */
+        const face = (key: string, id: string) => ({ isShapeClass: () => true, isShapeCollection: () => false, _flatKey: () => key, _id: id });
+        const faces = [face('A', 'f1'), face('A', 'f2'), face('B', 'f3')];
+        const brepCollection = { isShapeClass: () => true, isShapeCollection: () => true, toArray: () => faces };
+        const shell = { isShapeClass: () => true, isShapeCollection: () => false, _id: 's1', flatten: () => brepCollection };
+
+        const col = new ShapeCollection<any>(Mesh.Box(100, 50, 20)).add(shell as any).flatten();
+
+        expect(col.length).toEqual(3); // the mesh box, and faces A and B once each
+        expect(col.toArray().slice(1)).toEqual([faces[0], faces[2]]);
+    });
 });

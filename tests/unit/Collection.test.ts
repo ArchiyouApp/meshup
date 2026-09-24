@@ -502,3 +502,19 @@ describe('Mesh.vertices() as a collection', () =>
         expect(verts.length).toEqual(Mesh.Cube(10).positions().length);
     });
 });
+
+describe('Collection.getAnnotations()', () =>
+{
+    it('reads the annotations of a brep shape in the collection, which holds them as an array', () =>
+    {
+        /*  A brep document drawing mixes kernels: its dimensioned rect is a meshup Curve next to
+            brep shapes. Those keep `annotations` as an array, not a method, and calling it threw
+            "s.annotations is not a function" while the drawing was written */
+        const dim = { type: 'dimensionline' };
+        const brepFace = { isShapeClass: () => true, isShapeCollection: () => false, annotations: [dim] };
+        const rect = Curve.Line([0, 0, 0], [10, 0, 0]);
+        const col = new Collection<any>(rect).add(brepFace as any);
+
+        expect(col.getAnnotations()).toEqual([dim]);
+    });
+});

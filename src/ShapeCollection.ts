@@ -864,23 +864,27 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      */
     flatten(axis: Axis = 'z'): this
     {
-        const results = this._shapes.map(s =>
+        const results = this._shapes.flatMap(s =>
         {
             // Mesh.flatten() returns a replacement shape, Curve.flatten() flattens in place.
             if (typeof (s as any).flatten !== 'function')
             {
                 console.warn(`ShapeCollection::flatten(): cannot flatten a ${(s as any).type ?? 'Shape'} — kept as is`);
-                return s;
+                return [s];
             }
-            return ((s as any).flatten(axis) ?? s) as S;
+            const flat = (s as any).flatten(axis) ?? s;
+            // A brep Shell or Solid flattens to a collection of Faces: take its members
+            return (ShapeCollection.isShapeCollection(flat) || ShapeCollection.isForeignCollection(flat)
+                ? flat.toArray() : [flat]) as S[];
         });
 
         // Shapes that were apart along the axis can flatten onto each other — keep the first
-        // of each identical geometry (see Mesh._flatKey() / Curve._flatKey()).
+        // of each identical geometry (see Mesh._flatKey() / Curve._flatKey()). Brep shapes
+        // have a _flatKey() too; their id is `_id`, not `id()`.
         const seen = new Set<string>();
         const kept = results.filter(s =>
         {
-            const key = (s as any)._flatKey?.() ?? (s as any).id();
+            const key = (s as any)._flatKey?.() ?? (s as any).id?.() ?? (s as any)._id;
             if (seen.has(key)) { return false; }
             seen.add(key);
             return true;
@@ -1051,7 +1055,12 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  ShapeCollection's getAnnotations() — what toSVG() draws. */
     getAnnotations(): Array<any>
     {
-        const fromShapes = this._shapes.flatMap(s => (s as any).annotations?.() ?? []);
+        // A meshup Shape answers annotations(); a brep Shape in the collection holds them as an array
+        const fromShapes = this._shapes.flatMap(s =>
+        {
+            const own = (s as any).annotations;
+            return (typeof own === 'function' ? own.call(s) : own) ?? [];
+        });
         return [...new Set([...this.annotations, ...fromShapes])];
     }
 
