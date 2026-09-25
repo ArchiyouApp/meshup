@@ -1526,8 +1526,12 @@ export class ShapeCollection<S extends CollectableShape = Shape>
                 vx, vy, vz, 0, 0, 0, nx, ny, nz, occJs);
             if (!r) continue;
 
-            const hidden = Mesh.projectedPolylinesToShapeCollection(r.hiddenPolylines());
-            const visible = Mesh.projectedPolylinesToShapeCollection(r.visiblePolylines());
+            // The solver returns every segment on its own; join the ones of
+            // one smooth curve again.
+            const hidden = Mesh.projectedPolylinesToShapeCollection(
+                Mesh._joinPolylines(r.hiddenPolylines()).map(c => c.points));
+            const visible = Mesh.projectedPolylinesToShapeCollection(
+                Mesh._joinPolylines(r.visiblePolylines()).map(c => c.points));
             r.free?.();
 
             // The source shape's own styling rides along with its line work.
@@ -1539,6 +1543,41 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         }
 
         return result;
+    }
+
+    /** Project the outlines of the contact faces between touching cuboids, all
+     *  in one call, hidden by the merged scene.
+     *
+     *  Each contact face used to be a small Mesh of its own, projected against
+     *  a copy of the whole scene per touching pair; that rebuilt the occluder
+     *  set every time and was most of the cost of a drawing with many touching
+     *  boxes. The outline edges of such a face are boundary edges, so as
+     *  polylines they come out as the same visible, hidden and silhouette line
+     *  work. Returns an UNFLATTENED collection, like
+     *  {@link _projectLinearShapes}.
+     */
+    private static _projectContactOutlines(
+        outlines: Array<Array<[number, number, number]>>,
+        occluder: Mesh,
+        viewDir: Vector,
+        planeNormal: Vector,
+    ): ShapeCollection<any>
+    {
+        if (!outlines.length) return new ShapeCollection<any>();
+
+        const [vx, vy, vz] = viewDir.toArray();
+        const [nx, ny, nz] = planeNormal.toArray();
+        // Same ownership rule as Mesh._projectEdges: clone, or WASM consumes it.
+        const occJs = [occluder.inner()?.clone?.()].filter((m): m is any => m != null);
+
+        const r = MeshJs.projectPolylines(
+            new Float64Array(outlines.flat(2)), new Uint32Array(outlines.map(o => o.length)),
+            vx, vy, vz, 0, 0, 0, nx, ny, nz, occJs);
+        if (!r) return new ShapeCollection<any>();
+
+        const projected = Mesh._projectionToShapeCollection(r);
+        r.free?.();
+        return projected;
     }
 
     private static _makeProjectionOptions(
@@ -1849,6 +1888,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         const bboxes = meshes.map(mesh => mesh.bbox());
         const sourceShift = (globalThis as any).__ISO_SHIFT__ ?? 1;
         const faceShift = viewDir.copy().scale(Math.max(TOLERANCE * 100, sourceShift)).toArray();
+        const contactOutlines: Array<Array<[number, number, number]>> = [];
 
         const contactPoint = (
             touchAxis: 'x'|'y'|'z',
@@ -1920,13 +1960,15 @@ export class ShapeCollection<S extends CollectableShape = Shape>
                 const p11 = contactPoint(touchAxis, touchPlane, u, cMaxU, v, cMaxV);
                 const p01 = contactPoint(touchAxis, touchPlane, u, cMinU, v, cMaxV);
 
-                const face = Mesh.fromPoints([p00, p10, p11, p01])
-                    .translate(faceShift[0], faceShift[1], faceShift[2]);
-                const occluders = new ShapeCollection<Mesh>(merged._copy() as Mesh);
-                const projected = face._projectEdges(options, occluders);
-                ShapeCollection._appendProjectionGroups(iso, projected);
+                // Only the outline of the contact face is drawn. All outlines
+                // are projected together below, against one occluder set for
+                // the whole scene instead of one per touching pair.
+                contactOutlines.push([p00, p10, p11, p01, p00].map(p =>
+                    [p.x + faceShift[0], p.y + faceShift[1], p.z + faceShift[2]] as [number, number, number]));
             });
         });
+        ShapeCollection._appendProjectionGroups(
+            iso, ShapeCollection._projectContactOutlines(contactOutlines, merged, viewDir, planeNormal));
 
         // Merging destroys which mesh each edge came from, so a per-mesh style
         // cannot be attributed here. When every mesh agrees on its styling

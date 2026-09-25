@@ -209,9 +209,10 @@ describe('Example: Isometric projection with hidden lines', async () =>
         {
             (Mesh as any).prototype._projectEdges = original;
         }
-        // Merged-base collection isometry does one base projection pass plus
-        // one extra _projectEdges call for each touching-face add-back.
-        expect(seen.length).toBe(9);
+        // Merged-base collection isometry does one base projection pass; the
+        // outlines of the touching faces are projected together as polylines,
+        // outside _projectEdges.
+        expect(seen.length).toBe(1);
         expect(seen.every(s => s === 1000)).toBe(true);
     });
 
@@ -474,7 +475,9 @@ describe('Example: Isometric projection with hidden lines', async () =>
             (Mesh as any).prototype._projectEdges = original;
         }
 
-        expect(seen.length).toBe(2);
+        // One merged pass; the contact face between a and b is projected as a
+        // polyline outline, not through _projectEdges.
+        expect(seen.length).toBe(1);
         expect(seen[0].samples).toBe(123);
         expect(seen[0].featureAngle).toBe(7);
         expect(seen[0].bboxWidth).toBeLessThan(100);
@@ -494,6 +497,21 @@ describe('Example: Isometric projection with hidden lines', async () =>
         const visible = pair.elevation('left', false, false, 500, 5).group('visible');
 
         expect(visible?.length ?? 0).toBeGreaterThan(mergedVisible?.length ?? 0);
+    });
+
+    it('collection elevation draws no contact face where a cylinder stands on a box', () =>
+    {
+        // A cylinder is not a cuboid, so the square overlap of the two bboxes
+        // is not a contact face: it used to come out as a 40 x 40 square.
+        const plate = Mesh.Box(100, 100, 10);
+        const post = Mesh.Cylinder(20, 50);
+        post.move(0, 0, plate.bbox().maxZ() - post.bbox().minZ());
+        const top = new ShapeCollection(plate, post).elevation('top', { hiddenLines: true });
+
+        const lines = top.toArray() as any[];
+        expect(lines.filter(c => Math.abs(c.length() - 40) < 0.5)).toHaveLength(0);
+        // plate outline, and the post's top and bottom circle
+        expect(lines.filter(c => Math.abs(c.length() - 2 * Math.PI * 20) < 2)).toHaveLength(2);
     });
 
     it('collection section merges visible meshes and forwards samples', () =>

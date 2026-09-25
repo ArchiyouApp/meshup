@@ -35,7 +35,12 @@ import { TOLERANCE, EDGE_PROJECTION_DEFAULTS, EDGE_PROJECTION_LIMITS,
     ISOMETRY_HLR_STRATEGY_DEFAULT, ISOMETRY_CAM_DEFAULT, MESH_PROJECTION_LEGACY_ARGS, BASE_PLANE_NAME_TO_PLANE } from './constants';
 import { getQuality } from './quality';
 
-    
+/** Largest turn, in degrees, at which two projected lines that meet end to end
+ *  are joined into one polyline (see Mesh._joinPolylines). A tessellated circle
+ *  turns a few degrees per segment, a box corner 60 degrees or more in the usual
+ *  views. Joining only changes how line work is grouped into Curves, never where
+ *  the lines are. */
+const PROJECTION_JOIN_MAX_TURN = 30;
 
 export class Mesh extends Shape
 {
@@ -690,8 +695,10 @@ export class Mesh extends Shape
      *  Builds the PCA-based OBB and checks every unique vertex against the box
      *  surface in OBB-local coords: each vertex must lie within ±halfExtent on
      *  every non-zero axis AND touch (within `tolerance`) at least one face
-     *  along a non-zero axis. Tessellated boxes (mid-edge / face-centre verts)
-     *  still pass; curved surfaces do not.
+     *  along a non-zero axis. Then every triangle must lie flat in one of the
+     *  six face planes: without that, cylinders and prisms pass too, as all
+     *  their vertices sit on their two caps. Tessellated boxes (mid-edge /
+     *  face-centre verts) still pass; curved surfaces do not.
      *
      *  Pure 1D / point OBBs return false — neither is a box. */
     isCuboid(tolerance: number = 0.5): boolean
@@ -726,7 +733,20 @@ export class Mesh extends Shape
             }
             if (!onAFace) return false;
         }
-        return true;
+
+        // Vertices on the box surface are not enough: every vertex of a cylinder
+        // or a prism sits on one of its caps. A box has all its faces on that
+        // surface too, so each triangle has to lie in one of the face planes.
+        const tris = this.inner()?.positions() ?? new Float64Array(0);
+        const inFacePlane = (t: number): boolean => [0, 1, 2].some(i =>
+        {
+            const a = axes[i];
+            const d = [0, 3, 6].map(o => (tris[t + o] - c.x) * a.x
+                + (tris[t + o + 1] - c.y) * a.y + (tris[t + o + 2] - c.z) * a.z);
+            return d.every(p => Math.abs(p - halfExtents[i]) < tolerance)
+                || d.every(p => Math.abs(p + halfExtents[i]) < tolerance);
+        });
+        return Array.from({ length: Math.floor(tris.length / 9) }, (_, n) => n * 9).every(inFacePlane);
     }
 
     /** Copy current Mesh into a new one 
@@ -2638,68 +2658,188 @@ export class Mesh extends Shape
             return new ShapeCollection<Shape>(); // empty result on failure
         }
 
-        const result = new ShapeCollection<Shape>();
-        // First add hidden edges, so they are rendered below visible ones by default
-        result.addGroup('hidden',  this._projectedPolylinesToShapeCollection(r.hiddenPolylines()));
-        const visibleCurves = this._projectedPolylinesToShapeCollection(r.visiblePolylines());
-        result.addGroup('visible', visibleCurves);
-        // Tag the silhouette subset (outer contour). Rust returns indices into
-        // the visible polylines so we can register the same Curve instances
-        // under a second group label without inflating the shape count.
-        Mesh._tagSilhouetteFromIndices(result, visibleCurves, r.silhouetteIndices?.());
-
+        const result = Mesh._projectionToShapeCollection(r);
         r.free?.();
         return result;
     }
 
-    /** Register a subset of the just-added visible Curves under the
-     *  'silhouette' group, where the subset is given as indices into the
-     *  visible polyline array returned by the Rust HLR. No-op when the
-     *  WASM build doesn't expose `silhouetteIndices()` or it returns empty.
-     */
-    static _tagSilhouetteFromIndices(
-        target: ShapeCollection<Shape>,
-        visibleCurves: ShapeCollection<Shape>,
-        indices: Uint32Array | number[] | undefined,
-    ): void
+    /** The line work of a WASM hidden-line result as Curves: a 'hidden' and a
+     *  'visible' group, and the 'silhouette' subset of 'visible' (outer contour)
+     *  tagged on the same Curve instances, so the shape count does not grow.
+     *
+     *  The solver returns one polyline per mesh edge; the ones that continue each
+     *  other smoothly are joined first (see {@link _joinPolylines}). Silhouette
+     *  and other visible lines are joined apart, so each Curve is wholly one or
+     *  the other, and they keep the order the solver gave them. */
+    static _projectionToShapeCollection(r: {
+        hiddenPolylines(): Array<[number, number, number][]>,
+        visiblePolylines(): Array<[number, number, number][]>,
+        silhouetteIndices?(): Uint32Array,
+    }): ShapeCollection<Shape>
     {
-        if (!indices || indices.length === 0) return;
-        const visibleArr = visibleCurves.toArray() as Shape[];
+        const visible = r.visiblePolylines();
+        const outline = new Set<number>(r.silhouetteIndices?.() ?? []);
+        const chains = [
+            ...Mesh._joinPolylines(visible.map((p, i) => outline.has(i) ? p : null))
+                .map(c => ({ ...c, outline: true })),
+            ...Mesh._joinPolylines(visible.map((p, i) => outline.has(i) ? null : p))
+                .map(c => ({ ...c, outline: false })),
+        ].sort((a, b) => a.first - b.first);
+
+        const result = new ShapeCollection<Shape>();
+        // First add hidden edges, so they are rendered below visible ones by default
+        result.addGroup('hidden', Mesh.projectedPolylinesToShapeCollection(
+            Mesh._joinPolylines(r.hiddenPolylines()).map(c => c.points)));
+
+        const visibleCurves = new ShapeCollection<Shape>();
         const silhouette = new ShapeCollection<Shape>();
-        for (let i = 0; i < indices.length; i++)
+        chains.forEach(c =>
         {
-            const idx = indices[i];
-            if (idx < visibleArr.length) silhouette.add(visibleArr[idx]);
-        }
-        if (silhouette.length) target.tagGroup('silhouette', silhouette);
+            const curve = Mesh._polylineToCurve(c.points);
+            if (!curve) return;
+            visibleCurves.add(curve);
+            if (c.outline) silhouette.add(curve);
+        });
+        result.addGroup('visible', visibleCurves);
+        if (silhouette.length) result.tagGroup('silhouette', silhouette);
+        return result;
     }
 
-    _projectedPolylinesToShapeCollection(polylines: Array<[number, number, number][]>): ShapeCollection<Shape>
+    /** Join projected polylines that continue each other into longer ones.
+     *
+     *  The hidden-line solvers return one polyline per mesh edge, so a
+     *  tessellated circle comes out as dozens of separate lines, each its own
+     *  Curve and its own SVG path. Where exactly two polylines end at the same
+     *  point and the line turns less than {@link PROJECTION_JOIN_MAX_TURN}
+     *  degrees there, they are one smooth curve and are joined. Corners stay
+     *  separate lines, and so does any point where three or more lines meet.
+     *  Exact copies of a line are dropped first.
+     *
+     *  `null` entries are skipped, so a caller can join a subset and keep the
+     *  indices. Returns each joined polyline with the index of the first
+     *  polyline in it, in that order. */
+    static _joinPolylines(polylines: Array<Array<[number, number, number]> | null>): Array<{ first: number, points: Array<[number, number, number]> }>
     {
-        return Mesh.projectedPolylinesToShapeCollection(polylines);
+        type P = [number, number, number];
+        type End = { line: number, atStart: boolean };
+
+        // Adjacent edges share their end points exactly, up to the rounding of
+        // the projection, so a fine grid is enough to match them.
+        const key = (p: P) => `${Math.round(p[0] * 1e6)},${Math.round(p[1] * 1e6)},${Math.round(p[2] * 1e6)}`;
+
+        // Degenerate polylines are dropped here, as they would be as Curves, and
+        // so is a second copy of a line: seen along an axis, the two caps of a
+        // cylinder or the top and bottom edges of a box land on the same line.
+        // Left in, either would count as more lines meeting at a point of a
+        // circle, which would then not be joined.
+        const seen = new Set<string>();
+        const lines = polylines.map(p =>
+        {
+            if (!p || !Mesh._polylineHasLength(p)) return null;
+            const keys = p.map(key);
+            const id = [keys.join(';'), [...keys].reverse().join(';')].sort()[0];
+            if (seen.has(id)) return null;
+            seen.add(id);
+            return p;
+        });
+        const endPoint = (e: End): P =>
+        {
+            const pts = lines[e.line]!;
+            return e.atStart ? pts[0] : pts[pts.length - 1];
+        };
+
+        const ends = new Map<string, End[]>();
+        lines.forEach((p, line) =>
+        {
+            if (!p) return;
+            [true, false].forEach(atStart =>
+            {
+                const k = key(endPoint({ line, atStart }));
+                ends.set(k, [...(ends.get(k) ?? []), { line, atStart }]);
+            });
+        });
+
+        // Direction in which a polyline leaves one of its ends, towards the
+        // nearest of its points that does not coincide with that end.
+        const leaving = (e: End): P =>
+        {
+            const pts = e.atStart ? lines[e.line]! : [...lines[e.line]!].reverse();
+            const [x, y, z] = pts[0];
+            const to = pts.find(q => Math.hypot(q[0] - x, q[1] - y, q[2] - z) >= Curve.ZERO_LENGTH_TOLERANCE)!;
+            return [to[0] - x, to[1] - y, to[2] - z];
+        };
+
+        const cosMaxTurn = Math.cos(PROJECTION_JOIN_MAX_TURN * Math.PI / 180);
+        const used = lines.map(p => p === null);
+
+        // The line that continues the chain at its free end `e`, or null when
+        // that end meets no line, meets several, or turns too sharply.
+        const next = (e: End): End | null =>
+        {
+            const meeting = ends.get(key(endPoint(e)))!;
+            if (meeting.length !== 2) return null;
+            const other = meeting.find(m => m.line !== e.line || m.atStart !== e.atStart)!;
+            if (used[other.line]) return null;
+            // Both directions point away from the shared point: going straight
+            // on, they are opposite.
+            const [a, b] = [leaving(e), leaving(other)];
+            const cos = -(a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (Math.hypot(...a) * Math.hypot(...b));
+            return (cos >= cosMaxTurn) ? other : null;
+        };
+
+        // Follow the chain from the free end `e` of `line`, marking every line it
+        // takes in; returns their points in walking order, without the shared ends.
+        const follow = (e: End): P[] =>
+        {
+            const walked: P[] = [];
+            let other = next(e);
+            while (other)
+            {
+                used[other.line] = true;
+                const pts = lines[other.line]!;
+                walked.push(...(other.atStart ? pts : [...pts].reverse()).slice(1));
+                other = next({ line: other.line, atStart: !other.atStart });
+            }
+            return walked;
+        };
+
+        return lines.reduce((chains, p, first) =>
+        {
+            if (!p || used[first]) return chains;
+            used[first] = true;
+            const forward = follow({ line: first, atStart: false });
+            const backward = follow({ line: first, atStart: true });
+            chains.push({ first, points: [...backward.reverse(), ...p, ...forward] });
+            return chains;
+        }, [] as Array<{ first: number, points: P[] }>);
     }
 
     /** Turn raw projected polylines into Curves.
      *
      *  Static because the conversion depends on nothing but the polylines, and
      *  the linear-shape projection in ShapeCollection needs it without having a
-     *  Mesh to hand. The instance method above stays as the existing spelling.
+     *  Mesh to hand.
      */
     static projectedPolylinesToShapeCollection(polylines: Array<[number, number, number][]>): ShapeCollection<Shape>
     {
         const curves = new ShapeCollection<Shape>();
         polylines.forEach(points =>
         {
-            // HLR projection can emit degenerate polylines (an edge seen head-on collapses
-            // to coincident points). Skip those — Curve.Line/Polyline reject zero-length input.
-            if (!Mesh._polylineHasLength(points)) return;
-            curves.add(
-                (points.length === 2)
-                    ? Curve.Line(points[0], points[1])
-                    : Curve.Polyline(points)
-                )
+            const curve = Mesh._polylineToCurve(points);
+            if (curve) curves.add(curve);
         });
         return curves;
+    }
+
+    /** One raw projected polyline as a Curve, or null when it has no length:
+     *  HLR projection can emit degenerate polylines (an edge seen head-on
+     *  collapses to coincident points), and Curve.Line/Polyline reject those. */
+    static _polylineToCurve(points: Array<[number, number, number]>): Curve | null
+    {
+        if (!Mesh._polylineHasLength(points)) return null;
+        return (points.length === 2)
+            ? Curve.Line(points[0], points[1])
+            : Curve.Polyline(points);
     }
 
     /** True when a raw polyline spans a non-zero distance (has at least two points
@@ -2926,11 +3066,7 @@ export class Mesh extends Shape
             return new ShapeCollection<Shape>();
         }
 
-        const result = new ShapeCollection<Shape>();
-        result.addGroup('hidden',  this._projectedPolylinesToShapeCollection(r.hiddenPolylines()));
-        const visibleCurves = this._projectedPolylinesToShapeCollection(r.visiblePolylines());
-        result.addGroup('visible', visibleCurves);
-        Mesh._tagSilhouetteFromIndices(result, visibleCurves, r.silhouetteIndices?.());
+        const result = Mesh._projectionToShapeCollection(r);
 
         // Cut sketch: pull rings as typed coordinate buffers and lift back to
         // 3D using the section plane equation. `rings()` is the strongly-typed

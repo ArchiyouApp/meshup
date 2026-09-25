@@ -4,6 +4,33 @@ All notable changes to `@archiyou/meshup` are documented here.
 This project follows [semantic versioning](https://semver.org/); while on 0.x, minor
 versions may contain breaking changes.
 
+## Unreleased
+
+### Changed
+
+- **Projections return fewer, longer Curves.** The hidden-line solvers give one line per mesh
+  edge, so a projected cylinder was dozens of separate segments, each its own Curve and SVG
+  path. Lines that continue each other with a turn under 30 degrees are now joined into one
+  polyline (a circle becomes one closed Curve); corners and points where three or more lines
+  meet still start a new Curve. Exact copies of a line are dropped: seen along an axis, the two
+  caps of a cylinder or the top and bottom edges of a box land on the same line. The line work
+  itself is unchanged. A foundation plan with 12 screw piles went from 3,774 SVG paths to 358.
+
+- **Faster drawings of touching boxes.** The `'exact'` projection of a collection drew the
+  seam between each pair of touching cuboids by projecting that contact face against a copy of
+  the whole scene, one pair at a time. All contact outlines now go through one projection. The
+  plan above went from 7.7 s to 0.5 s. With `method: 'raycast'` the outlines are now solved
+  exactly as well.
+
+### Fixed
+
+- **Cylinders and prisms are no longer cuboids.** `Mesh.isCuboid()` only checked that every
+  vertex lay on the box surface, which all vertices on the two caps of a cylinder or prism do.
+  It now also needs every face in one of the six box faces. In projections, a cylinder standing
+  on a box drew a square where their bounding boxes overlapped. Code that branches on
+  `isCuboid()`, like the dimension lines of Archiyou core, now handles a cylinder as the
+  curved shape it is.
+
 ## 0.4.0 — 2026-09-21
 
 ### Added

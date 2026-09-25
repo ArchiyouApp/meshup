@@ -52,6 +52,44 @@ describe('Mesh.Cuboid()', () =>
     });
 });
 
+describe('Mesh.isCuboid()', () =>
+{
+    it('is true for boxes, also with extra vertices from a boolean', () =>
+    {
+        expect(Mesh.Cuboid(10, 20, 30).isCuboid()).toBe(true);
+        expect(Mesh.Box(4628, 38, 235).move(100, 200, 0).isCuboid()).toBe(true);
+        expect(Mesh.Cube(10).union(Mesh.Cube(10).move(10, 0, 0)).isCuboid()).toBe(true);
+    });
+
+    it('is false for cylinders and prisms, whose vertices all sit on their caps', () =>
+    {
+        expect(Mesh.Cylinder(44.5, 1600).isCuboid()).toBe(false);
+        expect(Mesh.Cylinder(100, 8).isCuboid()).toBe(false);
+        const lShape = new Polygon([[0, 0, 0], [20, 0, 0], [20, 10, 0], [10, 10, 0], [10, 20, 0], [0, 20, 0]]);
+        expect(lShape.extrude(10).isCuboid()).toBe(false);
+    });
+});
+
+describe('Projected line work of a Mesh', () =>
+{
+    it('joins the segments of a circle into one closed polyline', () =>
+    {
+        const top = Mesh.Cylinder(20, 50).elevation('top', { hiddenLines: true });
+        const visible = top.group('visible')!.toArray() as Curve[];
+        expect(visible.length).toBe(1);
+        expect(visible[0].isClosed()).toBe(true);
+        expect(visible[0].length()).toBeCloseTo(2 * Math.PI * 20, -1);
+        // the bottom circle, behind the top one
+        expect(top.group('hidden')!.length).toBe(1);
+    });
+
+    it('keeps the corners of a box as separate lines', () =>
+    {
+        const top = Mesh.Box(100, 50, 10).elevation('top');
+        expect(top.group('visible')!.length).toBe(4);
+    });
+});
+
 describe('Mesh.Sphere()', () =>
 {
     it('creates a non-null mesh', () =>
