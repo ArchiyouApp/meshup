@@ -573,6 +573,23 @@ export class Curve3DJs {
         return takeFromExternrefTable0(ret[0]);
     }
     /**
+     * Unit tangents at many normalised arc-length parameters `ts` at once — `tangentAt`
+     * in one go, with the same single arc-length table as [`Self::points_at`].
+     * @param {Float64Array} ts
+     * @returns {Vector3Js[]}
+     */
+    tangentsAt(ts) {
+        const ptr0 = passArrayF64ToWasm0(ts, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.curve3djs_tangentsAt(this.__wbg_ptr, ptr0, len0);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v2 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v2;
+    }
+    /**
      * The curve's plane as three vectors `[normal, localX, localY]`.
      * @returns {Vector3Js[]}
      */
@@ -1278,6 +1295,24 @@ export class Curve3DJs {
             throw takeFromExternrefTable0(ret[1]);
         }
         return Curve3DJs.__wrap(ret[0]);
+    }
+    /**
+     * Points at many normalised arc-length parameters `ts` at once: the points `pointAt`
+     * gives one by one. On a spline or an ellipse every `pointAt` rebuilds the arc-length
+     * table from a full tessellation; this builds it once for all of them.
+     * @param {Float64Array} ts
+     * @returns {Point3Js[]}
+     */
+    pointsAt(ts) {
+        const ptr0 = passArrayF64ToWasm0(ts, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.curve3djs_pointsAt(this.__wbg_ptr, ptr0, len0);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v2 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v2;
     }
     /**
      * Translate the curve by a world-space vector (moves the frame origin).

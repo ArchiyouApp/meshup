@@ -20,6 +20,7 @@ import { Bbox } from './Bbox';
 import type { PointLike, Axis } from './types';
 import { isPointLike } from './types';
 import type { ShapeCollection } from './ShapeCollection';
+import type { Curve } from './Curve';
 import { Point } from './Point';
 
 import { uuid, nodeToString } from './utils';
@@ -353,6 +354,7 @@ export abstract class Shape
      *  Both `pivot` and `alignment` accept:
      *  - A keyword string combining any of: left, right, front, back, top, bottom
      *    (unspecified axes default to the centre of that axis)
+     *  - 'start' or 'end' on a Curve: its end points instead of a bbox point
      *  - A PointLike [x%, y%, z%] where 0 = min-side and 1 = max-side
      *
      *  `other` may be a Shape, a Point, or a raw PointLike; a point is treated as a
@@ -362,15 +364,13 @@ export abstract class Shape
      *    box.align(shelf, 'bottom', 'top')  // sits box on top of shelf
      *    box.align(other, 'center', 'center') // centres box on other
      *    box.align(curve.middle(), 'lefttop') // align to a bare point
+     *    edge.align(point, 'end')           // puts the end of edge on point
      */
     align(other: AlignTarget, pivot: string | PointLike = 'center', alignment: string | PointLike = 'center'): this
     {
-        const selfBbox  = this.bbox();
-        const otherBbox = Shape.bboxOf(other);
-        if (!selfBbox || !otherBbox) return this;
-
-        const fromPos = Shape.bboxPointOf(selfBbox, pivot);
-        const toPos   = Shape.bboxPointOf(otherBbox, alignment);
+        const fromPos = Shape.alignPointOf(this, pivot);
+        const toPos   = Shape.alignPointOf(other, alignment);
+        if (!fromPos || !toPos) return this;
 
         return this.translate(toPos.x - fromPos.x, toPos.y - fromPos.y, toPos.z - fromPos.z);
     }
@@ -391,6 +391,18 @@ export abstract class Shape
         }
         const p = new Point(target as Point | PointLike);
         return new Bbox([p.x, p.y, p.z], [p.x, p.y, p.z]);
+    }
+
+    /** Resolve an alignment spec on anything align() can target: 'start'/'end' on a Curve
+     *  are its end points, any other spec a point on the target's bbox (see bboxPointOf). */
+    static alignPointOf(target: AlignTarget, spec: string | PointLike): Point | undefined
+    {
+        if ((spec === 'start' || spec === 'end') && (target as Shape)?.type === 'Curve')
+        {
+            return (target as Curve)[spec]().toPoint();
+        }
+        const bb = Shape.bboxOf(target);
+        return bb ? Shape.bboxPointOf(bb, spec) : undefined;
     }
 
     /** Resolve an alignment spec — a corner keyword ('lefttop') or a [x%, y%, z%] triple —

@@ -779,11 +779,10 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     align(other: AlignTarget, pivot: string | PointLike = 'center', alignment: string | PointLike = 'center'): this
     {
         const selfBbox = this.bbox();
-        const otherBbox = Shape.bboxOf(other);
-        if (!selfBbox || !otherBbox) return this;
+        const toPos    = Shape.alignPointOf(other, alignment);
+        if (!selfBbox || !toPos) return this;
 
         const fromPos = Shape.bboxPointOf(selfBbox, pivot);
-        const toPos   = Shape.bboxPointOf(otherBbox, alignment);
 
         return this.translate(toPos.x - fromPos.x, toPos.y - fromPos.y, toPos.z - fromPos.z);
     }

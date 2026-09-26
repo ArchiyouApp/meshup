@@ -76,6 +76,8 @@ const PERPENDICULAR_ZERO_TOLERANCE = 1e-9;
  *  Read from the quality profile at call time, so `setQuality()` reaches a loft written before
  *  it. @see {@link QualitySettings.loftSegmentsPerTurn} */
 const loftSegmentsPerTurn = (): number => getQuality().loftSegmentsPerTurn;
+/** Arc-length positions (0..1) of loft samples closer together than this are taken as one. */
+const LOFT_PARAM_TOLERANCE = 1e-9;
 
 /** How finely a revolve subdivides its sweep, counted per full turn: a 360° revolve becomes
  *  this many rings of faces, a 90° one a quarter of them. Matches the loft count, so a circle
@@ -4050,24 +4052,29 @@ export class Curve extends Shape
         const allClosed = profiles.every(p => p.isClosed());
         const allStraightOpen = profiles.every(p => !p.isClosed() && p.isStraight());
 
-        // Two straight open curves loft into a single flat quad — return a planar Polygon
-        // (which itself has .extrude()) rather than a tessellated Mesh, matching extrude().
-        if (allStraightOpen && profiles.length === 2)
+        // Two straight open curves in one plane loft into a single flat quad — return a planar
+        // Polygon (which itself has .extrude()) rather than a tessellated Mesh, matching
+        // extrude(). Skew lines span a twisted quad: that goes through the ruled loft below,
+        // which splits it into flat triangles.
+        const quad = allStraightOpen && profiles.length === 2
+            ? [profiles[0].start(), profiles[0].end(), profiles[1].end(), profiles[1].start()].map( v => v.toPoint())
+            : null;
+        if (quad && Curve._loftFaces(quad).length === 1)
         {
-            const s0 = profiles[0].start(); const e0 = profiles[0].end();
-            const s1 = profiles[1].start(); const e1 = profiles[1].end();
-            return new Polygon([
-                [s0.x, s0.y, s0.z],
-                [e0.x, e0.y, e0.z],
-                [e1.x, e1.y, e1.z],
-                [s1.x, s1.y, s1.z],
-            ]);
+            return new Polygon(quad.map( p => [p.x, p.y, p.z]));
         }
 
         // Ruled loft: sample every profile at matching positions and stitch corresponding points
         // between consecutive profiles into quads. hypercurve has no surfaces, so we build the
         // mesh directly.
-        const rings = this._loftRings(profiles);
+        // A closed profile wound against the first one would stitch every wall across to the
+        // other side of the loft: turn it to match
+        const winding = allClosed ? _newellNormal(this.tessellate()) : null;
+        const aligned = winding
+            ? profiles.map( p => (_newellNormal(p.tessellate()).dot(winding) < 0) ? p._copy().reverse() : p)
+            : profiles;
+        const rings = this._loftRings(aligned);
+        const centers = profiles.map( p => p.center()); // center() tessellates: once per profile
         const steps = rings[0].length - 1;
         const mkVert = (pt: Point) => new VertexJs(new Point3Js(pt.x, pt.y, pt.z), new Vector3Js(0, 0, 0));
         const polygons: PolygonJs[] = [];
@@ -4075,25 +4082,32 @@ export class Curve extends Shape
         {
             const A = rings[k];
             const B = rings[k + 1];
+            // walls face outward when the rings wind counter-clockwise looking along the loft;
+            // lofting the other way round turns them inside out
+            const inward = allClosed
+                && _newellNormal(A).dot(Vector.from(centers[k + 1]).subtracted(centers[k])) < 0;
             for (let i = 0; i < steps; i++)
             {
-                polygons.push(new PolygonJs([mkVert(A[i]), mkVert(A[i + 1]), mkVert(B[i + 1]), mkVert(B[i])], {}));
+                Curve._loftFaces([A[i], A[i + 1], B[i + 1], B[i]]).forEach( face =>
+                {
+                    const polygon = new PolygonJs((inward ? [...face].reverse() : face).map(mkVert), {});
+                    polygon.setNewNormal(); // flat shading: without it the walls render with zero normals
+                    polygons.push(polygon);
+                });
             }
         }
 
         // Cap the two end profiles into a watertight solid when all profiles are closed.
         if (allClosed && solid)
         {
-            const first = profiles[0];
-            const last  = profiles[profiles.length - 1];
             // Outward cap normals point away from the neighbouring profile.
-            const firstOut = Vector.from(first.center()).subtracted(profiles[1].center()).normalize();
-            const lastOut  = Vector.from(last.center()).subtracted(profiles[profiles.length - 2].center()).normalize();
+            const firstOut = Vector.from(centers[0]).subtracted(centers[1]).normalize();
+            const lastOut  = Vector.from(centers[centers.length - 1]).subtracted(centers[centers.length - 2]).normalize();
 
             // NOTE: cap from the ring, not from the profile's own tessellation — a cap sampled any
             // other way than the wall it closes leaves gaps along the seam
-            const firstCap = this._makeCap(first, firstOut, rings[0]);
-            const lastCap  = this._makeCap(last, lastOut, rings[rings.length - 1]);
+            const firstCap = this._makeCap(firstOut, rings[0]);
+            const lastCap  = this._makeCap(lastOut, rings[rings.length - 1]);
             if (firstCap) { polygons.push(firstCap); }
             if (lastCap)  { polygons.push(lastCap); }
         }
@@ -4113,11 +4127,26 @@ export class Curve extends Shape
     private _loftRings(profiles: Curve[]): Point[][]
     {
         const perTurn = loftSegmentsPerTurn();
-        const uniform = (): Point[][] => profiles.map( p =>
-                Array.from({ length: perTurn + 1 },
-                    (_, i) => new Point(p.inner().pointAt(i / perTurn))));
-
         const segments = profiles.map( p => p._atomicSegments() );
+
+        // Every profile is sampled at the same arc-length positions: evenly spaced, plus the
+        // corners of all profiles. Even spacing alone misses the corners and cuts them off (a
+        // rectangle lofted onto a circle came out with chamfered corners)
+        const uniform = (): Point[][] =>
+        {
+            const corners = segments.flatMap( segs =>
+            {
+                const lengths = segs.map( seg => seg.length()); // measured once: length() tessellates a spline
+                const total = lengths.reduce( (sum, length) => sum + length, 0);
+                return lengths.reduce( (acc, length) => [...acc, acc[acc.length - 1] + length / total], [0]);
+            });
+            const params = [...Array.from({ length: perTurn + 1 }, (_, i) => i / perTurn), ...corners]
+                .sort( (a, b) => a - b)
+                .reduce( (kept, t) => (t - kept[kept.length - 1] > LOFT_PARAM_TOLERANCE) ? [...kept, t] : kept, [0]);
+            params[params.length - 1] = 1; // end exactly on the end: a closed ring shuts on its start
+            return profiles.map( p => p.inner().pointsAt(new Float64Array(params)).map( pt => new Point(pt)));
+        };
+
         const count = segments[0].length;
         if(count === 0 || segments.some( s => s.length !== count )){ return uniform(); }
 
@@ -4131,12 +4160,37 @@ export class Curve extends Shape
 
         return segments.map( (segs, i) =>
         {
+            // one pointsAt() per segment: on a spline or an ellipse each separate pointAt()
+            // rebuilds the arc-length table from a full tessellation. The last segment also
+            // samples its end, where an open ring stops
             const ring = segs.flatMap( (seg, j) =>
-                    Array.from({ length: steps[j] }, (_, k) => new Point(seg.inner().pointAt(k / steps[j]))));
-            // close the ring: a closed profile returns to its start, an open one stops at its end
-            ring.push(new Point(profiles[i].inner().pointAt(1)));
+            {
+                const ts = Float64Array.from({ length: steps[j] + (j === segs.length - 1 ? 1 : 0) }, (_, k) => k / steps[j]);
+                return seg.inner().pointsAt(ts).map( pt => new Point(pt));
+            });
+            // a closed ring shuts exactly on its start, so the seam leaves no gap
+            if(profiles[i].isClosed()){ ring[ring.length - 1] = ring[0]; }
             return ring;
         });
+    }
+
+    /** Faces for one wall quad [a, b, c, d] of a loft: the quad itself when it is flat, else two
+     *  triangles split along its shorter diagonal. Profiles turned against each other (a square
+     *  lofted onto a rotated one) give twisted quads, and triangulating a face that is not flat
+     *  invents points on neither profile and leaves holes in the wall. */
+    private static _loftFaces(quad: Point[]): Point[][]
+    {
+        const [a, b, c, d] = quad;
+        // distance between the two diagonals' lines: zero for a flat quad
+        const across = Vector.from(c).subtracted(a).cross(Vector.from(d).subtracted(b));
+        const twist = (across.length() < TOLERANCE)
+            ? 0 // parallel diagonals: a degenerate quad, nothing to split
+            : Math.abs(across.dot(Vector.from(b).subtracted(a))) / across.length();
+        if(twist <= TOLERANCE){ return [quad]; }
+
+        return (a.distance(c) <= b.distance(d))
+            ? [[a, b, c], [a, c, d]]
+            : [[a, b, d], [b, c, d]];
     }
 
     /** How far a segment turns from end to end, in degrees. Summed over sub-steps so that a
@@ -4144,32 +4198,22 @@ export class Curve extends Shape
     private static _turnOf(segment: Curve): number
     {
         const STEPS = 4;
-        return Array.from({ length: STEPS }, (_, k) =>
-        {
-            const from = Vector.from(segment.inner().tangentAt(k / STEPS));
-            const to = Vector.from(segment.inner().tangentAt((k + 1) / STEPS));
-            return from.angle(to);
-        }).reduce( (total, angle) => total + angle, 0);
+        const tangents = segment.inner().tangentsAt(Float64Array.from({ length: STEPS + 1 }, (_, k) => k / STEPS))
+            .map( t => Vector.from(t));
+        return tangents.slice(1).reduce( (total, to, k) => total + tangents[k].angle(to), 0);
     }
 
-    /** Build a single cap face for a closed profile, wound so its normal faces `outward`.
-     *  Pass `ring` to cap exactly the points the surrounding wall was built from. */
-    private _makeCap(profile: Curve, outward: Vector, ring?: Point[]): PolygonJs | null
+    /** Build a single cap face over the ring of a closed profile, wound so its normal faces
+     *  `outward`. Cap exactly the points the surrounding wall was built from. */
+    private _makeCap(outward: Vector, ring: Point[]): PolygonJs | null
     {
-        const pts = ring ?? profile.tessellate();
-        // Drop the closing duplicate point if present (closed curves repeat the first vertex).
-        const capPts = (pts.length > 1 && pts[0].distance(pts[pts.length - 1]) < 1e-6)
-            ? pts.slice(0, -1)
-            : pts;
+        const capPts = _openRing(ring);
         if (capPts.length < 3) { return null; }
 
-        const curveNormal = profile.normalOrientation();
-        // Keep original winding when the curve's own normal already faces outward, else reverse.
-        const needsReverse = curveNormal !== null ? curveNormal.dot(outward) < 0 : false;
-        const orderedPts = needsReverse ? [...capPts].reverse() : capPts;
-
+        // wound by the ring itself: that is what the walls were stitched from, and it can be a
+        // reversed copy of the profile
         const norVec = new Vector3Js(outward.x, outward.y, outward.z);
-        const verts = orderedPts.map(p => new VertexJs(new Point3Js(p.x, p.y, p.z), norVec));
+        const verts = _facingOutward(capPts, outward).map(p => new VertexJs(new Point3Js(p.x, p.y, p.z), norVec));
         return new PolygonJs(verts, {});
     }
 

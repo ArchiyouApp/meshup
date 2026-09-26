@@ -774,44 +774,95 @@ impl Curve3DJs
         Ok((pts, cum))
     }
 
+    /// The native line/arc segments to solve arc length on exactly, if this curve has them.
+    ///
+    /// Native line/arc geometry has closed-form arc length, so a point is solved exactly and
+    /// lies ON the curve. The tessellated walk (see [`arclen_lerp`]) interpolates BETWEEN two
+    /// samples, so its result is off-curve by up to a chord sagitta. `world_pts` (a
+    /// non-coplanar polyline) keeps the tessellated walk: its true 3D path is not the planar
+    /// geometry.
+    fn arclen_native_segments(&self) -> Option<&[hypercurve::Segment2]>
+    {
+        if self.world_pts.is_some() { None } else { self.native_segments() }
+    }
+
     /// World point at normalised arc-length fraction `t` in `[0, 1]`.
     fn point_at_arclen_frac(&self, t: f64) -> Result<Point3<Real>, JsValue>
     {
-        // Native line/arc geometry has closed-form arc length, so the point is solved
-        // exactly and lies ON the curve. The tessellated path below interpolates BETWEEN
-        // two samples, so its result is off-curve by up to a chord sagitta.
-        // `world_pts` (a non-coplanar polyline) keeps the tessellated walk: its true 3D
-        // path is not the planar geometry.
-        if self.world_pts.is_none()
+        if let Some(segs) = self.arclen_native_segments()
         {
-            if let Some(segs) = self.native_segments()
-            {
-                let local = hcurve::point_at_arclen(segs, t).map_err(err)?;
-                return Ok(self.frame.to_world(seg_local(&local)));
-            }
+            let local = hcurve::point_at_arclen(segs, t).map_err(err)?;
+            return Ok(self.frame.to_world(seg_local(&local)));
         }
         let (pts, cum) = self.arc_length_table(&metric_quality()).map_err(err)?;
         if pts.is_empty()
         {
             return Err(JsValue::from_str("Curve3DJs: empty curve"));
         }
-        let total = *cum.last().unwrap();
-        if total <= 0.0
-        {
-            return Ok(pts[0]);
-        }
-        let target = t.clamp(0.0, 1.0) * total;
-        for i in 0..pts.len() - 1
-        {
-            if target <= cum[i + 1]
-            {
-                let seg = cum[i + 1] - cum[i];
-                let f = if seg > 1e-12 { (target - cum[i]) / seg } else { 0.0 };
-                return Ok(pts[i] + (pts[i + 1] - pts[i]) * (f as Real));
-            }
-        }
-        Ok(*pts.last().unwrap())
+        Ok(arclen_lerp(&pts, &cum, t))
     }
+
+    /// World points at normalised arc-length fractions `ts` in `[0, 1]`: what
+    /// [`Self::point_at_arclen_frac`] gives for each, but a curve without native geometry (a
+    /// spline, an ellipse) builds its arc-length table — a full tessellation — once for all
+    /// of `ts`, not once per point.
+    fn points_at_arclen_fracs(&self, ts: &[f64]) -> Result<Vec<Point3<Real>>, JsValue>
+    {
+        if let Some(segs) = self.arclen_native_segments()
+        {
+            return ts
+                .iter()
+                .map(|&t| {
+                    let local = hcurve::point_at_arclen(segs, t).map_err(err)?;
+                    Ok(self.frame.to_world(seg_local(&local)))
+                })
+                .collect();
+        }
+        let (pts, cum) = self.arc_length_table(&metric_quality()).map_err(err)?;
+        if pts.is_empty()
+        {
+            return Err(JsValue::from_str("Curve3DJs: empty curve"));
+        }
+        Ok(ts.iter().map(|&t| arclen_lerp(&pts, &cum, t)).collect())
+    }
+}
+
+/// Half the span of the chord a tangent is taken from, in arc-length fraction.
+const TANGENT_EPS: f64 = 1.0e-4;
+
+/// The arc-length fractions a tangent at `t` is taken between.
+fn tangent_span(t: f64) -> [f64; 2]
+{
+    [(t - TANGENT_EPS).max(0.0), (t + TANGENT_EPS).min(1.0)]
+}
+
+/// Unit direction from `a` to `b`, or +X when they coincide.
+fn unit_chord(a: Point3<Real>, b: Point3<Real>) -> Vector3<Real>
+{
+    let d = b - a;
+    let n = d.norm();
+    if n > 1e-12 { d / n } else { Vector3::x() }
+}
+
+/// Point at arc-length fraction `t` on a tessellation `pts` with cumulative lengths `cum`.
+fn arclen_lerp(pts: &[Point3<Real>], cum: &[f64], t: f64) -> Point3<Real>
+{
+    let total = *cum.last().unwrap();
+    if total <= 0.0
+    {
+        return pts[0];
+    }
+    let target = t.clamp(0.0, 1.0) * total;
+    for i in 0..pts.len() - 1
+    {
+        if target <= cum[i + 1]
+        {
+            let seg = cum[i + 1] - cum[i];
+            let f = if seg > 1e-12 { (target - cum[i]) / seg } else { 0.0 };
+            return pts[i] + (pts[i + 1] - pts[i]) * (f as Real);
+        }
+    }
+    *pts.last().unwrap()
 }
 
 /// A native segment endpoint (`Point2`) as an f64 local pair.
@@ -1407,17 +1458,40 @@ impl Curve3DJs
         Ok(Point3Js::new(p.x as f64, p.y as f64, p.z as f64))
     }
 
+    /// Points at many normalised arc-length parameters `ts` at once: the points `pointAt`
+    /// gives one by one. On a spline or an ellipse every `pointAt` rebuilds the arc-length
+    /// table from a full tessellation; this builds it once for all of them.
+    #[wasm_bindgen(js_name = pointsAt)]
+    pub fn points_at(&self, ts: Vec<f64>) -> Result<Vec<Point3Js>, JsValue>
+    {
+        Ok(self
+            .points_at_arclen_fracs(&ts)?
+            .iter()
+            .map(|p| Point3Js::new(p.x as f64, p.y as f64, p.z as f64))
+            .collect())
+    }
+
     /// Unit tangent at normalised arc-length parameter `t` in `[0, 1]`.
     #[wasm_bindgen(js_name = tangentAt)]
     pub fn tangent_at(&self, t: f64) -> Result<Vector3Js, JsValue>
     {
-        let eps = 1.0e-4;
-        let a = self.point_at_arclen_frac((t - eps).max(0.0))?;
-        let b = self.point_at_arclen_frac((t + eps).min(1.0))?;
-        let d = b - a;
-        let n = d.norm();
-        let u = if n > 1e-12 { d / n } else { Vector3::x() };
+        let [from, to] = tangent_span(t);
+        let u = unit_chord(self.point_at_arclen_frac(from)?, self.point_at_arclen_frac(to)?);
         Ok(Vector3Js::new(u.x as f64, u.y as f64, u.z as f64))
+    }
+
+    /// Unit tangents at many normalised arc-length parameters `ts` at once — `tangentAt`
+    /// in one go, with the same single arc-length table as [`Self::points_at`].
+    #[wasm_bindgen(js_name = tangentsAt)]
+    pub fn tangents_at(&self, ts: Vec<f64>) -> Result<Vec<Vector3Js>, JsValue>
+    {
+        let spans: Vec<f64> = ts.iter().flat_map(|&t| tangent_span(t)).collect();
+        Ok(self
+            .points_at_arclen_fracs(&spans)?
+            .chunks(2)
+            .map(|ab| unit_chord(ab[0], ab[1]))
+            .map(|u| Vector3Js::new(u.x as f64, u.y as f64, u.z as f64))
+            .collect())
     }
 
     /// The arc-length parameter (in `[0, 1]`) at absolute length `len`.

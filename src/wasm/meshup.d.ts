@@ -83,6 +83,11 @@ export class Curve3DJs {
    */
   spanParams(): any;
   /**
+   * Unit tangents at many normalised arc-length parameters `ts` at once — `tangentAt`
+   * in one go, with the same single arc-length table as [`Self::points_at`].
+   */
+  tangentsAt(ts: Float64Array): Vector3Js[];
+  /**
    * The curve's plane as three vectors `[normal, localX, localY]`.
    */
   getOnPlane(): Vector3Js[];
@@ -404,6 +409,12 @@ export class Curve3DJs {
    * Construct a straight line between two 3D points (open).
    */
   static makeLine(a: Point3Js, b: Point3Js): Curve3DJs;
+  /**
+   * Points at many normalised arc-length parameters `ts` at once: the points `pointAt`
+   * gives one by one. On a spline or an ellipse every `pointAt` rebuilds the arc-length
+   * table from a full tessellation; this builds it once for all of them.
+   */
+  pointsAt(ts: Float64Array): Point3Js[];
   /**
    * Translate the curve by a world-space vector (moves the frame origin).
    */
@@ -1164,6 +1175,7 @@ export interface InitOutput {
   readonly curve3djs_paramAtLength: (a: number, b: number) => [number, number, number];
   readonly curve3djs_paramClosestToPoint: (a: number, b: number) => [number, number, number];
   readonly curve3djs_pointAt: (a: number, b: number) => [number, number, number];
+  readonly curve3djs_pointsAt: (a: number, b: number, c: number) => [number, number, number, number];
   readonly curve3djs_reverse: (a: number) => [number, number, number];
   readonly curve3djs_rotateAxis: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
   readonly curve3djs_rotateQuaternion: (a: number, b: number, c: number, d: number, e: number) => number;
@@ -1177,6 +1189,7 @@ export interface InitOutput {
   readonly curve3djs_splitAtCurve: (a: number, b: number) => [number, number, number, number];
   readonly curve3djs_subtype: (a: number) => [number, number];
   readonly curve3djs_tangentAt: (a: number, b: number) => [number, number, number];
+  readonly curve3djs_tangentsAt: (a: number, b: number, c: number) => [number, number, number, number];
   readonly curve3djs_tessellate: (a: number, b: number, c: number) => [number, number, number, number];
   readonly curve3djs_translate: (a: number, b: number) => number;
   readonly curve3djs_trim: (a: number, b: number, c: number) => [number, number, number];

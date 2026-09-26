@@ -23,6 +23,16 @@ versions may contain breaking changes.
 
 - **`ProjectionOptions.method`**: the hidden-line algorithm is an option like the others.
 
+- **`align()` to the start or end of a curve.** `'start'` and `'end'` are accepted as pivot
+  and as alignment on a Curve, on both sides of the call: `edge.align(point, 'end')` puts the
+  end of the edge on the point, `box.align(edge, 'center', 'start')` centres a box on the start
+  of an edge. They used to fall back silently to the centre of the bounding box. Also in
+  `ShapeCollection.align()` for the target.
+
+- **`Curve3DJs.pointsAt(ts)` and `tangentsAt(ts)`**: many points or tangents at once, at
+  normalised arc-length parameters. The same answers as `pointAt()` and `tangentAt()`, but a
+  spline or an ellipse builds its arc-length table once instead of once per call.
+
 ### Changed
 
 - **Breaking: every projection takes one options object after its view arguments** — on
@@ -78,6 +88,30 @@ versions may contain breaking changes.
   `isometry()`.** A collection of brep shapes gave an empty drawing, as it has no meshes; those
   shapes are now projected by that kernel's own collection, as `merge()` and `union()` already
   did.
+
+- **Lofts between turned profiles have flat side faces.** A square lofted onto a rotated
+  square gave twisted four-sided faces, and triangulating those put points halfway up the wall
+  that lie on neither profile and left holes in it. A twisted face is now split along its
+  shorter diagonal into two flat triangles; flat faces stay as they are.
+
+- **Lofts face outward and shade.** The side walls had zero vertex normals, so the viewer
+  shaded them wrongly. Lofting downward turned the walls inside out while the caps faced out,
+  and profiles wound in opposite directions stitched the walls across the loft; both gave a
+  wrong volume. Profiles are now wound alike and walls face outward whichever way the loft
+  runs.
+
+- **Lofts keep the corners of their profiles.** Profiles with different segments (a
+  rectangle onto a circle, a hexagon onto a square, a rounded rectangle onto a rectangle) were
+  sampled at evenly spaced positions that missed the corners, so the loft cut them off and its
+  caps did not match the profiles. Every profile is now also sampled at the corners of all of
+  them.
+
+- **Two skew lines loft into two flat triangles**, not into one four-point Polygon that is not
+  flat.
+
+- **Lofts through ellipses and splines are about 15 times faster**: circle to ellipse took
+  about 6 s and now takes about 0.35 s. They sample with the new `pointsAt()`.
+
 
 ## 0.4.0 — 2026-09-21
 

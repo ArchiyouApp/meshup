@@ -59,6 +59,7 @@ export const curve3djs_offset: (a: number, b: number, c: number, d: number, e: n
 export const curve3djs_paramAtLength: (a: number, b: number) => [number, number, number];
 export const curve3djs_paramClosestToPoint: (a: number, b: number) => [number, number, number];
 export const curve3djs_pointAt: (a: number, b: number) => [number, number, number];
+export const curve3djs_pointsAt: (a: number, b: number, c: number) => [number, number, number, number];
 export const curve3djs_reverse: (a: number) => [number, number, number];
 export const curve3djs_rotateAxis: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
 export const curve3djs_rotateQuaternion: (a: number, b: number, c: number, d: number, e: number) => number;
@@ -72,6 +73,7 @@ export const curve3djs_spans: (a: number) => [number, number, number, number];
 export const curve3djs_splitAtCurve: (a: number, b: number) => [number, number, number, number];
 export const curve3djs_subtype: (a: number) => [number, number];
 export const curve3djs_tangentAt: (a: number, b: number) => [number, number, number];
+export const curve3djs_tangentsAt: (a: number, b: number, c: number) => [number, number, number, number];
 export const curve3djs_tessellate: (a: number, b: number, c: number) => [number, number, number, number];
 export const curve3djs_translate: (a: number, b: number) => number;
 export const curve3djs_trim: (a: number, b: number, c: number) => [number, number, number];

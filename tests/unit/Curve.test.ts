@@ -1999,3 +1999,60 @@ describe('Curve.trim()', () =>
         expect(() => (Curve.Line([0, 0, 0], [100, 0, 0]) as any).trim(0.2)).toThrow();
     });
 });
+
+describe('Curve.align() with start/end', () =>
+{
+    // 'start'/'end' are the curve's end points, not a bbox point: a diagonal line's
+    // bbox centre is off its end by half its length
+    it('puts the end of a curve on a point', () =>
+    {
+        const c = Curve.Line([0, 0, 0], [100, 50, 20]).align([500, 500, 500], 'end');
+        expect(c.end().toPoint().toArray()).toEqual([500, 500, 500]);
+        expect(c.start().toPoint().toArray()).toEqual([400, 450, 480]);
+    });
+
+    it('puts a shape on the start of a curve', () =>
+    {
+        const line = Curve.Line([10, 20, 30], [100, 50, 20]);
+        const box = Mesh.Box(10, 10, 10).align(line, 'center', 'start');
+        expect(box.bbox().center().toArray()).toEqual([10, 20, 30]);
+        const group = new ShapeCollection([Mesh.Box(10, 10, 10)]).align(line, 'center', 'start');
+        expect(group.bbox().center().toArray()).toEqual([10, 20, 30]);
+    });
+});
+
+describe('Curve3DJs.pointsAt() / tangentsAt()', () =>
+{
+    // the batch calls build a spline's or an ellipse's arc-length table once; they must give
+    // exactly what pointAt() and tangentAt() give one parameter at a time
+    const curves: Record<string, () => Curve> = {
+        'line':                 () => Curve.Line([0, 0, 0], [100, 50, 20]),
+        'arc':                  () => Curve.Arc([0, 0, 0], [50, 40, 0], [100, 0, 0], 'threepoint'),
+        'rect':                 () => Curve.Rect(100, 50),
+        'ellipse':              () => Curve.Ellipse(50, 20).move(0, 0, 10),
+        'spline':               () => Curve.Interpolated([[0, 0, 0], [30, 30, 0], [70, -30, 0], [100, 0, 0]]),
+        'non-planar polyline':  () => Curve.Polyline([[0, 0, 0], [50, 0, 0], [50, 50, 30], [0, 50, 60]]),
+    };
+    const PARAMS = [-0.5, 0, 0.1, 0.25, 1 / 3, 0.5, 0.75, 0.999, 1, 1.5]; // out of range clamps
+
+    it.each(Object.entries(curves))('%s: pointsAt() matches pointAt()', (_name, make) =>
+    {
+        const curve = make().inner();
+        const batch = curve.pointsAt(new Float64Array(PARAMS)).map( p => new Point(p).toArray());
+        const single = PARAMS.map( t => new Point(curve.pointAt(t)).toArray());
+        expect(batch).toEqual(single);
+    }, 30_000); // one pointAt() on a spline or ellipse builds a whole arc-length table
+
+    it.each(Object.entries(curves))('%s: tangentsAt() matches tangentAt()', (_name, make) =>
+    {
+        const curve = make().inner();
+        const batch = curve.tangentsAt(new Float64Array(PARAMS)).map( v => [v.x, v.y, v.z]);
+        const single = PARAMS.map( t => curve.tangentAt(t)).map( v => [v.x, v.y, v.z]);
+        expect(batch).toEqual(single);
+    }, 30_000);
+
+    it('gives nothing for no parameters', () =>
+    {
+        expect(Curve.Ellipse(50, 20).inner().pointsAt(new Float64Array([]))).toEqual([]);
+    });
+});
