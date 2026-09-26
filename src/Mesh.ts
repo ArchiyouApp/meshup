@@ -2853,6 +2853,11 @@ export class Mesh extends Shape
      *
      *  `planeNormal` is the projection plane normal in 3D (pointing toward the
      *  viewer). After this, the result lies on Z=0, centered at the origin.
+     *
+     *  A ShapeCollection result also records the transform it went through
+     *  (see {@link ShapeCollection.toScreen}), so a 3D point — the end of a
+     *  dimension line, say — can be placed in the drawing exactly where it
+     *  was projected to.
      */
     static _flattenProjectionToScreen<T extends {
         rotateQuaternion(q: any): T;
@@ -2860,8 +2865,8 @@ export class Mesh extends Shape
     }>(projection: T, planeNormal: Vector): T
     {
         // Flatten onto XY plane (Z = [0,0,1]) via shortest-arc rotation
-        const flattened = projection.rotateQuaternion(
-            planeNormal.rotationBetween(Vector.from(0, 0, 1)));
+        const flattenRot = planeNormal.rotationBetween(Vector.from(0, 0, 1));
+        const flattened = projection.rotateQuaternion(flattenRot);
 
         // Where the original 3D Up [0,0,1] landed: the shortest-arc rotation
         // maps the original Z-axis to (-nx, -ny) in the XY plane.
@@ -2882,7 +2887,16 @@ export class Mesh extends Shape
         const twistRot = dotUp < -(1 - TOLERANCE)
             ? { x: 1, y: 0, z: 0, w: 0 }   // 180° around X — preserves screen-X
             : mappedUpVec.rotationBetween(Vector.from(0, 1, 0));
-        return flattened.rotateQuaternion(twistRot).moveTo(0, 0, 0);
+        const turned = flattened.rotateQuaternion(twistRot);
+
+        // moveTo() centers the bbox on the origin: the same shift, remembered
+        const center = (turned instanceof ShapeCollection) ? turned.bbox()?.center() : null;
+        const screen = turned.moveTo(0, 0, 0);
+        if (center && screen instanceof ShapeCollection)
+        {
+            screen._screen = { rotations: [flattenRot, twistRot], offset: [-center.x, -center.y] };
+        }
+        return screen;
     }
 
     /** Resolve a BasePlane name or PointLike direction into a normalized

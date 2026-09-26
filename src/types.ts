@@ -260,10 +260,14 @@ export interface ProjectionOptions
    *  when the scene does not meet their requirements, instead of throwing.
    *  Default `false`, so a method that cannot run says so. */
   fallback?: boolean;
+  /** The dimension lines drawn into the projection, with their 3D values: by default the
+   *  ones of the projected shapes, `false` for none, or a list of them. Read by the host
+   *  app, which owns the annotations; meshup itself ignores it. */
+  dims?: boolean | Array<any>;
 }
 
 /** {@link ProjectionOptions} plus the method, with every default filled in. */
-export interface ResolvedProjectionOptions extends Required<ProjectionOptions>
+export interface ResolvedProjectionOptions extends Required<Omit<ProjectionOptions, 'dims'>>
 {
   /** Which hidden-line algorithm runs. */
   method: HlrStrategy;

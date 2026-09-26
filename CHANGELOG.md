@@ -23,6 +23,17 @@ versions may contain breaking changes.
 
 - **`ProjectionOptions.method`**: the hidden-line algorithm is an option like the others.
 
+- **`ShapeCollection.toScreen(point)`: where a 3D point lands in a projection.** An isometry,
+  elevation or section remembers the transform it applied, so a point of the model can be
+  placed in the drawing exactly where it was projected to, also after moving the drawing. A
+  host uses it to draw dimension lines into projections (`ProjectionOptions.dims`, which meshup
+  itself ignores). Moving a collection now also moves the annotations linked to it.
+
+  ```js
+  iso = model.iso().move(1000);
+  iso.toScreen(model.bbox().max()); // the top corner, as drawn
+  ```
+
 - **`align()` to the start or end of a curve.** `'start'` and `'end'` are accepted as pivot
   and as alignment on a Curve, on both sides of the call: `edge.align(point, 'end')` puts the
   end of the edge on the point, `box.align(edge, 'center', 'start')` centres a box on the start

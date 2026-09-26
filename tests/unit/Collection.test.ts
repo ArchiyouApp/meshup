@@ -518,3 +518,32 @@ describe('Collection.getAnnotations()', () =>
         expect(col.getAnnotations()).toEqual([dim]);
     });
 });
+
+describe('Collection.toScreen()', () =>
+{
+    it('places a 3D point where the projection drew it, also after a move', () =>
+    {
+        const box = Mesh.Cube(10).translate(5, 5, 5); // 0..10 on every axis
+        const iso = box.isometry([-1, -1, 1]).move(100, 20);
+
+        // The top corner nearest the camera: a vertex of the drawing
+        const corner = iso.toScreen([0, 0, 10])!;
+        const hits = iso.toArray().flatMap((c: any) => c.tessellate())
+                        .filter((p: any) => Math.hypot(p.x - corner.x, p.y - corner.y) < 1e-6);
+        expect(hits.length).toBeGreaterThan(0);
+        expect(corner.z).toBe(0);
+    });
+
+    it('is null for a collection that is not a projection', () =>
+    {
+        expect(new Collection(Mesh.Cube(10)).toScreen([0, 0, 0])).toBeNull();
+    });
+
+    it('moves linked annotations along with the collection', () =>
+    {
+        const moves: Array<Array<number>> = [];
+        const col = new Collection(Mesh.Cube(10)).addAnnotations({ translate: (...d: number[]) => moves.push(d) });
+        col.move(5, 6, 7);
+        expect(moves).toEqual([[5, 6, 7]]);
+    });
+});

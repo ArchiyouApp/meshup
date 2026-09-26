@@ -97,6 +97,10 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     _name = 'collection';
     /** Annotations linked to this collection (for the host annotator / DXF export). */
     annotations: Array<any> = [];
+    /** How a projection (isometry, elevation, section) put 3D onto this flat drawing: the
+     *  rotations it turned through and the shift that centered it. Null for anything that
+     *  is not a projection. See {@link toScreen}. */
+    _screen: { rotations: Array<{ x: number, y: number, z: number, w: number }>, offset: [number, number] } | null = null;
 
     //// IDENTITY ////
 
@@ -734,6 +738,18 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     translate(vecOrX: PointLike | number, dy?: number, dz?: number): this
     {
         this._shapes.forEach(shape => shape.translate?.(vecOrX, dy, dz));
+
+        // What travels with the drawing: its projection transform and the annotations linked
+        // to it, which would otherwise stay behind where the drawing was made
+        if (this._screen || this.annotations.length)
+        {
+            const v = (typeof dy === 'number') ? Point.from(vecOrX as number, dy, dz ?? 0) : Point.from(vecOrX);
+            if (this._screen)
+            {
+                this._screen.offset = [this._screen.offset[0] + v.x, this._screen.offset[1] + v.y];
+            }
+            this.annotations.forEach(a => a?.translate?.(v.x, v.y, v.z));
+        }
         return this;
     }
 
@@ -2132,6 +2148,23 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     iso(cam: PointLike = ISOMETRY_CAM_DEFAULT, ...args: any[]): ShapeCollection<any>
     {
         return this._iso(cam, resolveProjectionArgs(args, 'ShapeCollection.iso(cam, options)'));
+    }
+
+    /** Where a 3D point lands in this projection: the transform the isometry, elevation or
+     *  section applied to the model, followed by any translation since. Null when this
+     *  collection is not a projection.
+     *
+     *  ```ts
+     *  iso = model.iso();
+     *  iso.toScreen(model.bbox().max()); // the top corner, as drawn
+     *  ```
+     */
+    toScreen(point: PointLike): Point | null
+    {
+        if (!this._screen) return null;
+        const v = this._screen.rotations.reduce((acc, q) => acc.rotateQuaternion(q), Point.from(point).toVector());
+        // The drawing lies on Z=0: the distance along the view is what a projection drops
+        return Point.from(v.x + this._screen.offset[0], v.y + this._screen.offset[1], 0);
     }
 
     isoTest(
