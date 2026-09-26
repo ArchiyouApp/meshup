@@ -130,22 +130,21 @@ describe('isometry: style inheritance', () =>
         expect(found.has('#008000')).toBe(true);
     });
 
-    it('applies a shared colour on the merged path, and no colour when they differ', () =>
+    it('keeps each colour on the merged path, one merged pass per style', () =>
     {
-        // Merging destroys provenance. When every mesh agrees there is still
-        // only one right answer...
         const same = new ShapeCollection<any>(
             Mesh.Box(100, 100, 100).color('red'),
             Mesh.Box(100, 100, 100).move(300).color('red'),
         );
-        expect(colours(same._iso([-1, -1, 1])).has('#ff0000')).toBe(true);
+        expect([...colours(same._iso([-1, -1, 1]))]).toEqual(['#ff0000']);
 
-        // ...but when they disagree, guessing would be worse than not styling.
+        // Merging forgets which mesh an edge came from, so meshes styled apart are
+        // projected apart and each keeps its colour.
         const mixed = new ShapeCollection<any>(
             Mesh.Box(100, 100, 100).color('red'),
             Mesh.Box(100, 100, 100).move(300).color('green'),
         );
-        expect(colours(mixed._iso([-1, -1, 1])).size).toBe(0);
+        expect([...colours(mixed._iso([-1, -1, 1]))].sort()).toEqual(['#008000', '#ff0000']);
     });
 });
 

@@ -58,7 +58,7 @@ describe('HLR strategies: agreement on the easy cases', () =>
     {
         for (const strategy of ALL_STRATEGIES)
         {
-            const iso = Mesh.Cube(100).isometry([-1, -1, 1], true, false, 16, 10, { strategy });
+            const iso = Mesh.Cube(100).isometry([-1, -1, 1], { hiddenLines: true, samples: 16, featureAngle: 10, method: strategy });
 
             // 12 edges: 9 visible, 3 hidden behind the solid.
             expect(visibleCount(iso), `${strategy}: visible`).toBe(9);
@@ -77,7 +77,7 @@ describe('HLR strategies: agreement on the easy cases', () =>
         );
         for (const strategy of ALL_STRATEGIES)
         {
-            const iso = boxes.iso([-1, -1, 1], false, false, 16, 10, { strategy });
+            const iso = boxes.iso([-1, -1, 1], { samples: 16, featureAngle: 10, method: strategy });
             // Nothing overlaps on screen, so both cubes show their full
             // 9-visible-edge selves.
             expect(visibleCount(iso), `${strategy}`).toBe(18);
@@ -137,7 +137,7 @@ describe('HLR strategies: the cases that motivated the alternatives', () =>
         const scene = new ShapeCollection<Mesh>(slab, post);
         for (const strategy of ALL_STRATEGIES)
         {
-            const iso = scene.iso([-1, -1, 1], true, false, 16, 10, { strategy });
+            const iso = scene.iso([-1, -1, 1], { hiddenLines: true, samples: 16, featureAngle: 10, method: strategy });
             await save(OUTPUT_DIR + `thin-occluder.${strategy}.svg`, iso.toSVG());
         }
     });
@@ -153,7 +153,7 @@ describe('HLR strategies: the cases that motivated the alternatives', () =>
 
         for (const strategy of ALL_STRATEGIES)
         {
-            const iso = scene.iso([-1, -1, 1], false, false, 16, 10, { strategy });
+            const iso = scene.iso([-1, -1, 1], { samples: 16, featureAngle: 10, method: strategy });
             // Both boxes must contribute line work — a contact face that
             // swallowed its neighbour's outline would show up as a sharp drop.
             expect(visibleCount(iso), `${strategy}`).toBeGreaterThanOrEqual(12);
@@ -169,7 +169,7 @@ describe('HLR strategies: the cases that motivated the alternatives', () =>
 
         for (const strategy of PER_SHAPE_STRATEGIES)
         {
-            const iso = grid.iso([-1, -1, 1], false, false, 16, 10, { strategy });
+            const iso = grid.iso([-1, -1, 1], { samples: 16, featureAngle: 10, method: strategy });
             expect(visibleCount(iso), `${strategy}`).toBeGreaterThan(0);
         }
     }, 600_000);
@@ -184,7 +184,7 @@ describe('HLR strategies: per-shape output', () =>
             Mesh.Cube(20).move(60, 0, 0),
             Mesh.Cube(20).move(120, 0, 0),
         );
-        const iso = scene.iso([-1, -1, 1], false, false, 16, 10, { strategy: 'clip' });
+        const iso = scene.iso([-1, -1, 1], { samples: 16, featureAngle: 10, method: 'clip' });
 
         // Provenance survives projection — the merged path cannot do this.
         for (let i = 0; i < 3; i++)
@@ -203,8 +203,8 @@ describe('HLR strategies: per-shape output', () =>
             Mesh.Cube(20).move(-40, -40, 40),
         );
 
-        const clip = scene.iso([-1, -1, 1], false, false, 16, 10, { strategy: 'clip' });
-        const painter = scene.iso([-1, -1, 1], false, false, 16, 10, { strategy: 'painter' });
+        const clip = scene.iso([-1, -1, 1], { samples: 16, featureAngle: 10, method: 'clip' });
+        const painter = scene.iso([-1, -1, 1], { samples: 16, featureAngle: 10, method: 'painter' });
 
         // Painter's occlusion IS the fill: front faces painted over whatever
         // was drawn earlier. Clip computes occlusion into the line work instead,
@@ -232,7 +232,7 @@ describe('HLR strategies: per-shape output', () =>
         const notched = Mesh.Cube(40).subtract(Mesh.Cube(20).move(20, 20, 20));
         const scene = new ShapeCollection<Mesh>(notched, Mesh.Cube(20).move(80, 0, 0));
 
-        expect(() => scene.iso([-1, -1, 1], false, false, 16, 10, { strategy: 'clip' }))
+        expect(() => scene.iso([-1, -1, 1], { samples: 16, featureAngle: 10, method: 'clip' }))
             .toThrow(/convex/i);
     });
 
@@ -241,8 +241,7 @@ describe('HLR strategies: per-shape output', () =>
         const notched = Mesh.Cube(40).subtract(Mesh.Cube(20).move(20, 20, 20));
         const scene = new ShapeCollection<Mesh>(notched, Mesh.Cube(20).move(80, 0, 0));
 
-        const iso = scene.iso([-1, -1, 1], false, false, 16, 10,
-            { strategy: 'clip', fallback: true });
+        const iso = scene.iso([-1, -1, 1], { samples: 16, featureAngle: 10, method: 'clip', fallback: true });
         expect(visibleCount(iso)).toBeGreaterThan(0);
     });
 });
@@ -257,7 +256,7 @@ describe('HLR strategies: cost', () =>
         for (const strategy of ALL_STRATEGIES)
         {
             const t0 = performance.now();
-            const iso = grid.iso([-1, -1, 1], false, false, 16, 10, { strategy });
+            const iso = grid.iso([-1, -1, 1], { samples: 16, featureAngle: 10, method: strategy });
             timings[strategy] = Math.round(performance.now() - t0);
             expect(visibleCount(iso), `${strategy} produced no line work`).toBeGreaterThan(0);
             await save(OUTPUT_DIR + `grid-4.${strategy}.svg`, iso.toSVG());

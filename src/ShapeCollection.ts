@@ -10,7 +10,7 @@
  * 
  */
 
-import type { Axis, BasePlane, PointLike, ProjectEdgeOptions, RaycastHit, HlrStrategy, ProjectionViewOptions,
+import type { Axis, BasePlane, PointLike, ProjectEdgeOptions, RaycastHit, HlrStrategy,
     ProjectionOptions, ResolvedProjectionOptions } from './types';
 import { resolveProjectionArgs, resolveProjectionOptions } from './types';
 
@@ -18,6 +18,7 @@ import { Vector } from './Vector';
 import { Vertex } from './Vertex';
 import { Mesh } from './Mesh';
 import { Curve } from './Curve';
+import { Style } from './Style';
 import { Shape } from './Shape';
 import type { AlignTarget } from './Shape';
 import { Point } from './Point';
@@ -1405,7 +1406,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         // This replaces the old SmartShapeCollection._toMeshCollection() "plain-ify" trick.
         return projectedShapes
             .filter((shape): shape is Mesh => shape instanceof Mesh)
-            .map(shape => shape._copy() as Mesh);
+            .map(shape => ShapeCollection._projectionCopy(shape));
     }
 
     /** The linear shapes in this collection — Curves that are drawn in their
@@ -1426,7 +1427,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
         return projectedShapes
             .filter((shape): shape is Curve => shape instanceof Curve)
-            .map(shape => shape._copy() as Curve);
+            .map(shape => ShapeCollection._projectionCopy(shape));
     }
 
     /** Stable key for a Shape's explicitly-set style.
@@ -1437,23 +1438,45 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      */
     private static _styleKey(shape: any): string
     {
-        try { return JSON.stringify(shape?.style?.explicitData?.() ?? {}); }
+        try { return JSON.stringify(ShapeCollection._sceneStyle(shape)); }
         catch { return '{}'; }
     }
 
-    /** One of `shapes` if they all carry the same explicit style, else null.
-     *
-     *  The merged projection has no way to tell which mesh produced which edge,
-     *  so it can only style the result when the answer does not depend on
-     *  knowing. Shapes with no styling at all return null too — there is
-     *  nothing to apply.
-     */
-    private static _sharedStyleSource(shapes: any[]): any | null
+    /** The explicit style a shape has in the scene: what its layers pass down
+     *  (`layer('beams').color('red')`), with its own on top. A projection works on detached
+     *  copies and draws into a layer of its own, so this is the style its line work has to
+     *  carry. Visibility is left out of what the layers pass down: a drawing of a model whose
+     *  layer is hidden should still show. */
+    static _sceneStyle(shape: any): Record<string, any>
     {
-        if (!shapes.length) return null;
-        const first = ShapeCollection._styleKey(shapes[0]);
-        if (first === '{}') return null;
-        return shapes.every(s => ShapeCollection._styleKey(s) === first) ? shapes[0] : null;
+        const { visible: _layerVisible, ...fromLayers } = shape?._node?.effectiveStyle?.()?.explicitData?.() ?? {};
+        const style = new Style();
+        style.merge(fromLayers);
+        style.merge(shape?.style?.explicitData?.() ?? {});
+        return style.explicitData();
+    }
+
+    /** A detached copy of `shape` to project, with its scene style (see {@link _sceneStyle})
+     *  made its own: the copy is out of the scene, and would lose what its layers gave it. */
+    private static _projectionCopy<T extends Mesh | Curve>(shape: T): T
+    {
+        const copy = shape._copy() as T;
+        copy.style.merge(ShapeCollection._sceneStyle(shape) as any);
+        return copy;
+    }
+
+    /** `shapes` split by their explicit style, in the order the styles first appear. A
+     *  projection is made per group, so each keeps its own style: merging meshes forgets
+     *  which one an edge came from. */
+    private static _groupByStyle<T>(shapes: T[]): T[][]
+    {
+        const groups = new Map<string, T[]>();
+        shapes.forEach(shape =>
+        {
+            const key = ShapeCollection._styleKey(shape);
+            groups.set(key, [...(groups.get(key) ?? []), shape]);
+        });
+        return [...groups.values()];
     }
 
     /** Copy a source Shape's explicit style onto everything in `target`.
@@ -1463,9 +1486,9 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  asked for. This is what carries `.color('blue')` and `.dashed()` from a
      *  shape onto the line work the projection makes of it.
      */
-    private static _inheritStyle(target: ShapeCollection<any>, source: any): void
+    static _inheritStyle(target: ShapeCollection<any>, source: any): void
     {
-        const data = source?.style?.explicitData?.();
+        const data = ShapeCollection._sceneStyle(source);
         if (!data || Object.keys(data).length === 0) return;
         target.forEach((shape: any) => shape?.style?.merge?.(data));
     }
@@ -1868,6 +1891,56 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         curves: Curve[] = [],
     ): ShapeCollection<any>
     {
+        // Merging forgets which mesh an edge came from, so meshes styled apart are projected
+        // apart: one merged pass per style, hidden by the other styles' meshes too, and each
+        // pass takes its style. Touching meshes of two styles are never merged, so each keeps
+        // its own edges along the seam.
+        const groups = ShapeCollection._groupByStyle(meshes);
+        const iso = (groups.length === 1)
+            ? ShapeCollection._projectMergedGroup(meshes, [], viewDir, planeNormal, samples, featureAngle, strategy)
+            : new ShapeCollection<any>();
+        if (groups.length === 1)
+        {
+            ShapeCollection._inheritStyle(iso, meshes[0]);
+        }
+        else
+        {
+            groups.forEach(group =>
+            {
+                const others = meshes.filter(m => !group.includes(m));
+                const projected = ShapeCollection._projectMergedGroup(
+                    group, others, viewDir, planeNormal, samples, featureAngle, strategy);
+                ShapeCollection._inheritStyle(projected, group[0]);
+                ShapeCollection._appendProjectionGroups(iso, projected);
+            });
+        }
+
+        // Linear shapes are hidden by the solids but never occlude, and must be
+        // merged in before flattening — that step recentres on the origin.
+        ShapeCollection._appendProjectionGroups(
+            iso, ShapeCollection._projectLinearShapes(curves, meshes, viewDir, planeNormal));
+
+        if (!hiddenLines && iso.group('hidden'))
+        {
+            iso.removeGroup('hidden');
+        }
+
+        return Mesh._flattenProjectionToScreen(iso, planeNormal);
+    }
+
+    /** The merged-solid projection of `meshes`, hidden by `occluders` too, plus the outlines
+     *  of the faces where cuboids in it touch. UNFLATTENED and unstyled: the caller combines
+     *  the groups, then flattens once (flattening recentres on the origin). */
+    private static _projectMergedGroup(
+        meshes: Mesh[],
+        occluders: Mesh[],
+        viewDir: Vector,
+        planeNormal: Vector,
+        samples: number,
+        featureAngle: number,
+        strategy: HlrStrategy,
+    ): ShapeCollection<any>
+    {
         // _merged(): these meshes are in the scene and only merged to be projected as one -
         // merge() would replace them in the scene, deleting the model we are drawing.
         const merged = new ShapeCollection<Mesh>(...meshes)._merged();
@@ -1878,7 +1951,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             samples,
             strategy,
         );
-        const iso = merged._projectEdges(options);
+        const iso = merged._projectEdges(options, new ShapeCollection<Mesh>(...occluders));
 
         const TOL = 1e-3;
         const AXES: Array<'x'|'y'|'z'> = ['x', 'y', 'z'];
@@ -1967,42 +2040,39 @@ export class ShapeCollection<S extends CollectableShape = Shape>
                     [p.x + faceShift[0], p.y + faceShift[1], p.z + faceShift[2]] as [number, number, number]));
             });
         });
+        // The contact outlines are hidden by everything: this group and the other styles'
+        const everything = (occluders.length && contactOutlines.length)
+            ? new ShapeCollection<Mesh>(...meshes, ...occluders)._merged()
+            : merged;
         ShapeCollection._appendProjectionGroups(
-            iso, ShapeCollection._projectContactOutlines(contactOutlines, merged, viewDir, planeNormal));
+            iso, ShapeCollection._projectContactOutlines(contactOutlines, everything, viewDir, planeNormal));
 
-        // Merging destroys which mesh each edge came from, so a per-mesh style
-        // cannot be attributed here. When every mesh agrees on its styling
-        // there is only one answer and it can be applied; otherwise the line
-        // work stays unstyled rather than guessing. The per-shape strategies
-        // keep provenance and do this properly.
-        const shared = ShapeCollection._sharedStyleSource(meshes);
-        if (shared) ShapeCollection._inheritStyle(iso, shared);
-
-        // Linear shapes are hidden by the solids but never occlude, and must be
-        // merged in before flattening — that step recentres on the origin.
-        ShapeCollection._appendProjectionGroups(
-            iso, ShapeCollection._projectLinearShapes(curves, meshes, viewDir, planeNormal));
-
-        if (!hiddenLines && iso.group('hidden'))
-        {
-            iso.removeGroup('hidden');
-        }
-
-        return Mesh._flattenProjectionToScreen(iso, planeNormal);
+        return iso;
     }
 
     //// PROJECTIONS ////
 
+    /** Shapes of another kernel have no polygons to project: that kernel's own collection projects
+     *  them, with the same arguments - as in select(). Undefined when there are no such shapes. */
+    private _foreignProjection(name: string, project: (col: any) => ShapeCollection<any>): ShapeCollection<any> | undefined
+    {
+        const foreign = this._shapes.filter(s => ShapeCollection.isForeignShape(s));
+        const ForeignCollection = (foreign[0] as any)?._modeler?.classes?.ShapeCollection;
+        if (!foreign.length || typeof ForeignCollection !== 'function') return undefined;
+
+        if (foreign.length < this._shapes.length)
+        {
+            console.warn(`ShapeCollection::${name}(): This collection mixes shapes of two kernels. Only the ${foreign.length} of the other kernel are projected.`);
+        }
+        return project(new ForeignCollection(...foreign));
+    }
+
     /** Isometric projection of the collection, added to the active scene layer. */
-    isometry(cam?: PointLike, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<any>;
-    /** @deprecated Positional form. Kept working for saved scripts; prefer
-     *  `isometry(cam, method, { ... })`. */
-    isometry(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
-             samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<any>;
+    isometry(cam?: PointLike, options?: ProjectionOptions): ShapeCollection<any>;
     @colSceneAdd
     isometry(cam: PointLike = ISOMETRY_CAM_DEFAULT, ...args: any[]): ShapeCollection<any>
     {
-        return this._iso(cam, resolveProjectionArgs(args));
+        return this._iso(cam, resolveProjectionArgs(args, 'ShapeCollection.isometry(cam, options)'));
     }
 
     /** Internal isometric projection — skips scene management (no @scene* decorators fire), so
@@ -2015,6 +2085,9 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     _iso(cam: PointLike = ISOMETRY_CAM_DEFAULT, options: Partial<ResolvedProjectionOptions> = {}): ShapeCollection<any>
     {
         const o = resolveProjectionOptions(options);
+        const foreign = this._foreignProjection('isometry', col => col._isometry(cam, o));
+        if (foreign) return foreign;
+
         const meshes = this._visibleProjectionMeshes(o.includeHiddenShapes);
         const curves = this._visibleProjectionCurves(o.includeHiddenShapes);
         if (!meshes.length && !curves.length)
@@ -2024,7 +2097,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         // A lone mesh with no linear shapes has the fast single-mesh path.
         if (meshes.length === 1 && !curves.length)
         {
-            return meshes[0].isometry(cam, o.method, o);
+            return meshes[0].isometry(cam, o);
         }
 
         const camDirVec = Point.from(cam).toVector().normalize();
@@ -2055,14 +2128,11 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     }
 
     /** Isometric projection of the collection, added to a dedicated 'iso' scene layer. */
-    iso(cam?: PointLike, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<any>;
-    /** @deprecated Positional form — see {@link isometry}. */
-    iso(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
-        samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<any>;
+    iso(cam?: PointLike, options?: ProjectionOptions): ShapeCollection<any>;
     @colSceneLayer('iso')
     iso(cam: PointLike = ISOMETRY_CAM_DEFAULT, ...args: any[]): ShapeCollection<any>
     {
-        return this._iso(cam, resolveProjectionArgs(args));
+        return this._iso(cam, resolveProjectionArgs(args, 'ShapeCollection.iso(cam, options)'));
     }
 
     isoTest(
@@ -2080,7 +2150,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         }
         if (meshes.length === 1)
         {
-            return meshes[0].isometry(cam, ISOMETRY_HLR_STRATEGY_DEFAULT, { hiddenLines, samples, featureAngle });
+            return meshes[0].isometry(cam, { hiddenLines, samples, featureAngle });
         }
 
         const camDirVec = Point.from(cam).toVector().normalize();
@@ -2096,19 +2166,108 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         );
     }
 
-    /** Orthographic elevation projection of every Mesh in this collection,
-     *  using the merged-solid pass plus contact-face add-back. Added to a dedicated
-     *  'elevation' scene layer. See {@link Mesh.elevation} for parameter semantics.
+    /** Orthographic elevation of the collection: its visible edges as seen from `from`, added
+     *  to a dedicated 'elevation' scene layer. For the hidden edges too, use {@link project}.
+     *
+     *  @param from  Where to look from: a side ('front', 'back', 'left', 'right', 'top',
+     *               'bottom', 'xy', 'xz', 'yz') or a direction like `[1, -1, 0]`.
+     *  @param options Projection settings, like `{ hiddenLines: true }` or `{ method: 'raycast' }`
+     *    — see {@link ProjectionOptions}.
+     *  @returns ShapeCollection with groups 'visible', 'silhouette' (outer contour, subset of
+     *    'visible'), and 'hidden' (only with `hiddenLines`).
      */
-    elevation(from?: PointLike | BasePlane, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<any>;
-    /** @deprecated Positional form. Kept working for saved scripts; prefer
-     *  `elevation(from, method, { ... })`. */
-    elevation(from?: PointLike | BasePlane, hiddenLines?: boolean, includeHiddenShapes?: boolean,
-              samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<any>;
+    elevation(from?: PointLike | BasePlane, options?: ProjectionOptions): ShapeCollection<any>;
     @colSceneLayer('elevation')
     elevation(from: PointLike | BasePlane = 'front', ...args: any[]): ShapeCollection<any>
     {
-        return this._elevation(from, resolveProjectionArgs(args));
+        return this._elevation(from, resolveProjectionArgs(args, 'ShapeCollection.elevation(from, options)'));
+    }
+
+    /** Plain orthographic projection of the collection: every edge as seen from `from`, the
+     *  ones at the back too, flattened onto the view plane with each line drawn once. Added to
+     *  a dedicated 'projection' scene layer.
+     *
+     *  There is no hidden-line pass, so it is fast, and nothing is hidden or dashed: for that,
+     *  use {@link elevation} with `{ hiddenLines: true }`. The edges are chosen as for an
+     *  elevation: creases sharper than `featureAngle`, and the outline of curved surfaces.
+     *
+     *  @param from  Where to look from: a side ('front', 'back', 'left', 'right', 'top',
+     *               'bottom', 'xy', 'xz', 'yz') or a direction like `[1, -1, 0]`.
+     *  @param options `featureAngle` and `includeHiddenShapes` — see {@link ProjectionOptions}.
+     *    The others are about hiding lines, and have nothing to act on here.
+     *  @returns ShapeCollection of the lines, with the outline tagged as group 'silhouette'.
+     */
+    project(from?: PointLike | BasePlane, options?: ProjectionOptions): ShapeCollection<any>;
+    @colSceneLayer('projection')
+    project(from: PointLike | BasePlane = 'front', ...args: any[]): ShapeCollection<any>
+    {
+        return this._projectFlat(from, resolveProjectionArgs(args, 'ShapeCollection.project(from, options)'));
+    }
+
+    /** Internal plain projection — skips scene management, like {@link _elevation}. */
+    _projectFlat(from: PointLike | BasePlane = 'front', options: Partial<ResolvedProjectionOptions> = {}): ShapeCollection<any>
+    {
+        const o = resolveProjectionOptions(options);
+        const foreign = this._foreignProjection('project', col => col._projectFlat(from, o));
+        if (foreign) return foreign;
+
+        const shapes: any[] = [
+            ...this._visibleProjectionMeshes(o.includeHiddenShapes),
+            ...this._visibleProjectionCurves(o.includeHiddenShapes),
+        ];
+        if (!shapes.length) return new ShapeCollection<any>();
+
+        const viewDir = Mesh._resolveViewDirection(from);
+        const planeNormal = viewDir.copy().reverse();
+        const [vx, vy, vz] = viewDir.toArray();
+        const [nx, ny, nz] = planeNormal.toArray();
+
+        // One call per style, so each line keeps the style of its shape. Nothing hides anything
+        // here, so the calls are independent; a line two styles share is drawn in both.
+        const result = new ShapeCollection<any>();
+        ShapeCollection._groupByStyle(shapes).forEach(group =>
+        {
+            const meshes = group.filter(s => s instanceof Mesh) as Mesh[];
+            // Curves go in as points: tessellated, so arcs and splines project as what they are
+            const lines = group.filter(s => s instanceof Curve)
+                .map(c => (c.tessellate?.() ?? c.points?.() ?? []).map((p: any) => [p.x, p.y, p.z]))
+                .filter((line: any[]) => line.length >= 2);
+            // Same ownership rule as Mesh._projectEdges: clone, or WASM consumes the handles
+            const meshJs = meshes.map(m => m.inner()?.clone?.()).filter((m): m is any => m != null);
+
+            const r = MeshJs.projectFlat(meshJs,
+                new Float64Array(lines.flat(2)), new Uint32Array(lines.map((l: any[]) => l.length)),
+                vx, vy, vz, 0, 0, 0, nx, ny, nz, o.featureAngle);
+            if (!r) return;
+            const projected = ShapeCollection._flatLinesToCurves(r.visiblePolylines(), r.silhouetteIndices());
+            r.free?.();
+
+            ShapeCollection._inheritStyle(projected, group[0]);
+            result.add(projected.toArray());
+            const silhouette = projected.group('silhouette');
+            if (silhouette?.length) result.tagGroup('silhouette', silhouette);
+        });
+        return Mesh._flattenProjectionToScreen(result, planeNormal);
+    }
+
+    /** The lines of a plain projection as Curves, the outline tagged 'silhouette'. Lines that
+     *  continue each other are joined (see Mesh._joinPolylines), outline and others apart. */
+    private static _flatLinesToCurves(lines: Array<Array<[number, number, number]>>, outlineIndices: Uint32Array): ShapeCollection<any>
+    {
+        const outline = new Set<number>(outlineIndices);
+        const result = new ShapeCollection<any>();
+        const silhouette = new ShapeCollection<any>();
+        [true, false].forEach(isOutline =>
+            Mesh._joinPolylines(lines.map((line, i) => (outline.has(i) === isOutline) ? line : null))
+                .map(chain => Mesh._polylineToCurve(chain.points))
+                .forEach(curve =>
+                {
+                    if (!curve) return;
+                    result.add(curve);
+                    if (isOutline) silhouette.add(curve);
+                }));
+        if (silhouette.length) result.tagGroup('silhouette', silhouette);
+        return result;
     }
 
     /** Internal elevation projection — skips scene management, like {@link _iso}.
@@ -2118,6 +2277,10 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     _elevation(from: PointLike | BasePlane = 'front', options: Partial<ResolvedProjectionOptions> = {}): ShapeCollection<any>
     {
         const o = resolveProjectionOptions(options);
+
+        const foreign = this._foreignProjection('elevation', col => col._elevation(from, o));
+        if (foreign) return foreign;
+
         const meshes = this._visibleProjectionMeshes(o.includeHiddenShapes);
         if (!meshes.length)
         {
@@ -2126,7 +2289,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         const curves = this._visibleProjectionCurves(o.includeHiddenShapes);
         if (meshes.length === 1 && !curves.length)
         {
-            return meshes[0].elevation(from, o.method, o);
+            return meshes[0].elevation(from, o);
         }
 
         const viewDir = Mesh._resolveViewDirection(from);
@@ -2154,14 +2317,10 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     /** Architectural section across every Mesh in this collection.
      *  See {@link Mesh.section} for parameter semantics.
      */
-    section(pivot: PointLike, normal?: PointLike | BasePlane, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<any>;
-    /** @deprecated Positional form. Kept working for saved scripts; prefer
-     *  `section(pivot, normal, method, { ... })`. */
-    section(pivot: PointLike, normal?: PointLike | BasePlane, hiddenLines?: boolean, includeHiddenShapes?: boolean,
-            samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<any>;
+    section(pivot: PointLike, normal?: PointLike | BasePlane, options?: ProjectionOptions): ShapeCollection<any>;
     section(pivot: PointLike, normal: PointLike | BasePlane = [0, 0, 1], ...args: any[]): ShapeCollection<any>
     {
-        const o = resolveProjectionArgs(args);
+        const o = resolveProjectionArgs(args, 'ShapeCollection.section(pivot, normal, options)');
         const meshes = this._visibleProjectionMeshes(o.includeHiddenShapes);
         if (!meshes.length)
         {
@@ -2169,15 +2328,45 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         }
         if (meshes.length === 1)
         {
-            return meshes[0].section(pivot, normal, o.method, o);
+            return meshes[0].section(pivot, normal, o);
         }
 
         // A section cuts the assembly into one solid, so there are no separate
         // shapes left to order — the per-shape strategies have nothing to do
         // here and Mesh.section resolves them to 'exact'.
-        return new ShapeCollection<Mesh>(...meshes)
-            ._merged() // scene-free merge: the source meshes must stay in the scene
-            .section(pivot, normal, o.method, o);
+        const groups = ShapeCollection._groupByStyle(meshes);
+        if (groups.length === 1)
+        {
+            const result = new ShapeCollection<Mesh>(...meshes)
+                ._merged() // scene-free merge: the source meshes must stay in the scene
+                .section(pivot, normal, o);
+            ShapeCollection._inheritStyle(result, meshes[0]);
+            return result;
+        }
+
+        // Styled apart: one section per style, hidden by the other styles' meshes too, so each
+        // keeps its style (as in _projectMergedProjectionWithContactFaces); flattened once
+        const sectionNormal = Mesh._resolveViewDirection(normal);
+        const result = new ShapeCollection<any>();
+        groups.forEach(group =>
+        {
+            const others = meshes.filter(m => !group.includes(m));
+            const cut = new ShapeCollection<Mesh>(...group)._merged()._projectEdgesSection(
+                {
+                    pivot: Point.from(pivot),
+                    normal: sectionNormal,
+                    featureAngle: o.featureAngle,
+                    samples: o.samples,
+                    strategy: Mesh._singleMeshStrategy(o.method),
+                },
+                new ShapeCollection<Mesh>(...others));
+            ShapeCollection._inheritStyle(cut, group[0]);
+            const cutLines = cut.group('cut');
+            if (cutLines?.length) result.addGroup('cut', cutLines);
+            ShapeCollection._appendProjectionGroups(result, cut);
+        });
+        if (!o.hiddenLines) result.removeGroup('hidden');
+        return Mesh._flattenProjectionToScreen(result, sectionNormal.copy().reverse());
     }
 
     //// OUTPUTS ////

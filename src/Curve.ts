@@ -28,7 +28,7 @@ import { Shape } from './Shape';
 import type { SceneNode } from './SceneNode';
 import { sceneReplace, sceneAdd, sceneUpdate, sceneCarry, sceneReplaceOrKeep, sceneLayer } from './sceneDecorators';
 import type { CsgrsModule, PointLike, Axis, BasePlane, CurveCornerSelection, OrientationXY, HlrStrategy,
-    ProjectionOptions, ProjectionViewOptions, SpanParams, SpanEllipse, SpanPoint, CurveData, PointData } from './types';
+    ProjectionOptions, SpanParams, SpanEllipse, SpanPoint, CurveData, PointData } from './types';
 import { isPointLike, isBasePlane, isAxis, resolveProjectionArgs } from './types'
 import { Point } from './Point';
 import { Vector } from './Vector';
@@ -4533,29 +4533,19 @@ export class Curve extends Shape
      *  about the occluders. See `ShapeCollection.isometry`.
      *
      *  @param cam Direction from the origin toward the viewer. Default `[-1,-1,1]`.
-     *  @param method Which hidden-line algorithm the projection runs. Only
-     *    matters when there are solids to hide things; kept for signature
-     *    parity with {@link Mesh.isometry}.
-     *  @param options Projection settings — see {@link ProjectionOptions}.
+     *  @param options Projection settings, like `{ hiddenLines: true }` or `{ method: 'raycast' }` — see {@link ProjectionOptions}.
      */
-    isometry(cam?: PointLike, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<any>;
-    /** @deprecated Positional form. Kept working for saved scripts; prefer
-     *  `isometry(cam, method, { ... })`. */
-    isometry(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
-             samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<any>;
+    isometry(cam?: PointLike, options?: ProjectionOptions): ShapeCollection<any>;
     @sceneLayer('iso')
     isometry(cam: PointLike = ISOMETRY_CAM_DEFAULT, ...args: any[]): ShapeCollection<any>
     {
         // Undecorated `_iso`: this method already carries @sceneLayer, and
         // running both would add the projection to the scene twice.
-        return new ShapeCollection<any>(this._copy())._iso(cam, resolveProjectionArgs(args));
+        return new ShapeCollection<any>(this._copy())._iso(cam, resolveProjectionArgs(args, 'Curve.isometry(cam, options)'));
     }
 
     /** Shorthand alias for {@link isometry}. */
-    iso(cam?: PointLike, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<any>;
-    /** @deprecated Positional form — see {@link isometry}. */
-    iso(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
-        samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<any>;
+    iso(cam?: PointLike, options?: ProjectionOptions): ShapeCollection<any>;
     iso(cam: PointLike = ISOMETRY_CAM_DEFAULT, ...args: any[]): ShapeCollection<any>
     {
         return (this.isometry as any)(cam, ...args);

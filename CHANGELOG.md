@@ -6,7 +6,40 @@ versions may contain breaking changes.
 
 ## Unreleased
 
+### Added
+
+- **`ShapeCollection.project(from, options)`: a plain projection.** Every edge as seen from
+  `from`, the ones at the back too, flattened onto the view plane with each line drawn once,
+  and added to a 'projection' scene layer. There is no hidden-line pass, so it is fast and
+  nothing is hidden: for dashed hidden lines, use `elevation(from, { hiddenLines: true })`. The
+  edges are chosen as for an elevation (creases and the outline of curved surfaces); the
+  outline is tagged `'silhouette'`. Built on a new Rust `project_edges_flat()` (wasm
+  `MeshJs.projectFlat`), which skips the visibility step and merges lines that fall on top of
+  each other, across shapes too.
+
+  ```js
+  model.project('front');
+  ```
+
+- **`ProjectionOptions.method`**: the hidden-line algorithm is an option like the others.
+
 ### Changed
+
+- **Breaking: every projection takes one options object after its view arguments** — on
+  `Mesh`, `Curve` and `ShapeCollection`:
+
+  ```js
+  model.isometry([-1, -1, 1], { hiddenLines: true });
+  model.elevation('front', { method: 'raycast', samples: 64 });
+  model.section([0, 0, 1200], [0, 0, 1], { hiddenLines: true });
+  ```
+
+  The method is no longer an argument of its own, and the positional settings are gone:
+  `elevation('front', 'exact', { … })` and `isometry(cam, true, false, 16, 10)` throw, with the
+  options object to write instead. This undoes the method-and-options form of 0.4.0 and ends
+  the positional form that was kept for saved scripts. `ProjectionViewOptions`,
+  `PROJECTION_LEGACY_ARGS` and `MESH_PROJECTION_LEGACY_ARGS` are removed;
+  `resolveProjectionArgs(args, usage)` only reads an options object.
 
 - **Projections return fewer, longer Curves.** The hidden-line solvers give one line per mesh
   edge, so a projected cylinder was dozens of separate segments, each its own Curve and SVG
@@ -24,12 +57,27 @@ versions may contain breaking changes.
 
 ### Fixed
 
+- **Projections keep the style of their shapes.** A single Mesh's `isometry()`,
+  `elevation()` and `section()`, and a collection of one mesh, dropped the mesh's colour and
+  dash; a collection of differently styled meshes dropped them all, because the merged
+  hidden-line pass forgets which mesh an edge came from. Now meshes are projected per style —
+  one merged pass per style, hidden by the other styles' meshes too — so every line keeps the
+  style of its shape, in `isometry()`, `elevation()`, `section()` and `project()` alike. That
+  includes the style a shape gets from its layers (`layer('beams').color('red')`), which the
+  detached copies a projection works on used to lose; the shape's own style wins, and a hidden
+  layer does not hide the drawing. A four-style floor draws as fast as a one-style one.
+
 - **Cylinders and prisms are no longer cuboids.** `Mesh.isCuboid()` only checked that every
   vertex lay on the box surface, which all vertices on the two caps of a cylinder or prism do.
   It now also needs every face in one of the six box faces. In projections, a cylinder standing
   on a box drew a square where their bounding boxes overlapped. Code that branches on
   `isCuboid()`, like the dimension lines of Archiyou core, now handles a cylinder as the
   curved shape it is.
+
+- **A collection of another kernel's shapes is projected by `elevation()`, `project()` and
+  `isometry()`.** A collection of brep shapes gave an empty drawing, as it has no meshes; those
+  shapes are now projected by that kernel's own collection, as `merge()` and `union()` already
+  did.
 
 ## 0.4.0 — 2026-09-21
 

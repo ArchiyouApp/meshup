@@ -20,6 +20,20 @@ pub struct MeshJs {
 ///
 /// Absent or unrecognised means the original sampling solver, so a caller
 /// written before the option existed keeps exactly the behaviour it had.
+/// Polylines passed from JS as one flat x,y,z array plus the number of points
+/// in each. Lines of fewer than two points are left out.
+fn polylines_from_flat(points: &[Real], counts: &[u32]) -> Vec<Vec<Point3<Real>>> {
+    let starts = counts.iter().scan(0usize, |at, &n| { let s = *at; *at += n as usize; Some((s, n as usize)) });
+    starts
+        .map(|(start, n)| (start..start + n)
+            .map(|i| i * 3)
+            .take_while(|&base| base + 2 < points.len())
+            .map(|base| Point3::new(points[base], points[base + 1], points[base + 2]))
+            .collect::<Vec<_>>())
+        .filter(|line| line.len() >= 2)
+        .collect()
+}
+
 fn hlr_strategy(name: Option<&str>) -> crate::mesh::edge_projection::HlrStrategy {
     match name {
         Some(n) => crate::mesh::edge_projection::HlrStrategy::from_name(n),
@@ -1347,19 +1361,7 @@ impl MeshJs {
         nx: Real, ny: Real, nz: Real,
         occluders: Vec<MeshJs>,
     ) -> crate::wasm::edge_projection_js::EdgeProjectionResultJs {
-        let mut polylines: Vec<Vec<Point3<Real>>> = Vec::with_capacity(counts.len());
-        let mut at = 0usize;
-        for n in counts {
-            let n = n as usize;
-            let mut line = Vec::with_capacity(n);
-            for i in 0..n {
-                let base = (at + i) * 3;
-                if base + 2 >= points.len() { break; }
-                line.push(Point3::new(points[base], points[base + 1], points[base + 2]));
-            }
-            at += n;
-            if line.len() >= 2 { polylines.push(line); }
-        }
+        let polylines = polylines_from_flat(&points, &counts);
 
         let occ_inner: Vec<crate::mesh::Mesh<String>> =
             occluders.into_iter().map(|m| m.inner).collect();
@@ -1371,6 +1373,35 @@ impl MeshJs {
             &Point3::new(ox, oy, oz),
             &Vector3::new(nx, ny, nz),
             &occ_refs,
+        );
+        crate::wasm::edge_projection_js::EdgeProjectionResultJs { inner: result }
+    }
+
+    /// Plain projection: the edges of `meshes` and the segments of free-standing
+    /// polylines flattened onto a plane, with nothing hidden and every line
+    /// drawn once. See [`crate::mesh::edge_projection::project_edges_flat`].
+    ///
+    /// - `points` / `counts` – polylines, as in `projectPolylines`.
+    /// - `feature_angle_deg` – as in `projectEdges`.
+    #[wasm_bindgen(js_name = projectFlat)]
+    pub fn project_flat_js(
+        meshes: Vec<MeshJs>,
+        points: Vec<Real>,
+        counts: Vec<u32>,
+        vx: Real, vy: Real, vz: Real,
+        ox: Real, oy: Real, oz: Real,
+        nx: Real, ny: Real, nz: Real,
+        feature_angle_deg: Real,
+    ) -> crate::wasm::edge_projection_js::EdgeProjectionResultJs {
+        let inner: Vec<crate::mesh::Mesh<String>> = meshes.into_iter().map(|m| m.inner).collect();
+        let refs: Vec<&crate::mesh::Mesh<String>> = inner.iter().collect();
+        let result = crate::mesh::edge_projection::project_edges_flat(
+            &refs,
+            &polylines_from_flat(&points, &counts),
+            &Vector3::new(vx, vy, vz),
+            &Point3::new(ox, oy, oz),
+            &Vector3::new(nx, ny, nz),
+            feature_angle_deg,
         );
         crate::wasm::edge_projection_js::EdgeProjectionResultJs { inner: result }
     }

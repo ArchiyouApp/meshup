@@ -548,6 +548,15 @@ export class MeshJs {
   distributeGrid(rows: number, cols: number, row_spacing: number, col_spacing: number): MeshJs;
   massProperties(density: number): any;
   /**
+   * Plain projection: the edges of `meshes` and the segments of free-standing
+   * polylines flattened onto a plane, with nothing hidden and every line
+   * drawn once. See [`crate::mesh::edge_projection::project_edges_flat`].
+   *
+   * - `points` / `counts` – polylines, as in `projectPolylines`.
+   * - `feature_angle_deg` – as in `projectEdges`.
+   */
+  static projectFlat(meshes: MeshJs[], points: Float64Array, counts: Uint32Array, vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, feature_angle_deg: number): EdgeProjectionResultJs;
+  /**
    * Project a query point onto the nearest mesh surface (BVH-accelerated).
    *
    * Returns `undefined` if the mesh has no polygons.
@@ -1242,6 +1251,7 @@ export interface InitOutput {
   readonly meshjs_positions: (a: number) => any;
   readonly meshjs_projectEdges: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
   readonly meshjs_projectEdgesSection: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number) => number;
+  readonly meshjs_projectFlat: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
   readonly meshjs_projectPolylines: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => number;
   readonly meshjs_projectToPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
   readonly meshjs_raycastAll: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];

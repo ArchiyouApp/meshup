@@ -126,15 +126,6 @@ export const PROJECTION_DEFAULTS: ResolvedProjectionOptions = {
     fallback: false,
 };
 
-/** The settings of the legacy positional projection signatures, in their order — followed by
- *  a trailing {@link ProjectionViewOptions} object. Every collection projection and
- *  `isometry()` on a single shape take them like this. */
-export const PROJECTION_LEGACY_ARGS = ['hiddenLines', 'includeHiddenShapes', 'samples', 'featureAngle'] as const;
-
-/** The legacy positional settings of `Mesh.elevation()` and `Mesh.section()`. A single mesh has
- *  no hidden shapes to leave out, and these two never took `includeHiddenShapes`. */
-export const MESH_PROJECTION_LEGACY_ARGS = ['hiddenLines', 'samples', 'featureAngle'] as const;
-
 export const SHAPE_DEFAULT_STYLE: StyleData = {
     visible: true,
     color: 'red',

@@ -490,6 +490,134 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S> {
     }
 }
 
+// ─── plain projection: stages 1-3, no visibility ────────────────────────────
+
+/// Project the edges of `meshes` and the segments of `polylines` onto a plane,
+/// without deciding what hides what: an x-ray drawing of everything.
+///
+/// The edges are chosen as for a hidden-line drawing — stages 1-3 above, so a
+/// curved surface keeps its silhouette and a flat seam is dropped — and are
+/// flattened onto the plane. Stage 4 is skipped: nothing is hidden, everything
+/// lands in `visible_polylines`, and the outline edges (boundary, silhouette,
+/// and every polyline segment) are listed in `silhouette_indices`.
+///
+/// Without a visibility pass, edges that lie behind each other now land on top
+/// of each other: the back edges of a box on its front ones. Those are merged
+/// (see [`merge_overlapping_segments`]), across meshes too, so every line is
+/// drawn once.
+pub fn project_edges_flat<S: Clone + Debug + Send + Sync>(
+    meshes: &[&Mesh<S>],
+    polylines: &[Vec<Point3<Real>>],
+    view_normal: &Vector3<Real>,
+    plane_origin: &Point3<Real>,
+    plane_normal: &Vector3<Real>,
+    feature_angle_deg: Real,
+) -> EdgeProjectionResult {
+    let view_dir = view_normal.normalize();
+    let plane_n = plane_normal.normalize();
+    let feature_thresh = normalize_feature_angle_rad(feature_angle_deg);
+
+    let mesh_segments = meshes.iter().flat_map(|mesh| {
+        merge_collinear_edges(extract_edges(*mesh))
+            .into_iter()
+            .filter_map(|(_key, edge)| {
+                let kind = classify_edge(&edge.face_normals, &view_dir, feature_thresh)?;
+                Some((
+                    project_point(&edge.v0, plane_origin, &plane_n),
+                    project_point(&edge.v1, plane_origin, &plane_n),
+                    kind.is_outline(),
+                ))
+            })
+            .collect::<Vec<_>>()
+    });
+    // A free-standing polyline has no faces to classify: its segments are
+    // outline, as in [`crate::mesh::hlr::project_polylines_exact`].
+    let polyline_segments = polylines.iter().flat_map(|line| {
+        line.windows(2)
+            .map(|pair| (
+                project_point(&pair[0], plane_origin, &plane_n),
+                project_point(&pair[1], plane_origin, &plane_n),
+                true,
+            ))
+            .collect::<Vec<_>>()
+    });
+    let segments: Vec<(Point3<Real>, Point3<Real>, bool)> =
+        mesh_segments.chain(polyline_segments).collect();
+
+    let mut result = EdgeProjectionResult::default();
+    for (p0, p1, outline) in merge_overlapping_segments(&segments) {
+        if outline {
+            result.silhouette_indices.push(result.visible_polylines.len() as u32);
+        }
+        result.visible_polylines.push(vec![p0, p1]);
+    }
+    result
+}
+
+/// Merge segments that lie on the same line and overlap or touch, so a line
+/// drawn by several edges comes out once. A merged segment is outline when any
+/// of the segments in it was.
+///
+/// Segments are grouped by their line — its direction, and where it passes the
+/// origin — both quantised relative to the size of the drawing, then merged as
+/// intervals along that line. Output is in a stable order.
+pub(crate) fn merge_overlapping_segments(
+    segments: &[(Point3<Real>, Point3<Real>, bool)],
+) -> Vec<(Point3<Real>, Point3<Real>, bool)> {
+    let extent = segments.iter()
+        .flat_map(|(a, b, _)| [a.coords.amax(), b.coords.amax()])
+        .fold(0.0 as Real, Real::max)
+        .max(1.0);
+    let tol = extent * 1e-9;   // overlap / touch tolerance along a line
+    let grid = extent * 1e-7;  // quantisation of where a line lies
+
+    // line key -> (a point on the line, its direction, intervals along it)
+    type Line = (Point3<Real>, Vector3<Real>, Vec<(Real, Real, bool)>);
+    let mut lines: std::collections::BTreeMap<((i64, i64, i64), (i64, i64, i64)), Line> =
+        std::collections::BTreeMap::new();
+
+    for (a, b, outline) in segments {
+        let d = b - a;
+        let len = d.norm();
+        if len <= tol {
+            continue;
+        }
+        let key_dir = dir_key(&d);
+        // One direction per line, whichever way the segment was drawn
+        let dir = {
+            let n = d / len;
+            let k = Vector3::new(key_dir.0 as Real, key_dir.1 as Real, key_dir.2 as Real);
+            if n.dot(&k) < 0.0 { -n } else { n }
+        };
+        // Where the line passes closest to the origin: the same for every
+        // segment on it, whatever part of the line it covers
+        let foot = a.coords - dir * a.coords.dot(&dir);
+        let qf = |x: Real| (x / grid).round() as i64;
+        let key = (key_dir, (qf(foot.x), qf(foot.y), qf(foot.z)));
+
+        let (t0, t1) = (a.coords.dot(&dir), b.coords.dot(&dir));
+        let entry = lines.entry(key).or_insert_with(|| (Point3::from(foot), dir, Vec::new()));
+        entry.2.push((t0.min(t1), t0.max(t1), *outline));
+    }
+
+    lines.into_values().flat_map(|(foot, dir, mut spans)| {
+        spans.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let merged = spans.into_iter().fold(Vec::<(Real, Real, bool)>::new(), |mut acc, span| {
+            match acc.last_mut() {
+                Some(last) if span.0 <= last.1 + tol => {
+                    last.1 = last.1.max(span.1);
+                    last.2 |= span.2;
+                }
+                _ => acc.push(span),
+            }
+            acc
+        });
+        merged.into_iter()
+            .map(|(t0, t1, outline)| (foot + dir * t0, foot + dir * t1, outline))
+            .collect::<Vec<_>>()
+    }).collect()
+}
+
 // ─── internal record ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -1189,6 +1317,58 @@ mod tests {
         for &idx in &r.silhouette_indices {
             assert!((idx as usize) < vis_len, "silhouette index out of range");
         }
+    }
+
+    #[test]
+    fn flat_projection_of_a_cube_from_the_front_is_one_rectangle() {
+        // The back edges land on the front ones and are merged; the edges along
+        // the view collapse to points and are dropped.
+        let c = translate(crate::mesh::Mesh::<()>::cube(10.0, None), -5.0, -5.0, -5.0);
+        let front = Vector3::new(0.0_f64, -1.0, 0.0);
+        let r = project_edges_flat(&[&c], &[], &front, &Point3::origin(), &front, 15.0);
+        assert_eq!(r.visible_polylines.len(), 4, "a square: {:?}", r.visible_polylines);
+        assert!(r.hidden_polylines.is_empty());
+        assert_eq!(r.silhouette_indices.len(), 4, "all four are outline");
+    }
+
+    #[test]
+    fn flat_projection_merges_lines_across_meshes() {
+        // Two touching cubes from the front: bottom and top run through, and the
+        // shared side is drawn once: 5 lines.
+        let a = translate(crate::mesh::Mesh::<()>::cube(10.0, None), 0.0, 0.0, 0.0);
+        let b = translate(crate::mesh::Mesh::<()>::cube(10.0, None), 10.0, 0.0, 0.0);
+        let front = Vector3::new(0.0_f64, -1.0, 0.0);
+        let r = project_edges_flat(&[&a, &b], &[], &front, &Point3::origin(), &front, 15.0);
+        assert_eq!(r.visible_polylines.len(), 5, "{:?}", r.visible_polylines);
+    }
+
+    #[test]
+    fn flat_projection_keeps_the_silhouette_of_a_sphere() {
+        // The ring around the equator is outline, the rest are creases.
+        // NOTE: a feature angle above the facets' own angle (~30 deg here) drops
+        // the outline too - classify_edge() tests for flat seams before silhouettes.
+        let sphere = crate::mesh::Mesh::<()>::sphere(5.0, 12, 8, None);
+        let top = Vector3::new(0.0_f64, 0.0, 1.0);
+        let r = project_edges_flat(&[&sphere], &[], &top, &Point3::origin(), &top, 15.0);
+        assert!(!r.silhouette_indices.is_empty());
+        assert!(r.silhouette_indices.len() < r.visible_polylines.len());
+    }
+
+    #[test]
+    fn overlapping_segments_merge_only_on_the_same_line() {
+        let p = |x: Real, y: Real| Point3::new(x, y, 0.0);
+        let merged = merge_overlapping_segments(&[
+            (p(0.0, 0.0), p(2.0, 0.0), false),
+            (p(3.0, 0.0), p(1.0, 0.0), true),   // reversed, overlaps the first
+            (p(5.0, 0.0), p(6.0, 0.0), false),  // same line, apart
+            (p(0.0, 1.0), p(3.0, 1.0), false),  // parallel line
+        ]);
+        let spans: Vec<(Real, Real, Real, bool)> = merged.iter()
+            .map(|(a, b, o)| (a.y, a.x.min(b.x), a.x.max(b.x), *o)).collect();
+        assert_eq!(merged.len(), 3, "{:?}", spans);
+        assert!(spans.contains(&(0.0, 0.0, 3.0, true)), "{:?}", spans);
+        assert!(spans.contains(&(0.0, 5.0, 6.0, false)), "{:?}", spans);
+        assert!(spans.contains(&(1.0, 0.0, 3.0, false)), "{:?}", spans);
     }
 
     #[test]

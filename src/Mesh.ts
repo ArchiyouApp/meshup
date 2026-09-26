@@ -9,7 +9,7 @@
  * 
  */
 
-import type { CsgrsModule, Axis, BasePlane, OrientationXY, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions, HlrStrategy, ProjectionViewOptions, ProjectionOptions } from './types';
+import type { CsgrsModule, Axis, BasePlane, OrientationXY, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions, HlrStrategy, ProjectionOptions } from './types';
 import { isAxis, isBasePlane, isPointLike, resolveProjectionArgs } from './types';
 
 import { Curve, getCsgrs } from './index';
@@ -32,7 +32,7 @@ import { Selector } from './Selector';
 
 // Settings
 import { TOLERANCE, EDGE_PROJECTION_DEFAULTS, EDGE_PROJECTION_LIMITS,
-    ISOMETRY_HLR_STRATEGY_DEFAULT, ISOMETRY_CAM_DEFAULT, MESH_PROJECTION_LEGACY_ARGS, BASE_PLANE_NAME_TO_PLANE } from './constants';
+    ISOMETRY_HLR_STRATEGY_DEFAULT, ISOMETRY_CAM_DEFAULT, BASE_PLANE_NAME_TO_PLANE } from './constants';
 import { getQuality } from './quality';
 
 /** Largest turn, in degrees, at which two projected lines that meet end to end
@@ -749,7 +749,7 @@ export class Mesh extends Shape
         return Array.from({ length: Math.floor(tris.length / 9) }, (_, n) => n * 9).every(inFacePlane);
     }
 
-    /** Copy current Mesh into a new one 
+    /** Copy current Mesh into a new one
      *  NOTE: We use copy here instead of clone
      *  conventionally cloning is used for operations involving references to previous data
     */
@@ -2540,11 +2540,7 @@ export class Mesh extends Shape
      *
      * @param cam Direction from the origin toward the viewer. Default `[-1,-1,1]`,
      *   see {@link ISOMETRY_CAM_DEFAULT}.
-     * @param method Which hidden-line algorithm to run. Defaults to `'exact'`
-     *   (see {@link ISOMETRY_HLR_STRATEGY_DEFAULT}); `'raycast'` is the original
-     *   sampling solver. A single mesh has no shapes to order, so the per-shape
-     *   methods `'clip'` and `'painter'` reduce to `'exact'` here.
-     * @param options Projection settings — see {@link ProjectionOptions}. A single
+     * @param options Projection settings, like `{ hiddenLines: true }` or `{ method: 'raycast' }` — see {@link ProjectionOptions}. A single
      *   mesh has no hidden shapes to filter and no per-shape method to fall back
      *   from, so `includeHiddenShapes` and `fallback` are accepted and ignored.
      *
@@ -2554,15 +2550,11 @@ export class Mesh extends Shape
      *   - `'silhouette'`: subset of `'visible'` forming the outer contour
      *     (silhouette + open-mesh boundary edges) as classified by the Rust HLR
      */
-    isometry(cam?: PointLike, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<Shape>;
-    /** @deprecated Positional form. Kept working for saved scripts; prefer
-     *  `isometry(cam, method, { ... })`. */
-    isometry(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
-             samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<Shape>;
+    isometry(cam?: PointLike, options?: ProjectionOptions): ShapeCollection<Shape>;
     @sceneLayer('iso')
     isometry(cam: PointLike = ISOMETRY_CAM_DEFAULT, ...args: any[]): ShapeCollection<Shape>
     {
-        const o = resolveProjectionArgs(args);
+        const o = resolveProjectionArgs(args, 'Mesh.isometry(cam, options)');
 
         // from cam position to origin
         const camDirVec = (isPointLike(cam))
@@ -2581,15 +2573,13 @@ export class Mesh extends Shape
             } as ProjectEdgeOptions);
 
         if(!o.hiddenLines){ iso.removeGroup('hidden'); }
+        ShapeCollection._inheritStyle(iso, this); // the line work takes this mesh's style
 
         return Mesh._flattenProjectionToScreen(iso, planeNormal);
     }
 
     /** Shorthand alias for {@link isometry}. */
-    iso(cam?: PointLike, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<Shape>;
-    /** @deprecated Positional form — see {@link isometry}. */
-    iso(cam?: PointLike, hiddenLines?: boolean, includeHiddenShapes?: boolean,
-        samples?: number, featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<Shape>;
+    iso(cam?: PointLike, options?: ProjectionOptions): ShapeCollection<Shape>;
     iso(cam: PointLike = ISOMETRY_CAM_DEFAULT, ...args: any[]): ShapeCollection<Shape>
     {
         return (this.isometry as any)(cam, ...args);
@@ -2918,22 +2908,16 @@ export class Mesh extends Shape
      *  @param from  Camera-side direction. Either a `BasePlane` name
      *               ('front', 'back', 'left', 'right', 'top', 'bottom',
      *               'xy', 'xz', 'yz') or a `PointLike` direction.
-     *  @param method Which hidden-line algorithm to run. Defaults to `'exact'`; the
-     *    per-shape methods `'clip'` and `'painter'` reduce to `'exact'` on a single mesh.
-     *  @param options Projection settings — see {@link ProjectionOptions}.
+     *  @param options Projection settings, like `{ hiddenLines: true }` or `{ method: 'raycast' }` — see {@link ProjectionOptions}.
      *    `includeHiddenShapes` and `fallback` have nothing to act on for a single mesh.
      *  @returns ShapeCollection with groups 'visible', 'silhouette' (outer
      *    contour, subset of 'visible'), and 'hidden' (only if requested).
      */
-    elevation(from?: PointLike | BasePlane, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<Shape>;
-    /** @deprecated Positional form. Kept working for saved scripts; prefer
-     *  `elevation(from, method, { ... })`. */
-    elevation(from?: PointLike | BasePlane, hiddenLines?: boolean, samples?: number,
-              featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<Shape>;
+    elevation(from?: PointLike | BasePlane, options?: ProjectionOptions): ShapeCollection<Shape>;
     @sceneLayer('elevation')
     elevation(from: PointLike | BasePlane = 'front', ...args: any[]): ShapeCollection<Shape>
     {
-        const o = resolveProjectionArgs(args, MESH_PROJECTION_LEGACY_ARGS);
+        const o = resolveProjectionArgs(args, 'Mesh.elevation(from, options)');
         const camDirVec = Mesh._resolveViewDirection(from);
         const planeNormal = camDirVec.copy().reverse();
 
@@ -2948,6 +2932,7 @@ export class Mesh extends Shape
             } as ProjectEdgeOptions);
 
         if (!o.hiddenLines) elev.removeGroup('hidden');
+        ShapeCollection._inheritStyle(elev, this); // the line work takes this mesh's style
 
         return Mesh._flattenProjectionToScreen(elev, planeNormal);
     }
@@ -2961,9 +2946,7 @@ export class Mesh extends Shape
      *  @param pivot Any point on the section plane.
      *  @param normal Section plane normal (BasePlane name or PointLike).
      *                Default `[0,0,1]` (horizontal cut).
-     *  @param method Which hidden-line algorithm to run. Defaults to `'exact'`; the
-     *    per-shape methods `'clip'` and `'painter'` reduce to `'exact'` on a single mesh.
-     *  @param options Projection settings — see {@link ProjectionOptions}.
+     *  @param options Projection settings, like `{ hiddenLines: true }` or `{ method: 'raycast' }` — see {@link ProjectionOptions}.
      *    `includeHiddenShapes` and `fallback` have nothing to act on for a single mesh.
      *  @returns ShapeCollection with groups 'cut', 'visible', 'silhouette'
      *    (outer contour, subset of 'visible'), and 'hidden' (if requested).
@@ -2973,15 +2956,11 @@ export class Mesh extends Shape
      *           non-trivial Z component. Vertical sections (normal in XY
      *           plane) currently produce a degenerate cut profile.
      */
-    section(pivot: PointLike, normal?: PointLike | BasePlane, method?: HlrStrategy, options?: ProjectionOptions): ShapeCollection<Shape>;
-    /** @deprecated Positional form. Kept working for saved scripts; prefer
-     *  `section(pivot, normal, method, { ... })`. */
-    section(pivot: PointLike, normal?: PointLike | BasePlane, hiddenLines?: boolean, samples?: number,
-            featureAngle?: number, view?: ProjectionViewOptions): ShapeCollection<Shape>;
+    section(pivot: PointLike, normal?: PointLike | BasePlane, options?: ProjectionOptions): ShapeCollection<Shape>;
     @sceneLayer('section')
     section(pivot: PointLike, normal: PointLike | BasePlane = [0, 0, 1], ...args: any[]): ShapeCollection<Shape>
     {
-        const o = resolveProjectionArgs(args, MESH_PROJECTION_LEGACY_ARGS);
+        const o = resolveProjectionArgs(args, 'Mesh.section(pivot, normal, options)');
         const sectionNormal = Mesh._resolveViewDirection(normal);
         const pivotPoint    = Point.from(pivot);
 
@@ -2995,6 +2974,7 @@ export class Mesh extends Shape
             });
 
         if (!o.hiddenLines) result.removeGroup('hidden');
+        ShapeCollection._inheritStyle(result, this); // the line work takes this mesh's style
 
         // Projection plane faces the viewer (= -sectionNormal). Flatten using
         // that as planeNormal so the result lands on XY screen-oriented.

@@ -40,7 +40,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         // assertions below — with the default `false`, isometry() calls
         // removeGroup('hidden'), dropping the 3 hidden polylines and
         // collapsing total length to 9.
-        const boxIso = box.isometry([-1, -1, 1], true);
+        const boxIso = box.isometry([-1, -1, 1], { hiddenLines: true });
         expect(boxIso).toBeTruthy();
         expect(boxIso.length).toBe(12);
         expect(boxIso.group('hidden')?.length).toBe(3);
@@ -62,7 +62,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
 
     it('keeps cube isometry line endpoints attached', async () =>
     {
-        const boxIso = Mesh.Cube(100).isometry([-1, -1, 1], true);
+        const boxIso = Mesh.Cube(100).isometry([-1, -1, 1], { hiddenLines: true });
         const endpoints = collectPolylineEndpoints(boxIso);
         const orphanCount = countOrphanEndpoints(endpoints, 1e-6);
 
@@ -162,7 +162,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         const floor = new ShapeCollection(bs, bhf, bhb);
         expect(floor.length).toBe(12); // 10 verticals flattened in + 2 horizontals
 
-        const iso = floor.isometry([-1, -1, 1], false, false, 500, 5);
+        const iso = floor.isometry([-1, -1, 1], { samples: 500, featureAngle: 5 });
 
         const visible = iso.group('visible');
         await save(OUTPUT_DIR + 'test.isometry.beam-grid.gltf',
@@ -203,7 +203,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
                 bsBbox.corner('righttopfront').moveY(-10),
             );
             const bhb = (bhf.copy() as Mesh).mirrorY();
-            new ShapeCollection(bs, bhf, bhb).iso([-1, -1, 1], false, false, 1000, 5);
+            new ShapeCollection(bs, bhf, bhb).iso([-1, -1, 1], { samples: 1000, featureAngle: 5 });
         }
         finally
         {
@@ -235,8 +235,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         const runSamples = (s: number) =>
         {
             const t0 = performance.now();
-            const v = make().iso([-1, -1, 1], 'raycast',
-                { hiddenLines: false, includeHiddenShapes: false, samples: s, featureAngle: 5 })
+            const v = make().iso([-1, -1, 1], { method: 'raycast', hiddenLines: false, includeHiddenShapes: false, samples: s, featureAngle: 5 })
                 .group('visible');
             return { dt: performance.now() - t0, visible: v?.length ?? 0 };
         };
@@ -300,7 +299,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         for (const k of [0, 0.001, 0.01, 0.1, 1])
         {
             (globalThis as any).__ISO_SHIFT__ = k;
-            const visible = make().iso([-1, -1, 1], false, false, 1000, 5).group('visible')!;
+            const visible = make().iso([-1, -1, 1], { samples: 1000, featureAngle: 5 }).group('visible')!;
             console.log(`shift=${k} → polylines=${visible.length}, ` +
                 `orphans=${orphanCount(visible)}, long(>200)=${longCount(visible)}`);
         }
@@ -325,7 +324,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         const bhb = (bhf.copy() as Mesh).mirrorY();
         const floor = new ShapeCollection(bs, bhf, bhb);
 
-        const visible = floor.iso([-1, -1, 1], false, false, 1000, 5).group('visible')!;
+        const visible = floor.iso([-1, -1, 1], { samples: 1000, featureAngle: 5 }).group('visible')!;
 
         const endpoints = collectPolylineEndpoints(visible);
 
@@ -377,7 +376,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         );
 
         const pair = new ShapeCollection(v, h);
-        const visible = pair.isometry([-1, -1, 1], false, false, 500, 5).group('visible');
+        const visible = pair.isometry([-1, -1, 1], { samples: 500, featureAngle: 5 }).group('visible');
 
         await save(OUTPUT_DIR + 'test.isometry.beam-pair.gltf',
             await new ShapeCollection(pair, (visible ?? new ShapeCollection()).copy().translate(800, 0, 0))
@@ -396,7 +395,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         );
 
         const pair = new ShapeCollection(v, h);
-        const mergedVisible = pair.merge().isometry([-1, -1, 1], false, false, 500, 5).group('visible');
+        const mergedVisible = pair.merge().isometry([-1, -1, 1], { samples: 500, featureAngle: 5 }).group('visible');
         const visible = pair.isoTest([-1, -1, 1], false, false, 500, 5).group('visible');
 
         expect(visible?.length ?? 0).toBeGreaterThan(mergedVisible?.length ?? 0);
@@ -468,7 +467,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
             const a = Mesh.Box(10, 10, 10);
             const b = Mesh.Box(10, 10, 10).move(10, 0, 0);
             const hidden = Mesh.Box(10, 10, 10).move(1000, 0, 0).hide();
-            new ShapeCollection(a, b, hidden).elevation('front', true, false, 123, 7);
+            new ShapeCollection(a, b, hidden).elevation('front', { hiddenLines: true, samples: 123, featureAngle: 7 });
         }
         finally
         {
@@ -493,8 +492,8 @@ describe('Example: Isometric projection with hidden lines', async () =>
         );
 
         const pair = new ShapeCollection(v, h);
-        const mergedVisible = pair.merge().elevation('left', false, 500, 5).group('visible');
-        const visible = pair.elevation('left', false, false, 500, 5).group('visible');
+        const mergedVisible = pair.merge().elevation('left', { samples: 500, featureAngle: 5 }).group('visible');
+        const visible = pair.elevation('left', { samples: 500, featureAngle: 5 }).group('visible');
 
         expect(visible?.length ?? 0).toBeGreaterThan(mergedVisible?.length ?? 0);
     });
@@ -521,13 +520,11 @@ describe('Example: Isometric projection with hidden lines', async () =>
         (Mesh as any).prototype.section = function (
             pivot: any,
             normal: any,
-            method: any,
             options: any,
         )
         {
             void pivot;
             void normal;
-            void method;
             seen.push({
                 samples: options?.samples,
                 featureAngle: options?.featureAngle,
@@ -541,7 +538,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
             const a = Mesh.Box(10, 10, 10);
             const b = Mesh.Box(10, 10, 10).move(10, 0, 0);
             const hidden = Mesh.Box(10, 10, 10).move(1000, 0, 0).hide();
-            new ShapeCollection(a, b, hidden).section([0, 0, 0], [0, 0, 1], true, false, 321, 11);
+            new ShapeCollection(a, b, hidden).section([0, 0, 0], [0, 0, 1], { hiddenLines: true, samples: 321, featureAngle: 11 });
         }
         finally
         {

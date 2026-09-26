@@ -138,7 +138,7 @@ describe('iso projection — planarity above ~3000 units (regression)', () =>
     {
         // _flattenProjectionToScreen rotates rather than re-projects, so any non-planarity
         // survives as z spread rather than being corrected. Was ~1516 units; now ~4e-12.
-        expect(zSpread(Mesh.Box(4000, 4000, 4000).isometry(ISO_CAM, false))).toBeLessThan(1e-6);
+        expect(zSpread(Mesh.Box(4000, 4000, 4000).isometry(ISO_CAM))).toBeLessThan(1e-6);
     }, 300000);
 
     it('flattens a building-scale collection onto z = 0', () =>

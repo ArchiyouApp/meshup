@@ -1880,6 +1880,38 @@ export class MeshJs {
         return ret;
     }
     /**
+     * Plain projection: the edges of `meshes` and the segments of free-standing
+     * polylines flattened onto a plane, with nothing hidden and every line
+     * drawn once. See [`crate::mesh::edge_projection::project_edges_flat`].
+     *
+     * - `points` / `counts` – polylines, as in `projectPolylines`.
+     * - `feature_angle_deg` – as in `projectEdges`.
+     * @param {MeshJs[]} meshes
+     * @param {Float64Array} points
+     * @param {Uint32Array} counts
+     * @param {number} vx
+     * @param {number} vy
+     * @param {number} vz
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @param {number} feature_angle_deg
+     * @returns {EdgeProjectionResultJs}
+     */
+    static projectFlat(meshes, points, counts, vx, vy, vz, ox, oy, oz, nx, ny, nz, feature_angle_deg) {
+        const ptr0 = passArrayJsValueToWasm0(meshes, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayF64ToWasm0(points, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArray32ToWasm0(counts, wasm.__wbindgen_malloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.meshjs_projectFlat(ptr0, len0, ptr1, len1, ptr2, len2, vx, vy, vz, ox, oy, oz, nx, ny, nz, feature_angle_deg);
+        return EdgeProjectionResultJs.__wrap(ret);
+    }
+    /**
      * Project a query point onto the nearest mesh surface (BVH-accelerated).
      *
      * Returns `undefined` if the mesh has no polygons.
