@@ -285,13 +285,26 @@ export class Selector
 
     //// SUBSHAPE EXTRACTION HELPERS ////
 
+    /** Remember the shape each sub-shape was selected from in `_parent`, like brep does: the
+     *  host annotator links a dimension up that chain, and make.cutAngles() finds the beam an
+     *  edge belongs to. Members of a collection are the owners of their own sub-shapes. */
+    private _ownedBy<T>(subs: Array<T>, owner: Mesh | Curve): Array<T>
+    {
+        subs.forEach(sub =>
+        {
+            // a Curve can be its own (only) segment: never make a shape its own parent
+            if (sub && typeof sub === 'object' && (sub as unknown) !== owner) { (sub as any)._parent = owner; }
+        });
+        return subs;
+    }
+
     /** Get all faces (Polygons) from a target */
     private _facesFromTarget(target: ShapeCollection | Mesh | Curve): Array<Polygon>
     {
-        if (target instanceof Mesh) return target.polygons().toArray();
+        if (target instanceof Mesh) return this._ownedBy(target.polygons().toArray(), target);
         if (target instanceof ShapeCollection)
         {
-            return target.meshes().toArray().flatMap(m => m.polygons().toArray());
+            return target.meshes().toArray().flatMap(m => this._ownedBy(m.polygons().toArray(), m));
         }
         return [];
     }
@@ -313,13 +326,13 @@ export class Selector
      *  segments — the edges of a polyline are its individual spans. */
     private _edgesFromTarget(target: ShapeCollection | Mesh | Curve): Array<Curve>
     {
-        if (target instanceof Mesh) return target.edges().toArray();
-        if (target instanceof Curve) return target.segments().toArray();
+        if (target instanceof Mesh) return this._ownedBy(target.edges().toArray(), target);
+        if (target instanceof Curve) return this._ownedBy(target.segments().toArray(), target);
         if (target instanceof ShapeCollection)
         {
             return [
-                ...target.meshes().toArray().flatMap(m => m.edges().toArray()),
-                ...target.curves().toArray().flatMap(c => c.segments().toArray()),
+                ...target.meshes().toArray().flatMap(m => this._ownedBy(m.edges().toArray(), m)),
+                ...target.curves().toArray().flatMap(c => this._ownedBy(c.segments().toArray(), c)),
             ];
         }
         return [];
@@ -328,13 +341,13 @@ export class Selector
     /** Get all vertices (Points) from a target */
     private _verticesFromTarget(target: ShapeCollection | Mesh | Curve): Array<Point>
     {
-        if (target instanceof Mesh) return target.positions();
-        if (target instanceof Curve) return target.controlPoints();
+        if (target instanceof Mesh) return this._ownedBy(target.positions(), target);
+        if (target instanceof Curve) return this._ownedBy(target.controlPoints(), target);
         if (target instanceof ShapeCollection)
         {
             return [
-                ...target.meshes().toArray().flatMap(m => m.positions()),
-                ...target.curves().toArray().flatMap(c => c.controlPoints()),
+                ...target.meshes().toArray().flatMap(m => this._ownedBy(m.positions(), m)),
+                ...target.curves().toArray().flatMap(c => this._ownedBy(c.controlPoints(), c)),
             ];
         }
         return [];
@@ -394,9 +407,9 @@ export class Selector
             ? [...target.meshes().toArray(), ...target.curves().toArray()]
             : [target];
 
-        const points = targets.flatMap((t: any) =>
+        const points = targets.flatMap((t: any) => this._ownedBy(
             (t instanceof Curve) ? t.vertices().toArray().map((v: Vertex) => v.toPoint())
-                                 : (t instanceof Mesh) ? t.positions() : []);
+                                 : (t instanceof Mesh) ? t.positions() : [], t));
 
         const seen = new Set<string>();
         return points.filter((p: Point) =>

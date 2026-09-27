@@ -1311,7 +1311,16 @@ export class Polygon extends Shape
     @sceneCarry
     select(what: string)
     {
-        return this.toMesh().select(what);
+        const mesh = this.toMesh();
+        const result = mesh.select(what);
+
+        // the Mesh is only a stand-in: the sub-shapes were selected from this Polygon
+        const subs: Array<any> = (result instanceof ShapeCollection) ? result.toArray() : [result];
+        subs.forEach(sub =>
+        {
+            if (sub?._parent === mesh) { sub._parent = this; }
+        });
+        return result;
     }
 
     /** Boundary edges of this Polygon as line Curves: the outer loop, then one loop per hole.

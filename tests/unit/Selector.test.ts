@@ -575,3 +575,42 @@ describe('Curve.select()', () =>
         expect(() => rect.select('garbage')).toThrow('Unrecognized selector string');
     });
 });
+
+describe('select() keeps the shape it selected from in _parent', () =>
+{
+    it('on a Mesh, and on through a selected face', () =>
+    {
+        const box = Mesh.Box(100, 50, 20);
+        const face = box.select('F||top') as any;
+        expect(face._parent).toBe(box);
+
+        const edge = face.select('E||left') as any;
+        expect(edge._parent).toBe(face); // the Polygon, not the Mesh it selects through
+        expect(edge._parent._parent).toBe(box);
+    });
+
+    it('on a collection, per member', () =>
+    {
+        const a = Mesh.Box(10, 10, 10);
+        const b = Mesh.Box(10, 10, 10).move(100, 0, 0);
+        const edge = new ShapeCollection(a, b).select('E||topright') as any;
+        expect(edge._parent).toBe(b);
+    });
+
+    it('on a Curve, without making a shape its own parent', () =>
+    {
+        const rect = Curve.Rect(10, 10);
+        const left = rect.select('E||left') as any;
+        expect(left._parent).toBe(rect);
+
+        const line = Curve.Line([0, 0, 0], [10, 0, 0]);
+        const segment = line.select('E||front') as any; // a single line can be its own segment
+        expect(segment._parent).not.toBe(segment);
+    });
+
+    it('does not carry over to a copy', () =>
+    {
+        const box = Mesh.Box(100, 50, 20);
+        expect((box.select('E||topleft') as any).copy()._parent).toBeUndefined();
+    });
+});
