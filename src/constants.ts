@@ -9,11 +9,13 @@ export const TOLERANCE = 1e-5; // general tolerance for geometric comparisons, i
 export const POINT_TOLERANCE = TOLERANCE; 
 export const ANGLE_COMPARE_TOLERANCE = 1e-3; // in degrees, for comparing angles (e.g. to detect axis-alignment)
 /** Below this extent a bbox axis counts as flat (Bbox.is2D/is1D/axisMissingIn2D).
- *  Deliberately far tighter than TOLERANCE: this only has to absorb float residue from
- *  rotating a shape onto a plane (layflat()), not real thickness. The relative term keeps
- *  it meaningful for very large models. */
+ *  Deliberately far tighter than TOLERANCE: this only has to absorb residue from rotating a
+ *  shape onto a plane (layflat(), rotateToAxesOBbox()), not real thickness. The relative term
+ *  matches OBBOX_PLANAR_REL_EPS: a part built from intersections and lofts, then laid down
+ *  by an OBbox fit, lands ~1e-9 of its size thick (a 400mm frame member: 4.5e-7), which a
+ *  1e-9 relative term rejected as 3D. */
 export const BBOX_FLAT_EPS = 1e-9;
-export const BBOX_FLAT_REL_EPS = 1e-9;
+export const BBOX_FLAT_REL_EPS = 1e-7;
 /** How flat a point cloud has to be before OBbox orients it with the exact minimum-area
  *  (rotating-calipers) frame instead of PCA. Deliberately looser than BBOX_FLAT_EPS: a curve
  *  that came out of a boolean, an offset or a projection is planar to within kernel tolerance,
