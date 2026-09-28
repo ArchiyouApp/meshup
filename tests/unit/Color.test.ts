@@ -4,6 +4,17 @@
 import { describe, it, expect } from 'vitest';
 import { Color, type ColorStop } from '../../src/Color';
 
+describe('Color parsing', () =>
+{
+    it('names the problem when given no color at all', () =>
+    {
+        // e.g. COLORS[key] with a key that is not in the table
+        expect(() => new Color(undefined as any)).toThrow(/expected a color .* but got undefined/);
+        expect(() => new Color(null as any)).toThrow(/but got null/);
+        expect(() => new Color({} as any)).toThrow(/but got object/);
+    });
+});
+
 describe('Color.mix', () =>
 {
     it('returns the endpoints at t=0 and t=1', () =>

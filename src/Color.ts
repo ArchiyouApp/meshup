@@ -205,7 +205,14 @@ export class Color
                 .map(v => Math.max(0, Math.min(255, Math.round(v)))) as [number, number, number];
         }
 
-        const s = (input as string).trim().toLowerCase();
+        // Anything else is a caller mistake (typically an undefined lookup like COLORS[key]):
+        // say so, instead of failing on .trim() with a message that names no color at all
+        if (typeof input !== 'string')
+        {
+            throw new Error(`Color: expected a color name, '#rrggbb', 0xRRGGBB or [r,g,b], but got ${input === null ? 'null' : typeof input}`);
+        }
+
+        const s = input.trim().toLowerCase();
 
         // #RGB
         if (/^#[0-9a-f]{3}$/.test(s))
