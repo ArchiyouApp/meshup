@@ -58,6 +58,21 @@ describe('Sketch.moveTo() / lineTo()', () =>
             .lineTo(5, 5); // zero-length — should be skipped
         expect(s._curves.count()).toBe(0);
     });
+
+    // A skipped line used to drop the cursor, so every call after it drew nothing: a roof
+    // profile starting with lineTo(0, '+0') came out as an empty sketch
+    it('keeps drawing after a skipped zero-length line', () =>
+    {
+        const s = new Sketch()
+            .moveTo(0, 9)
+            .lineTo(0, '+0') // zero-length — skipped
+            .lineTo(2.5, '+1.44')
+            .lineTo(5, '-1.44')
+            .close();
+        expect(s._curves.count()).toBe(1);
+        expect(s._curves.first().isClosed()).toBe(true);
+        expect(s._curves.first().bbox().width()).toBeCloseTo(5);
+    });
 });
 
 describe('Sketch on different base planes', () =>

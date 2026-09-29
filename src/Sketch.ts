@@ -435,9 +435,11 @@ export class Sketch
                 if(p)
                 {
                     // Skip zero-length segments (Curve.Line would throw on coincident points)
+                    // The cursor was popped above: put it back, or every later call has nothing to draw from
                     if(cur.at.distance(p) < Curve.ZERO_LENGTH_TOLERANCE)
                     {
                         console.warn(`Sketch::lineTo(): Zero length line from ${cur.at} to ${p}. Skipping.`);
+                        this._pushCursor(cur.at, cur.direction);
                         return;
                     }
 
@@ -449,6 +451,7 @@ export class Sketch
                 else 
                 {
                     console.warn(`Sketch::lineTo(): Invalid coordinates: ${JSON.stringify(coords)}. Please supply absolute, relative or polar coordinates like [x,y], ['+dx','-dy'], 'r<angle' or 'r<<angle'`);
+                    this._pushCursor(cur.at, cur.direction);
                 }
             });    
         return this;
