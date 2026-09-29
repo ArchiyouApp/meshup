@@ -117,7 +117,8 @@ export class Bbox
     /** Get corner (or edge/face midpoint) of a 2D/3D bbox.
      *  Combine any of: left, right, top, bottom, front, back — in any order.
      *  Unspecified axes default to the centre of that axis.
-     *  For flat XY bboxes (height = 0): top/back and bottom/front are aliases for max-Y and min-Y.
+     *  For flat XY bboxes (height = 0): front/back address Y; top/bottom alias max-Y/min-Y
+     *  only when no front/back is given (otherwise they address the flat Z).
      *  For 3D bboxes: top/bottom refer to Z, front/back refer to Y.
      *
      *  @example
@@ -154,10 +155,13 @@ export class Bbox
 
         if (isXYPlane)
         {
-            // In 2D (XY plane): front = bottom (min Y), back = top (max Y)
-            if ((hasTop || hasBack) && (hasBottom || hasFront))
-                throw new Error(`Bbox.corner(): conflicting Y-axis keywords in 2D bbox in "${where}"`);
-            y = (hasTop || hasBack) ? this._max.y : (hasBottom || hasFront) ? this._min.y : cy;
+            // In 2D (XY plane): front/back own Y. Without them, top/bottom alias max/min Y.
+            // With them, top/bottom address the (flat) Z axis, so a 3D keyword like
+            // 'backbottomleft' works on a flat rect, as in the brep kernel.
+            const hasFrontBack = hasFront || hasBack;
+            y = hasFrontBack
+                ? (hasBack ? this._max.y : this._min.y)
+                : hasTop ? this._max.y : hasBottom ? this._min.y : cy;
             z = this._min.z;
         }
         else

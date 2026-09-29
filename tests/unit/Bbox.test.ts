@@ -31,6 +31,24 @@ describe('Bbox construction', () =>
     });
 });
 
+describe('Bbox.corner() on a flat XY bbox', () =>
+{
+    const flat = new Bbox([0, 0, 0], [10, 20, 0]);
+
+    it('top/bottom alias max/min Y without front/back', () =>
+    {
+        expect(flat.corner('topleft').y).toBe(20);
+        expect(flat.corner('bottomleft').y).toBe(0);
+    });
+
+    it('front/back own Y when combined with top/bottom (3D keywords)', () =>
+    {
+        const p = flat.corner('backbottomleft');
+        expect([p.x, p.y, p.z]).toEqual([0, 20, 0]);
+        expect(flat.corner('fronttopright').y).toBe(0);
+    });
+});
+
 describe('Bbox.min() / max()', () =>
 {
     it('returns the correct min point', () =>
