@@ -1033,6 +1033,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     /** Name this collection. For scene-backed collections this also names the layer node.
      *  No argument returns the current name. Auto-named after the assigned variable while
      *  still holding the default 'collection' (see the host Runner auto-namer). */
+    name(value: string): this
+    name(): string
     name(value?: string): this | string
     {
         if (value === undefined) return this._name;
