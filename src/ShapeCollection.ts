@@ -2348,10 +2348,11 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         );
     }
 
-    /** Architectural section across every Mesh in this collection.
-     *  See {@link Mesh.section} for parameter semantics.
+    /** Architectural section across every Mesh in this collection, added to a dedicated
+     *  'section' scene layer. See {@link Mesh.section} for parameter semantics.
      */
     section(pivot: PointLike, normal?: PointLike | BasePlane, options?: ProjectionOptions): ShapeCollection<any>;
+    @colSceneLayer('section')
     section(pivot: PointLike, normal: PointLike | BasePlane = [0, 0, 1], ...args: any[]): ShapeCollection<any>
     {
         const o = resolveProjectionArgs(args, 'ShapeCollection.section(pivot, normal, options)');

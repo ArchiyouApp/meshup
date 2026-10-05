@@ -51,6 +51,29 @@ describe('@sceneLayer projections group under the ACTIVE layer', () =>
         expect(isoGroup!.shapes().toArray()).toEqual(iso.toArray());
     });
 
+    it('ShapeCollection.section() lands in a "section" group inside the active layer, once', () =>
+    {
+        // Reproduces: all().section([0,0,50]) drew nothing, the cut never reached the scene
+        const root = new SceneNode('root');
+        const a = Mesh.Cube(100).color('blue');
+        const b = Mesh.Cube(50).move(200, 0, 0).color('green');
+        const c = Mesh.Cube(30).move(400, 0, 0);
+        const d = Mesh.Cube(30).move(600, 0, 0);
+        const testLayer = root.addLayer('test', new ShapeCollection<Mesh>(a, b, c, d));
+        root.setActiveLayer(testLayer);
+
+        const sections = [
+            new ShapeCollection<Mesh>(a, b), // styled apart: a section per style
+            new ShapeCollection<Mesh>(c, d), // styled alike: one merged section
+            new ShapeCollection<Mesh>(c),    // a lone mesh: Mesh.section(), which adds it too
+        ].map(col => col.section([0, 0, 10]).toArray());
+
+        expect(sections.every(s => s.length > 0)).toBe(true);
+        expect(root.children().map(n => n.name)).not.toContain('section');
+        const sectionGroup = testLayer.children().find(n => n.name === 'section');
+        expect(sectionGroup!.shapes().toArray()).toEqual(sections.flat());
+    });
+
     it('falls back to the root when no active layer is set', () =>
     {
         const root = new SceneNode('root');
