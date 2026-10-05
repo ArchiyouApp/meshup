@@ -2356,6 +2356,9 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     section(pivot: PointLike, normal: PointLike | BasePlane = [0, 0, 1], ...args: any[]): ShapeCollection<any>
     {
         const o = resolveProjectionArgs(args, 'ShapeCollection.section(pivot, normal, options)');
+        const foreign = this._foreignProjection('section', col => col._section(pivot, normal, o));
+        if (foreign) return foreign;
+
         const meshes = this._visibleProjectionMeshes(o.includeHiddenShapes);
         if (!meshes.length)
         {
