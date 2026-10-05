@@ -1,20 +1,6 @@
 /**
  *  Curve.ts
- *
- *  Wrapper around the native hypercurve Curve3DJs (see wasm/curve_js.rs)
- *
- *  A NurbsCurve consists of:
- *
- *  - Control Points: the points that define the shape of the curve
- *  - Weights: higher is closer to control point
- *  - Knots / Knot Vector: defines the parameter space, for example where the curve is clamped
- *
- *  and has: 
- *  - degree: 1 = straight, 2 = quadratic, 3 = cubic
- *  - order: degree + 1
- *
- *  NOTES:
- *    - we always use 3D version, so no 2D curves classes. This for simplicity and consistency.
+ *   wrapper around hypercurve
  * 
  */
 
