@@ -2575,7 +2575,8 @@ export class Mesh extends Shape
         if(!o.hiddenLines){ iso.removeGroup('hidden'); }
         ShapeCollection._inheritStyle(iso, this); // the line work takes this mesh's style
 
-        return Mesh._flattenProjectionToScreen(iso, planeNormal);
+        // The flatten takes the normal toward the viewer; the reversed one gives a mirror image
+        return Mesh._flattenProjectionToScreen(iso, camDirVec);
     }
 
     /** Shorthand alias for {@link isometry}. */
@@ -2851,8 +2852,9 @@ export class Mesh extends Shape
     /** Flatten a 3D projection onto the XY plane and orient so world-up maps
      *  to screen-up [0,1,0]. Shared by isometry(), elevation(), section().
      *
-     *  `planeNormal` is the projection plane normal in 3D (pointing toward the
-     *  viewer). After this, the result lies on Z=0, centered at the origin.
+     *  `planeNormal` is the projection plane normal in 3D, pointing toward the
+     *  viewer (reversed, the result is the drawing seen from behind: a mirror
+     *  image). After this, the result lies on Z=0, centered at the origin.
      *
      *  A ShapeCollection result also records the transform it went through
      *  (see {@link ShapeCollection.toScreen}), so a 3D point — the end of a
@@ -2881,11 +2883,11 @@ export class Mesh extends Shape
 
         // Twist so mapped-up aligns with screen-up [0,1,0].
         // When mappedUpVec is anti-parallel to [0,1,0] (dot ≈ -1), rotationBetween
-        // picks an arbitrary perpendicular axis. Using the Z-axis there would flip
-        // screen-X, so we explicitly use a 180° rotation around X instead.
+        // picks an arbitrary perpendicular axis, so turn explicitly: 180° around Z, the
+        // view axis. (180° around X keeps screen-x but flips the drawing over: a mirror image.)
         const dotUp = mappedUpVec.dot(Vector.from(0, 1, 0));
         const twistRot = dotUp < -(1 - TOLERANCE)
-            ? { x: 1, y: 0, z: 0, w: 0 }   // 180° around X — preserves screen-X
+            ? { x: 0, y: 0, z: 1, w: 0 }   // 180° around Z
             : mappedUpVec.rotationBetween(Vector.from(0, 1, 0));
         const turned = flattened.rotateQuaternion(twistRot);
 
@@ -2948,7 +2950,8 @@ export class Mesh extends Shape
         if (!o.hiddenLines) elev.removeGroup('hidden');
         ShapeCollection._inheritStyle(elev, this); // the line work takes this mesh's style
 
-        return Mesh._flattenProjectionToScreen(elev, planeNormal);
+        // The flatten takes the normal toward the viewer; the reversed one gives a mirror image
+        return Mesh._flattenProjectionToScreen(elev, camDirVec);
     }
 
     /** Architectural section: cut the mesh with a plane and project the
@@ -2990,10 +2993,9 @@ export class Mesh extends Shape
         if (!o.hiddenLines) result.removeGroup('hidden');
         ShapeCollection._inheritStyle(result, this); // the line work takes this mesh's style
 
-        // Projection plane faces the viewer (= -sectionNormal). Flatten using
-        // that as planeNormal so the result lands on XY screen-oriented.
-        const planeNormal = sectionNormal.copy().reverse();
-        return Mesh._flattenProjectionToScreen(result, planeNormal);
+        // The viewer looks along -normal, so the normal itself points toward the viewer: that is
+        // what the flatten takes (the reversed one gives a mirror image)
+        return Mesh._flattenProjectionToScreen(result, sectionNormal);
     }
 
     /** Slice + project edges through a section plane.

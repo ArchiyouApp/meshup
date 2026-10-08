@@ -2118,7 +2118,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         }
 
         const camDirVec = Point.from(cam).toVector().normalize();
-        const planeNormal = camDirVec.copy(); // .reverse() removed. Now works. TODO: check why;
+        const planeNormal = camDirVec.copy(); // toward the viewer, as _flattenProjectionToScreen takes it
 
         const strategy = ShapeCollection._resolveStrategy(meshes, o.method, o.fallback);
         if (strategy === 'clip' || strategy === 'painter')
@@ -2281,7 +2281,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             const silhouette = projected.group('silhouette');
             if (silhouette?.length) result.tagGroup('silhouette', silhouette);
         });
-        return Mesh._flattenProjectionToScreen(result, planeNormal);
+        // The flatten takes the normal toward the viewer; the reversed one gives a mirror image
+        return Mesh._flattenProjectionToScreen(result, viewDir);
     }
 
     /** The lines of a plain projection as Curves, the outline tagged 'silhouette'. Lines that
@@ -2327,7 +2328,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         }
 
         const viewDir = Mesh._resolveViewDirection(from);
-        const planeNormal = viewDir.copy().reverse();
+        const planeNormal = viewDir.copy(); // toward the viewer, as _flattenProjectionToScreen takes it
 
         const strategy = ShapeCollection._resolveStrategy(meshes, o.method, o.fallback);
         if (strategy === 'clip' || strategy === 'painter')
@@ -2404,7 +2405,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             ShapeCollection._appendProjectionGroups(result, cut);
         });
         if (!o.hiddenLines) result.removeGroup('hidden');
-        return Mesh._flattenProjectionToScreen(result, sectionNormal.copy().reverse());
+        // the viewer looks along -normal: the normal points toward the viewer, as the flatten takes it
+        return Mesh._flattenProjectionToScreen(result, sectionNormal);
     }
 
     //// OUTPUTS ////
