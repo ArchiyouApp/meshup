@@ -31,7 +31,7 @@ import { MeshJs } from './wasm/meshup';
 import { GLTFBuilder } from './GLTFBuilder';
 
 import { TOLERANCE, ISOMETRY_HLR_STRATEGY_DEFAULT, ISOMETRY_CAM_DEFAULT, EDGE_PROJECTION_DEFAULTS } from './constants';
-import { gridCounts } from './utils';
+import { gridCounts, moveUntilTouching } from './utils';
 
 /** A Shape that SVG can draw as a FACE: a Mesh or a Polygon lying on a plane parallel to XY.
  *
@@ -757,6 +757,15 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     moveX(dx: number): this { return this.translate(dx, 0, 0); }
     moveY(dy: number): this { return this.translate(0, dy, 0); }
     moveZ(dz: number): this { return this.translate(0, 0, dz); }
+
+    /** Move the whole collection along `direction` until one of its shapes touches `other`, or
+     *  stops `gap` short of it. See {@link Shape.moveUntil}. */
+    moveUntil(other: Shape | ShapeCollection<any>, direction: string | PointLike, gap: number = 0): this
+    {
+        const dir = typeof direction === 'string' ? direction : Point.from(direction).toArray() as [number, number, number];
+        moveUntilTouching(this, other, dir, gap, () => Shape.distanceBetween(this, other), 'ShapeCollection.moveUntil()');
+        return this;
+    }
 
     moveTo(...args: any[]): this
     {

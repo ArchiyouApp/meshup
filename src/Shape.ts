@@ -23,7 +23,7 @@ import type { ShapeCollection } from './ShapeCollection';
 import type { Curve } from './Curve';
 import { Point } from './Point';
 
-import { uuid, nodeToString } from './utils';
+import { uuid, nodeToString, moveUntilTouching } from './utils';
 
 /** Anything align()/alignTo() can be aimed at: a Shape, a ShapeCollection (both have a
  *  bbox()), or a bare point (treated as a zero-size bbox at that location). */
@@ -322,6 +322,42 @@ export abstract class Shape
     move(px: PointLike | number, dy?: number, dz?: number): this
     {
         return this.translate(px, dy, dz);
+    }
+
+    /** Move this shape along `direction` until it touches `other`, or stops `gap` short of it.
+     *
+     *  It meets the true shape, not its bbox: a lath pushed up under a tilted seat ends against the
+     *  seat's underside, a bar slid toward a leaning board ends against the board. So a part can be
+     *  placed against another without working out the angles and offsets yourself.
+     *
+     *  `direction` is a vector or one of 'up', 'down', 'left', 'right', 'front', 'back' (front is
+     *  -y, back +y). It throws when moving that way never touches `other` (they pass each other,
+     *  or `other` is behind); a shape that already touches stays where it is. `other` may be a
+     *  shape or a collection: it stops at the first one it touches.
+     *
+     *  @example
+     *    seat = box(500, 450, 15).rotateX(-12).moveZ(400)
+     *    bar = box(560, 30, 30).move(0, -150, 0).moveUntil(seat, 'up')   // under the seat's front
+     *    floor = box(1000, 1000, 10)
+     *    shelf = box(600, 300, 18).moveZ(500).moveUntil(floor, 'down', 5) // 5 above the floor
+     */
+    moveUntil(other: Shape | ShapeCollection<any>, direction: string | PointLike, gap: number = 0): this
+    {
+        const dir = typeof direction === 'string' ? direction : Point.from(direction).toArray() as [number, number, number];
+        moveUntilTouching(this, other, dir, gap, () => Shape.distanceBetween(this, other), `${this.constructor.name.replace(/^_/, '')}.moveUntil()`);
+        return this;
+    }
+
+    /** Distance from a shape to a shape or to the nearest member of a collection: 0 when touching.
+     *  @internal */
+    static distanceBetween(shape: Shape | ShapeCollection<any>, other: Shape | ShapeCollection<any>): number
+    {
+        const items = (s: any) => (typeof s?.toArray === 'function' ? s.toArray() : [s]) as Array<any>;
+        return Math.min(...items(shape).flatMap(a => items(other).map(b =>
+        {
+            if (typeof a.distance !== 'function') { throw new Error(`moveUntil(): a ${a.constructor?.name} cannot measure its distance`); }
+            return a.distance(b);
+        })));
     }
 
     moveX(dx: number): this { return this.translate(dx, 0, 0); }

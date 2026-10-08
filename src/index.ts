@@ -111,7 +111,7 @@ export type { QualityPreset, QualitySettings } from './quality';
 export { isPointLike } from './types';
 export { ANNOTATIONS_SVG_START, ANNOTATIONS_SVG_END, ANNOTATION_MARGIN_MM } from './ShapeCollection';
 export type { SpanParams, SpanPoint } from './types';
-export { rad, deg, nodeToString, GLTFJsonDocumentToString, gridCounts } from './utils';
+export { rad, deg, nodeToString, GLTFJsonDocumentToString, gridCounts, moveUntilTouching, MOVE_DIRECTIONS } from './utils';
 
 /*  Scene membership. A method that produces a shape has to say what becomes of it — the
     result replaces the receiver, joins the active layer, or carries its scene along — so

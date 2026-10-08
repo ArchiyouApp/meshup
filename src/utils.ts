@@ -8,6 +8,95 @@ export function deg(radians: number): number
   return radians * 180 / Math.PI;
 }
 
+//// MOVING UNTIL TOUCHING ////
+
+/** The directions moveUntil() takes as words: y grows to the back, z up */
+export const MOVE_DIRECTIONS: Record<string, [number, number, number]> = {
+    up: [0, 0, 1], down: [0, 0, -1], left: [-1, 0, 0], right: [1, 0, 0], front: [0, -1, 0], back: [0, 1, 0],
+};
+
+/** Anything with a bbox: the min and max corners */
+interface ContactBox { min(): { x: number; y: number; z: number }; max(): { x: number; y: number; z: number } }
+
+/** Steps moveUntil() takes at most; a direct approach takes one or two, a grazing one more */
+const MOVE_UNTIL_MAX_STEPS = 500;
+
+/**
+ * Move `mover` along `direction` until it touches `other`, or stops `gap` short of it: the shared
+ * core of moveUntil() for meshup and brep shapes and collections.
+ *
+ * Conservative advancement: each step moves by the current distance between the two, which can
+ * never pass through (no point moves further than that), then measures again. A head-on approach
+ * lands in a step or two, a slanted one (a lath pushed up under a tilted seat) in a few. It works on
+ * the true shapes, so a part meets a tilted board where the board is, not where its bbox is.
+ *
+ * Throws, leaving `mover` where it was, when it would never touch `other`: their shadows across
+ * the direction do not overlap, or `other` lies behind it. A mover already touching (or
+ * overlapping) stays where it is.
+ *
+ * @param distance The current distance from mover to other (0 when touching or overlapping)
+ * @param method   For the error messages, e.g. 'Mesh.moveUntil()'
+ */
+export function moveUntilTouching(
+    mover: { bbox(): ContactBox | undefined | null; move(x: number, y: number, z: number): unknown },
+    other: { bbox(): ContactBox | undefined | null },
+    direction: string | [number, number, number],
+    gap: number,
+    distance: () => number,
+    method: string,
+): void
+{
+    const raw = typeof direction === 'string' ? MOVE_DIRECTIONS[direction] : direction;
+    const length = raw ? Math.hypot(raw[0], raw[1], raw[2]) : 0;
+    if (!raw || !(length > 0))
+    {
+        throw new Error(`${method}: give a direction as a vector or one of ${Object.keys(MOVE_DIRECTIONS).join(', ')}; got ${JSON.stringify(direction)}`);
+    }
+    const d = raw.map(v => v / length) as [number, number, number];
+    const a = mover.bbox(), b = other.bbox();
+    if (!a || !b) { throw new Error(`${method}: both shapes need a size`); }
+
+    // Two axes across the motion, and each box's extent along an axis
+    const helper: [number, number, number] = Math.abs(d[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+    const cross = (p: number[], q: number[]): [number, number, number] =>
+        [p[1] * q[2] - p[2] * q[1], p[2] * q[0] - p[0] * q[2], p[0] * q[1] - p[1] * q[0]];
+    const u = cross(d, helper), v = cross(d, u);
+    const corners = (box: ContactBox) => [0, 1, 2, 3, 4, 5, 6, 7].map(i =>
+        [(i & 1 ? box.max() : box.min()).x, (i & 2 ? box.max() : box.min()).y, (i & 4 ? box.max() : box.min()).z]);
+    const extent = (box: ContactBox, axis: number[]) =>
+    {
+        const along = corners(box).map(c => c[0] * axis[0] + c[1] * axis[1] + c[2] * axis[2]);
+        return [Math.min(...along), Math.max(...along)];
+    };
+    const size = Math.max(...[a, b].flatMap(box => [box.max().x - box.min().x, box.max().y - box.min().y, box.max().z - box.min().z]));
+    const tol = Math.max(size * 1e-7, 1e-9);
+    const meets = [u, v].every(axis =>
+    {
+        const [ea, eb] = [extent(a, axis), extent(b, axis)];
+        return ea[0] < eb[1] - tol && eb[0] < ea[1] - tol;
+    });
+    const travelMax = extent(b, d)[1] - extent(a, d)[0];   // further on, the mover is past the other
+    const where = typeof direction === 'string' ? direction : `along [${d.map(x => +x.toFixed(3)).join(', ')}]`;
+    if (!meets || travelMax <= 0)
+    {
+        throw new Error(`${method}: moving ${where} it never touches the other shape (${meets ? 'that lies behind it' : 'they pass each other'})`);
+    }
+
+    const advance = (travelled: number, steps: number): void =>
+    {
+        const remaining = distance() - gap;
+        if (remaining <= tol) { return; }
+        if (travelled + remaining > travelMax + tol || steps >= MOVE_UNTIL_MAX_STEPS)
+        {
+            mover.move(-d[0] * travelled, -d[1] * travelled, -d[2] * travelled);
+            throw new Error(`${method}: moving ${where} it never touches the other shape`);
+        }
+        mover.move(d[0] * remaining, d[1] * remaining, d[2] * remaining);
+        advance(travelled + remaining, steps + 1);
+    };
+    advance(0, 0);
+}
+
 /**
  * Remap a 3-D point/vector from the kernel's native Z-up space to the
  * requested output coordinate system (`up` = desired up-axis).
