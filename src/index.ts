@@ -38,17 +38,11 @@ export async function init(options?: InitOptions): Promise<void>
 {
     if (!_csgrs)
     {
-        const t = performance.now();
         _csgrs = await loadAsync(options);
         // The kernel owns the curve-sampling loops, so it has to be told the quality profile.
         // Flushed here rather than only from setQuality() so that a setQuality() written
         // ABOVE the await — where getCsgrs() would still throw — is not silently lost.
         syncQualityToKernel();
-        console.info(`Meshup WASM loaded successfully in ${Math.round(performance.now() - t)} ms.`);
-    }
-    else
-    {
-        console.info('Meshup already initialized. Returning existing instance.');
     }
 }
 

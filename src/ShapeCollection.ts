@@ -1654,9 +1654,11 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     private static _appendProjectionGroups(target: ShapeCollection<any>, projected: ShapeCollection<any>): void
     {
-        const hidden = projected.group('hidden');
-        const visible = projected.group('visible');
-        const silhouette = projected.group('silhouette');
+        // Read _groups directly: a projection without hidden lines or silhouettes is normal,
+        // and group() reports a missing group as an error
+        const hidden = projected._groups.get('hidden');
+        const visible = projected._groups.get('visible');
+        const silhouette = projected._groups.get('silhouette');
         if (hidden?.length) target.addGroup('hidden', hidden);
         if (visible?.length) target.addGroup('visible', visible);
         // silhouette is a subset of visible — use tagGroup so the same Curve
@@ -1946,7 +1948,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         ShapeCollection._appendProjectionGroups(
             iso, ShapeCollection._projectLinearShapes(curves, meshes, viewDir, planeNormal));
 
-        if (!hiddenLines && iso.group('hidden'))
+        if (!hiddenLines && iso._groups.has('hidden'))
         {
             iso.removeGroup('hidden');
         }
@@ -2287,7 +2289,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
             ShapeCollection._inheritStyle(projected, group[0]);
             result.add(projected.toArray());
-            const silhouette = projected.group('silhouette');
+            const silhouette = projected._groups.get('silhouette');
             if (silhouette?.length) result.tagGroup('silhouette', silhouette);
         });
         // The flatten takes the normal toward the viewer; the reversed one gives a mirror image
@@ -2647,7 +2649,6 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             }
         });
 
-        console.info(`Connecting ${connectingLines.length} pairs of endpoints with lines.`);
 
         return new ShapeCollection<Curve>(
             ...combined.curves().toArray(),

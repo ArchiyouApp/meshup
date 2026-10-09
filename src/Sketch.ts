@@ -593,7 +593,6 @@ export class Sketch
                 sketch = sketch.difference(SketchJs.polygon(holePoints.map(p => [p.x, p.y]), null));
             });
 
-            console.info(`Sketch._toSketchJs(): Built SketchJs with ${outerPoints.length} points and ${holes.length + otherContours.length} holes.`);
             //console.log(sketch.debugGeometry());
 
             return sketch.renormalize(); // Make sure its OK winding order
