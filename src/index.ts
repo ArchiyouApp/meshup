@@ -102,10 +102,11 @@ export { TOLERANCE, SHAPE_DEFAULT_STYLE } from './constants';
     loft/revolve subdivision and mesh primitive. See ./quality.ts. */
 export { setQuality, getQuality, resetQuality, QUALITY_PRESETS, DEFAULT_QUALITY_PRESET } from './quality';
 export type { QualityPreset, QualitySettings } from './quality';
-export { isPointLike } from './types';
+export { isPointLike, isAxisDirection } from './types';
+export type { AxisDirection, RowFillDistribute } from './types';
 export { ANNOTATIONS_SVG_START, ANNOTATIONS_SVG_END, ANNOTATION_MARGIN_MM } from './ShapeCollection';
 export type { SpanParams, SpanPoint } from './types';
-export { rad, deg, nodeToString, GLTFJsonDocumentToString, gridCounts, moveUntilTouching, MOVE_DIRECTIONS } from './utils';
+export { rad, deg, nodeToString, GLTFJsonDocumentToString, gridCounts, moveUntilTouching, MOVE_DIRECTIONS, rowFillOffsets } from './utils';
 
 /*  Scene membership. A method that produces a shape has to say what becomes of it — the
     result replaces the receiver, joins the active layer, or carries its scene along — so

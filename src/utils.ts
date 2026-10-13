@@ -1,3 +1,5 @@
+import type { RowFillDistribute } from './types';
+
 export function rad(degrees: number): number
 {
    return degrees * Math.PI / 180;
@@ -97,6 +99,78 @@ export function moveUntilTouching(
     advance(0, 0);
 }
 
+//// FILLING A ROW ////
+
+/** Where a box lies along a unit direction: the lowest and highest of its corners */
+function extentAlong(box: ContactBox, d: [number, number, number]): [number, number]
+{
+    const along = [0, 1, 2, 3, 4, 5, 6, 7].map(i =>
+        (i & 1 ? box.max() : box.min()).x * d[0] + (i & 2 ? box.max() : box.min()).y * d[1] + (i & 4 ? box.max() : box.min()).z * d[2]);
+    return [Math.min(...along), Math.max(...along)];
+}
+
+/**
+ * Where the members of rowFill() go: their distances along `direction` from the first member,
+ * the first being 0. The shared core of rowFill() for meshup and brep shapes.
+ *
+ * The span starts at the back face of `box` and runs over `until` when that is a number, or up to
+ * the near face of `until` when that is a box. With 'grid' the members are every `spacing` from
+ * the start; a grid member that would overlap the closing one gives way to it. With 'even' the
+ * span is split in the fewest equal bays of at most `spacing`. With `close` a last member ends
+ * flush with the end of the span.
+ *
+ * Throws when the spacing would make members overlap. When no member fits (a span shorter than
+ * one member, or a shape that leaves no room or lies behind) it warns and gives only the first member.
+ */
+export function rowFillOffsets(
+    box: ContactBox,
+    until: number | ContactBox,
+    spacing: number,
+    direction: [number, number, number],
+    distribute: RowFillDistribute,
+    close: boolean,
+    method: string,
+): Array<number>
+{
+    const length = Math.hypot(direction[0], direction[1], direction[2]);
+    if (!(length > 0)) { throw new Error(`${method}: give a direction as an axis ('x', '-y', ...) or a vector; got ${JSON.stringify(direction)}`); }
+    if (distribute !== 'grid' && distribute !== 'even') { throw new Error(`${method}: distribute is 'grid' or 'even'; got ${JSON.stringify(distribute)}`); }
+    if (typeof until !== 'number' && typeof until?.min !== 'function') { throw new Error(`${method}: fill until a length or a shape with a size; got ${String(until)}`); }
+
+    const d = direction.map(v => v / length) as [number, number, number];
+    const [start, end] = extentAlong(box, d);
+    const thickness = end - start;
+    const span = typeof until === 'number' ? until : extentAlong(until, d)[0] - start;
+    const tol = Math.max(Math.abs(span) * 1e-9, 1e-9);
+
+    if (!Number.isFinite(span)) { throw new Error(`${method}: give the span as a number; got ${until}`); }
+    if (!(typeof spacing === 'number' && Number.isFinite(spacing) && spacing > 0)) { throw new Error(`${method}: give the spacing (centre to centre) as a positive number; got ${spacing}`); }
+    if (spacing < thickness - tol) { throw new Error(`${method}: a spacing of ${spacing} makes members of ${+thickness.toFixed(3)} overlap; use at least ${+thickness.toFixed(3)}`); }
+    if (span < thickness - tol)
+    {
+        // No room for a member: keep the script running with just the first member
+        console.warn(typeof until === 'number'
+            ? `${method}: a span of ${until} is shorter than one member (${+thickness.toFixed(3)}). Only the first member is placed.`
+            : `${method}: no member fits before the other shape (it is ${+span.toFixed(3)} away, a member is ${+thickness.toFixed(3)}); is it behind? Only the first member is placed.`);
+        return [0];
+    }
+
+    // The distance of a member flush with the end of the span: the closing member
+    const last = span - thickness;
+    if (last <= tol) { return [0]; }
+
+    if (distribute === 'even')
+    {
+        const bays = Math.ceil((last - tol) / spacing);
+        return Array.from({ length: close ? bays + 1 : bays }, (_, i) => i * last / bays);
+    }
+
+    const grid = Array.from({ length: Math.floor((last + tol) / spacing) + 1 }, (_, i) => i * spacing);
+    return close
+        ? [...grid.filter(o => o <= last - thickness + tol), last]
+        : grid;
+}
+
 /**
  * Remap a 3-D point/vector from the kernel's native Z-up space to the
  * requested output coordinate system (`up` = desired up-axis).
@@ -120,7 +194,7 @@ export function remapAxis(x: number, y: number, z: number, up: 'x' | 'y' | 'z' =
  *  NOTE: lives here, not in SceneNode.ts, on purpose. Shape.ts only ever needed SceneNode
  *  as a *type*, so that import gets erased at runtime; importing a value from it would
  *  make Shape <-> SceneNode a real cycle and leave `Polygon extends Shape` undefined.
- *  utils.ts imports nothing, so it is always safe to import from. */
+ *  utils.ts imports nothing at runtime (types only), so it is always safe to import from. */
 export function nodeToString(node: { name: string, id(): string } | null | undefined): string
 {
     return (node) ? `node={ name: '${node.name}', id: '${node.id()}' }` : 'node=<not in scene>';

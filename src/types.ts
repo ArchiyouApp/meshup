@@ -39,6 +39,16 @@ export function isAxis(obj: any): obj is Axis {
   return obj === 'x' || obj === 'y' || obj === 'z';
 }
 
+/** An axis as a direction, or its opposite: 'x' is [1,0,0], '-x' is [-1,0,0] */
+export type AxisDirection = Axis|'-x'|'-y'|'-z';
+export function isAxisDirection(obj: any): obj is AxisDirection {
+  return isAxis(obj) || obj === '-x' || obj === '-y' || obj === '-z';
+}
+
+/** How rowFill() spreads its members over the span: on a grid of the spacing from the start
+ *  ('grid'), or in equal bays of at most the spacing ('even'). See Mesh/Curve.rowFill(). */
+export type RowFillDistribute = 'grid'|'even';
+
 /** In-plane orientation of a Shape: aligned with the X axis ('horizontal')
  *  or with the Y axis ('vertical'). See Mesh/Curve.rotateToOrtho(). */
 export type OrientationXY = 'horizontal'|'vertical';

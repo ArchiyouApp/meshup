@@ -13,8 +13,8 @@
 
 import { Vector3Js  } from "./wasm/meshup";
 
-import type { PointLike, Axis } from "./types";
-import { isAxis, isPointLike } from "./types";
+import type { PointLike, Axis, AxisDirection } from "./types";
+import { isAxisDirection, isPointLike } from "./types";
 
 import { Point } from "./Point";
 import { deg } from "./utils";
@@ -23,22 +23,22 @@ export class Vector
 {
   private _inner: Vector3Js;
 
-  constructor(x: number|PointLike|Axis|Vector3Js, y: number = 0, z: number = 0)
+  constructor(x: number|PointLike|AxisDirection|Vector3Js, y: number = 0, z: number = 0)
   {
     this._inner = Vector.from(x, y, z)._inner;
   }
 
-  /** Create a Vector from numbers, PointLike, Axis, or Vector3Js.
+  /** Create a Vector from numbers, PointLike, an axis direction ('x', '-y', ...) or Vector3Js.
    *  A Vector3Js is wrapped directly (no copy); everything else is converted. */
-  static from(x: number|PointLike|Axis|Vector3Js, y: number = 0, z: number = 0): Vector
+  static from(x: number|PointLike|AxisDirection|Vector3Js, y: number = 0, z: number = 0): Vector
   {
     if(typeof x === 'number')
     {
       return new Vector(new Vector3Js(x, y, z));
     }
-    else if(isAxis(x))
+    else if(isAxisDirection(x))
     {
-      const AXIS_TO_VEC = { x: [1,0,0], y: [0,1,0], z: [0,0,1] };
+      const AXIS_TO_VEC = { x: [1,0,0], y: [0,1,0], z: [0,0,1], '-x': [-1,0,0], '-y': [0,-1,0], '-z': [0,0,-1] };
       const [ax, ay, az] = AXIS_TO_VEC[x];
       return new Vector(new Vector3Js(ax, ay, az));
     }

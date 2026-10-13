@@ -8,6 +8,21 @@ versions may contain breaking changes.
 
 ### Added
 
+- **`Mesh/Curve.rowFill(until, spacing, direction, distribute, close)`: fill a span with a row.**
+  Copies of the shape every `spacing` (centre to centre) along `direction`, over a length or up
+  to another shape, like studs in a wall or joists in a floor. `'grid'` (default) keeps the
+  members on the grid from the start with a closing member flush at the end; `'even'` splits the
+  span in equal bays of at most `spacing`. `close: false` leaves the end member out. The
+  placement is in `rowFillOffsets()`, so the brep kernel can share it.
+
+  ```js
+  studs = stud.rowFill(3000, 600);
+  joists = joist.rowFill(wallB, 400, 'y', 'even', false);
+  ```
+
+- **`AxisDirection`: `'-x'`, `'-y'` and `'-z'` as directions.** `Vector.from('-x')` is
+  `[-1, 0, 0]`. `Axis` itself stays `'x'|'y'|'z'`.
+
 - **`ShapeCollection.project(from, options)`: a plain projection.** Every edge as seen from
   `from`, the ones at the back too, flattened onto the view plane with each line drawn once,
   and added to a 'projection' scene layer. There is no hidden-line pass, so it is fast and

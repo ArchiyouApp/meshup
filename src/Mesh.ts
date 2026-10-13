@@ -9,7 +9,7 @@
  * 
  */
 
-import type { CsgrsModule, Axis, BasePlane, OrientationXY, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions, HlrStrategy, ProjectionOptions } from './types';
+import type { CsgrsModule, Axis, BasePlane, OrientationXY, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions, HlrStrategy, ProjectionOptions, AxisDirection, RowFillDistribute } from './types';
 import { isAxis, isBasePlane, isPointLike, resolveProjectionArgs } from './types';
 
 import { Curve, getCsgrs } from './index';
@@ -18,7 +18,7 @@ import { Point } from './Point';
 import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { Vector } from './Vector'
-import { rad, deg, shortestArcAxisAngle, primaryOrthoXYAngle, svgDocument, gridCounts } from './utils';
+import { rad, deg, shortestArcAxisAngle, primaryOrthoXYAngle, svgDocument, gridCounts, rowFillOffsets } from './utils';
 import { Style } from './Style';
 import { sceneAdd, sceneReplace, sceneLayer, sceneCarry, sceneReplaceOrKeep, replaceInScene } from './sceneDecorators';
 import { GLTFBuilder } from './GLTFBuilder';
@@ -1790,6 +1790,53 @@ export class Mesh extends Shape
                 mesh.move(dirVec.copy().scale(i * (offsetSize + spacing)));
                 meshes.add(mesh);
             }
+        });
+
+        ShapeCollection._nameRow(meshes, this.name() as string | undefined);
+        return meshes;
+    }
+
+    /** Fill a span with a row of copies of this Mesh, like studs in a wall or joists in a floor.
+     *
+     *  This Mesh is the first member. The span runs from its back face along `direction`: over a
+     *  length, or up to the near face of another shape. By default the members sit every `spacing`
+     *  from the start with a closing member flush at the end, so sheet edges land on them.
+     *
+     *  NOTE: `spacing` is centre to centre here, while in row() it is the gap between copies.
+     *
+     *  @param until      - the span: a length from the back of this Mesh to the far side of the
+     *                      last member, or a shape (or collection) to fill up to
+     *  @param spacing    - centre-to-centre distance of the members; with 'even' the largest one
+     *  @param direction  - direction of the row: an axis ('x', '-y', ...) or a vector (default: 'x')
+     *  @param distribute - 'grid' (default): every `spacing` from the start, what is left in the
+     *                      last bay; 'even': the span split in equal bays of at most `spacing`.
+     *                      The number of bays rounds up, so a bay is `spacing` or a bit less:
+     *                      a 3000 span of 38 studs at 600 gives 5 bays of 592.4.
+     *  @param close      - end with a member flush with the end of the span (default: true). Use
+     *                      false when `until` carries that end already, like a wall under joists.
+     *  @returns ShapeCollection<Mesh> of all members, this Mesh the first
+     *
+     *  @example
+     *    stud = box(38, 140, 2400)
+     *    studs = stud.rowFill(3000, 600)                        // studs 600 c/c, one at 3000
+     *    joist = box(3000, 50, 200)
+     *    wallB = box(3000, 140, 300).move(0, 4000, 0)
+     *    joists = joist.rowFill(wallB, 400, 'y', 'even', false) // equal bays up to wallB
+     */
+    rowFill(until:number|Shape|ShapeCollection<any>, spacing:number, direction:PointLike|AxisDirection='x', distribute:RowFillDistribute='grid', close:boolean=true):ShapeCollection<Mesh>
+    {
+        const bbox = this.bbox();
+        if(!bbox){ throw new Error('Mesh.rowFill(): this Mesh has no size'); }
+        const dirVec = Vector.from(direction).normalize();
+        const target = (typeof until === 'number') ? until : until?.bbox?.();
+        const offsets = rowFillOffsets(bbox, target as any, spacing, dirVec.toArray(), distribute, close, 'Mesh.rowFill()');
+
+        const meshes = new ShapeCollection<Mesh>();
+        offsets.forEach((offset, i) =>
+        {
+            const member = (i === 0) ? this : this.copy();
+            member.move(dirVec.copy().scale(offset));
+            meshes.add(member);
         });
 
         ShapeCollection._nameRow(meshes, this.name() as string | undefined);
