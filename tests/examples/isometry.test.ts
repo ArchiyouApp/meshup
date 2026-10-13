@@ -1,6 +1,6 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { save } from '../../src/utils';
 import { ShapeCollection } from '../../src/ShapeCollection';
 import { outputDir } from '../helpers/outputs';
@@ -35,7 +35,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
 {
     it('can do basic isometric projection', async () =>
     {
-        const box = Mesh.Cube(100);
+        const box = Solid.Cube(100);
         // hiddenLines=true so both groups stay populated for the count
         // assertions below — with the default `false`, isometry() calls
         // removeGroup('hidden'), dropping the 3 hidden polylines and
@@ -62,7 +62,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
 
     it('keeps cube isometry line endpoints attached', async () =>
     {
-        const boxIso = Mesh.Cube(100).isometry([-1, -1, 1], { hiddenLines: true });
+        const boxIso = Solid.Cube(100).isometry([-1, -1, 1], { hiddenLines: true });
         const endpoints = collectPolylineEndpoints(boxIso);
         const orphanCount = countOrphanEndpoints(endpoints, 1e-6);
 
@@ -72,8 +72,8 @@ describe('Example: Isometric projection with hidden lines', async () =>
 
     it('can do isometric projection of boxes difference', async () =>
     {
-        const bigbox = Mesh.Cube(50);
-        const smallbox = Mesh.Cube(20).moveTo(bigbox.bbox().corner('rightfronttop'));
+        const bigbox = Solid.Cube(50);
+        const smallbox = Solid.Cube(20).moveTo(bigbox.bbox().corner('rightfronttop'));
         const diff = bigbox.subtract(smallbox)!;
         const diffIso = diff.isometry([-1, -1, 1]);
 
@@ -87,7 +87,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
 
     it('can do isometric projection of a Sphere', async () =>
     {
-        const sphere = Mesh.Sphere(20);
+        const sphere = Solid.Sphere(20);
         const sphereIso = sphere.isometry();
         expect(sphereIso).toBeTruthy();
         await save(OUTPUT_DIR + 'test.isometry.sphere.gltf', await new ShapeCollection(sphere.move(-20*2), sphereIso.group('visible')!).toGLTF());
@@ -95,9 +95,9 @@ describe('Example: Isometric projection with hidden lines', async () =>
 
     it('can do isometric projection of box with a hole', async () =>
     {
-        const box = Mesh.Cube(50);
-        const hole = Mesh.Cylinder(10, 100);
-        const subBox = Mesh.Cube(20).move(-25);
+        const box = Solid.Cube(50);
+        const hole = Solid.Cylinder(10, 100);
+        const subBox = Solid.Cube(20).move(-25);
         box.subtract(hole).subtract(subBox);
 
         await save(OUTPUT_DIR + 'test.isometry.hole.gltf',
@@ -117,7 +117,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         // — every later test in this file then fails at the next WASM call.
         // Boundary is between 9³ (passes) and 10³ (panics). Re-raise once the
         // Rust panic is diagnosed and a new csgrs WASM is built.
-        const box = Mesh.Cube(50);
+        const box = Solid.Cube(50);
         const boxes = box.grid(8, 8, 8, 60);
 
         const t = performance.now();
@@ -146,18 +146,18 @@ describe('Example: Isometric projection with hidden lines', async () =>
     it('preserves contact edges in a beam-grid floor', async () =>
     {
         // 10 vertical beams (5 wide × 300 deep × 20 tall), spaced 45 apart in X.
-        const bs = (Mesh.Box(5, 300, 20).translate(500, 0, 0) as Mesh).row(10, 45);
+        const bs = (Solid.Box(5, 300, 20).translate(500, 0, 0) as Solid).row(10, 45);
 
         // Bbox of the grid → two horizontal beams (front + back) hugging the
         // outer faces of the row. The user wrote `rightfrontop` — using the
         // canonical 'righttopfront' so the keyword parser actually matches
         // top/front/right.
         const bsBbox = bs.bbox()!;
-        const bhf = Mesh.BoxBetween(
+        const bhf = Solid.BoxBetween(
             bsBbox.corner('leftbottomfront'),
             bsBbox.corner('righttopfront').moveY(-10),
         );
-        const bhb = (bhf.copy() as Mesh).mirrorY();
+        const bhb = (bhf.copy() as Solid).mirrorY();
 
         const floor = new ShapeCollection(bs, bhf, bhb);
         expect(floor.length).toBe(12); // 10 verticals flattened in + 2 horizontals
@@ -181,13 +181,13 @@ describe('Example: Isometric projection with hidden lines', async () =>
     }, 30_000);
 
     // Plumbing regression: `samples` from ShapeCollection.iso() reaches
-    // Rust core unchanged. Monkey-patches Mesh.prototype._projectEdges to
+    // Rust core unchanged. Monkey-patches Solid.prototype._projectEdges to
     // capture the `options.samples` of every call during a multi-mesh iso.
     it('iso() forwards `samples` from ShapeCollection.iso down to _projectEdges', async () =>
     {
         const seen: Array<number | undefined> = [];
-        const original = (Mesh as any).prototype._projectEdges;
-        (Mesh as any).prototype._projectEdges = function (
+        const original = (Solid as any).prototype._projectEdges;
+        (Solid as any).prototype._projectEdges = function (
             options: any, occluders?: any,
         )
         {
@@ -196,18 +196,18 @@ describe('Example: Isometric projection with hidden lines', async () =>
         };
         try
         {
-            const bs = (Mesh.Box(5, 300, 20).translate(500, 0, 0) as Mesh).row(4, 45);
+            const bs = (Solid.Box(5, 300, 20).translate(500, 0, 0) as Solid).row(4, 45);
             const bsBbox = bs.bbox()!;
-            const bhf = Mesh.BoxBetween(
+            const bhf = Solid.BoxBetween(
                 bsBbox.corner('leftbottomfront'),
                 bsBbox.corner('righttopfront').moveY(-10),
             );
-            const bhb = (bhf.copy() as Mesh).mirrorY();
+            const bhb = (bhf.copy() as Solid).mirrorY();
             new ShapeCollection(bs, bhf, bhb).iso([-1, -1, 1], { samples: 1000, featureAngle: 5 });
         }
         finally
         {
-            (Mesh as any).prototype._projectEdges = original;
+            (Solid as any).prototype._projectEdges = original;
         }
         // Merged-base collection isometry does one base projection pass; the
         // outlines of the touching faces are projected together as polylines,
@@ -223,13 +223,13 @@ describe('Example: Isometric projection with hidden lines', async () =>
     {
         const make = () =>
         {
-            const bs = (Mesh.Box(5, 300, 20).translate(500, 0, 0) as Mesh).row(4, 45);
+            const bs = (Solid.Box(5, 300, 20).translate(500, 0, 0) as Solid).row(4, 45);
             const bsBbox = bs.bbox()!;
-            const bhf = Mesh.BoxBetween(
+            const bhf = Solid.BoxBetween(
                 bsBbox.corner('leftbottomfront'),
                 bsBbox.corner('righttopfront').moveY(-10),
             );
-            const bhb = (bhf.copy() as Mesh).mirrorY();
+            const bhb = (bhf.copy() as Solid).mirrorY();
             return new ShapeCollection(bs, bhf, bhb);
         };
         const runSamples = (s: number) =>
@@ -260,13 +260,13 @@ describe('Example: Isometric projection with hidden lines', async () =>
     {
         const make = () =>
         {
-            const bs = (Mesh.Box(5, 300, 20).translate(500, 0, 0) as Mesh).row(4, 45);
+            const bs = (Solid.Box(5, 300, 20).translate(500, 0, 0) as Solid).row(4, 45);
             const bsBbox = bs.bbox()!;
-            const bhf = Mesh.BoxBetween(
+            const bhf = Solid.BoxBetween(
                 bsBbox.corner('leftbottomfront'),
                 bsBbox.corner('righttopfront').moveY(-10),
             );
-            const bhb = (bhf.copy() as Mesh).mirrorY();
+            const bhb = (bhf.copy() as Solid).mirrorY();
             return new ShapeCollection(bs, bhf, bhb);
         };
 
@@ -315,13 +315,13 @@ describe('Example: Isometric projection with hidden lines', async () =>
     // compare. No hard assertion until the root cause is fixed.
     it('identifies orphan endpoints in beam-grid iso (4-vertical version)', async () =>
     {
-        const bs = (Mesh.Box(5, 300, 20).translate(500, 0, 0) as Mesh).row(4, 45);
+        const bs = (Solid.Box(5, 300, 20).translate(500, 0, 0) as Solid).row(4, 45);
         const bsBbox = bs.bbox()!;
-        const bhf = Mesh.BoxBetween(
+        const bhf = Solid.BoxBetween(
             bsBbox.corner('leftbottomfront'),
             bsBbox.corner('righttopfront').moveY(-10),
         );
-        const bhb = (bhf.copy() as Mesh).mirrorY();
+        const bhb = (bhf.copy() as Solid).mirrorY();
         const floor = new ShapeCollection(bs, bhf, bhb);
 
         const visible = floor.iso([-1, -1, 1], { samples: 1000, featureAngle: 5 }).group('visible')!;
@@ -368,9 +368,9 @@ describe('Example: Isometric projection with hidden lines', async () =>
     // old per-mesh path.
     it('preserves contact edges between one vertical + one horizontal beam', async () =>
     {
-        const v = Mesh.Box(5, 300, 20).translate(500, 0, 0) as Mesh;
+        const v = Solid.Box(5, 300, 20).translate(500, 0, 0) as Solid;
         const vBb = v.bbox()!;
-        const h = Mesh.BoxBetween(
+        const h = Solid.BoxBetween(
             vBb.corner('leftbottomfront'),
             vBb.corner('righttopfront').moveY(-10),
         );
@@ -387,9 +387,9 @@ describe('Example: Isometric projection with hidden lines', async () =>
 
     it('isoTest preserves contact edges between one vertical + one horizontal beam', () =>
     {
-        const v = Mesh.Box(5, 300, 20).translate(500, 0, 0) as Mesh;
+        const v = Solid.Box(5, 300, 20).translate(500, 0, 0) as Solid;
         const vBb = v.bbox()!;
-        const h = Mesh.BoxBetween(
+        const h = Solid.BoxBetween(
             vBb.corner('leftbottomfront'),
             vBb.corner('righttopfront').moveY(-10),
         );
@@ -404,9 +404,9 @@ describe('Example: Isometric projection with hidden lines', async () =>
 
     it('isoTest handles beam floor collections without wasm array-type errors', () =>
     {
-        const bs = (Mesh.Box(5, 500, 20).move(500) as Mesh).row(5, 45);
+        const bs = (Solid.Box(5, 500, 20).move(500) as Solid).row(5, 45);
         const bb = bs.bbox()!;
-        const bhf = Mesh.BoxBetween(
+        const bhf = Solid.BoxBetween(
             bb.corner('leftfrontbottom'),
             bb.corner('rightfronttop').moveY(-10),
         );
@@ -426,7 +426,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         'preserves contact edges between %i stacked boxes',
         async (n) =>
         {
-            const b1 = Mesh.Box(100, 100, 10);
+            const b1 = Solid.Box(100, 100, 10);
             const c = b1.replicate(n, (s, i) => s.move(0, 0, 10 * i));
             const iso = c.isometry()?.group('visible')!;
 
@@ -447,8 +447,8 @@ describe('Example: Isometric projection with hidden lines', async () =>
     it('collection elevation uses merged projection passes and forwards samples', () =>
     {
         const seen: Array<{ samples: number; featureAngle: number; bboxWidth: number }> = [];
-        const original = (Mesh as any).prototype._projectEdges;
-        (Mesh as any).prototype._projectEdges = function (
+        const original = (Solid as any).prototype._projectEdges;
+        (Solid as any).prototype._projectEdges = function (
             options: any,
             occluders?: any,
         )
@@ -464,14 +464,14 @@ describe('Example: Isometric projection with hidden lines', async () =>
 
         try
         {
-            const a = Mesh.Box(10, 10, 10);
-            const b = Mesh.Box(10, 10, 10).move(10, 0, 0);
-            const hidden = Mesh.Box(10, 10, 10).move(1000, 0, 0).hide();
+            const a = Solid.Box(10, 10, 10);
+            const b = Solid.Box(10, 10, 10).move(10, 0, 0);
+            const hidden = Solid.Box(10, 10, 10).move(1000, 0, 0).hide();
             new ShapeCollection(a, b, hidden).elevation('front', { hiddenLines: true, samples: 123, featureAngle: 7 });
         }
         finally
         {
-            (Mesh as any).prototype._projectEdges = original;
+            (Solid as any).prototype._projectEdges = original;
         }
 
         // One merged pass; the contact face between a and b is projected as a
@@ -484,9 +484,9 @@ describe('Example: Isometric projection with hidden lines', async () =>
 
     it('collection elevation restores a touching-beam contact edge beyond merged elevation', () =>
     {
-        const v = Mesh.Box(5, 300, 20).translate(500, 0, 0) as Mesh;
+        const v = Solid.Box(5, 300, 20).translate(500, 0, 0) as Solid;
         const vBb = v.bbox()!;
-        const h = Mesh.BoxBetween(
+        const h = Solid.BoxBetween(
             vBb.corner('leftbottomfront'),
             vBb.corner('righttopfront').moveY(-10),
         );
@@ -502,8 +502,8 @@ describe('Example: Isometric projection with hidden lines', async () =>
     {
         // A cylinder is not a cuboid, so the square overlap of the two bboxes
         // is not a contact face: it used to come out as a 40 x 40 square.
-        const plate = Mesh.Box(100, 100, 10);
-        const post = Mesh.Cylinder(20, 50);
+        const plate = Solid.Box(100, 100, 10);
+        const post = Solid.Cylinder(20, 50);
         post.move(0, 0, plate.bbox().maxZ() - post.bbox().minZ());
         const top = new ShapeCollection(plate, post).elevation('top', { hiddenLines: true });
 
@@ -516,8 +516,8 @@ describe('Example: Isometric projection with hidden lines', async () =>
     it('collection section merges visible meshes and forwards samples', () =>
     {
         const seen: Array<{ samples: number; featureAngle: number; bboxWidth: number }> = [];
-        const original = (Mesh as any).prototype.section;
-        (Mesh as any).prototype.section = function (
+        const original = (Solid as any).prototype.section;
+        (Solid as any).prototype.section = function (
             pivot: any,
             normal: any,
             options: any,
@@ -535,14 +535,14 @@ describe('Example: Isometric projection with hidden lines', async () =>
 
         try
         {
-            const a = Mesh.Box(10, 10, 10);
-            const b = Mesh.Box(10, 10, 10).move(10, 0, 0);
-            const hidden = Mesh.Box(10, 10, 10).move(1000, 0, 0).hide();
+            const a = Solid.Box(10, 10, 10);
+            const b = Solid.Box(10, 10, 10).move(10, 0, 0);
+            const hidden = Solid.Box(10, 10, 10).move(1000, 0, 0).hide();
             new ShapeCollection(a, b, hidden).section([0, 0, 0], [0, 0, 1], { hiddenLines: true, samples: 321, featureAngle: 11 });
         }
         finally
         {
-            (Mesh as any).prototype.section = original;
+            (Solid as any).prototype.section = original;
         }
 
         expect(seen.length).toBe(1);

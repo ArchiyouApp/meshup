@@ -2,7 +2,7 @@
  * Isometric projection — planarity of the result.
  *
  * A projection maps 3D onto a PLANE, so every point it returns must lie on that plane.
- * `Mesh._flattenProjectionToScreen` then rotates that plane onto XY — note it ROTATES,
+ * `Solid._flattenProjectionToScreen` then rotates that plane onto XY — note it ROTATES,
  * it does not re-project, so anything not already coplanar stays non-coplanar and simply
  * ends up straddling z=0.
  *
@@ -35,7 +35,7 @@
  */
 
 import { beforeAll, describe, it, expect } from 'vitest';
-import { Mesh, ShapeCollection, initAsync } from '../../src/index';
+import { Solid, ShapeCollection, initAsync } from '../../src/index';
 
 beforeAll(async () =>
 {
@@ -77,7 +77,7 @@ function zSpread(collection: any): number
 }
 
 /** The raw Rust projection, before any TS flattening. */
-function rawProjection(mesh: Mesh): any
+function rawProjection(mesh: Solid): any
 {
     return (mesh as any)._projectEdges({
         viewDirection: [-N, -N, N],
@@ -89,21 +89,21 @@ function rawProjection(mesh: Mesh): any
 }
 
 /** A building-like frame at millimetre scale, mirroring housetest's timber walls. */
-function houseFrame(): ShapeCollection<Mesh>
+function houseFrame(): ShapeCollection<Solid>
 {
     const W = 2500, D = 4000, H = 2550, T = 200;
-    const parts: Mesh[] = [];
+    const parts: Solid[] = [];
     for (let x = 0; x < W; x += 400)
     {
-        parts.push(Mesh.Box(60, T, H).moveTo([x, 0, H / 2]));
-        parts.push(Mesh.Box(60, T, H).moveTo([x, D, H / 2]));
+        parts.push(Solid.Box(60, T, H).moveTo([x, 0, H / 2]));
+        parts.push(Solid.Box(60, T, H).moveTo([x, D, H / 2]));
     }
     for (let y = 400; y < D; y += 400)
     {
-        parts.push(Mesh.Box(T, 60, H).moveTo([0, y, H / 2]));
-        parts.push(Mesh.Box(T, 60, H).moveTo([W, y, H / 2]));
+        parts.push(Solid.Box(T, 60, H).moveTo([0, y, H / 2]));
+        parts.push(Solid.Box(T, 60, H).moveTo([W, y, H / 2]));
     }
-    return new ShapeCollection<Mesh>(...parts);
+    return new ShapeCollection<Solid>(...parts);
 }
 
 describe('iso projection — what still works', () =>
@@ -112,7 +112,7 @@ describe('iso projection — what still works', () =>
     {
         for (const scale of [10, 100, 1000, 3000])
         {
-            expect(planeDeviation(rawProjection(Mesh.Box(scale, scale, scale))))
+            expect(planeDeviation(rawProjection(Solid.Box(scale, scale, scale))))
                 .toBeLessThan(scale * 1e-9);
         }
     }, 300000);
@@ -121,8 +121,8 @@ describe('iso projection — what still works', () =>
     {
         // Same shape, same answer — the failure below is purely positional, which rules
         // out edge classification and points at the projection arithmetic itself.
-        const below = rawProjection(Mesh.Box(3000, 3000, 3000));
-        const above = rawProjection(Mesh.Box(4000, 4000, 4000));
+        const below = rawProjection(Solid.Box(3000, 3000, 3000));
+        const above = rawProjection(Solid.Box(4000, 4000, 4000));
         expect(above.length).toBe(below.length);
     }, 300000);
 });
@@ -131,14 +131,14 @@ describe('iso projection — planarity above ~3000 units (regression)', () =>
 {
     it('returns points on the projection plane for a large single mesh', () =>
     {
-        expect(planeDeviation(rawProjection(Mesh.Box(4000, 4000, 4000)))).toBeLessThan(1e-6);
+        expect(planeDeviation(rawProjection(Solid.Box(4000, 4000, 4000)))).toBeLessThan(1e-6);
     }, 300000);
 
     it('flattens a large single mesh onto z = 0', () =>
     {
         // _flattenProjectionToScreen rotates rather than re-projects, so any non-planarity
         // survives as z spread rather than being corrected. Was ~1516 units; now ~4e-12.
-        expect(zSpread(Mesh.Box(4000, 4000, 4000).isometry(ISO_CAM))).toBeLessThan(1e-6);
+        expect(zSpread(Solid.Box(4000, 4000, 4000).isometry(ISO_CAM))).toBeLessThan(1e-6);
     }, 300000);
 
     it('flattens a building-scale collection onto z = 0', () =>

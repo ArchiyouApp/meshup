@@ -9,7 +9,7 @@ import { getQuality } from './quality';
 
 import { Vector3Js, VertexJs, Point3Js, PolygonJs, SketchJs, Curve3DJs } from "./wasm/meshup";
 
-import { ShapeCollection, getCsgrs, Mesh, Importer } from './index';
+import { ShapeCollection, getCsgrs, Solid, Importer } from './index';
 import { Shape } from './Shape';
 import type { SceneNode } from './SceneNode';
 import { sceneReplace, sceneAdd, sceneUpdate, sceneCarry, sceneReplaceOrKeep, sceneLayer } from './sceneDecorators';
@@ -179,7 +179,7 @@ export class Curve extends Shape
         newCurve._curve = this._curve?.clone();
         newCurve._holes = this._holes.map(h => h._copy());
         newCurve.style.merge(this.style.explicitData() as any);
-        newCurve.metadata = { ...this.metadata }; // copy metadata (name, subtype), like Mesh and Polygon do
+        newCurve.metadata = { ...this.metadata }; // copy metadata (name, subtype), like Solid and Polygon do
 
         newCurve._inheritSid(this);
 
@@ -275,7 +275,7 @@ export class Curve extends Shape
     {
         if(!sketch) { throw new Error('Curve::fromSketchJs(): Invalid SketchJs'); }
 
-        const rings = Mesh._extractSketchRings(sketch); // { points:[[x,y]...], closed }[]
+        const rings = Solid._extractSketchRings(sketch); // { points:[[x,y]...], closed }[]
         const curves = new ShapeCollection<Curve>();
 
         rings.forEach((ring) =>
@@ -1343,7 +1343,7 @@ export class Curve extends Shape
     /** Minimum distance to another PointLike or Curve
      *  Returns null if the closest parameter cannot be determined.
      */
-    distance(to: PointLike|Curve|Mesh|Polygon): number|null
+    distance(to: PointLike|Curve|Solid|Polygon): number|null
     {
         if(isPointLike(to))
         {
@@ -1354,7 +1354,7 @@ export class Curve extends Shape
             return this._distanceToCurve(to);
         }
         // Surface shapes measure curve↔surface distance themselves (Polygon → its mesh).
-        else if(to instanceof Mesh)
+        else if(to instanceof Solid)
         {
             return to.distanceTo(this);
         }
@@ -1780,7 +1780,7 @@ export class Curve extends Shape
     /** Move the curve so its bbox center lands at the given point */
     /** Move this Curve so its bbox centre lands on `target`. Takes loose coordinates too
      *  (`moveTo(200, 475, 0)`) - this override used to drop everything but the first
-     *  argument, silently moving the Curve to y=0/z=0 while Mesh.moveTo() did the right thing. */
+     *  argument, silently moving the Curve to y=0/z=0 while Solid.moveTo() did the right thing. */
     moveTo(target: PointLike | number, py?: number, pz?: number): this
     {
         const bb = this.bbox();
@@ -1809,7 +1809,7 @@ export class Curve extends Shape
     }
 
     /** Rotate the given curve a specified angle (in degrees) around an axis through the WORLD
-     *  ORIGIN — the explicitly origin-based turn, as on Mesh and Polygon. Pass a pivot, or use
+     *  ORIGIN — the explicitly origin-based turn, as on Solid and Polygon. Pass a pivot, or use
      *  rotateAround() / rotateX() / rotateY() / rotateZ(), to turn about the curve's own centre. */
     override rotate(angle: number, axis: Axis | PointLike = 'z', pivot: PointLike = [0, 0, 0]): this
     {
@@ -1824,7 +1824,7 @@ export class Curve extends Shape
      */
     override rotateAround(angleDeg: number, axis: Axis | PointLike = 'z', pivot?: PointLike): this
     {
-        // No pivot means the shape's own centre, as it does on Mesh and Polygon — so
+        // No pivot means the shape's own centre, as it does on Solid and Polygon — so
         // `circle(20).move(100, 100, 10).rotateX(90)` turns the circle where it stands instead
         // of swinging it around the world origin. rotate() is the origin-based turn.
         const p = pivot ? Point.from(pivot) : this.center();
@@ -2150,7 +2150,7 @@ export class Curve extends Shape
     /** Flatten this Curve onto a coordinate plane: project it onto the plane through the
      *  origin perpendicular to `axis` and drop the doubles that creates — segments that
      *  collapse onto each other (the two vertical edges of a wall outline) or onto nothing
-     *  (an edge running along the axis). Mirrors Mesh.flatten() / ShapeCollection.flatten().
+     *  (an edge running along the axis). Mirrors Solid.flatten() / ShapeCollection.flatten().
      *
      *  @param axis  Axis to collapse along ('x' | 'y' | 'z', default 'z' — onto the XY plane).
      */
@@ -2746,7 +2746,7 @@ export class Curve extends Shape
     trim(at: Axis, coord?: number, smallest?: boolean): Curve | ShapeCollection<Curve> | null;
     /** Trim this Curve with another Curve — the same as cutoffBy(). */
     trim(other: Curve, keepSmallest?: boolean): Curve | ShapeCollection<Curve> | null;
-    /** Trim this Curve, like Mesh.trim(), Polygon.trim() and brep's Shape.trim(), and more:
+    /** Trim this Curve, like Solid.trim(), Polygon.trim() and brep's Shape.trim(), and more:
      *  - `trim(other, keepSmallest?)`: cut by another Curve and keep a piece — see cutoffBy().
      *  - `trim(at, coord?, smallest?)`: cut by the plane `{ <at> = coord }` — see cutoff().
      *  - `trim(t0, t1)`: keep the part between two positions along the length (fractions in
@@ -3071,7 +3071,7 @@ export class Curve extends Shape
     /** Boolean subtraction: this Curve minus one or more cutters.
      *
      *  Cutters can be single Curves, ShapeCollections of Curves, or any mix of the two, so
-     *  `band.difference(layer('rafters').shapes())` works like it does on Mesh and Polygon.
+     *  `band.difference(layer('rafters').shapes())` works like it does on Solid and Polygon.
      *  All curves must be closed and coplanar. Two kinds of cutter are skipped with a warning
      *  rather than wrecking the result: members of a collection that are not Curves, and a
      *  cutter that IS this very Curve — a layer collection routinely contains the very shape
@@ -3191,7 +3191,7 @@ export class Curve extends Shape
     }
 
     /** Cut off this Curve with the axis-aligned plane `{ <at> = coord }` and keep one piece —
-     *  the Curve twin of Mesh.cutoff() and Polygon.cutoff(). Keeps the biggest piece by default
+     *  the Curve twin of Solid.cutoff() and Polygon.cutoff(). Keeps the biggest piece by default
      *  (by length for an open Curve, by area for a closed one); `smallest=true` keeps the
      *  smallest.
      *
@@ -3563,14 +3563,14 @@ export class Curve extends Shape
 
     /** Pure intersection geometry - never touches the scene. Used internally (by the public
      *  intersection(s), by Polygon's boundary booleans and by ShapeCollection). */
-    _intersections(other: Curve|Mesh): ShapeCollection<CurveIntersection>|null
+    _intersections(other: Curve|Solid): ShapeCollection<CurveIntersection>|null
     {
-        return (other instanceof Mesh)
+        return (other instanceof Solid)
                     ? this._intersectionMesh(other)
                     : this._intersectionCurve(other);
     }
 
-    /** The geometry this Curve shares with another Curve or a Mesh: the Curve piece(s) where
+    /** The geometry this Curve shares with another Curve or a Solid: the Curve piece(s) where
      *  they overlap along a length, the Vertices where they only cross. See _intersectionCurve()
      *  for what each kind of pair answers.
      *
@@ -3579,24 +3579,24 @@ export class Curve extends Shape
      *  this Curve tmp() to keep the results out of the scene. Use intersect() to replace this
      *  Curve by the intersection instead. */
     @sceneAdd
-    intersections(other: Curve|Mesh): ShapeCollection<CurveIntersection>|null
+    intersections(other: Curve|Solid): ShapeCollection<CurveIntersection>|null
     {
         return this._intersections(other);
     }
 
-    /** The single shared shape between this Curve and another Curve or Mesh — the singular of
+    /** The single shared shape between this Curve and another Curve or Solid — the singular of
      *  intersections(), with the same non-replacing, added-to-the-active-layer contract.
      *
      *  `line.intersection(rect)` is the piece of line inside the rect, and its `vertices()` are
      *  the two crossings — which is how you ask for intersection POINTS. Two open curves have
      *  nothing but crossings, so they answer with those Vertices directly. */
     @sceneAdd
-    intersection(other: Curve|Mesh): CurveIntersection|ShapeCollection<CurveIntersection>|null
+    intersection(other: Curve|Solid): CurveIntersection|ShapeCollection<CurveIntersection>|null
     {
         return this._intersections(other)?.checkSingle() || null;
     }
 
-    /** Replace this Curve by its intersection with another Curve or Mesh, the way union() and
+    /** Replace this Curve by its intersection with another Curve or Solid, the way union() and
      *  difference() replace it by their result — the mesh-kernel spelling of brep's intersect().
      *
      *  A single Curve piece updates this Curve in place; anything else (the Vertices where two
@@ -3604,7 +3604,7 @@ export class Curve extends Shape
      *  scene. Nothing shared leaves this Curve alone and returns null. Use intersections() /
      *  intersection() to keep this Curve and get the result as a new shape. */
     @sceneReplaceOrKeep
-    intersect(other: Curve|Mesh): CurveIntersection|ShapeCollection<CurveIntersection>|null
+    intersect(other: Curve|Solid): CurveIntersection|ShapeCollection<CurveIntersection>|null
     {
         const result = this._intersections(other)?.checkSingle() || null;
 
@@ -3626,7 +3626,7 @@ export class Curve extends Shape
      *  So the result holds Curves wherever the shapes overlap along a length and Vertices
      *  wherever they merely cross, which is what a brep Edge ∩ Wire answers with too.
      *
-     *  NOTE: For intersection with a Mesh, use `intersection(mesh)` instead.
+     *  NOTE: For intersection with a Solid, use `intersection(mesh)` instead.
      *
      *  This used to run the region boolean unconditionally: the guard meant to stop that was
      *  `if(!this.isClosed)` — the METHOD, always truthy, so it never fired — and hypercurve
@@ -3635,7 +3635,7 @@ export class Curve extends Shape
      */
     private _intersectionCurve(other: Curve): ShapeCollection<CurveIntersection> | null
     {
-        if(!(other instanceof Curve)){ throw new Error('Curve::intersection(): Please supply a Curve or a Mesh!'); }
+        if(!(other instanceof Curve)){ throw new Error('Curve::intersection(): Please supply a Curve or a Solid!'); }
 
         const thisClosed = this.isClosed();
         const otherClosed = other.isClosed();
@@ -3796,22 +3796,22 @@ export class Curve extends Shape
         return inside;
     }
 
-    /** Intersect this Curve with a Mesh and return the trimmed sub-curve(s) as ShapeCollection<Curve>.
+    /** Intersect this Curve with a Solid and return the trimmed sub-curve(s) as ShapeCollection<Curve>.
      *  If the curve doesn't intersect the mesh, returns null
      *
      *  With an even number of intersections the curve alternates
      *  between outside and inside the mesh. The "inside" segments are returned.
      *  With two intersection points, a single trimmed curve is returned.
      *
-     *  @param mesh - The Mesh to intersect with
+     *  @param mesh - The Solid to intersect with
      *  @param tolerance - Tessellation tolerance for finding intersections (default: 1e-4)
      *  @returns Array of Curve segments that lie inside the mesh
      */
-    private _intersectionMesh(mesh: Mesh, tolerance?: number): ShapeCollection<Curve>|null
+    private _intersectionMesh(mesh: Solid, tolerance?: number): ShapeCollection<Curve>|null
     {
-        if(!mesh || !(mesh instanceof Mesh))
+        if(!mesh || !(mesh instanceof Solid))
         {
-            throw new Error('Curve::intersection(): Please supply a valid Mesh instance!');
+            throw new Error('Curve::intersection(): Please supply a valid Solid instance!');
         }
 
         // Find intersection points
@@ -3857,25 +3857,25 @@ export class Curve extends Shape
         return (results.length > 0) ? new ShapeCollection<Curve>(results) : null;
     }
 
-    /** Find intersection points between this Curve and a Mesh.
+    /** Find intersection points between this Curve and a Solid.
      *  The curve is tessellated into a polyline and each segment is tested
      *  against every triangle of the mesh surface.
      * 
-     *  @param mesh - A Mesh instance to test against
+     *  @param mesh - A Solid instance to test against
      *  @param tolerance - Tessellation tolerance for the curve (default: 1e-4)
      *  @returns Array of intersection Points, in order along the curve. Empty array if none found.
      */
-    private _intersectionPointsMesh(mesh: Mesh, tolerance?: number): Array<Point>
+    private _intersectionPointsMesh(mesh: Solid, tolerance?: number): Array<Point>
     {
-        if(!mesh || !(mesh instanceof Mesh))
+        if(!mesh || !(mesh instanceof Solid))
         {
-            throw new Error('Curve::intersectMesh(): Please supply a valid Mesh instance!');
+            throw new Error('Curve::intersectMesh(): Please supply a valid Solid instance!');
         }
 
         try
         {
             const meshInner = (mesh as any)._mesh;
-            if(!meshInner){ throw new Error('Mesh has no inner WASM object'); }
+            if(!meshInner){ throw new Error('Solid has no inner WASM object'); }
 
             // Tessellate here and hand the mesh a plain polyline.
             const pts = mesh.inner()?.intersectPolyline(this.inner().tessellate(tolerance ?? 1e-4));
@@ -3891,17 +3891,17 @@ export class Curve extends Shape
 
     //// SURFACES/SOLIDS OPERATIONS ////
 
-    /** Extrude this curve along a direction to create a Mesh.
+    /** Extrude this curve along a direction to create a Solid.
      *  If the curve is closed and planar, creates a solid extrusion.
      *  If the curve is open or non-planar, creates a swept surface.
      *  @param length - The extrusion length (default: 1) 
      *  @param direction - The extrusion direction vector (default planar normal or [0,0,1])
-     *  @returns A new Mesh representing the extruded geometry
+     *  @returns A new Solid representing the extruded geometry
      * 
      *  NOTE: bring this into the Rust/WASM layer?
      */
     @sceneReplace
-    extrude(length: number, direction?: PointLike): Mesh | Polygon | null
+    extrude(length: number, direction?: PointLike): Solid | Polygon | null
     {
         if (!this._curve) { return null; }
 
@@ -3913,7 +3913,7 @@ export class Curve extends Shape
         const dirVec = new Vector3Js(d.x, d.y, d.z);
 
         // A straight, open curve sweeps into a single flat quad. Return a planar Polygon
-        // (which itself has .extrude() to build a solid) rather than a Mesh.
+        // (which itself has .extrude() to build a solid) rather than a Solid.
         if (!this.isClosed() && this.isStraight())
         {
             const s = this.start();
@@ -4000,24 +4000,24 @@ export class Curve extends Shape
         }
 
         if (polygons.length === 0) { return null; }
-        return Mesh.from(this._csgrs.MeshJs.fromPolygons(polygons, {}));
+        return Solid.from(this._csgrs.MeshJs.fromPolygons(polygons, {}));
     }
 
     /** Loft a ruled surface/solid through this curve and one or more other curves.
      *  Builds a ruled mesh by stitching the tessellated profiles.
      *
      *  - **Open profiles** → a lofted surface. Two straight open curves give a single flat
-     *    `Polygon` (quad); any other open loft returns a triangulated surface `Mesh`.
-     *  - **Closed profiles** → a `Mesh`. With `solid = true` (default) end caps are added at
+     *    `Polygon` (quad); any other open loft returns a triangulated surface `Solid`.
+     *  - **Closed profiles** → a `Solid`. With `solid = true` (default) end caps are added at
      *    the first and last profile for a watertight solid; with `solid = false` only the
      *    open tube wall is returned.
      *
      *  @param others  A single Curve or an array of Curves to loft through (in order after this).
      *  @param solid   When all profiles are closed, cap the ends into a watertight solid (default true).
-     *  @returns A new Mesh or Polygon, or null on invalid input.
+     *  @returns A new Solid or Polygon, or null on invalid input.
      */
     @sceneReplace
-    loft(others: Curve | Curve[], solid: boolean = true): Mesh | Polygon | null
+    loft(others: Curve | Curve[], solid: boolean = true): Solid | Polygon | null
     {
         if (!this._curve) { return null; }
 
@@ -4039,7 +4039,7 @@ export class Curve extends Shape
         const allStraightOpen = profiles.every(p => !p.isClosed() && p.isStraight());
 
         // Two straight open curves in one plane loft into a single flat quad — return a planar
-        // Polygon (which itself has .extrude()) rather than a tessellated Mesh, matching
+        // Polygon (which itself has .extrude()) rather than a tessellated Solid, matching
         // extrude(). Skew lines span a twisted quad: that goes through the ruled loft below,
         // which splits it into flat triangles.
         const quad = allStraightOpen && profiles.length === 2
@@ -4099,7 +4099,7 @@ export class Curve extends Shape
         }
 
         if (polygons.length === 0) { return null; }
-        return Mesh.from(this._csgrs.MeshJs.fromPolygons(polygons, {}));
+        return Solid.from(this._csgrs.MeshJs.fromPolygons(polygons, {}));
     }
 
     /** Ring sample points for a ruled loft, one array per profile, all of the same length.
@@ -4206,7 +4206,7 @@ export class Curve extends Shape
 
 
 
-    /** Revolve this curve around an axis into a Mesh — the lathe operation.
+    /** Revolve this curve around an axis into a Solid — the lathe operation.
      *
      *  - **Closed profile** → a solid. A full turn closes on itself; a partial one is shut
      *    with a flat cap at either end, so the result is watertight either way.
@@ -4226,10 +4226,10 @@ export class Curve extends Shape
      *  @param axisStart  Axis base point — or the axis direction, when `axisEnd` is left out.
      *  @param axisEnd    A second point on the axis.
      *  @param segments   Facets around the sweep (default: the quality profile's count for a full turn).
-     *  @returns A new Mesh, or null on invalid input.
+     *  @returns A new Solid, or null on invalid input.
      */
     @sceneReplace
-    revolve(angle: number = 360, axisStart?: PointLike|Axis, axisEnd?: PointLike|Axis, segments?: number): Mesh | null
+    revolve(angle: number = 360, axisStart?: PointLike|Axis, axisEnd?: PointLike|Axis, segments?: number): Solid | null
     {
         if (!this._curve) { return null; }
 
@@ -4334,7 +4334,7 @@ export class Curve extends Shape
         }
 
         if (faces.length === 0) { return null; }
-        return Mesh.fromPolygons(faces);
+        return Solid.fromPolygons(faces);
     }
 
     /** Resolve the axis a revolve turns around, from whatever the caller gave:
@@ -4475,7 +4475,7 @@ export class Curve extends Shape
     }
 
     @sceneReplace
-    toMesh(tolerance?: number): Mesh | undefined
+    toMesh(tolerance?: number): Solid | undefined
     {
         const poly = this._toPolygon(tolerance);
         if (!poly)
@@ -4484,9 +4484,9 @@ export class Curve extends Shape
         }
 
         // Build mesh from one polygon (preserves holes on PolygonJs level)
-        const m = Mesh.from(this._csgrs.MeshJs.fromPolygons([poly.inner()], {}));
+        const m = Solid.from(this._csgrs.MeshJs.fromPolygons([poly.inner()], {}));
 
-        // When converting to Mesh, the orientation is important for the resulting normal of new polygons/faces.
+        // When converting to Solid, the orientation is important for the resulting normal of new polygons/faces.
         // Once case is ackward: If Curve normal (based on orientation) is pointing away from default camera position ([0,1,0])
         // It is not immediately visible. Correct this.
         return ((this.isPlanar() && this.normalOrientation()!.dot(Vector.from(0, 1, 0)) < 0))
@@ -4980,7 +4980,7 @@ export class Curve extends Shape
      *  required for correctness — but GC finalisation is non-deterministic and applies no
      *  back-pressure on WASM linear memory. A host that keeps curves alive across a long
      *  session (a CAD document rather than a one-shot script) should free them explicitly on
-     *  delete. Mirrors `Mesh.dispose()`.
+     *  delete. Mirrors `Solid.dispose()`.
      *
      *  After `dispose()` the curve is unusable: `inner()` will throw. */
     dispose(): void

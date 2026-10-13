@@ -25,7 +25,7 @@
 import fs from 'node:fs';
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { save } from '../../src/utils';
 import { ShapeCollection } from '../../src/ShapeCollection';
 import type { HlrStrategy } from '../../src/types';
@@ -53,14 +53,14 @@ interface Case
 const CASES: Case[] = [
     {
         name: 'single-box',
-        build: () => new ShapeCollection<any>(Mesh.Box(100, 100, 100)),
+        build: () => new ShapeCollection<any>(Solid.Box(100, 100, 100)),
         cam: [-1, -1, 1], samples: 16, featureAngle: 10,
     },
     {
         name: 'stack-merged',
         // One solid — the shape the merged path is happiest with.
         build: () => new ShapeCollection<any>(
-            (Mesh.Box(100, 100, 10) as any)
+            (Solid.Box(100, 100, 10) as any)
                 .replicate(STACK_COUNT, (s: any, i: number) => s.move(0, 0, 10 * i))
                 .merge()),
         cam: [-1, -1, 1], samples: 16, featureAngle: 10,
@@ -68,7 +68,7 @@ const CASES: Case[] = [
     {
         name: 'stack-collection',
         // The same stack left as separate shapes, every slab face touching.
-        build: () => (Mesh.Box(100, 100, 10) as any)
+        build: () => (Solid.Box(100, 100, 10) as any)
             .replicate(STACK_COUNT, (s: any, i: number) => s.move(0, 0, 10 * i)),
         cam: [-1, -1, 1], samples: 16, featureAngle: 10,
     },
@@ -78,8 +78,8 @@ const CASES: Case[] = [
         // slab, whose separating edge the merged path drops.
         build: () =>
         {
-            const bigbox = Mesh.Box(400, 200, 10).move(0, -300);
-            const sm = (Mesh.Box(5, 200, 5) as any)
+            const bigbox = Solid.Box(400, 200, 10).move(0, -300);
+            const sm = (Solid.Box(5, 200, 5) as any)
                 .align(bigbox, 'leftfrontbottom', 'leftfronttop');
             return new ShapeCollection<any>(bigbox, sm);
         },
@@ -89,8 +89,8 @@ const CASES: Case[] = [
         name: 'beam-floor',
         build: () =>
         {
-            const bs = (Mesh.Box(5, 500, 20).move(500) as any).row(5, 45);
-            const bhf = Mesh.BoxBetween(
+            const bs = (Solid.Box(5, 500, 20).move(500) as any).row(5, 45);
+            const bhf = Solid.BoxBetween(
                 bs.bbox().corner('leftfrontbottom'),
                 bs.bbox().corner('rightfronttop').moveY(-10),
             );
@@ -101,7 +101,7 @@ const CASES: Case[] = [
     },
     {
         name: 'grid-3x3x3',
-        build: () => (Mesh.Box(100, 100, 100) as any).grid(3, 3, 3, [150, 150, 150]),
+        build: () => (Solid.Box(100, 100, 100) as any).grid(3, 3, 3, [150, 150, 150]),
         cam: [-1, -1, 1], samples: 16, featureAngle: 10,
     },
 ];

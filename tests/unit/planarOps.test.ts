@@ -6,7 +6,7 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Polygon } from '../../src/Polygon';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 import { Vertex } from '../../src/Vertex';
 
@@ -35,8 +35,8 @@ describe('Polygon.toCurve()', () =>
 
     it('does not leave a zero-length segment when vertices() repeats the first point', () =>
     {
-        // a Polygon coming out of a Mesh face repeats its first vertex to close the loop
-        const face = Mesh.Cube(10).polygons().first() as Polygon;
+        // a Polygon coming out of a Solid face repeats its first vertex to close the loop
+        const face = Solid.Cube(10).polygons().first() as Polygon;
         expect(() => face.toCurve()).not.toThrow();
         expect(face.toCurve().isClosed()).toBe(true);
     });
@@ -109,16 +109,16 @@ describe('Polygon planar booleans', () =>
 
 describe('Polygon.loft()', () =>
 {
-    it('lofts to another Polygon into a closed solid Mesh', () =>
+    it('lofts to another Polygon into a closed solid Solid', () =>
     {
         const bottom = new Polygon(SQUARE);
         const top = new Polygon(SQUARE).translate(0, 0, 10);
 
         const solid = bottom.loft(top);
-        expect(solid).toBeInstanceOf(Mesh);
+        expect(solid).toBeInstanceOf(Solid);
         // a 10x10x10 box-ish loft — capped, so it has a real volume
-        expect((solid as Mesh).volume()).toBeGreaterThan(900);
-        expect((solid as Mesh).bbox().height()).toBeCloseTo(10, 1);
+        expect((solid as Solid).volume()).toBeGreaterThan(900);
+        expect((solid as Solid).bbox().height()).toBeCloseTo(10, 1);
     });
 
     it('lofts to a closed Curve profile', () =>
@@ -127,14 +127,14 @@ describe('Polygon.loft()', () =>
         const top = new Polygon(SQUARE).translate(0, 0, 10).toCurve();
 
         const solid = bottom.loft(top);
-        expect(solid).toBeInstanceOf(Mesh);
-        expect((solid as Mesh).volume()).toBeGreaterThan(900);
+        expect(solid).toBeInstanceOf(Solid);
+        expect((solid as Solid).volume()).toBeGreaterThan(900);
     });
 
     it('returns null (with a warning) for a non-profile argument', () =>
     {
         const bottom = new Polygon(SQUARE);
-        expect(bottom.loft(Mesh.Cube(1) as any)).toBeNull();
+        expect(bottom.loft(Solid.Cube(1) as any)).toBeNull();
     });
 });
 
@@ -204,9 +204,9 @@ describe('Vertex.extrude()', () =>
         const solid = new Vertex([0, 0, 0])
             .extrude(10, [1, 0, 0])   // → Curve (line along x)
             .extrude(10, [0, 1, 0])!  // → Polygon (flat quad on XY)
-            .extrude(10, [0, 0, 1]);  // → Mesh (solid box)
+            .extrude(10, [0, 0, 1]);  // → Solid (solid box)
 
-        expect(solid).toBeInstanceOf(Mesh);
-        expect((solid as Mesh).volume()).toBeCloseTo(1000, 0);
+        expect(solid).toBeInstanceOf(Solid);
+        expect((solid as Solid).volume()).toBeCloseTo(1000, 0);
     });
 });

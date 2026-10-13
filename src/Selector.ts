@@ -1,13 +1,13 @@
 /**
  *  Selector.ts
- *      Select (sub)shapes from ShapeCollections, Mesh and Curve objects
+ *      Select (sub)shapes from ShapeCollections, Solid and Curve objects
  *  
  *  Shapes: 
- *      - Mesh (if collection)
+ *      - Solid (if collection)
  *      - Vertex
- *      - Edge (=Curve Span? - TODO: extract from Mesh edges?)
- *      - Wire (=(Compound)Curve - TODO: extract from Mesh polygons?)
- *      - Face (=Polygon, Mesh only)
+ *      - Edge (=Curve Span? - TODO: extract from Solid edges?)
+ *      - Wire (=(Compound)Curve - TODO: extract from Solid polygons?)
+ *      - Face (=Polygon, Solid only)
  * 
  */
 
@@ -22,7 +22,7 @@ import {
 import type { Bbox } from "./Bbox";
 import type { Vertex } from "./Vertex";
 import { Curve } from "./Curve";
-import { Mesh } from "./Mesh";
+import { Solid } from "./Solid";
 import { Point } from "./Point";
 import { Polygon } from "./Polygon";
 import { Vector } from "./Vector";
@@ -140,7 +140,7 @@ export class Selector
     }
 
     /** Execute the selector on a target object */
-    execute(target: ShapeCollection|Mesh|Curve): any
+    execute(target: ShapeCollection|Solid|Curve): any
     {
         if (!this._parsed)
         {
@@ -178,7 +178,7 @@ export class Selector
      *  A side selector therefore always returns at least one subshape, as long as the target
      *  has subshapes of the requested type at all.
      */
-    private _side(target: Mesh | Curve | ShapeCollection): ShapeCollection
+    private _side(target: Solid | Curve | ShapeCollection): ShapeCollection
     {
         const bbox = target.bbox();
         const sides = this._sideKeywords();
@@ -203,7 +203,7 @@ export class Selector
      *  parallel: <shape>|<axis|plane>
      *  Return subshapes whose orientation is parallel to the given axis or plane normal.
      */
-    private _parallel(target: ShapeCollection | Mesh | Curve): Array<Polygon | Curve>
+    private _parallel(target: ShapeCollection | Solid | Curve): Array<Polygon | Curve>
     {
         const refNormal = this._refNormal();
         const shape = this.params.shape as string;
@@ -233,7 +233,7 @@ export class Selector
      *  closest: <shape><<-><point|axis|plane>
      *  Return the single subshape whose center is closest to the reference.
      */
-    private _closest(target: ShapeCollection | Mesh | Curve): Polygon | Point | Curve | null
+    private _closest(target: ShapeCollection | Solid | Curve): Polygon | Point | Curve | null
     {
         const items = this._subshapesFromTarget(target);
         if (items.length === 0) return null;
@@ -249,7 +249,7 @@ export class Selector
      *  furthest: <shape><->><point|axis|plane>
      *  Return the single subshape whose center is furthest from the reference.
      */
-    private _furthest(target: ShapeCollection | Mesh | Curve): Polygon | Point | Curve | null
+    private _furthest(target: ShapeCollection | Solid | Curve): Polygon | Point | Curve | null
     {
         const items = this._subshapesFromTarget(target);
         if (items.length === 0) return null;
@@ -265,7 +265,7 @@ export class Selector
      *  positive: <shape>+<axis>
      *  Return subshapes whose center has a positive coordinate along the given axis.
      */
-    private _positive(target: ShapeCollection | Mesh | Curve): Array<Polygon | Point | Curve>
+    private _positive(target: ShapeCollection | Solid | Curve): Array<Polygon | Point | Curve>
     {
         const axis = this.params.axis as Axis;
         return this._subshapesFromTarget(target)
@@ -276,7 +276,7 @@ export class Selector
      *  negative: <shape>-<axis>
      *  Return subshapes whose center has a negative coordinate along the given axis.
      */
-    private _negative(target: ShapeCollection | Mesh | Curve): Array<Polygon | Point | Curve>
+    private _negative(target: ShapeCollection | Solid | Curve): Array<Polygon | Point | Curve>
     {
         const axis = this.params.axis as Axis;
         return this._subshapesFromTarget(target)
@@ -288,7 +288,7 @@ export class Selector
     /** Remember the shape each sub-shape was selected from in `_parent`, like brep does: the
      *  host annotator links a dimension up that chain, and make.cutAngles() finds the beam an
      *  edge belongs to. Members of a collection are the owners of their own sub-shapes. */
-    private _ownedBy<T>(subs: Array<T>, owner: Mesh | Curve): Array<T>
+    private _ownedBy<T>(subs: Array<T>, owner: Solid | Curve): Array<T>
     {
         subs.forEach(sub =>
         {
@@ -299,12 +299,12 @@ export class Selector
     }
 
     /** Get all faces (Polygons) from a target */
-    private _facesFromTarget(target: ShapeCollection | Mesh | Curve): Array<Polygon>
+    private _facesFromTarget(target: ShapeCollection | Solid | Curve): Array<Polygon>
     {
-        if (target instanceof Mesh) return this._ownedBy(target.polygons().toArray(), target);
+        if (target instanceof Solid) return this._ownedBy(target.polygons().toArray(), target);
         if (target instanceof ShapeCollection)
         {
-            return target.meshes().toArray().flatMap(m => this._ownedBy(m.polygons().toArray(), m));
+            return target._solids().toArray().flatMap(m => this._ownedBy(m.polygons().toArray(), m));
         }
         return [];
     }
@@ -312,7 +312,7 @@ export class Selector
     /** Get all curves (Curves) from a target.
      *  A single Curve yields itself as one whole curve (native geometry stores a
      *  circle/rect as several segments, but they form one logical curve). */
-    private _curvesFromTarget(target: ShapeCollection | Mesh | Curve): Array<Curve>
+    private _curvesFromTarget(target: ShapeCollection | Solid | Curve): Array<Curve>
     {
         if (target instanceof Curve) return [target];
         if (target instanceof ShapeCollection) return target.curves().toArray();
@@ -321,17 +321,17 @@ export class Selector
 
     /** Get all edges from a target, as 2-point Curves.
      *
-     *  A Mesh yields its real model edges (see Mesh.edges(): unique, deduplicated by
+     *  A Solid yields its real model edges (see Solid.edges(): unique, deduplicated by
      *  position, with triangulation diagonals filtered out). A Curve yields its atomic
      *  segments — the edges of a polyline are its individual spans. */
-    private _edgesFromTarget(target: ShapeCollection | Mesh | Curve): Array<Curve>
+    private _edgesFromTarget(target: ShapeCollection | Solid | Curve): Array<Curve>
     {
-        if (target instanceof Mesh) return this._ownedBy(target.edges().toArray(), target);
+        if (target instanceof Solid) return this._ownedBy(target.edges().toArray(), target);
         if (target instanceof Curve) return this._ownedBy(target.segments().toArray(), target);
         if (target instanceof ShapeCollection)
         {
             return [
-                ...target.meshes().toArray().flatMap(m => this._ownedBy(m.edges().toArray(), m)),
+                ...target._solids().toArray().flatMap(m => this._ownedBy(m.edges().toArray(), m)),
                 ...target.curves().toArray().flatMap(c => this._ownedBy(c.segments().toArray(), c)),
             ];
         }
@@ -339,14 +339,14 @@ export class Selector
     }
 
     /** Get all vertices (Points) from a target */
-    private _verticesFromTarget(target: ShapeCollection | Mesh | Curve): Array<Point>
+    private _verticesFromTarget(target: ShapeCollection | Solid | Curve): Array<Point>
     {
-        if (target instanceof Mesh) return this._ownedBy(target.positions(), target);
+        if (target instanceof Solid) return this._ownedBy(target.positions(), target);
         if (target instanceof Curve) return this._ownedBy(target.controlPoints(), target);
         if (target instanceof ShapeCollection)
         {
             return [
-                ...target.meshes().toArray().flatMap(m => this._ownedBy(m.positions(), m)),
+                ...target._solids().toArray().flatMap(m => this._ownedBy(m.positions(), m)),
                 ...target.curves().toArray().flatMap(c => this._ownedBy(c.controlPoints(), c)),
             ];
         }
@@ -354,7 +354,7 @@ export class Selector
     }
 
     /** Extract subshapes of the requested shape type from the target */
-    private _subshapesFromTarget(target: ShapeCollection | Mesh | Curve): Array<any>
+    private _subshapesFromTarget(target: ShapeCollection | Solid | Curve): Array<any>
     {
         const shape = this.params.shape as string;
         switch (shape)
@@ -364,8 +364,8 @@ export class Selector
             case 'vertex':
                 return this._verticesFromTarget(target);
             case 'mesh':
-                if (target instanceof ShapeCollection) return target.meshes().toArray();
-                if (target instanceof Mesh) return [target];
+                if (target instanceof ShapeCollection) return target._solids().toArray();
+                if (target instanceof Solid) return [target];
                 return [];
             case 'curve':
             case 'wire':
@@ -396,7 +396,7 @@ export class Selector
 
     /** Subshapes of the target that a side selector picks from.
      *  Vertices are deduplicated by position: a mesh repeats every corner once per polygon. */
-    private _sideSubshapes(target: Mesh | Curve | ShapeCollection): Array<Polygon | Curve | Point>
+    private _sideSubshapes(target: Solid | Curve | ShapeCollection): Array<Polygon | Curve | Point>
     {
         const shape = this.params.shape as string;
         if (shape === 'face') return this._facesFromTarget(target);
@@ -404,12 +404,12 @@ export class Selector
 
         // vertex: use the corner vertices of a Curve (its control points repeat at segment joins)
         const targets = (target instanceof ShapeCollection)
-            ? [...target.meshes().toArray(), ...target.curves().toArray()]
+            ? [...target._solids().toArray(), ...target.curves().toArray()]
             : [target];
 
         const points = targets.flatMap((t: any) => this._ownedBy(
             (t instanceof Curve) ? t.vertices().toArray().map((v: Vertex) => v.toPoint())
-                                 : (t instanceof Mesh) ? t.positions() : [], t));
+                                 : (t instanceof Solid) ? t.positions() : [], t));
 
         const seen = new Set<string>();
         return points.filter((p: Point) =>
@@ -471,7 +471,7 @@ export class Selector
     private _shapeCenter(item: any): Point
     {
         if (item instanceof Point) return item;
-        if (item instanceof Polygon || item instanceof Curve || item instanceof Mesh)
+        if (item instanceof Polygon || item instanceof Curve || item instanceof Solid)
         {
             return item.center();
         }

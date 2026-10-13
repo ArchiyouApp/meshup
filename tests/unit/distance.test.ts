@@ -1,6 +1,6 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 import { Polygon } from '../../src/Polygon';
 import { Point } from '../../src/Point';
@@ -15,26 +15,26 @@ describe('distance() across shape types', () =>
 {
     // Reproduces the reported example:
     //   pl = polyline([-100,0,0],[100,0,0],[0,100,0]).close()   → a closed Curve at z=0
-    //   p  = plane(10,10)                                       → a 10×10 Mesh at z=0 (x,y ∈ [-5,5])
+    //   p  = plane(10,10)                                       → a 10×10 Solid at z=0 (x,y ∈ [-5,5])
     // The polyline's first edge runs along y=0,z=0 through x∈[-100,100], crossing the plane.
-    const makePlane = () => Curve.Rect(10, 10, [0, 0, 0]).toMesh() as Mesh;
+    const makePlane = () => Curve.Rect(10, 10, [0, 0, 0]).toMesh() as Solid;
     const makePolyline = () => Curve.Polyline([[-100, 0, 0], [100, 0, 0], [0, 100, 0]]).close();
 
-    it('Mesh.distance(Curve) is ~0 when they overlap (was 95)', () =>
+    it('Solid.distance(Curve) is ~0 when they overlap (was 95)', () =>
     {
         const p = makePlane();
         const pl = makePolyline();
         expect(p.distance(pl)).toBeCloseTo(0, 5);
     });
 
-    it('Curve.distance(Mesh) is defined and ~0 (was undefined)', () =>
+    it('Curve.distance(Solid) is defined and ~0 (was undefined)', () =>
     {
         const p = makePlane();
         const pl = makePolyline();
         expect(pl.distance(p)).toBeCloseTo(0, 5);
     });
 
-    it('Mesh.distance(Curve) returns the true gap when apart', () =>
+    it('Solid.distance(Curve) returns the true gap when apart', () =>
     {
         const p = makePlane();               // x,y ∈ [-5,5], z=0
         const line = Curve.Polyline([[20, 0, 0], [20, 100, 0]]); // nearest point x=20 → gap 15
@@ -42,9 +42,9 @@ describe('distance() across shape types', () =>
         expect(line.distance(p)).toBeCloseTo(15, 4);
     });
 
-    it('symmetric across Point / Vertex / Polygon / Mesh / Curve', () =>
+    it('symmetric across Point / Vertex / Polygon / Solid / Curve', () =>
     {
-        const mesh = Mesh.Cube(10);                    // centered cube, x,y,z ∈ [-5,5]
+        const mesh = Solid.Cube(10);                    // centered cube, x,y,z ∈ [-5,5]
         const pt = new Point([15, 0, 0]);              // 10 from the +X face
         const vx = new Vertex([15, 0, 0]);
         const poly = Polygon.from([[20, -5, 0], [20, 5, 0], [20, 5, 10], [20, -5, 10]]);

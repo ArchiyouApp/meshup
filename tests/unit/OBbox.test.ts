@@ -2,13 +2,13 @@
  *  OBbox.test.ts
  *
  *  OBbox.shape() — the real geometry of an oriented bounding box:
- *  a box Mesh (3D), a rectangle Curve (2D) or a line Curve (1D),
- *  reachable from Mesh.obbox() and Curve.obbox().
+ *  a box Solid (3D), a rectangle Curve (2D) or a line Curve (1D),
+ *  reachable from Solid.obbox() and Curve.obbox().
  */
 
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 import { OBbox } from '../../src/OBbox';
 
@@ -17,21 +17,21 @@ beforeAll(async () =>
     await initAsync();
 });
 
-describe('OBbox.shape() from a Mesh (3D)', () =>
+describe('OBbox.shape() from a Solid (3D)', () =>
 {
-    it('returns a box Mesh with the same volume as the OBB', () =>
+    it('returns a box Solid with the same volume as the OBB', () =>
     {
-        const m = Mesh.Box(200, 100, 20);
+        const m = Solid.Box(200, 100, 20);
         const shape = m.obbox().shape();
 
-        expect(shape).toBeInstanceOf(Mesh);
-        expect((shape as Mesh).volume()).toBeCloseTo(200 * 100 * 20, 0);
+        expect(shape).toBeInstanceOf(Solid);
+        expect((shape as Solid).volume()).toBeCloseTo(200 * 100 * 20, 0);
     });
 
     it('follows the shape when it is rotated (a real oriented box, not axis aligned)', () =>
     {
-        const m = Mesh.Box(200, 100, 20).rotateZ(30);
-        const shape = m.obbox().shape() as Mesh;
+        const m = Solid.Box(200, 100, 20).rotateZ(30);
+        const shape = m.obbox().shape() as Solid;
 
         // Volume stays that of the original box — an axis-aligned box would be much bigger
         expect(shape.volume()).toBeCloseTo(200 * 100 * 20, -1);
@@ -43,25 +43,25 @@ describe('OBbox.shape() from a Mesh (3D)', () =>
 
     it('wraps a tumbled shape tightly', () =>
     {
-        const m = Mesh.Box(200, 100, 20).rotateX(25).rotateY(-15).rotateZ(40);
-        const shape = m.obbox().shape() as Mesh;
+        const m = Solid.Box(200, 100, 20).rotateX(25).rotateY(-15).rotateZ(40);
+        const shape = m.obbox().shape() as Solid;
         expect(shape.volume()).toBeCloseTo(200 * 100 * 20, -2);
     });
 
     it('has outward facing faces (positive volume, right-handed frame)', () =>
     {
         // A mirrored PCA frame would build the box inside-out
-        [Mesh.Box(200, 100, 20), Mesh.Box(200, 100, 20).mirrorX(0), Mesh.Sphere(50)]
+        [Solid.Box(200, 100, 20), Solid.Box(200, 100, 20).mirrorX(0), Solid.Sphere(50)]
             .forEach(m =>
             {
-                expect((m.obbox().shape() as Mesh).volume()!).toBeGreaterThan(0);
+                expect((m.obbox().shape() as Solid).volume()!).toBeGreaterThan(0);
             });
     });
 
     it('contains all of the original shape', () =>
     {
-        const m = Mesh.Box(200, 100, 20).rotateZ(30).rotateX(20);
-        const box = m.obbox().shape() as Mesh;
+        const m = Solid.Box(200, 100, 20).rotateZ(30).rotateX(20);
+        const box = m.obbox().shape() as Solid;
         // Every vertex of the source sits inside (or on) the oriented box
         const bb = box.bbox();
         m.vertices().forEach(v =>
@@ -72,9 +72,9 @@ describe('OBbox.shape() from a Mesh (3D)', () =>
 
     it('box() is the 3D-only accessor and toShape() is an alias', () =>
     {
-        const obb = Mesh.Box(200, 100, 20).obbox();
-        expect(obb.box()).toBeInstanceOf(Mesh);
-        expect(obb.toShape()).toBeInstanceOf(Mesh);
+        const obb = Solid.Box(200, 100, 20).obbox();
+        expect(obb.box()).toBeInstanceOf(Solid);
+        expect(obb.toShape()).toBeInstanceOf(Solid);
         expect(obb.rect()).toBeNull();  // not 2D
         expect(obb.line()).toBeNull();  // not 1D
     });

@@ -13,7 +13,7 @@
  *     Nodes via gltf-transform.
  *
  *  The class is generic over S (the shape type it holds).
- *  The default S = Shape (Vertex| Curve| Polygon | Mesh ) preserves existing behaviour.
+ *  The default S = Shape (Vertex| Curve| Polygon | Solid ) preserves existing behaviour.
  *  SmartSceneNode uses S = SmartShape.
  * 
  *  NOTE: Scene management with SceneNode is optional in Meshup and not integrated into Shapes 
@@ -113,12 +113,12 @@ export class SceneNode<S extends SceneNodeShape = Shape>
     }
 
     /** Label for the node adopting `s`: the shape's own name when it has one, else a
-     *  type/subtype label ('Mesh:Box').
+     *  type/subtype label ('Solid:Box').
      *
      *  Taking the shape's name matters for shapes named while DETACHED: `Shape.name()` can
      *  only sync the node label when the shape already has a node, so a shape named before it
      *  enters the scene (`template.copy().name('stud0')`, then added via a collection) would
-     *  otherwise show up in the scenegraph as 'Mesh:Box'. */
+     *  otherwise show up in the scenegraph as 'Solid:Box'. */
     static getName<S extends SceneNodeShape>(s: S): string
     {
         const own = s.name?.();
@@ -623,7 +623,7 @@ export class SceneNode<S extends SceneNodeShape = Shape>
     }
 
     /** Display names for a node's direct children, applying the sibling `[idx]` suffix rule
-     *  ('Mesh', 'Mesh[0]', 'Mesh[1]', …). Single source of truth so toData() and path()
+     *  ('Solid', 'Solid[0]', 'Solid[1]', …). Single source of truth so toData() and path()
      *  cannot drift. Aligned with the input order. */
     static _siblingDisplayNames(children: ReadonlyArray<SceneNode<any>>): string[]
     {

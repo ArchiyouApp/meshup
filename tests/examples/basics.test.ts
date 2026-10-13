@@ -6,7 +6,7 @@
  */
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 import { Sketch } from '../../src/Sketch';
 import { Vector } from '../../src/Vector';
@@ -21,15 +21,15 @@ describe('Example: primitive meshes', () =>
 {
     it('builds a cube and checks it has geometry', () =>
     {
-        const cube = Mesh.Cube(10);
+        const cube = Solid.Cube(10);
         expect(cube.positions().length).toBeGreaterThan(0);
         expect(cube.polygons().length).toBeGreaterThan(0);
     });
 
     it('builds a sphere and checks it has more faces than a cube', () =>
     {
-        const sphere = Mesh.Sphere(5);
-        const cube = Mesh.Cube(10);
+        const sphere = Solid.Sphere(5);
+        const cube = Solid.Cube(10);
         expect(sphere.polygons().length).toBeGreaterThan(
             cube.polygons().length
         );
@@ -40,8 +40,8 @@ describe('Example: boolean modeling workflow', () =>
 {
     it('punches a hole by subtracting a smaller cube', () =>
     {
-        const box = Mesh.Cuboid(20, 20, 20);
-        const hole = Mesh.Cube(8);
+        const box = Solid.Cuboid(20, 20, 20);
+        const hole = Solid.Cube(8);
         box.difference(hole);
         expect(box.positions().length).toBeGreaterThan(0);
     });
@@ -60,7 +60,7 @@ describe('Example: sketch-to-solid workflow', () =>
             .extrude(10);
 
         expect(mesh).toBeTruthy();
-        expect((mesh as Mesh).polygons().length).toBeGreaterThan(0);
+        expect((mesh as Solid).polygons().length).toBeGreaterThan(0);
     });
 });
 
@@ -107,8 +107,8 @@ describe('Example: collection workflow', () =>
 {
     it('collects two meshes and iterates over them', () =>
     {
-        const a = Mesh.Cube(5);
-        const b = Mesh.Cube(5);
+        const a = Solid.Cube(5);
+        const b = Solid.Cube(5);
         b.translate([10, 0, 0]);
 
         const col = new ShapeCollection(a, b);
@@ -117,7 +117,7 @@ describe('Example: collection workflow', () =>
         let totalVertices = 0;
         col.shapes().forEach(s =>
         {
-            totalVertices += (s as Mesh).positions().length;
+            totalVertices += (s as Solid).positions().length;
         });
         expect(totalVertices).toBeGreaterThan(0);
     });

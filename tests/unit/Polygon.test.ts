@@ -1,7 +1,7 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Polygon } from '../../src/Polygon';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 import { ShapeCollection } from '../../src/ShapeCollection';
 import { Bbox } from '../../src/Bbox';
@@ -70,7 +70,7 @@ describe('Polygon construction', () =>
 
     it('Polygon.from() wraps a raw PolygonJs', () =>
     {
-        const rawPolygons = Mesh.Cube(1).polygons();
+        const rawPolygons = Solid.Cube(1).polygons();
         expect(rawPolygons.length).toBeGreaterThan(0);
         const p = rawPolygons[0];
         expect(p).instanceOf(Polygon);
@@ -131,11 +131,11 @@ describe('Polygon.triangulate()', () =>
 
 describe('Polygon.extrude()', () =>
 {
-    it('returns a Mesh', () =>
+    it('returns a Solid', () =>
     {
         const p = new Polygon(SQUARE);
         const m = p.extrude(2);
-        expect(m).instanceOf(Mesh);
+        expect(m).instanceOf(Solid);
     });
 
     it('extruded mesh has vertices', () =>
@@ -177,11 +177,11 @@ describe('Polygon.extrude()', () =>
     // Regression: extruding *against* the polygon normal used to produce an inverted solid
     // (all faces pointing inward). Such a mesh reports a positive volume but behaves like a
     // hole in boolean ops, so subtracting it from a box kept the box unchanged (or grew it)
-    // instead of carving it out — which broke Mesh.cutoffBy()/intersection() downstream.
-    const carvesCleanly = (solid: Mesh): void =>
+    // instead of carving it out — which broke Solid.cutoffBy()/intersection() downstream.
+    const carvesCleanly = (solid: Solid): void =>
     {
         const bb = solid.bbox();
-        const box = Mesh.BoxBetween(
+        const box = Solid.BoxBetween(
             [bb.min().x - 10, bb.min().y - 10, bb.min().z - 10],
             [bb.max().x + 10, bb.max().y + 10, bb.max().z + 10],
         );
@@ -205,8 +205,8 @@ describe('Polygon.extrude()', () =>
 
     it('a closed planar Curve extrudes into an outward-oriented solid (usable as a cutter)', () =>
     {
-        const solid = Curve.Rect(4, 3).close().extrude(2, [0, 0, -1]) as Mesh;
-        expect(solid).instanceOf(Mesh);
+        const solid = Curve.Rect(4, 3).close().extrude(2, [0, 0, -1]) as Solid;
+        expect(solid).instanceOf(Solid);
         carvesCleanly(solid);
     });
 });
@@ -275,11 +275,11 @@ describe('Polygon.offset()', () =>
     });
 });
 
-describe('Mesh.polygons()', () =>
+describe('Solid.polygons()', () =>
 {
     it('returns Polygon instances', () =>
     {
-        const m = Mesh.Cube(2);
+        const m = Solid.Cube(2);
         const polys = m.polygons();
         expect(polys.length).toBeGreaterThan(0);
         polys.forEach(p =>
@@ -290,7 +290,7 @@ describe('Mesh.polygons()', () =>
 
     it('each polygon has at least 3 vertices', () =>
     {
-        const m = Mesh.Cube(2);
+        const m = Solid.Cube(2);
         m.polygons().forEach(p =>
         {
             expect(p.vertices().length).toBeGreaterThanOrEqual(3);
@@ -414,7 +414,7 @@ describe('Polygon.distance()', () =>
     it('measures distance to a separated mesh', () =>
     {
         const p = new Polygon(SQUARE);
-        const cube = Mesh.Cube(1).move(0.5, 0.5, 5.5);
+        const cube = Solid.Cube(1).move(0.5, 0.5, 5.5);
         expect(p.distance(cube)).toBeCloseTo(5, 6);
     });
 });

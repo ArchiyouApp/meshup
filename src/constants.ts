@@ -77,7 +77,7 @@ export const SELECTOR_SHAPES = ['mesh', 'curve', 'face', 'edge', 'wire','vertex'
  *  isometric view. A direction from the origin toward the viewer. */
 export const ISOMETRY_CAM_DEFAULT: [number, number, number] = [-1, -1, 1];
 
-/** What {@link Mesh._projectEdges} fills in for a setting the caller leaves out. The
+/** What {@link Solid._projectEdges} fills in for a setting the caller leaves out. The
  *  projection entry points (`isometry()`, `elevation()`, `section()`) take their numbers from
  *  here too, so there is one default per setting. */
 export const EDGE_PROJECTION_DEFAULTS = {
@@ -93,7 +93,7 @@ export const EDGE_PROJECTION_DEFAULTS = {
  */
 export const HLR_STRATEGIES = ['raycast', 'exact', 'clip', 'painter'] as const;
 
-/** The hidden-line algorithm {@link Mesh.isometry} (and `elevation` / `section` and their
+/** The hidden-line algorithm {@link Solid.isometry} (and `elevation` / `section` and their
  *  collection equivalents) use when the caller names none.
  *
  *  `'exact'`: occlusion is solved as exact parametric intervals, so segment endpoints land

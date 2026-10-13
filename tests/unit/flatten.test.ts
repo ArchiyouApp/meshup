@@ -1,9 +1,9 @@
-/** flatten() across Mesh / Curve / ShapeCollection.
+/** flatten() across Solid / Curve / ShapeCollection.
  *  Flattening collapses geometry onto a coordinate plane (default 'z' → the XY plane) and
  *  filters out the doubles that creates — the brep kernel's Solid.flatten() equivalent. */
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 import { ShapeCollection } from '../../src/ShapeCollection';
 import { Vertex } from '../../src/Vertex';
@@ -13,11 +13,11 @@ beforeAll(async () =>
     await initAsync();
 });
 
-describe('Mesh.flatten()', () =>
+describe('Solid.flatten()', () =>
 {
     it('defaults to axis z and keeps a single face for a box', () =>
     {
-        const flat = Mesh.Box(100, 50, 20).moveZ(30).flatten();
+        const flat = Solid.Box(100, 50, 20).moveZ(30).flatten();
 
         expect(flat.polygons().length).toEqual(1);
         expect(flat.polygons().toArray()[0].vertices().length).toEqual(4);
@@ -29,7 +29,7 @@ describe('Mesh.flatten()', () =>
 
     it("collapses along the given axis, not always z", () =>
     {
-        const flat = Mesh.Box(100, 50, 20).flatten('x');
+        const flat = Solid.Box(100, 50, 20).flatten('x');
 
         expect(flat.polygons().length).toEqual(1);
         expect(flat.bbox().min().x).toBeCloseTo(0);
@@ -95,7 +95,7 @@ describe('ShapeCollection.flatten()', () =>
             quoted as a fraction landed at the wrong place, and bbox().back().dim() measured a
             282-tall side of a drawing with no height, which a plan view can only draw as a
             number with no line under it. */
-        const col = new ShapeCollection<any>(Mesh.Box(100, 50, 20), new Vertex([0, 0, 282])).flatten();
+        const col = new ShapeCollection<any>(Solid.Box(100, 50, 20), new Vertex([0, 0, 282])).flatten();
 
         expect(col.bbox().max().z).toBeCloseTo(0);
         expect(col.bbox().min().z).toBeCloseTo(0);
@@ -103,11 +103,11 @@ describe('ShapeCollection.flatten()', () =>
 
     it('flattens every shape and removes shapes that become identical', () =>
     {
-        const a = Mesh.Box(100, 50, 20);
-        const b = Mesh.Box(100, 50, 20).moveZ(200); // same footprint, different height
-        const c = Mesh.Box(60, 60, 20).moveX(500);
+        const a = Solid.Box(100, 50, 20);
+        const b = Solid.Box(100, 50, 20).moveZ(200); // same footprint, different height
+        const c = Solid.Box(60, 60, 20).moveX(500);
 
-        const col = new ShapeCollection<Mesh>(a, b, c).flatten();
+        const col = new ShapeCollection<Solid>(a, b, c).flatten();
 
         expect(col.length).toEqual(2);
         expect(col.toArray().every(m => m.bbox().max().z === 0)).toEqual(true);
@@ -124,7 +124,7 @@ describe('ShapeCollection.flatten()', () =>
         const brepCollection = { isShapeClass: () => true, isShapeCollection: () => true, toArray: () => faces };
         const shell = { isShapeClass: () => true, isShapeCollection: () => false, _id: 's1', flatten: () => brepCollection };
 
-        const col = new ShapeCollection<any>(Mesh.Box(100, 50, 20)).add(shell as any).flatten();
+        const col = new ShapeCollection<any>(Solid.Box(100, 50, 20)).add(shell as any).flatten();
 
         expect(col.length).toEqual(3); // the mesh box, and faces A and B once each
         expect(col.toArray().slice(1)).toEqual([faces[0], faces[2]]);

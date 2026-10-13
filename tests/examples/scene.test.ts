@@ -1,7 +1,7 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync, Point } from '../../src/index';
 import { ShapeCollection } from '../../src/ShapeCollection';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 import { SceneNode } from '../../src/SceneNode';
 import { save } from '../../src/utils';
@@ -19,14 +19,14 @@ describe('Set up a basic scene hierarchy and export', () =>
 {
     it('Create a scene hierarchy and export to GLTF', async () =>
     {
-        const cyl = Mesh.Cylinder(5, 10).color('blue');
+        const cyl = Solid.Cylinder(5, 10).color('blue');
 
-        const cubes = Mesh.Cube(10)
+        const cubes = Solid.Cube(10)
                         .replicate(4, (c,i) => c.move(i*15, 0, 0).color(255-i*50, 0, 0))
                         .moveTo(0,0,0)
                         .moveZ(20);
 
-        const spheres = Mesh.Sphere(5)
+        const spheres = Solid.Sphere(5)
                             .row(3, 10)
                             .color('yellow')
                             .moveTo(0,0,0)
@@ -50,7 +50,7 @@ describe('Set up a basic scene hierarchy and export', () =>
         expect(lineLayer.shapes().length).toBe(lines.length);
 
         cyl.copy().move(20).opacity(0.5);
-        expect(scene.findAll(c => c.name === 'Mesh:Cylinder')?.length).toBe(2);
+        expect(scene.findAll(c => c.name === 'Solid:Cylinder')?.length).toBe(2);
 
         const gltf = await scene.toGLTF();
         expect(gltf).toBeTruthy();
@@ -60,9 +60,9 @@ describe('Set up a basic scene hierarchy and export', () =>
 
 describe('glTF extension exports', () =>
 {
-    it('Mesh with stroke style emits EXT_mesh_primitive_edge_visibility and BENTLEY_materials_line_style', async () =>
+    it('Solid with stroke style emits EXT_mesh_primitive_edge_visibility and BENTLEY_materials_line_style', async () =>
     {
-        const box = Mesh.Cube(10);
+        const box = Solid.Cube(10);
         box.style.strokeWidth = 3;
         box.style.strokeDash = [5, 2];
 

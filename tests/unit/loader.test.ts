@@ -14,7 +14,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { init, isInitialized, Mesh } from '../../src/index';
+import { init, isInitialized, Solid } from '../../src/index';
 
 const WASM_PATH = fileURLToPath(new URL('../../src/wasm/meshup_bg.wasm', import.meta.url));
 
@@ -38,7 +38,7 @@ describe('loader: explicit wasm source', () =>
         await init({ wasm: readFileSync(WASM_PATH) });
         expect(isInitialized()).toBe(true);
 
-        const cube = Mesh.Cube(10);
+        const cube = Solid.Cube(10);
         expect(cube.bbox().width()).toBeCloseTo(10);
     });
 });

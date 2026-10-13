@@ -13,7 +13,7 @@ fluent, chainable JS API — built as the modeling kernel for
 
 ## Features
 
-- **Shapes**: `Mesh` (solids: cube, sphere, cylinder, custom polygons/points, SDF) and
+- **Shapes**: `Solid` (cube, sphere, cylinder, custom polygons/points, SDF) and
   `Curve` (2D/3D: lines, polylines, arcs, circles, ellipses/elliptical arcs, rectangles,
   interpolated splines, compounds) as first-class, chainable objects.
 - **CSG booleans**: `union`, `difference`/`subtract`, `intersection`, `split` on meshes; exact 2D
@@ -46,7 +46,7 @@ fluent, chainable JS API — built as the modeling kernel for
 - **Export**: glTF/GLB via `GLTFBuilder`/`SceneNode.toGLTF()`/`toGLB()`, including custom
   extensions for line style, point style, and edge visibility; SVG for 2D line work
   (`ShapeCollection.toSVG()`, `SceneNode.toSVG()`); STL via
-  `Mesh.toSTLBinary()`/`toSTLAscii()`.
+  `Solid.toSTLBinary()`/`toSTLAscii()`.
 - **Import**: `Importer`/static `from*` factories for SVG, GeoJSON, DXF (2D curves), and
   OBJ, STL, glTF/GLB, AMF, 3MF (meshes) — auto-detected via `Importer.load()`.
 
@@ -62,12 +62,12 @@ Meshup loads its WASM kernel asynchronously. Call `init()` once before using any
 classes:
 
 ```ts
-import { init, Mesh, Curve, Point } from '@archiyou/meshup';
+import { init, Solid, Curve, Point } from '@archiyou/meshup';
 
 await init();
 
-const box = Mesh.Cube(10).moveTo([0, 0, 5]).color('blue');
-const hole = Mesh.Cylinder(3, 20).moveTo([0, 0, 5]);
+const box = Solid.Cube(10).moveTo([0, 0, 5]).color('blue');
+const hole = Solid.Cylinder(3, 20).moveTo([0, 0, 5]);
 
 const result = box.difference(hole);
 
@@ -77,11 +77,11 @@ const glb = await result.toGLB(); // Uint8Array, ready to save or stream
 ### Node.js
 
 ```ts
-import { init, Mesh } from '@archiyou/meshup';
+import { init, Solid } from '@archiyou/meshup';
 import { writeFileSync } from 'node:fs';
 
 await init();
-const mesh = Mesh.Sphere(10);
+const mesh = Solid.Sphere(10);
 writeFileSync('sphere.glb', await mesh.toGLB());
 ```
 
@@ -89,10 +89,10 @@ writeFileSync('sphere.glb', await mesh.toGLB());
 
 ```html
 <script type="module">
-  import { init, Mesh } from 'https://esm.sh/@archiyou/meshup';
+  import { init, Solid } from 'https://esm.sh/@archiyou/meshup';
 
   await init();
-  const mesh = Mesh.Cylinder(5, 10).color('red');
+  const mesh = Solid.Cylinder(5, 10).color('red');
   const glb = await mesh.toGLB(); // feed into three.js / Babylon.js GLTFLoader
 </script>
 ```
@@ -155,25 +155,25 @@ const gltf = await all.toGLTF(); // or all.toSVG()
 
 ```ts
 
-import { initAsync, Mesh, 
+import { initAsync, Solid, 
       Polygon, ShapeCollection } 
   from '@archiyou/meshup';
 
 await initAsync();
 
 // boxes
-const bx1 = Mesh.Box(50).color('blue');
-const bx2 = Mesh.Box(50, 40, 100)
+const bx1 = Solid.Box(50).color('blue');
+const bx2 = Solid.Box(50, 40, 100)
               .move(100).color('blue');
-const bx3 = Mesh.BoxBetween(
+const bx3 = Solid.BoxBetween(
                 [170, 50, 0], [220, -30, 40])
               .color('blue');
-const bx4 = Mesh.BoxBetween(
+const bx4 = Solid.BoxBetween(
               [250, 0, 0], [280, 10, 200])
                 .color('blue');
 
 // others
-const sph = Mesh.Sphere(30)
+const sph = Solid.Sphere(30)
               .move(0, -150).color('red');
 const pl = Polygon.planeBetween(
           [50, 0, 0], [120, 30, 0])
@@ -199,15 +199,15 @@ const stack3 = extr2.copy()
 
 // booleans
 const boolbox = bx2.copy().moveTo(600)
-    .subtract(sph.copy().moveTo(600)) as Mesh;
+    .subtract(sph.copy().moveTo(600)) as Solid;
 
 boolbox.subtract(
-    Mesh.Box(40).align(
+    Solid.Box(40).align(
         boolbox.select('V||topfrontright'),
         'center',
         'center')
 ).union(
-    Mesh.Box(20, 20, 40).align(
+    Solid.Box(20, 20, 40).align(
         boolbox.select('V||topbackleft'),
         'center',
         'center')
@@ -224,13 +224,13 @@ const glb = await all.toGLB();
 ### Manage your scene
 
 ```ts
-import { init, Mesh, SceneNode } from '@archiyou/meshup';
+import { init, Solid, SceneNode } from '@archiyou/meshup';
 
 await init();
 
 const scene = SceneNode.root();
-scene.addLayer('walls', Mesh.Cube(100));
-scene.addLayer('roof', Mesh.Cylinder(50, 20).moveToZ(100));
+scene.addLayer('walls', Solid.Cube(100));
+scene.addLayer('roof', Solid.Cylinder(50, 20).moveToZ(100));
 
 const glb = await scene.toGLB();
 ```
@@ -276,7 +276,7 @@ Things are the radar:
   whole result a plain Array
 - `Sketch.loft()` does not work
 -  no PLY import yet
-- `Mesh.edges()` classifies an edge by the angle between adjacent face normals, so a
+- `Solid.edges()` classifies an edge by the angle between adjacent face normals, so a
   smooth-shaded curved surface (sphere, cylinder wall) yields many near-coplanar edges.
   Raise `featureAngle` to thin them out.
 

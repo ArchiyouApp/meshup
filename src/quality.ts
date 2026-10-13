@@ -6,7 +6,7 @@
  *  mesh is triangles, and every export is line segments, so *somewhere* the exact geometry
  *  has to be sampled down. That sampling used to be governed by four unrelated numbers
  *  scattered across two languages — a chord tolerance in `constants.ts`, two segment counts
- *  in `Mesh.ts`, two file-private per-turn counts in `Curve.ts`, and a chord error in the
+ *  in `Solid.ts`, two file-private per-turn counts in `Curve.ts`, and a chord error in the
  *  Rust kernel that did not even agree with the TypeScript one.
  *
  *  A quality profile bundles them. Pick a preset by name, or override individual dials:
@@ -27,7 +27,7 @@
  *  true arc" asks for 226 points on a circle of radius 10 and 2224 on one of radius 1000 —
  *  and the same model authored in millimetres rather than metres asks for a thousand times
  *  more again. That is what meshup used to do, and it is why extruding a `Curve.Circle(100)`
- *  cost 708 polygons and 220 ms where the equivalent `Mesh.Cylinder` cost 96 and 1 ms.
+ *  cost 708 polygons and 220 ms where the equivalent `Solid.Cylinder` cost 96 and 1 ms.
  *
  *  How far an arc *turns* has no units and no size. Fixing the facets per full turn fixes
  *  the cost of a circle at every radius, in every unit — which is what a renderer, a mesh
@@ -73,11 +73,11 @@ export interface QualitySettings
      *  their sweep, per full turn. Matched to {@link loftSegmentsPerTurn} so a circle comes
      *  out equally smooth whether it was lofted or revolved. */
     revolveSegmentsPerTurn: number;
-    /** Facets around `Mesh.Sphere()`. */
+    /** Facets around `Solid.Sphere()`. */
     sphereSegmentsWidth: number;
-    /** Facets from pole to pole on `Mesh.Sphere()`. */
+    /** Facets from pole to pole on `Solid.Sphere()`. */
     sphereSegmentsHeight: number;
-    /** Facets around `Mesh.Cylinder()`. */
+    /** Facets around `Solid.Cylinder()`. */
     cylinderSegmentsRadial: number;
 }
 
@@ -218,7 +218,7 @@ function pushToKernel(): void
  *
  *  Takes effect immediately, for shapes built from here on. Geometry already built keeps the
  *  points it was sampled with — exact curves are re-sampled on every operation, so a Curve
- *  follows the new profile, but a Mesh that has already been triangulated does not.
+ *  follows the new profile, but a Solid that has already been triangulated does not.
  *
  *  @returns the resolved profile now in force.
  */

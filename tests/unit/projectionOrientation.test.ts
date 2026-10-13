@@ -6,7 +6,7 @@
  * the direction toward the viewer is R x U, and that must be `c`. A mirror image gives -c: the
  * drawing is then the view from the other side, flipped.
  *
- * BUG (fixed 2026-10-08): `Mesh.isometry`, `Mesh.elevation`, `Mesh.section` and their
+ * BUG (fixed 2026-10-08): `Solid.isometry`, `Solid.elevation`, `Solid.section` and their
  * ShapeCollection counterparts handed `_flattenProjectionToScreen` the plane normal reversed,
  * pointing away from the viewer; and when the up vector landed upside down the flatten turned it
  * 180° around X, which is a mirror too. The two cancelled for the front elevation (and a section
@@ -19,7 +19,7 @@
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { Mesh, ShapeCollection, initAsync } from '../../src/index';
+import { Solid, ShapeCollection, initAsync } from '../../src/index';
 
 beforeAll(async () =>
 {
@@ -60,11 +60,11 @@ function expectViewFrom(drawing: ShapeCollection<any>, cam: V3): void
 }
 
 /** One asymmetric mesh, and the same split in three for the collection paths */
-const single = () => Mesh.BoxBetween([0, 0, 0], [300, 150, 10]);
+const single = () => Solid.BoxBetween([0, 0, 0], [300, 150, 10]);
 const several = () => new ShapeCollection([
-    Mesh.BoxBetween([0, 0, 0], [300, 150, 10]),
-    Mesh.BoxBetween([0, 0, 0], [20, 20, 200]),
-    Mesh.BoxBetween([240, 100, 10], [300, 150, 80]),
+    Solid.BoxBetween([0, 0, 0], [300, 150, 10]),
+    Solid.BoxBetween([0, 0, 0], [20, 20, 200]),
+    Solid.BoxBetween([240, 100, 10], [300, 150, 80]),
 ]);
 
 describe('projection orientation: a view, never a mirror image', () =>
@@ -73,7 +73,7 @@ describe('projection orientation: a view, never a mirror image', () =>
     {
         Object.entries(VIEWS).forEach(([name, cam]) =>
         {
-            it(`Mesh: ${name}`, () => expectViewFrom(single().elevation(name as any), cam));
+            it(`Solid: ${name}`, () => expectViewFrom(single().elevation(name as any), cam));
             it(`ShapeCollection: ${name}`, () => expectViewFrom(several().elevation(name as any), cam));
         });
     });
@@ -82,7 +82,7 @@ describe('projection orientation: a view, never a mirror image', () =>
     {
         CAMS.forEach(cam =>
         {
-            it(`Mesh.isometry ${cam}`, () => expectViewFrom(single().isometry(cam), cam));
+            it(`Solid.isometry ${cam}`, () => expectViewFrom(single().isometry(cam), cam));
             it(`ShapeCollection.iso ${cam}`, () => expectViewFrom(several().iso(cam), cam));
         });
     });
@@ -95,7 +95,7 @@ describe('projection orientation: a view, never a mirror image', () =>
 
     describe('section(pivot, normal): the viewer looks along -normal', () =>
     {
-        it('Mesh: a floor plan is seen from above, x to the right and y up', () =>
+        it('Solid: a floor plan is seen from above, x to the right and y up', () =>
         {
             const plan = single().section([0, 0, 5], [0, 0, 1]);
             expectViewFrom(plan, [0, 0, 1]);

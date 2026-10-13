@@ -16,7 +16,7 @@
  */
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { save } from '../../src/utils';
 import { ShapeCollection } from '../../src/ShapeCollection';
 import type { HlrStrategy } from '../../src/types';
@@ -37,14 +37,14 @@ function visibleCount(result: ShapeCollection<any>): number
 }
 
 /** A grid of separated boxes — the shape of a real assembly drawing. */
-function boxGrid(n: number, size = 10, gap = 15): ShapeCollection<Mesh>
+function boxGrid(n: number, size = 10, gap = 15): ShapeCollection<Solid>
 {
-    const boxes: Mesh[] = [];
+    const boxes: Solid[] = [];
     for (let x = 0; x < n; x++)
         for (let y = 0; y < n; y++)
             for (let z = 0; z < n; z++)
-                boxes.push(Mesh.Cube(size).move(x * gap, y * gap, z * gap));
-    return new ShapeCollection<Mesh>(...boxes);
+                boxes.push(Solid.Cube(size).move(x * gap, y * gap, z * gap));
+    return new ShapeCollection<Solid>(...boxes);
 }
 
 beforeAll(async () =>
@@ -58,7 +58,7 @@ describe('HLR strategies: agreement on the easy cases', () =>
     {
         for (const strategy of ALL_STRATEGIES)
         {
-            const iso = Mesh.Cube(100).isometry([-1, -1, 1], { hiddenLines: true, samples: 16, featureAngle: 10, method: strategy });
+            const iso = Solid.Cube(100).isometry([-1, -1, 1], { hiddenLines: true, samples: 16, featureAngle: 10, method: strategy });
 
             // 12 edges: 9 visible, 3 hidden behind the solid.
             expect(visibleCount(iso), `${strategy}: visible`).toBe(9);
@@ -71,9 +71,9 @@ describe('HLR strategies: agreement on the easy cases', () =>
 
     it('two separated boxes keep all their edges under every strategy', async () =>
     {
-        const boxes = new ShapeCollection<Mesh>(
-            Mesh.Cube(20),
-            Mesh.Cube(20).move(60, 0, 0),
+        const boxes = new ShapeCollection<Solid>(
+            Solid.Cube(20),
+            Solid.Cube(20).move(60, 0, 0),
         );
         for (const strategy of ALL_STRATEGIES)
         {
@@ -93,16 +93,16 @@ describe('HLR strategies: the cases that motivated the alternatives', () =>
         // A long slab with a narrow post standing in front of it. The post is
         // far thinner than the sampling solver's probe spacing along the slab.
         //
-        // Compared at the Mesh level rather than through a collection so both
+        // Compared at the Solid level rather than through a collection so both
         // strategies take the identical path and the only difference is how
         // visibility is decided — a collection would BSP-merge the two shapes
         // first, which changes the geometry itself.
-        // Mesh.Box takes explicit per-axis sizes and is centred on the origin.
-        // (Mesh.scale is a uniform scale about a pivot, not a per-axis one.)
+        // Solid.Box takes explicit per-axis sizes and is centred on the origin.
+        // (Solid.scale is a uniform scale about a pivot, not a per-axis one.)
         // Slab spans x -500..500; the post is 0.4 wide in x and stands clear
         // above it, so it occludes a 0.4-long bite out of each long edge.
-        const slab = Mesh.Box(1000, 40, 1);
-        const post = Mesh.Box(0.4, 200, 20).move(0, 0, 15);
+        const slab = Solid.Box(1000, 40, 1);
+        const post = Solid.Box(0.4, 200, 20).move(0, 0, 15);
 
         const postWidthSpans = (strategy: HlrStrategy) =>
         {
@@ -115,7 +115,7 @@ describe('HLR strategies: the cases that motivated the alternatives', () =>
                     samples: 16,
                     strategy,
                 },
-                new ShapeCollection<Mesh>(post),
+                new ShapeCollection<Solid>(post),
             );
             // Count only spans the width of the post; the slab is a solid, so
             // its underside is hidden by its own top face in both solvers.
@@ -134,7 +134,7 @@ describe('HLR strategies: the cases that motivated the alternatives', () =>
         expect(postWidthSpans('raycast')).toBe(0);
         expect(postWidthSpans('exact')).toBeGreaterThan(0);
 
-        const scene = new ShapeCollection<Mesh>(slab, post);
+        const scene = new ShapeCollection<Solid>(slab, post);
         for (const strategy of ALL_STRATEGIES)
         {
             const iso = scene.iso([-1, -1, 1], { hiddenLines: true, samples: 16, featureAngle: 10, method: strategy });
@@ -146,9 +146,9 @@ describe('HLR strategies: the cases that motivated the alternatives', () =>
     {
         // Two cubes flush against each other. The shared face is coplanar with
         // both, so it must hide neither.
-        const scene = new ShapeCollection<Mesh>(
-            Mesh.Cube(20),
-            Mesh.Cube(20).move(20, 0, 0),
+        const scene = new ShapeCollection<Solid>(
+            Solid.Cube(20),
+            Solid.Cube(20).move(20, 0, 0),
         );
 
         for (const strategy of ALL_STRATEGIES)
@@ -179,10 +179,10 @@ describe('HLR strategies: per-shape output', () =>
 {
     it('tags one group per source shape, ordered back to front', async () =>
     {
-        const scene = new ShapeCollection<Mesh>(
-            Mesh.Cube(20),
-            Mesh.Cube(20).move(60, 0, 0),
-            Mesh.Cube(20).move(120, 0, 0),
+        const scene = new ShapeCollection<Solid>(
+            Solid.Cube(20),
+            Solid.Cube(20).move(60, 0, 0),
+            Solid.Cube(20).move(120, 0, 0),
         );
         const iso = scene.iso([-1, -1, 1], { samples: 16, featureAngle: 10, method: 'clip' });
 
@@ -198,9 +198,9 @@ describe('HLR strategies: per-shape output', () =>
         // Two separated boxes offset along the view direction, so they land on
         // top of each other on screen while staying disjoint in space — one is
         // squarely in front of the other.
-        const scene = new ShapeCollection<Mesh>(
-            Mesh.Cube(20),
-            Mesh.Cube(20).move(-40, -40, 40),
+        const scene = new ShapeCollection<Solid>(
+            Solid.Cube(20),
+            Solid.Cube(20).move(-40, -40, 40),
         );
 
         const clip = scene.iso([-1, -1, 1], { samples: 16, featureAngle: 10, method: 'clip' });
@@ -229,8 +229,8 @@ describe('HLR strategies: per-shape output', () =>
     {
         // A cube with a notch taken out is not convex, so "a face is visible
         // iff it faces the viewer" no longer holds.
-        const notched = Mesh.Cube(40).subtract(Mesh.Cube(20).move(20, 20, 20));
-        const scene = new ShapeCollection<Mesh>(notched, Mesh.Cube(20).move(80, 0, 0));
+        const notched = Solid.Cube(40).subtract(Solid.Cube(20).move(20, 20, 20));
+        const scene = new ShapeCollection<Solid>(notched, Solid.Cube(20).move(80, 0, 0));
 
         expect(() => scene.iso([-1, -1, 1], { samples: 16, featureAngle: 10, method: 'clip' }))
             .toThrow(/convex/i);
@@ -238,8 +238,8 @@ describe('HLR strategies: per-shape output', () =>
 
     it('downgrades instead of throwing when asked to', () =>
     {
-        const notched = Mesh.Cube(40).subtract(Mesh.Cube(20).move(20, 20, 20));
-        const scene = new ShapeCollection<Mesh>(notched, Mesh.Cube(20).move(80, 0, 0));
+        const notched = Solid.Cube(40).subtract(Solid.Cube(20).move(20, 20, 20));
+        const scene = new ShapeCollection<Solid>(notched, Solid.Cube(20).move(80, 0, 0));
 
         const iso = scene.iso([-1, -1, 1], { samples: 16, featureAngle: 10, method: 'clip', fallback: true });
         expect(visibleCount(iso)).toBeGreaterThan(0);

@@ -15,6 +15,7 @@ import { loadAsync } from './loader'; // Loader for the WASM module
 import { syncQualityToKernel } from './quality';
 import type { InitOptions } from './loader';
 import type { CsgrsModule } from './types';
+import { Solid } from './Solid';
 
 // Global state
 let _csgrs: CsgrsModule | null = null;
@@ -68,7 +69,12 @@ export { Point } from './Point';
 export { Vector } from './Vector';
 export { Vertex } from './Vertex';
 export { Shape } from './Shape';
-export { Mesh } from './Mesh';
+export { Solid } from './Solid';
+/** @deprecated Renamed to Solid, the name both kernels use. `Mesh` is the same class:
+ *  `Mesh.Box()`, `new Mesh()` and `instanceof Mesh` keep working. */
+export const Mesh = Solid;
+/** @deprecated Renamed to Solid. */
+export type Mesh = Solid;
 export { Polygon } from './Polygon';
 export { Curve } from './Curve';
 export { ShapeCollection } from './ShapeCollection';

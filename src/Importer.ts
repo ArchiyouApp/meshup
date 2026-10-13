@@ -5,28 +5,28 @@
  *
  *  Geometry parsing happens in the Rust/WASM kernel (csgrs); this module
  *  detects the format, routes the bytes/text to the right WASM entry, and
- *  assembles the result into native meshup objects (Curve / Mesh wrapped in a
+ *  assembles the result into native meshup objects (Curve / Solid wrapped in a
  *  ShapeCollection, or a SceneNode for hierarchical scenes).
  *
  *  Supported:
  *    - SVG      → ShapeCollection<Curve>   via SketchJs.fromSVG
  *    - GeoJSON  → ShapeCollection<Curve>   via SketchJs.fromGeo (through a
  *                 standard-GeoJSON → geo-native shim; see _geometryToGeoNative)
- *    - OBJ      → ShapeCollection<Mesh>    via MeshJs.fromOBJ
- *    - STL      → ShapeCollection<Mesh>    via MeshJs.fromSTL (binary + ASCII)
+ *    - OBJ      → ShapeCollection<Solid>    via MeshJs.fromOBJ
+ *    - STL      → ShapeCollection<Solid>    via MeshJs.fromSTL (binary + ASCII)
  *    - DXF      → ShapeCollection<Curve>   via importDxfCurves (2-D curves, exact:
  *                 bulges, arcs, ellipses and splines all survive; INSERTs are resolved
- *                 against the block table. Use Mesh.fromDXF for DXF solids as a mesh)
- *    - glTF/GLB → ShapeCollection<Mesh>    via MeshJs.fromGLTF (merged mesh;
+ *                 against the block table. Use Solid.fromDXF for DXF solids as a mesh)
+ *    - glTF/GLB → ShapeCollection<Solid>    via MeshJs.fromGLTF (merged mesh;
  *                 materials/hierarchy flattened, Y-up→Z-up)
- *    - AMF      → ShapeCollection<Mesh>    via MeshJs.fromAMF (plain or zipped)
- *    - 3MF      → ShapeCollection<Mesh>    via MeshJs.from3MF (geometry only)
+ *    - AMF      → ShapeCollection<Solid>    via MeshJs.fromAMF (plain or zipped)
+ *    - 3MF      → ShapeCollection<Solid>    via MeshJs.from3MF (geometry only)
  *
  *  Reserved (throw until the Rust importers land — see the Importer plan):
- *    - PLY   (3D → Mesh)
+ *    - PLY   (3D → Solid)
  */
 
-import { getCsgrs, ShapeCollection, Curve, Mesh } from './index';
+import { getCsgrs, ShapeCollection, Curve, Solid } from './index';
 import type { SketchJs } from './wasm/meshup';
 import type { Axis } from './types';
 
@@ -42,7 +42,7 @@ export interface ImportOptions
     name?: string;
     /** glTF only: the up axis **inside the file**. Defaults to `'z'`, which is what
      *  meshup itself writes; pass `'y'` for a conforming glTF from Blender/three.js,
-     *  or the model arrives lying on its side. See {@link Mesh.fromGLTF}. */
+     *  or the model arrives lying on its side. See {@link Solid.fromGLTF}. */
     up?: Axis;
 }
 
@@ -279,15 +279,15 @@ export class Importer
     //// MESH FORMATS ////
 
     /** Import a Wavefront OBJ mesh. */
-    static fromOBJ(data: string | Uint8Array | ArrayBuffer, _opts: ImportOptions = {}): ShapeCollection<Mesh>
+    static fromOBJ(data: string | Uint8Array | ArrayBuffer, _opts: ImportOptions = {}): ShapeCollection<Solid>
     {
-        return new ShapeCollection<Mesh>(Mesh.fromOBJ(Importer._toText(data)));
+        return new ShapeCollection<Solid>(Solid.fromOBJ(Importer._toText(data)));
     }
 
     /** Import a binary or ASCII STL mesh. */
-    static fromSTL(data: string | Uint8Array | ArrayBuffer, _opts: ImportOptions = {}): ShapeCollection<Mesh>
+    static fromSTL(data: string | Uint8Array | ArrayBuffer, _opts: ImportOptions = {}): ShapeCollection<Solid>
     {
-        return new ShapeCollection<Mesh>(Mesh.fromSTL(Importer._toBytes(data)));
+        return new ShapeCollection<Solid>(Solid.fromSTL(Importer._toBytes(data)));
     }
 
     /** Import a DXF drawing as 2-D curves, exactly.
@@ -298,7 +298,7 @@ export class Importer
      *  array applied) are read rather than discarded. Entity types with no curve meaning
      *  are counted and reported through console warnings.
      *
-     *  For DXF solids as a mesh, use {@link Mesh.fromDXF} instead. */
+     *  For DXF solids as a mesh, use {@link Solid.fromDXF} instead. */
     static fromDXF(data: string | Uint8Array | ArrayBuffer, _opts: ImportOptions = {}): ShapeCollection<Curve>
     {
         const bytes = Importer._toBytes(data);
@@ -352,23 +352,23 @@ export class Importer
         }
     }
 
-    /** Import a glTF 2.0 model (.glb or .gltf) as a merged Mesh.
-     *  Pass `opts.up = 'y'` for a file written by another tool — see {@link Mesh.fromGLTF}. */
-    static fromGLTF(data: string | Uint8Array | ArrayBuffer, opts: ImportOptions = {}): ShapeCollection<Mesh>
+    /** Import a glTF 2.0 model (.glb or .gltf) as a merged Solid.
+     *  Pass `opts.up = 'y'` for a file written by another tool — see {@link Solid.fromGLTF}. */
+    static fromGLTF(data: string | Uint8Array | ArrayBuffer, opts: ImportOptions = {}): ShapeCollection<Solid>
     {
-        return new ShapeCollection<Mesh>(Mesh.fromGLTF(Importer._toBytes(data), null, opts.up ?? 'z'));
+        return new ShapeCollection<Solid>(Solid.fromGLTF(Importer._toBytes(data), null, opts.up ?? 'z'));
     }
 
-    /** Import an AMF model (plain XML or zipped) as a merged Mesh. */
-    static fromAMF(data: string | Uint8Array | ArrayBuffer, _opts: ImportOptions = {}): ShapeCollection<Mesh>
+    /** Import an AMF model (plain XML or zipped) as a merged Solid. */
+    static fromAMF(data: string | Uint8Array | ArrayBuffer, _opts: ImportOptions = {}): ShapeCollection<Solid>
     {
-        return new ShapeCollection<Mesh>(Mesh.fromAMF(Importer._toBytes(data)));
+        return new ShapeCollection<Solid>(Solid.fromAMF(Importer._toBytes(data)));
     }
 
-    /** Import a 3MF package as a merged Mesh (geometry only). */
-    static from3MF(data: string | Uint8Array | ArrayBuffer, _opts: ImportOptions = {}): ShapeCollection<Mesh>
+    /** Import a 3MF package as a merged Solid (geometry only). */
+    static from3MF(data: string | Uint8Array | ArrayBuffer, _opts: ImportOptions = {}): ShapeCollection<Solid>
     {
-        return new ShapeCollection<Mesh>(Mesh.from3MF(Importer._toBytes(data)));
+        return new ShapeCollection<Solid>(Solid.from3MF(Importer._toBytes(data)));
     }
 
     //// FORMAT DETECTION ////

@@ -1,7 +1,7 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Selector } from '../../src/Selector';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 import { Polygon } from '../../src/Polygon';
 import { Point } from '../../src/Point';
@@ -161,7 +161,7 @@ describe('Selector.execute()', () =>
     {
         it('face||front returns faces that are facing the front side of the bounding box', () =>
         {
-            const cube = Mesh.Cube(10);
+            const cube = Solid.Cube(10);
             const result = new Selector('face||front').execute(cube);
             // execute() returns a ShapeCollection for side selectors
             const faces = (result as any).toArray ? (result as any).toArray() : (result as any[]);
@@ -176,7 +176,7 @@ describe('Selector.execute()', () =>
 
         it('face||front returns the mesh own face, not the bbox plane', () =>
         {
-            const cube = Mesh.Cube(10);
+            const cube = Solid.Cube(10);
             const faces = (new Selector('face||front').execute(cube) as ShapeCollection).toArray() as Polygon[];
             // the front face of the cube itself: area 10x10, every vertex on the front plane
             expect(faces.reduce((sum, f) => sum + f.area(), 0)).toBeCloseTo(100);
@@ -188,7 +188,7 @@ describe('Selector.execute()', () =>
         describe('rotated shapes', () =>
         {
             // 10 (x) x 10 (y) x 100 (z) box, tilted around two axes
-            const rotatedBox = () => Mesh.Box(10, 10, 100).rotateX(-10).rotateY(10);
+            const rotatedBox = () => Solid.Box(10, 10, 100).rotateX(-10).rotateY(10);
 
             it('face||front returns the polygon facing front', () =>
             {
@@ -255,7 +255,7 @@ describe('Selector.execute()', () =>
     {
         it('face|z returns faces whose normal is parallel to z-axis', () =>
         {
-            const cube = Mesh.Cube(10);
+            const cube = Solid.Cube(10);
             const faces = new Selector('face|z').execute(cube) as Polygon[];
             expect(faces.length).toBeGreaterThan(0);
             faces.forEach(f =>
@@ -267,7 +267,7 @@ describe('Selector.execute()', () =>
 
         it('face|xy returns faces whose normal is parallel to xy-plane normal (z)', () =>
         {
-            const cube = Mesh.Cube(10);
+            const cube = Solid.Cube(10);
             const faces = new Selector('face|xy').execute(cube) as Polygon[];
             expect(faces.length).toBeGreaterThan(0);
             faces.forEach(f =>
@@ -282,7 +282,7 @@ describe('Selector.execute()', () =>
     {
         it('vertex+z returns only vertices with positive z', () =>
         {
-            const cube = Mesh.Cube(10); // centered, so vertices at z = -5 and z = +5
+            const cube = Solid.Cube(10); // centered, so vertices at z = -5 and z = +5
             const verts = new Selector('vertex+z').execute(cube) as Point[];
             expect(verts.length).toBeGreaterThan(0);
             verts.forEach(p =>
@@ -293,7 +293,7 @@ describe('Selector.execute()', () =>
 
         it('vertex-z returns only vertices with negative z', () =>
         {
-            const cube = Mesh.Cube(10);
+            const cube = Solid.Cube(10);
             const verts = new Selector('vertex-z').execute(cube) as Point[];
             expect(verts.length).toBeGreaterThan(0);
             verts.forEach(p =>
@@ -304,7 +304,7 @@ describe('Selector.execute()', () =>
 
         it('V-z shortcut returns only vertices with negative z', () =>
         {
-            const cube = Mesh.Cube(10);
+            const cube = Solid.Cube(10);
             const verts = new Selector('V-z').execute(cube) as Point[];
             expect(verts.length).toBeGreaterThan(0);
             verts.forEach(p =>
@@ -315,7 +315,7 @@ describe('Selector.execute()', () =>
 
         it('face+z returns faces with center z > 0', () =>
         {
-            const cube = Mesh.Cube(10);
+            const cube = Solid.Cube(10);
             const faces = new Selector('face+z').execute(cube) as Polygon[];
             expect(faces.length).toBeGreaterThan(0);
         });
@@ -325,7 +325,7 @@ describe('Selector.execute()', () =>
     {
         it('face<<->z returns the face closest to the z-axis', () =>
         {
-            const cube = Mesh.Cube(10);
+            const cube = Solid.Cube(10);
             const face = new Selector('face<<->z').execute(cube);
             expect(face).toBeTruthy();
             expect(face).toBeInstanceOf(Polygon);
@@ -333,7 +333,7 @@ describe('Selector.execute()', () =>
 
         it('vertex<<->z returns the vertex closest to the z-axis', () =>
         {
-            const cube = Mesh.Cube(10);
+            const cube = Solid.Cube(10);
             const vert = new Selector('vertex<<->z').execute(cube);
             expect(vert).toBeTruthy();
             expect(vert).toBeInstanceOf(Point);
@@ -344,7 +344,7 @@ describe('Selector.execute()', () =>
     {
         it('vertex<->>z returns the vertex furthest from z-axis', () =>
         {
-            const cube = Mesh.Cube(10);
+            const cube = Solid.Cube(10);
             const vert = new Selector('vertex<->>z').execute(cube);
             expect(vert).toBeTruthy();
             expect(vert).toBeInstanceOf(Point);
@@ -352,7 +352,7 @@ describe('Selector.execute()', () =>
 
         it('face<->>z returns a face', () =>
         {
-            const cube = Mesh.Cube(10);
+            const cube = Solid.Cube(10);
             const face = new Selector('face<->>z').execute(cube);
             expect(face).toBeTruthy();
             expect(face).toBeInstanceOf(Polygon);
@@ -578,21 +578,21 @@ describe('Curve.select()', () =>
 
 describe('select() keeps the shape it selected from in _parent', () =>
 {
-    it('on a Mesh, and on through a selected face', () =>
+    it('on a Solid, and on through a selected face', () =>
     {
-        const box = Mesh.Box(100, 50, 20);
+        const box = Solid.Box(100, 50, 20);
         const face = box.select('F||top') as any;
         expect(face._parent).toBe(box);
 
         const edge = face.select('E||left') as any;
-        expect(edge._parent).toBe(face); // the Polygon, not the Mesh it selects through
+        expect(edge._parent).toBe(face); // the Polygon, not the Solid it selects through
         expect(edge._parent._parent).toBe(box);
     });
 
     it('on a collection, per member', () =>
     {
-        const a = Mesh.Box(10, 10, 10);
-        const b = Mesh.Box(10, 10, 10).move(100, 0, 0);
+        const a = Solid.Box(10, 10, 10);
+        const b = Solid.Box(10, 10, 10).move(100, 0, 0);
         const edge = new ShapeCollection(a, b).select('E||topright') as any;
         expect(edge._parent).toBe(b);
     });
@@ -610,7 +610,7 @@ describe('select() keeps the shape it selected from in _parent', () =>
 
     it('does not carry over to a copy', () =>
     {
-        const box = Mesh.Box(100, 50, 20);
+        const box = Solid.Box(100, 50, 20);
         expect((box.select('E||topleft') as any).copy()._parent).toBeUndefined();
     });
 });

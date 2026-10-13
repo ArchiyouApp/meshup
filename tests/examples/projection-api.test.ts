@@ -1,7 +1,7 @@
 /**
  * The projection signatures: `isometry(cam, options)`, `elevation(from, options)`,
  * `project(from, options)` (a collection's elevation with its hidden lines) and
- * `section(pivot, normal, options)` — on Mesh, Curve and ShapeCollection alike.
+ * `section(pivot, normal, options)` — on Solid, Curve and ShapeCollection alike.
  *
  * The settings, the hidden-line method included, are one options object, so the call stays
  * readable and options can be added without growing a positional tail. The earlier forms —
@@ -10,7 +10,7 @@
  */
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 import { ShapeCollection } from '../../src/ShapeCollection';
 import { SceneNode } from '../../src/SceneNode';
@@ -30,12 +30,12 @@ function shape(result: ShapeCollection<any>): string
         .join('|');
 }
 
-/** Run `fn` while recording the options of every call to one of Mesh's kernel projections. */
+/** Run `fn` while recording the options of every call to one of Solid's kernel projections. */
 function recordKernelOptions(method: '_projectEdges' | '_projectEdgesSection', fn: () => void): any[]
 {
     const seen: any[] = [];
-    const original = (Mesh as any).prototype[method];
-    (Mesh as any).prototype[method] = function (options: any, occluders?: any)
+    const original = (Solid as any).prototype[method];
+    (Solid as any).prototype[method] = function (options: any, occluders?: any)
     {
         seen.push(options);
         return original.call(this, options, occluders);
@@ -46,12 +46,12 @@ function recordKernelOptions(method: '_projectEdges' | '_projectEdgesSection', f
     }
     finally
     {
-        (Mesh as any).prototype[method] = original;
+        (Solid as any).prototype[method] = original;
     }
     return seen;
 }
 
-const twoBoxes = () => new ShapeCollection<any>(Mesh.Box(20, 20, 20), Mesh.Box(20, 20, 20).move(60, 0, 0));
+const twoBoxes = () => new ShapeCollection<any>(Solid.Box(20, 20, 20), Solid.Box(20, 20, 20).move(60, 0, 0));
 
 beforeAll(async () =>
 {
@@ -60,9 +60,9 @@ beforeAll(async () =>
 
 describe('isometry(cam, options)', () =>
 {
-    it('takes its options on Mesh', () =>
+    it('takes its options on Solid', () =>
     {
-        const iso = Mesh.Box(100, 100, 100).isometry([-1, -1, 1], { method: 'exact', hiddenLines: true });
+        const iso = Solid.Box(100, 100, 100).isometry([-1, -1, 1], { method: 'exact', hiddenLines: true });
         expect(iso.group('visible')?.length).toBe(9);
         expect(iso.group('hidden')?.length).toBe(3);
     });
@@ -75,15 +75,15 @@ describe('isometry(cam, options)', () =>
 
     it('defaults to the exact method and no hidden lines', () =>
     {
-        const bare = Mesh.Box(100, 100, 100).isometry();
-        const spelled = Mesh.Box(100, 100, 100).isometry([-1, -1, 1], { method: 'exact', hiddenLines: false });
+        const bare = Solid.Box(100, 100, 100).isometry();
+        const spelled = Solid.Box(100, 100, 100).isometry([-1, -1, 1], { method: 'exact', hiddenLines: false });
         expect(shape(bare)).toBe(shape(spelled));
         expect(bare.group('hidden')?.length ?? 0).toBe(0);
     });
 
     it('routes each method through to a different solver', () =>
     {
-        const build = () => new ShapeCollection<any>(Mesh.Box(20, 20, 20), Mesh.Box(20, 20, 20).move(20, 0, 0));
+        const build = () => new ShapeCollection<any>(Solid.Box(20, 20, 20), Solid.Box(20, 20, 20).move(20, 0, 0));
         for (const method of ['raycast', 'exact', 'clip', 'painter'] as const)
         {
             expect(build().isometry([-1, -1, 1], { method }).length, method).toBeGreaterThan(0);
@@ -92,8 +92,8 @@ describe('isometry(cam, options)', () =>
 
     it('reports a method that cannot run, unless told to fall back', () =>
     {
-        const notched = Mesh.Box(40, 40, 40).subtract(Mesh.Box(20, 20, 20).move(20, 20, 20));
-        const scene = () => new ShapeCollection<any>(notched.copy(), Mesh.Box(20, 20, 20).move(80, 0, 0));
+        const notched = Solid.Box(40, 40, 40).subtract(Solid.Box(20, 20, 20).move(20, 20, 20));
+        const scene = () => new ShapeCollection<any>(notched.copy(), Solid.Box(20, 20, 20).move(80, 0, 0));
 
         expect(() => scene().isometry([-1, -1, 1], { method: 'clip' })).toThrow(/convex/i);
         expect(scene().isometry([-1, -1, 1], { method: 'clip', fallback: true }).length).toBeGreaterThan(0);
@@ -102,10 +102,10 @@ describe('isometry(cam, options)', () =>
 
 describe('elevation(from, options)', () =>
 {
-    it('hands its options to the kernel on Mesh', () =>
+    it('hands its options to the kernel on Solid', () =>
     {
         const seen = recordKernelOptions('_projectEdges', () =>
-            Mesh.Box(20, 20, 20).elevation('front', { method: 'raycast', samples: 123, featureAngle: 7 }));
+            Solid.Box(20, 20, 20).elevation('front', { method: 'raycast', samples: 123, featureAngle: 7 }));
         expect(seen.map(o => [o.strategy, o.samples, o.featureAngle])).toEqual([['raycast', 123, 7]]);
     });
 
@@ -120,14 +120,14 @@ describe('elevation(from, options)', () =>
     it('takes the default method when it is left out', () =>
     {
         const seen = recordKernelOptions('_projectEdges', () =>
-            Mesh.Box(20, 20, 20).elevation('front', { samples: 123 }));
+            Solid.Box(20, 20, 20).elevation('front', { samples: 123 }));
         expect(seen.map(o => [o.strategy, o.samples])).toEqual([['exact', 123]]);
     });
 
     it('reports a method that cannot run, unless told to fall back', () =>
     {
-        const notched = Mesh.Box(40, 40, 40).subtract(Mesh.Box(20, 20, 20).move(20, 20, 20));
-        const scene = () => new ShapeCollection<any>(notched.copy(), Mesh.Box(20, 20, 20).move(80, 0, 0));
+        const notched = Solid.Box(40, 40, 40).subtract(Solid.Box(20, 20, 20).move(20, 20, 20));
+        const scene = () => new ShapeCollection<any>(notched.copy(), Solid.Box(20, 20, 20).move(80, 0, 0));
 
         expect(() => scene().elevation('front', { method: 'clip' })).toThrow(/convex/i);
         expect(scene().elevation('front', { method: 'clip', fallback: true }).length).toBeGreaterThan(0);
@@ -142,20 +142,20 @@ describe('ShapeCollection.project(from, options)', () =>
     it('draws every edge once, the ones at the back too, with nothing hidden', () =>
     {
         // A box from the front: its back edges fall on the front ones, so one square
-        const square = new ShapeCollection<any>(Mesh.Box(20, 20, 20)).project('front');
+        const square = new ShapeCollection<any>(Solid.Box(20, 20, 20)).project('front');
         expect(lengths(square)).toEqual([20, 20, 20, 20]);
         expect(square.group('hidden')).toBeFalsy();
         expect(square.group('silhouette')?.length).toBe(4);
 
         // Two touching boxes: top and bottom run through, the shared side is drawn once
-        const pair = new ShapeCollection<any>(Mesh.Box(20, 20, 20), Mesh.Box(20, 20, 20).move(20, 0, 0)).project('front');
+        const pair = new ShapeCollection<any>(Solid.Box(20, 20, 20), Solid.Box(20, 20, 20).move(20, 0, 0)).project('front');
         expect(lengths(pair)).toEqual([20, 20, 20, 40, 40]);
     });
 
     it('shows what an elevation hides, without hiding it', () =>
     {
         // A small box behind a big one: gone in the elevation, drawn in the projection
-        const scene = () => new ShapeCollection<any>(Mesh.Box(100, 10, 100), Mesh.Box(20, 20, 20).move(0, 50, 0));
+        const scene = () => new ShapeCollection<any>(Solid.Box(100, 10, 100), Solid.Box(20, 20, 20).move(0, 50, 0));
         const elevated = scene().elevation('front');
         const projected = scene().project('front');
         expect(projected.length).toBeGreaterThan(elevated.length);
@@ -167,7 +167,7 @@ describe('ShapeCollection.project(from, options)', () =>
         const line = Curve.Line([-50, 0, 0], [50, 0, 0]);
         expect(new ShapeCollection<any>(line).project('front').length).toBe(1);
 
-        const withHidden = () => new ShapeCollection<any>(Mesh.Box(20, 20, 20), Mesh.Box(20, 20, 20).move(100, 0, 0).hide());
+        const withHidden = () => new ShapeCollection<any>(Solid.Box(20, 20, 20), Solid.Box(20, 20, 20).move(100, 0, 0).hide());
         expect(withHidden().project('front').length).toBe(4);
         expect(withHidden().project('front', { includeHiddenShapes: true }).length).toBe(8);
     });
@@ -179,13 +179,13 @@ describe('projections keep the style of their shapes', () =>
     const colours = (c: ShapeCollection<any>) =>
         [...new Set(c.toArray().map((s: any) => s.style?.explicitData?.()?.color ?? '-'))].sort();
 
-    const red = () => Mesh.Box(20, 20, 20).color('red');
-    const blue = () => Mesh.Box(20, 20, 20).move(40, 0, 0).color('blue');
+    const red = () => Solid.Box(20, 20, 20).color('red');
+    const blue = () => Solid.Box(20, 20, 20).move(40, 0, 0).color('blue');
     const greenLine = () => Curve.Line([0, -30, 0], [60, -30, 0]).color('green');
     const RED = '#ff0000', BLUE = '#0000ff', GREEN = '#008000';
 
     const sources: Array<[string, () => any, string[]]> = [
-        ['a Mesh',                          () => red(),                                              [RED]],
+        ['a Solid',                          () => red(),                                              [RED]],
         ['a collection of one mesh',        () => new ShapeCollection<any>(red()),                    [RED]],
         ['a collection of one style',       () => new ShapeCollection<any>(red(), red().move(40, 0, 0)), [RED]],
         ['a collection of two styles',      () => new ShapeCollection<any>(red(), blue()),            [BLUE, RED]],
@@ -204,7 +204,7 @@ describe('projections keep the style of their shapes', () =>
     sources.forEach(([source, make, expected]) =>
         projections.forEach(([name, project, curvesToo]) =>
         {
-            if (name === 'project' && source === 'a Mesh') return; // project() is a collection method
+            if (name === 'project' && source === 'a Solid') return; // project() is a collection method
             it(`${name} of ${source}`, () =>
             {
                 const want = curvesToo ? expected : expected.filter(c => c !== GREEN);
@@ -216,9 +216,9 @@ describe('projections keep the style of their shapes', () =>
     {
         // layer('ringbeams').color('red'); layer('spanbeams').color('blue')
         const scene = SceneNode.root();
-        const ring = Mesh.Box(20, 20, 20);
-        const span = Mesh.Box(20, 20, 20).move(40, 0, 0);
-        const screw = Mesh.Box(5, 5, 5).move(80, 0, 0).color('green');
+        const ring = Solid.Box(20, 20, 20);
+        const span = Solid.Box(20, 20, 20).move(40, 0, 0);
+        const screw = Solid.Box(5, 5, 5).move(80, 0, 0).color('green');
         scene.addLayer('ringbeams', new ShapeCollection<any>(ring)).color('red');
         scene.addLayer('spanbeams', new ShapeCollection<any>(span, screw)).color('blue');
 
@@ -232,7 +232,7 @@ describe('projections keep the style of their shapes', () =>
     it('still draws a shape whose layer is hidden', () =>
     {
         const scene = SceneNode.root();
-        const box = Mesh.Box(20, 20, 20);
+        const box = Solid.Box(20, 20, 20);
         scene.addLayer('model', new ShapeCollection<any>(box)).color('red').hide();
 
         const drawing = new ShapeCollection<any>(box).elevation('front');
@@ -245,8 +245,8 @@ describe('projections keep the style of their shapes', () =>
     {
         // A small blue box right behind a big red one: its edges stay hidden, in blue
         const scene = new ShapeCollection<any>(
-            Mesh.Box(100, 10, 100).color('red'),
-            Mesh.Box(20, 20, 20).move(0, 50, 0).color('blue'));
+            Solid.Box(100, 10, 100).color('red'),
+            Solid.Box(20, 20, 20).move(0, 50, 0).color('blue'));
         const drawing = scene.elevation('front', { hiddenLines: true });
         expect(colours(drawing.group('visible')!)).toEqual([RED]);
         expect(colours(drawing.group('hidden')!)).toEqual([BLUE, RED]);
@@ -255,10 +255,10 @@ describe('projections keep the style of their shapes', () =>
 
 describe('section(pivot, normal, options)', () =>
 {
-    it('hands its options to the kernel on Mesh and on ShapeCollection', () =>
+    it('hands its options to the kernel on Solid and on ShapeCollection', () =>
     {
         const onMesh = recordKernelOptions('_projectEdgesSection', () =>
-            Mesh.Box(20, 20, 20).section([0, 0, 0], [0, 0, 1], { method: 'raycast', samples: 321, featureAngle: 11 }));
+            Solid.Box(20, 20, 20).section([0, 0, 0], [0, 0, 1], { method: 'raycast', samples: 321, featureAngle: 11 }));
         const onCollection = recordKernelOptions('_projectEdgesSection', () =>
             twoBoxes().section([0, 0, 0], [0, 0, 1], { method: 'raycast', samples: 321, featureAngle: 11 }));
 
@@ -271,11 +271,11 @@ describe('the earlier call forms are refused', () =>
 {
     const line = () => Curve.Line([0, 0, 0], [100, 0, 0]);
     const calls: Array<[string, () => any]> = [
-        ['Mesh.isometry(cam, true)',                 () => (Mesh.Box(10, 10, 10) as any).isometry([-1, -1, 1], true)],
-        ['Mesh.iso(cam, method, options)',           () => (Mesh.Box(10, 10, 10) as any).iso([-1, -1, 1], 'exact', { hiddenLines: true })],
-        ['Mesh.elevation(from, true)',               () => (Mesh.Box(10, 10, 10) as any).elevation('front', true)],
-        ['Mesh.elevation(from, method)',             () => (Mesh.Box(10, 10, 10) as any).elevation('front', 'raycast')],
-        ['Mesh.section(pivot, normal, true, 16)',    () => (Mesh.Box(10, 10, 10) as any).section([0, 0, 0], [0, 0, 1], true, 16)],
+        ['Solid.isometry(cam, true)',                 () => (Solid.Box(10, 10, 10) as any).isometry([-1, -1, 1], true)],
+        ['Solid.iso(cam, method, options)',           () => (Solid.Box(10, 10, 10) as any).iso([-1, -1, 1], 'exact', { hiddenLines: true })],
+        ['Solid.elevation(from, true)',               () => (Solid.Box(10, 10, 10) as any).elevation('front', true)],
+        ['Solid.elevation(from, method)',             () => (Solid.Box(10, 10, 10) as any).elevation('front', 'raycast')],
+        ['Solid.section(pivot, normal, true, 16)',    () => (Solid.Box(10, 10, 10) as any).section([0, 0, 0], [0, 0, 1], true, 16)],
         ['ShapeCollection.isometry(cam, false, false, 16, 10)', () => (twoBoxes() as any).isometry([-1, -1, 1], false, false, 16, 10)],
         ['ShapeCollection.elevation(from, true)',    () => (twoBoxes() as any).elevation('front', true)],
         ['ShapeCollection.elevation(from, method, options)', () => (twoBoxes() as any).elevation('front', 'exact', { hiddenLines: true })],
@@ -310,8 +310,8 @@ describe('resolveProjectionArgs', () =>
 
     it('refuses anything else, naming the call', () =>
     {
-        expect(() => resolveProjectionArgs([true], 'Mesh.elevation(from, options)'))
-            .toThrow(/^Mesh\.elevation\(from, options\): /);
+        expect(() => resolveProjectionArgs([true], 'Solid.elevation(from, options)'))
+            .toThrow(/^Solid\.elevation\(from, options\): /);
         expect(() => resolveProjectionArgs([{ hiddenLines: true }, 16], 'test')).toThrow();
         expect(() => resolveProjectionArgs([undefined, { hiddenLines: true }], 'test')).toThrow();
     });
@@ -339,7 +339,7 @@ describe('Curve.isometry', () =>
         const alone = line.copy().isometry([0, -1, 0], { hiddenLines: true });
         expect(alone.group('hidden')?.length ?? 0).toBe(0);
 
-        const withSolid = new ShapeCollection<any>(Mesh.Box(100, 100, 100), line.copy())
+        const withSolid = new ShapeCollection<any>(Solid.Box(100, 100, 100), line.copy())
             .isometry([0, -1, 0], { hiddenLines: true });
         expect(withSolid.group('hidden')?.length ?? 0).toBeGreaterThan(0);
     });
@@ -359,7 +359,7 @@ describe('projection group shortcuts', () =>
         const warns: string[] = [];
         const orig = console.warn;
         console.warn = (...a: any[]) => { warns.push(a.join(' ')); };
-        const iso: any = Mesh.Box(100, 100, 100).isometry([-1, -1, 1], { hiddenLines: true });
+        const iso: any = Solid.Box(100, 100, 100).isometry([-1, -1, 1], { hiddenLines: true });
         console.warn = orig;
 
         expect(warns.filter(w => w.includes('conflicts with an existing'))).toEqual([]);
@@ -378,7 +378,7 @@ describe('projection group shortcuts', () =>
 
     it('keeps the visibility filters under their only- names', () =>
     {
-        const col = new ShapeCollection<any>(Mesh.Box(10, 10, 10), Mesh.Box(10, 10, 10).move(50).hide());
+        const col = new ShapeCollection<any>(Solid.Box(10, 10, 10), Solid.Box(10, 10, 10).move(50).hide());
         expect(col.onlyVisible().length).toBe(1);
         expect(col.onlyHidden().length).toBe(1);
         // the old names must stay free, or the shortcuts above break again

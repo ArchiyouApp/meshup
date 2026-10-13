@@ -1,6 +1,6 @@
 import { beforeAll, describe, it, expect } from 'vitest';
-import { initAsync, ShapeCollection } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { initAsync, ShapeCollection, Mesh } from '../../src/index';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 import { Polygon } from '../../src/Polygon';
 import { SceneNode } from '../../src/SceneNode';
@@ -14,67 +14,89 @@ beforeAll(async () =>
     await initAsync();
 });
 
-describe('Mesh.Cube()', () =>
+describe('Mesh, the name before the rename', () =>
+{
+    it('is the Solid class itself', () =>
+    {
+        expect(Mesh).toBe(Solid);
+        const box = Mesh.Box(10);
+        expect(box).toBeInstanceOf(Solid);
+        expect(Solid.Box(10)).toBeInstanceOf(Mesh);
+        expect(box.type).toBe('Solid');
+    });
+
+    it('keeps meshes() as an alias of solids(), and isSolid() accepts the old type string', () =>
+    {
+        const col = new ShapeCollection(Solid.Box(10), Curve.Line([0, 0, 0], [1, 0, 0]));
+        expect(col.meshes().length).toBe(1);
+        expect(col.solids().length).toBe(1);
+        const old = Solid.Box(10);
+        Object.defineProperty(old, 'type', { value: 'Mesh' });
+        expect(old.isSolid()).toBe(true);
+    });
+});
+
+describe('Solid.Cube()', () =>
 {
     it('creates a non-null mesh', () =>
     {
-        const m = Mesh.Cube(10);
+        const m = Solid.Cube(10);
         expect(m).toBeTruthy();
     });
 
     it('has vertices', () =>
     {
-        const m = Mesh.Cube(10);
+        const m = Solid.Cube(10);
         expect(m.positions().length).toBeGreaterThan(0);
     });
 
     it('has triangles', () =>
     {
-        const m = Mesh.Cube(10);
+        const m = Solid.Cube(10);
         expect(m.inner().triangleCount()).toBeGreaterThan(0);
     });
 });
 
-describe('Mesh.Cuboid()', () =>
+describe('Solid.Cuboid()', () =>
 {
     it('creates a non-null mesh', () =>
     {
-        const m = Mesh.Cuboid(10, 20, 30);
+        const m = Solid.Cuboid(10, 20, 30);
         expect(m).toBeTruthy();
     });
 
     it('has more triangles than a cube when dimensions differ', () =>
     {
-        const cube = Mesh.Cube(10);
-        const cuboid = Mesh.Cuboid(10, 20, 30);
+        const cube = Solid.Cube(10);
+        const cuboid = Solid.Cuboid(10, 20, 30);
         // Both are rectangular - triangle count should be equal
         expect(cuboid.inner().triangleCount()).toBe(cube.inner().triangleCount());
     });
 });
 
-describe('Mesh.isCuboid()', () =>
+describe('Solid.isCuboid()', () =>
 {
     it('is true for boxes, also with extra vertices from a boolean', () =>
     {
-        expect(Mesh.Cuboid(10, 20, 30).isCuboid()).toBe(true);
-        expect(Mesh.Box(4628, 38, 235).move(100, 200, 0).isCuboid()).toBe(true);
-        expect(Mesh.Cube(10).union(Mesh.Cube(10).move(10, 0, 0)).isCuboid()).toBe(true);
+        expect(Solid.Cuboid(10, 20, 30).isCuboid()).toBe(true);
+        expect(Solid.Box(4628, 38, 235).move(100, 200, 0).isCuboid()).toBe(true);
+        expect(Solid.Cube(10).union(Solid.Cube(10).move(10, 0, 0)).isCuboid()).toBe(true);
     });
 
     it('is false for cylinders and prisms, whose vertices all sit on their caps', () =>
     {
-        expect(Mesh.Cylinder(44.5, 1600).isCuboid()).toBe(false);
-        expect(Mesh.Cylinder(100, 8).isCuboid()).toBe(false);
+        expect(Solid.Cylinder(44.5, 1600).isCuboid()).toBe(false);
+        expect(Solid.Cylinder(100, 8).isCuboid()).toBe(false);
         const lShape = new Polygon([[0, 0, 0], [20, 0, 0], [20, 10, 0], [10, 10, 0], [10, 20, 0], [0, 20, 0]]);
         expect(lShape.extrude(10).isCuboid()).toBe(false);
     });
 });
 
-describe('Projected line work of a Mesh', () =>
+describe('Projected line work of a Solid', () =>
 {
     it('joins the segments of a circle into one closed polyline', () =>
     {
-        const top = Mesh.Cylinder(20, 50).elevation('top', { hiddenLines: true });
+        const top = Solid.Cylinder(20, 50).elevation('top', { hiddenLines: true });
         const visible = top.group('visible')!.toArray() as Curve[];
         expect(visible.length).toBe(1);
         expect(visible[0].isClosed()).toBe(true);
@@ -85,47 +107,47 @@ describe('Projected line work of a Mesh', () =>
 
     it('keeps the corners of a box as separate lines', () =>
     {
-        const top = Mesh.Box(100, 50, 10).elevation('top');
+        const top = Solid.Box(100, 50, 10).elevation('top');
         expect(top.group('visible')!.length).toBe(4);
     });
 });
 
-describe('Mesh.Sphere()', () =>
+describe('Solid.Sphere()', () =>
 {
     it('creates a non-null mesh', () =>
     {
-        const m = Mesh.Sphere(5);
+        const m = Solid.Sphere(5);
         expect(m).toBeTruthy();
     });
 
     it('has many more triangles than a cube', () =>
     {
-        const sphere = Mesh.Sphere(5);
+        const sphere = Solid.Sphere(5);
         expect(sphere.inner().triangleCount()).toBeGreaterThan(10);
     });
 });
 
-describe('Mesh.fromPoints()', () =>
+describe('Solid.fromPoints()', () =>
 {
     it('creates a triangulated polygon', () =>
     {
-        const m = Mesh.fromPoints([[0,0,0], [10,0,0], [10,10,0], [0,10,0]]);
+        const m = Solid.fromPoints([[0,0,0], [10,0,0], [10,10,0], [0,10,0]]);
         expect(m).toBeTruthy();
         expect(m.positions().length).toBeGreaterThan(0);
     });
 
     it('throws for an empty points array', () =>
     {
-        expect(() => Mesh.fromPoints([])).toThrow();
+        expect(() => Solid.fromPoints([])).toThrow();
     });
 });
 
-describe('Mesh.fromPolygons()', () =>
+describe('Solid.fromPolygons()', () =>
 {
     it('creates a mesh from polygon vertex arrays', () =>
     {
         const tri = [[0,0,0], [5,0,0], [2.5,5,0]];
-        const m = Mesh.fromPolygons([tri]);
+        const m = Solid.fromPolygons([tri]);
         expect(m).toBeTruthy();
         expect(m.positions().length).toBeGreaterThan(0);
     });
@@ -136,7 +158,7 @@ describe('Mesh.fromPolygons()', () =>
     // carrying its own plane normal.
     it('gives every vertex the polygon plane normal', () =>
     {
-        const { normals } = Mesh.fromPolygons([[[0,0,0], [5,0,0], [2.5,5,0]]]).toBuffer();
+        const { normals } = Solid.fromPolygons([[[0,0,0], [5,0,0], [2.5,5,0]]]).toBuffer();
 
         expect(normals.length).toBeGreaterThan(0);
         for (let i = 0; i < normals.length; i += 3)
@@ -154,16 +176,16 @@ describe('Mesh.fromPolygons()', () =>
     it('handles a polygon face with a T-intersection (vertex on non-adjacent edge) without panicking', () =>
     {
         const poly = [[0,0,0], [2,0,0], [1,0,0], [2,0,2], [0,0,2]];
-        expect(() => Mesh.fromPolygons([poly])).not.toThrow();
+        expect(() => Solid.fromPolygons([poly])).not.toThrow();
     });
 });
 
-describe('Mesh boolean operations', () =>
+describe('Solid boolean operations', () =>
 {
     it('union() combines two meshes', () =>
     {
-        const a = Mesh.Cube(10);
-        const b = Mesh.Cube(10);
+        const a = Solid.Cube(10);
+        const b = Solid.Cube(10);
         b.translate([5, 5, 5]);
         a.union(b);
         expect(a.positions().length).toBeGreaterThan(0);
@@ -171,18 +193,18 @@ describe('Mesh boolean operations', () =>
 
     it('difference() subtracts one mesh from another', () =>
     {
-        const a = Mesh.Cube(10);
-        const b = Mesh.Cube(5);
+        const a = Solid.Cube(10);
+        const b = Solid.Cube(5);
         a.difference(b);
         expect(a.positions().length).toBeGreaterThan(0);
     });
 
     it('intersection() returns the overlapping volume', () =>
     {
-        const a = Mesh.Cube(10);
-        const b = Mesh.Cube(10);
+        const a = Solid.Cube(10);
+        const b = Solid.Cube(10);
         b.translate([2, 2, 2]);
-        // non-replacing: the shared volume is a NEW Mesh, `a` keeps its own geometry
+        // non-replacing: the shared volume is a NEW Solid, `a` keeps its own geometry
         const volume = a.volume();
         const shared = a.intersection(b);
         expect(shared).not.toBe(a);
@@ -191,9 +213,9 @@ describe('Mesh boolean operations', () =>
         expect(a.volume()).toBeCloseTo(volume, 4);
     });
 
-    it('difference() refuses to subtract a Mesh from itself', () =>
+    it('difference() refuses to subtract a Solid from itself', () =>
     {
-        const a = Mesh.Cube(10);
+        const a = Solid.Cube(10);
         const volume = a.volume();
         a.difference(a);
         expect(a.volume()).toBeCloseTo(volume as number, 3);    // untouched, not wiped out
@@ -203,39 +225,39 @@ describe('Mesh boolean operations', () =>
     // because it was built while that layer was active.
     it('difference() skips itself when it sits inside the cutter collection', () =>
     {
-        const a = Mesh.Cube(10);
-        const cutter = Mesh.Cube(10).translate([5, 5, 5]);
-        a.difference(new ShapeCollection<Mesh>(a, cutter));
+        const a = Solid.Cube(10);
+        const cutter = Solid.Cube(10).translate([5, 5, 5]);
+        a.difference(new ShapeCollection<Solid>(a, cutter));
         expect(a.volume()).toBeGreaterThan(0);                  // the cube survives
         expect(a.volume()).toBeLessThan(1000);                  // and the real cutter still bit
     });
 });
 
-describe('Mesh.translate()', () =>
+describe('Solid.translate()', () =>
 {
     it('returns this (chainable)', () =>
     {
-        const m = Mesh.Cube(10);
+        const m = Solid.Cube(10);
         expect(m.translate([1, 2, 3])).toBe(m);
     });
 });
 
-describe('Mesh.copy()', () =>
+describe('Solid.copy()', () =>
 {
     it('creates an independent copy', () =>
     {
-        const original = Mesh.Cube(10);
-        const copy = original.copy() as Mesh;
+        const original = Solid.Cube(10);
+        const copy = original.copy() as Solid;
         expect(copy).not.toBe(original);
         expect(copy.positions().length).toBe(original.positions().length);
     });
 });
 
-describe('Mesh.grid()', () =>
+describe('Solid.grid()', () =>
 {
     it('accepts per-axis spacing as a vector-like 4th parameter', () =>
     {
-        const meshes = Mesh.Cube(2).grid(2, 2, 2, [5, 6, 7]);
+        const meshes = Solid.Cube(2).grid(2, 2, 2, [5, 6, 7]);
         const centers = meshes.toArray().map(mesh => mesh.center().round(1e-9).toArray());
 
         expect(meshes.length).toBe(8);
@@ -246,21 +268,21 @@ describe('Mesh.grid()', () =>
     it('reads a zero count as a flat grid on that axis instead of returning nothing', () =>
     {
         // grid(4,3,0) is how you write a flat XY grid - it must not yield an empty collection
-        const meshes = Mesh.Cube(2).grid(4, 3, 0, [100, 100, 0]);
+        const meshes = Solid.Cube(2).grid(4, 3, 0, [100, 100, 0]);
         expect(meshes.length).toBe(12);
     });
 
     it('floors non-integer counts and throws on non-finite ones', () =>
     {
-        expect(Mesh.Cube(2).grid(2.7, 2, 1, 10).length).toBe(4);
-        expect(() => Mesh.Cube(2).grid(NaN, 2, 1, 10)).toThrow(/Mesh::grid/);
-        expect(() => Mesh.Cube(2).grid('2' as any, 2, 1, 10)).toThrow(/Mesh::grid/);
+        expect(Solid.Cube(2).grid(2.7, 2, 1, 10).length).toBe(4);
+        expect(() => Solid.Cube(2).grid(NaN, 2, 1, 10)).toThrow(/Solid::grid/);
+        expect(() => Solid.Cube(2).grid('2' as any, 2, 1, 10)).toThrow(/Solid::grid/);
     });
 
-    it('puts the source Mesh itself at cell [0,0,0] - no duplicate left in the scene', () =>
+    it('puts the source Solid itself at cell [0,0,0] - no duplicate left in the scene', () =>
     {
         const root = new SceneNode('root');
-        const cube = Mesh.Cube(2);
+        const cube = Solid.Cube(2);
         const layer = root.addLayer('grid', cube);
         root.setActiveLayer(layer);
 
@@ -272,12 +294,12 @@ describe('Mesh.grid()', () =>
     });
 });
 
-describe('Mesh.array()', () =>
+describe('Solid.array()', () =>
 {
-    it('puts the source Mesh itself at [0,0,0] - no duplicate left in the scene', () =>
+    it('puts the source Solid itself at [0,0,0] - no duplicate left in the scene', () =>
     {
         const root = new SceneNode('root');
-        const cube = Mesh.Cube(2);
+        const cube = Solid.Cube(2);
         const layer = root.addLayer('array', cube);
         root.setActiveLayer(layer);
 
@@ -289,11 +311,11 @@ describe('Mesh.array()', () =>
     });
 });
 
-describe('Mesh.mirror()', () =>
+describe('Solid.mirror()', () =>
 {
     it('Should mirror in center', async () =>
     {
-        const b = Mesh.Cube(10).color('red');
+        const b = Solid.Cube(10).color('red');
         const centerline = Curve.Line([0,0,-10], [0,0,10]).color('blue');
         const mirrored = b.copy().mirror('x', 0);
         expect(mirrored.bbox()).toEqual(b.bbox());
@@ -309,7 +331,7 @@ describe('Mesh.mirror()', () =>
 
     it('Should mirror at specific plane position', async () =>
     {
-        const b = Mesh.Cube(10).color('red');
+        const b = Solid.Cube(10).color('red');
         const mirrorline = Curve.Line([50,0,-10], [50,0,10]).color('blue');
         const mirrored = b.copy().mirror('x', mirrorline.start().x).color('green');
         // NOTE: use round to avoid any precision issues with the mirroring math
@@ -326,7 +348,7 @@ describe('Mesh.mirror()', () =>
 
     it('Should mirror in z coord (XY plane)', async () =>
     {
-        const b = Mesh.Cube(10).color('red');
+        const b = Solid.Cube(10).color('red');
         const mirrorline = Curve.Line([-100,0,25], [100,0,25]).color('blue');
         const mirrored = b.copy().mirror('z', mirrorline.start().z).color('green');
         // NOTE: use round to avoid any precision issues with the mirroring math
@@ -343,7 +365,7 @@ describe('Mesh.mirror()', () =>
 
     it('Should mirror with offset vector', async () =>
     {
-        const b = Mesh.Cube(10).color('red').moveX(10);
+        const b = Solid.Cube(10).color('red').moveX(10);
         const OFFSET = 50;
         const mirrorline = Curve.Line([OFFSET,0,-100], [OFFSET,0,100]).color('blue');
         const originline = Curve.Line([0,0,-100], [0,0,100]).color('gray');
@@ -368,7 +390,7 @@ describe('Mesh.mirror()', () =>
 
 });
 
-describe('Mesh.layflat()', () =>
+describe('Solid.layflat()', () =>
 {
     // Regression: a 1000×1000×20 plate with four symmetric interlocking slot cuts has
     // equal X and Y PCA eigenvalues (degenerate). toOrthoQuaternion() then returns an
@@ -379,12 +401,12 @@ describe('Mesh.layflat()', () =>
     {
         for (let i = 0; i < 5; i++)
         {
-            const pl = Mesh.Box(1000, 1000, 20);
+            const pl = Solid.Box(1000, 1000, 20);
             // Four symmetric slot cuts → equal X/Y variance → degenerate PCA
-            const s1 = Mesh.Box(10, 1000, 10).align(pl, 'lefttopfront', 'lefttopfront');
+            const s1 = Solid.Box(10, 1000, 10).align(pl, 'lefttopfront', 'lefttopfront');
             pl.subtract(s1);
             pl.subtract(s1.copy().mirrorX(0));
-            const s2 = Mesh.Box(1000, 10, 10).align(pl, 'fronttop', 'fronttop');
+            const s2 = Solid.Box(1000, 10, 10).align(pl, 'fronttop', 'fronttop');
             pl.subtract(s2);
             pl.subtract(s2.copy().mirrorY(0));
 
@@ -405,7 +427,7 @@ describe('Mesh.layflat()', () =>
 
     it('lays a tilted box flat (non-degenerate case still works)', () =>
     {
-        const m = Mesh.Box(200, 100, 20).rotateX(30);
+        const m = Solid.Box(200, 100, 20).rotateX(30);
         m.layflat();
         const bb = m.bbox();
         expect(bb.minZ()).toBeCloseTo(0, 1);
@@ -415,7 +437,7 @@ describe('Mesh.layflat()', () =>
     it('only translates an already-flat mesh to Z=0', () =>
     {
         // Already sitting at Z > 0 but flat — dominant face is parallel to XY, no rotation.
-        const m = Mesh.Box(200, 100, 20).moveZ(50);
+        const m = Solid.Box(200, 100, 20).moveZ(50);
         m.layflat();
         const bb = m.bbox();
         expect(bb.minZ()).toBeCloseTo(0, 1);
@@ -430,7 +452,7 @@ describe('Mesh.layflat()', () =>
     // only dropped, never rotated, and came to rest on an edge.
     it('lays a tilted plate flat even when its tilted AABB is still Z-thin', () =>
     {
-        const m = Mesh.Box(400, 200, 10).rotateX(35).rotateZ(15);
+        const m = Solid.Box(400, 200, 10).rotateX(35).rotateZ(15);
         m.layflat();
         const bb = m.bbox();
         expect(bb.minZ()).toBeCloseTo(0, 1);
@@ -442,7 +464,7 @@ describe('Mesh.layflat()', () =>
     it('puts a face of a sheared (non plate-like) solid on the XY plane', () =>
     {
         const bottom = new Polygon([[-250, -250, 0], [250, -250, 0], [250, 250, 0], [-250, 250, 0]]);
-        const sheared = bottom.loft(bottom.copy().translate(100, 100, 1000)) as Mesh;
+        const sheared = bottom.loft(bottom.copy().translate(100, 100, 1000)) as Solid;
         sheared.rotateX(20).layflat();
 
         const bb = sheared.bbox();
@@ -455,18 +477,18 @@ describe('Mesh.layflat()', () =>
         expect(onPlane.length).toBeGreaterThan(0);
     });
 });
-describe('Mesh.edges()', () =>
+describe('Solid.edges()', () =>
 {
     it('returns the 12 edges of a cube, each once', () =>
     {
-        const edges = Mesh.Cube(10).edges();
+        const edges = Solid.Cube(10).edges();
         expect(edges.length).toBe(12);
         edges.toArray().forEach(e => expect(e.length()).toBeCloseTo(10, 6));
     });
 
     it('groups the edges of a closed solid as creases, with no boundary', () =>
     {
-        const edges = Mesh.Cube(10).edges();
+        const edges = Solid.Cube(10).edges();
         expect(edges.group('crease')?.length).toBe(12);
         expect(edges.group('boundary')).toBeUndefined(); // a cube is watertight
     });
@@ -474,7 +496,7 @@ describe('Mesh.edges()', () =>
     it('reports the open border of a single face as boundary edges', () =>
     {
         // One planar quad: every edge has exactly one adjacent face.
-        const plate = Mesh.fromPoints([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]]);
+        const plate = Solid.fromPoints([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]]);
         const edges = plate.edges();
         expect(edges.group('boundary')?.length).toBe(4);
         expect(edges.group('crease')).toBeUndefined();
@@ -482,7 +504,7 @@ describe('Mesh.edges()', () =>
 
     it('hides triangulation diagonals unless asked for them', () =>
     {
-        const tri = Mesh.Cube(10).triangulate();
+        const tri = Solid.Cube(10).triangulate();
         // 12 triangles: each cube face is split by a diagonal that is not a model edge.
         expect(tri.edges().length).toBe(12);          // only the real cube edges
         expect(tri.edges(10, true).length).toBe(18);  // + the 6 face diagonals
@@ -491,7 +513,7 @@ describe('Mesh.edges()', () =>
 
     it('reconstructNgons() merges coplanar faces back together', () =>
     {
-        const tri = Mesh.Cube(10).triangulate();
+        const tri = Solid.Cube(10).triangulate();
         expect(tri.polygons().length).toBe(12);
         expect(tri.reconstructNgons().polygons().length).toBe(6);
     });
@@ -499,7 +521,7 @@ describe('Mesh.edges()', () =>
     it('deduplicates: every edge is shared by exactly two faces on a closed solid', () =>
     {
         // 6 faces x 4 edges = 24 face-edges, halved to 12 unique edges.
-        const edges = Mesh.Cube(10).edges();
+        const edges = Solid.Cube(10).edges();
         const keys = edges.toArray().map(e =>
         {
             const [a, b] = [e.start(), e.end()].map(p => `${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}`);
@@ -509,11 +531,11 @@ describe('Mesh.edges()', () =>
     });
 });
 
-describe('Selector — edges on a Mesh', () =>
+describe('Selector — edges on a Solid', () =>
 {
     it('selects mesh edges parallel to an axis', () =>
     {
-        const box = Mesh.Box(10, 20, 30);
+        const box = Solid.Box(10, 20, 30);
         const zEdges = box.select('edge|z');
         expect(zEdges).toBeTruthy();
         // a box has 4 edges along each axis
@@ -523,27 +545,27 @@ describe('Selector — edges on a Mesh', () =>
 
     it('selects the mesh edge closest to a point', () =>
     {
-        const box = Mesh.Box(10, 10, 10);
+        const box = Solid.Box(10, 10, 10);
         const edge = box.select('edge<<->[10,10,10]');
         expect(edge).toBeTruthy();
         expect(edge.type).toBe('Curve');
     });
 });
 
-describe('Mesh.trim()', () =>
+describe('Solid.trim()', () =>
 {
     it('with an axis is cutoff()', () =>
     {
-        // Mesh.Cube(10) is centred on the origin: x runs -5..5
-        expect(Mesh.Cube(10).trim('x', -2).volume()).toBeCloseTo(700, 3);
-        expect(Mesh.Cube(10).trim('x', -2, true).volume()).toBeCloseTo(300, 3);
+        // Solid.Cube(10) is centred on the origin: x runs -5..5
+        expect(Solid.Cube(10).trim('x', -2).volume()).toBeCloseTo(700, 3);
+        expect(Solid.Cube(10).trim('x', -2, true).volume()).toBeCloseTo(300, 3);
     });
 
-    it('with another Mesh is cutoffBy(), keepSmallest included', () =>
+    it('with another Solid is cutoffBy(), keepSmallest included', () =>
     {
-        const cutter = () => Mesh.Cube(10).move(7, 0, 0); // overlaps x 2..5
-        expect(Mesh.Cube(10).trim(cutter()).volume()).toBeCloseTo(700, 3);
-        expect(Mesh.Cube(10).trim(cutter(), true).volume()).toBeCloseTo(300, 3);
+        const cutter = () => Solid.Cube(10).move(7, 0, 0); // overlaps x 2..5
+        expect(Solid.Cube(10).trim(cutter()).volume()).toBeCloseTo(700, 3);
+        expect(Solid.Cube(10).trim(cutter(), true).volume()).toBeCloseTo(300, 3);
     });
 });
 
@@ -556,6 +578,6 @@ describe('center() of a flat mesh', () =>
         expect(tri.volume() ?? 0).toBeCloseTo(0, 6);
         expect(tri.center().round(1e-6).toArray()).toEqual([30, 10, 0]);
         // and a solid keeps its mass centre
-        expect(Mesh.Cube(10).move(5, 0, 0).center().round(1e-6).toArray()).toEqual([5, 0, 0]);
+        expect(Solid.Cube(10).move(5, 0, 0).center().round(1e-6).toArray()).toEqual([5, 0, 0]);
     });
 });

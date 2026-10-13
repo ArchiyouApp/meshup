@@ -3,7 +3,7 @@
  *
  *      Style class is the interface to set, read and apply styles
  *
- *      Every Curve and Mesh has a default Style instance that can be modified:
+ *      Every Curve and Solid has a default Style instance that can be modified:
  *
  *      myCurve.style.color = 'blue'; // sets both fill and stroke at the same time
  *      myMesh.style.opacity = 0.5;
@@ -646,7 +646,7 @@ export class Style
     }
 
     /**
-     * Apply this style to a GLTF/three.js scene node (THREE.Object3D / THREE.Mesh).
+     * Apply this style to a GLTF/three.js scene node (THREE.Object3D / THREE.Solid).
      * Uses duck-typing so no three.js import is required.
      *
      * Handles:

@@ -107,7 +107,7 @@ export class Vertex extends Shape
   }
 
   /** Move this Vertex so it lands on `target`. A Vertex is dimensionless, so its bbox centre
-   *  is the vertex itself: where Mesh.moveTo()/Curve.moveTo() re-centre a bbox, this simply
+   *  is the vertex itself: where Solid.moveTo()/Curve.moveTo() re-centre a bbox, this simply
    *  sets the position. The normal is carried along untouched.
    *  Takes loose coordinates too (`moveTo(200, 475, 0)`). */
   override moveTo(target: PointLike | number, py?: number, pz?: number): this
@@ -206,7 +206,7 @@ export class Vertex extends Shape
   {
     const v = new Vertex([this.x, this.y, this.z], this.normal().toArray());
     v.style.merge(this.style.toData());
-    v.metadata = { ...this.metadata }; // copy metadata (name, subtype), like Mesh and Polygon do
+    v.metadata = { ...this.metadata }; // copy metadata (name, subtype), like Solid and Polygon do
     v._inheritSid(this);
     return v as this;
   }
@@ -220,7 +220,7 @@ export class Vertex extends Shape
 
   /**
    * Euclidean distance from this vertex to a PointLike (Point, Vertex, Vector, [x,y,z]).
-   * For other shapes (Mesh, Curve, Polygon …) delegates to `other.distanceTo(this)`.
+   * For other shapes (Solid, Curve, Polygon …) delegates to `other.distanceTo(this)`.
    */
   distance(other: PointLike | Shape): number
   {
@@ -232,7 +232,7 @@ export class Vertex extends Shape
       }
       // A shape knows how to measure to a point — delegate to it.
       const shape = other as any;
-      if (typeof shape?.distanceTo === 'function') return shape.distanceTo(this); // Mesh
+      if (typeof shape?.distanceTo === 'function') return shape.distanceTo(this); // Solid
       if (typeof shape?.distance === 'function')   return shape.distance(this);   // Curve, Polygon
       throw new Error(`Vertex.distance(): unsupported type. Got: ${(other as any)?.constructor?.name ?? typeof other}`);
   }
@@ -244,7 +244,7 @@ export class Vertex extends Shape
    *
    * This is the first link of the classic vertex → line → face → solid chain: the Curve it
    * returns has extrude() (giving a Polygon for a straight sweep), and that Polygon has
-   * extrude() in turn (giving a solid Mesh).
+   * extrude() in turn (giving a solid Solid).
    *
    * @param length     Distance to sweep.
    * @param direction  Direction to sweep in. Defaults to this vertex's own normal when it has
@@ -261,7 +261,7 @@ export class Vertex extends Shape
   }
 
   /** Collapse this Vertex onto the coordinate plane perpendicular to `axis`, in place.
-   *  Mirrors Curve.flatten() / Mesh.flatten() / ShapeCollection.flatten().
+   *  Mirrors Curve.flatten() / Solid.flatten() / ShapeCollection.flatten().
    *
    *  A point is the one shape flattening cannot lose anything from, but without this method
    *  ShapeCollection.flatten() had nothing to call and kept the Vertex AT ITS OLD HEIGHT.

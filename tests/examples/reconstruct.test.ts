@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { save } from '../../src/utils';
 import { outputDir } from '../helpers/outputs';
 
@@ -11,15 +11,15 @@ beforeAll(async () =>
     await initAsync();
 });
 
-/** Vertex count per polygon face of a Mesh. */
-const faceVertCounts = (m: Mesh): number[] =>
+/** Vertex count per polygon face of a Solid. */
+const faceVertCounts = (m: Solid): number[] =>
     m.polygons().toArray().map(p => p.vertices().count());
 
 describe('Example: Coplanar n-gon reconstruction after booleans', () =>
 {
     it('a pristine box is built from quad faces', () =>
     {
-        const b = Mesh.Box(100, 100, 100);
+        const b = Solid.Box(100, 100, 100);
         const counts = faceVertCounts(b);
 
         expect(counts.length).toBe(6);            // 6 faces
@@ -28,10 +28,10 @@ describe('Example: Coplanar n-gon reconstruction after booleans', () =>
 
     it('subtracting a notch keeps n-gon faces instead of triangle soup', async () =>
     {
-        const b = Mesh.Box(100, 100, 100);
+        const b = Solid.Box(100, 100, 100);
         // Cutter straddling the right (+x) / top (+z) edge — removes a 30×30 notch
         // running the full depth, the way `align(..., 'rightfronttop')` would.
-        const cutter = Mesh.Box(30, 100, 30).move(50, 0, 50).hide();
+        const cutter = Solid.Box(30, 100, 30).move(50, 0, 50).hide();
 
         b.subtract(cutter);
 
@@ -53,12 +53,12 @@ describe('Example: Coplanar n-gon reconstruction after booleans', () =>
 
     it('reconstructNgons() is idempotent on an already-merged mesh', () =>
     {
-        const b = Mesh.Box(100, 100, 100);
-        b.subtract(Mesh.Box(30, 100, 30).move(50, 0, 50));
+        const b = Solid.Box(100, 100, 100);
+        b.subtract(Solid.Box(30, 100, 30).move(50, 0, 50));
 
         const before = faceVertCounts(b).sort((a, z) => a - z);
         // Re-running reconstruction must not change the face topology.
-        const after = faceVertCounts(Mesh.from(b.inner().reconstructNgons())).sort((a, z) => a - z);
+        const after = faceVertCounts(Solid.from(b.inner().reconstructNgons())).sort((a, z) => a - z);
 
         expect(after).toEqual(before);
     });

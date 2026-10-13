@@ -185,7 +185,7 @@ export class Point
     moveY(dy: number): Point { return this.move(0, dy, 0); }
     moveZ(dz: number): Point { return this.move(0, 0, dz); }
 
-    /** Move this Point onto `target`. A Point is dimensionless, so where Mesh.moveTo() and
+    /** Move this Point onto `target`. A Point is dimensionless, so where Solid.moveTo() and
      *  Curve.moveTo() re-centre a bbox on the target, this is simply setting the coordinates.
      *  Present for API parity: the same call reads the same on a Point, a Vertex and a Shape.
      *  Takes loose coordinates too (`moveTo(200, 475, 0)`). */
@@ -215,10 +215,10 @@ export class Point
             // NOTE: could use WASM Vector3Js for this calculation, but might not be faster
             return Math.sqrt(dx*dx + dy*dy + dz*dz);
         }
-        // A shape (Curve, Polygon, Mesh, …) knows how to measure to a point — delegate to it.
+        // A shape (Curve, Polygon, Solid, …) knows how to measure to a point — delegate to it.
         // (Duck-typed to avoid importing those modules here and deepening the import cycle.)
         const shape = to as any;
-        if (typeof shape?.distanceTo === 'function') return shape.distanceTo(this); // Mesh
+        if (typeof shape?.distanceTo === 'function') return shape.distanceTo(this); // Solid
         if (typeof shape?.distance === 'function')   return shape.distance(this);   // Curve, Polygon
         throw new Error(`Point::distance(): Invalid parameter: ${to}`);
     }

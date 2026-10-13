@@ -1,7 +1,7 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { SceneNode } from '../../src/SceneNode';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 
 beforeAll(async () =>
@@ -50,9 +50,9 @@ describe('SceneNode construction', () =>
         expect(r.name).toBe('root');
     });
 
-    it('SceneNode.from() wraps a Mesh', () =>
+    it('SceneNode.from() wraps a Solid', () =>
     {
-        const m = Mesh.Cube(5);
+        const m = Solid.Cube(5);
         const c = SceneNode.from(m);
         expect(c.shapes()).toHaveLength(1);
         expect(c.shapes().toArray()[0]).toBe(m);
@@ -74,7 +74,7 @@ describe('SceneNode shape management', () =>
     it('addShape / shapes()', () =>
     {
         const c = new SceneNode('c');
-        const m = Mesh.Cube(5);
+        const m = Solid.Cube(5);
         c.addShape(m);
         expect(c.shapes().toArray()).toContain(m);
     });
@@ -82,18 +82,18 @@ describe('SceneNode shape management', () =>
     it('addShape is idempotent', () =>
     {
         const c = new SceneNode('c');
-        const m = Mesh.Cube(5);
+        const m = Solid.Cube(5);
         c.addShape(m).addShape(m);
         expect(c.shapes()).toHaveLength(1);
     });
 
     // Shape.name() can only sync the node label when the shape already has a node, so a shape
     // named while detached (a copy of a template kept out of the scene, added later via a
-    // collection) has to have its name picked up here — or it shows as 'Mesh:Box'.
+    // collection) has to have its name picked up here — or it shows as 'Solid:Box'.
     it('a node adopting a named shape takes the shape name', () =>
     {
         const c = new SceneNode('c');
-        const m = Mesh.Cube(5).name('stud0');
+        const m = Solid.Cube(5).name('stud0');
         expect(m._node).toBeNull();     // named while detached
 
         c.addShape(m);
@@ -104,14 +104,14 @@ describe('SceneNode shape management', () =>
     it('a node adopting an unnamed shape falls back to the type label', () =>
     {
         const c = new SceneNode('c');
-        c.addShape(Mesh.Cube(5));
-        expect(c.children()[0].name).toBe('Mesh:Box');
+        c.addShape(Solid.Cube(5));
+        expect(c.children()[0].name).toBe('Solid:Box');
     });
 
     it('removeShape removes the shape', () =>
     {
         const c = new SceneNode('c');
-        const m = Mesh.Cube(5);
+        const m = Solid.Cube(5);
         c.setShape(m).removeShape(m);
         expect(c.shapes().toArray()).toHaveLength(0);
     });
@@ -125,7 +125,7 @@ describe('SceneNode shape management', () =>
     it('isLayer() is false when shapes are present', () =>
     {
         const c = new SceneNode('c');
-        c.setShape(Mesh.Cube(5));
+        c.setShape(Solid.Cube(5));
         expect(c.isLayer()).toBe(false);
     });
 
@@ -133,19 +133,19 @@ describe('SceneNode shape management', () =>
     {
         const c = new SceneNode('c');
         expect(c.hasShape()).toBe(false);
-        c.setShape(Mesh.Cube(5));
+        c.setShape(Solid.Cube(5));
         expect(c.hasShape()).toBe(true);
     });
 
-    it('can filter Mesh and Curve shapes from descendants', () =>
+    it('can filter Solid and Curve shapes from descendants', () =>
     {
         const parent = new SceneNode('p');
         const meshNode = new SceneNode('mn');
         const curveNode = new SceneNode('cn');
-        meshNode.setShape(Mesh.Cube(5));
+        meshNode.setShape(Solid.Cube(5));
         curveNode.setShape(Curve.Line([0,0,0], [1,0,0]));
         parent.addChild(meshNode).addChild(curveNode);
-        expect(parent.shapes().filter(s => s instanceof Mesh)).toHaveLength(1);
+        expect(parent.shapes().filter(s => s instanceof Solid)).toHaveLength(1);
         expect(parent.shapes().filter(s => s instanceof Curve)).toHaveLength(1);
     });
 
@@ -153,7 +153,7 @@ describe('SceneNode shape management', () =>
     {
         const parent = new SceneNode('parent');
         const child = new SceneNode('child');
-        const m = Mesh.Cube(5);
+        const m = Solid.Cube(5);
         child.addShape(m);
         parent.addChild(child);
         expect(parent.shapes().toArray()).toContain(m);
@@ -213,7 +213,7 @@ describe('SceneNode hierarchy', () =>
     {
         const parent = new SceneNode('parent');
         const child = new SceneNode('child');
-        const m = Mesh.Cube(5);
+        const m = Solid.Cube(5);
         parent.add(child).add(m);
         expect(parent.children()).toContain(child);
         expect(parent.shapes().toArray()).toContain(m);
@@ -328,7 +328,7 @@ describe('SceneNode style cascading', () =>
     it('applyStyle() mutates shape styles', () =>
     {
         const c = new SceneNode('c');
-        const m = Mesh.Cube(5);
+        const m = Solid.Cube(5);
         c.setShape(m);
         c.color('blue');
         c.applyStyle();
@@ -357,12 +357,12 @@ describe('SceneNode.toGraph()', () =>
     it('returns correct structure for a single container with a shape', () =>
     {
         const c = new SceneNode('root');
-        c.setShape(Mesh.Cube(5));
+        c.setShape(Solid.Cube(5));
         const g = c.toGraph();
         expect(g.name).toBe('root');
         expect(g.isLayer).toBe(false);
         expect(g.hasShape).toBe(true);
-        expect(g.shapeType).toEqual('Mesh');
+        expect(g.shapeType).toEqual('Solid');
         expect(g.children).toHaveLength(0);
     });
 
@@ -377,7 +377,7 @@ describe('SceneNode.toGraph()', () =>
     {
         const parent = new SceneNode('parent');
         const child = new SceneNode('child');
-        child.setShape(Mesh.Cube(5));
+        child.setShape(Solid.Cube(5));
         parent.addChild(child);
         const g = parent.toGraph();
         expect(g.children).toHaveLength(1);
@@ -442,7 +442,7 @@ describe('SceneNode.toGLTF()', () =>
     it('returns a valid JSON string', async () =>
     {
         const c = new SceneNode('scene');
-        c.setShape(Mesh.Cube(5));
+        c.setShape(Solid.Cube(5));
         const gltf = await c.toGLTF();
         const parsed = JSON.parse(gltf);
         expect(parsed).toBeTruthy();
@@ -452,7 +452,7 @@ describe('SceneNode.toGLTF()', () =>
     it('root node carries the container name', async () =>
     {
         const c = new SceneNode('myScene');
-        c.setShape(Mesh.Cube(5));
+        c.setShape(Solid.Cube(5));
         const gltf = await c.toGLTF();
         const parsed = JSON.parse(gltf);
         const nodeNames: string[] = (parsed.nodes ?? []).map((n: any) => n.name as string);
@@ -464,7 +464,7 @@ describe('SceneNode.toGLTF()', () =>
         const parent = new SceneNode('parent');
         const child = new SceneNode('child');
         parent.addChild(child);
-        child.setShape(Mesh.Cube(5));
+        child.setShape(Solid.Cube(5));
         const gltf = await parent.toGLTF();
         const parsed = JSON.parse(gltf);
         const nodeNames: string[] = (parsed.nodes ?? []).map((n: any) => n.name as string);
@@ -479,7 +479,7 @@ describe('SceneNode.toGLTF()', () =>
         const root = new SceneNode('root');
         const hidden = new SceneNode('hiddenChild');
         hidden.visible(false);
-        hidden.setShape(Mesh.Cube(5));
+        hidden.setShape(Solid.Cube(5));
         root.addChild(hidden);
         const gltf = await root.toGLTF();
         const parsed = JSON.parse(gltf);
@@ -492,7 +492,7 @@ describe('SceneNode.toGLTF()', () =>
     it('toGLB() returns a Uint8Array', async () =>
     {
         const c = new SceneNode('scene');
-        c.setShape(Mesh.Cube(5));
+        c.setShape(Solid.Cube(5));
         const glb = await c.toGLB();
         expect(glb).toBeInstanceOf(Uint8Array);
         expect(glb.length).toBeGreaterThan(0);

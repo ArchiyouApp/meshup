@@ -2,7 +2,7 @@ import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Curve } from '../../src/Curve';
 import { Polygon } from '../../src/Polygon';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Vector } from '../../src/Vector';
 import { Point } from '../../src/Point';
 
@@ -22,22 +22,22 @@ describe('Curve.loft()', () =>
         expect((result as Polygon).vertices().length).toBe(4);
     });
 
-    it('two open arcs -> surface Mesh (no caps)', () =>
+    it('two open arcs -> surface Solid (no caps)', () =>
     {
         const a = Curve.Arc([0, 0, 0], [5, 5, 0], [10, 0, 0]);
         const b = Curve.Arc([0, 0, 5], [5, 5, 5], [10, 0, 5]);
         const result = a.loft(b);
-        expect(result).toBeInstanceOf(Mesh);
-        expect((result as Mesh).polygons().length).toBeGreaterThan(0);
+        expect(result).toBeInstanceOf(Solid);
+        expect((result as Solid).polygons().length).toBeGreaterThan(0);
     });
 
-    it('two closed circles, solid=true -> watertight solid Mesh with positive volume', () =>
+    it('two closed circles, solid=true -> watertight solid Solid with positive volume', () =>
     {
         const a = Curve.Circle(10, [0, 0, 0], [0, 0, 1]);
         const b = Curve.Circle(5,  [0, 0, 10], [0, 0, 1]);
         const result = a.loft(b, true);
-        expect(result).toBeInstanceOf(Mesh);
-        const vol = (result as Mesh).volume();
+        expect(result).toBeInstanceOf(Solid);
+        const vol = (result as Solid).volume();
         expect(vol).toBeGreaterThan(0);
     });
 
@@ -45,8 +45,8 @@ describe('Curve.loft()', () =>
     {
         const a = Curve.Circle(10, [0, 0, 0], [0, 0, 1]);
         const b = Curve.Circle(5,  [0, 0, 10], [0, 0, 1]);
-        const solid = a.loft(b, true) as Mesh;
-        const open  = a.loft(b, false) as Mesh;
+        const solid = a.loft(b, true) as Solid;
+        const open  = a.loft(b, false) as Solid;
         expect(open.polygons().length).toBeLessThan(solid.polygons().length);
     });
 
@@ -56,8 +56,8 @@ describe('Curve.loft()', () =>
         const b = Curve.Circle(5,  [0, 0, 10], [0, 0, 1]);
         const c = Curve.Circle(8,  [0, 0, 20], [0, 0, 1]);
         const result = a.loft([b, c], true);
-        expect(result).toBeInstanceOf(Mesh);
-        expect((result as Mesh).volume()).toBeGreaterThan(0);
+        expect(result).toBeInstanceOf(Solid);
+        expect((result as Solid).volume()).toBeGreaterThan(0);
     });
 
     it('single profile / no others -> null', () =>
@@ -73,15 +73,15 @@ describe('Curve.loft() resolution', () =>
     {
         // a box has four sides and two caps — a loft that resamples the profiles instead of
         // following their segments used to make this 66
-        const box = Curve.Rect(100, 50).loft(Curve.Rect(100, 50).move(0, 0, 100)) as Mesh;
-        expect(box).toBeInstanceOf(Mesh);
+        const box = Curve.Rect(100, 50).loft(Curve.Rect(100, 50).move(0, 0, 100)) as Solid;
+        expect(box).toBeInstanceOf(Solid);
         expect(box.polygons().length).toBe(6);
         expect(box.volume()).toBeCloseTo(100 * 50 * 100, 6); // no faceting, so this is exact
     });
 
     it('keeps the four side faces when the rectangles differ', () =>
     {
-        const frustum = Curve.Rect(100, 50).loft(Curve.Rect(50, 25).move(0, 0, 100)) as Mesh;
+        const frustum = Curve.Rect(100, 50).loft(Curve.Rect(50, 25).move(0, 0, 100)) as Solid;
         expect(frustum.polygons().length).toBe(6);
         // h/3 * (A1 + A2 + sqrt(A1*A2)) for a tapered prism
         expect(frustum.volume()).toBeCloseTo(100 / 3 * (5000 + 1250 + Math.sqrt(5000 * 1250)), 6);
@@ -91,7 +91,7 @@ describe('Curve.loft() resolution', () =>
     {
         // a square onto a 45° turned one: every side quad is twisted. Triangulating those as-is
         // put points halfway up the wall and left holes in it
-        const lofted = Curve.Rect(100, 100).loft(Curve.Rect(40, 40).rotateZ(45).move(0, 0, 100)) as Mesh;
+        const lofted = Curve.Rect(100, 100).loft(Curve.Rect(40, 40).rotateZ(45).move(0, 0, 100)) as Solid;
         const onProfile = (p: { x: number, y: number, z: number }) =>
             (Math.abs(p.z) < 1e-6 && Math.max(Math.abs(p.x), Math.abs(p.y)) === 50)
             || (Math.abs(p.z - 100) < 1e-6 && Math.abs(Math.abs(p.x) + Math.abs(p.y) - 20 * Math.SQRT2) < 1e-6);
@@ -113,7 +113,7 @@ describe('Curve.loft() resolution', () =>
             up:       bottom().loft(top()),
             down:     top().loft(bottom()),
             reversed: bottom().reverse().loft(top()),
-        } as Record<string, Mesh>;
+        } as Record<string, Solid>;
 
         Object.entries(lofts).forEach( ([name, lofted]) =>
         {
@@ -134,7 +134,7 @@ describe('Curve.loft() resolution', () =>
 
     it('leaves out the caps when solid is false', () =>
     {
-        const tube = Curve.Rect(100, 50).loft(Curve.Rect(100, 50).move(0, 0, 100), false) as Mesh;
+        const tube = Curve.Rect(100, 50).loft(Curve.Rect(100, 50).move(0, 0, 100), false) as Solid;
         expect(tube.polygons().length).toBe(4);
     });
 
@@ -143,7 +143,7 @@ describe('Curve.loft() resolution', () =>
         const a = Curve.Rect(100, 50);
         const b = Curve.Rect(50, 25).move(0, 0, 50);
         const c = Curve.Rect(80, 40).move(0, 0, 100);
-        const stack = a.loft([b, c]) as Mesh;
+        const stack = a.loft([b, c]) as Solid;
         expect(stack.polygons().length).toBe(4 + 4 + 2); // two rings of sides, two caps
     });
 
@@ -151,7 +151,7 @@ describe('Curve.loft() resolution', () =>
     {
         // straight segments cost one face each, the fillet arcs are subdivided by how far they turn
         const rounded = Curve.Rect(100, 50).fillet(10)!;
-        const lofted = rounded.loft(Curve.Rect(100, 50).fillet(10)!.move(0, 0, 50)) as Mesh;
+        const lofted = rounded.loft(Curve.Rect(100, 50).fillet(10)!.move(0, 0, 50)) as Solid;
         expect(lofted.polygons().length).toBeGreaterThan(6);
         // area of the rounded rect: the four corners lose (4 - pi) * r^2 between them
         expect(lofted.volume()).toBeCloseTo((5000 - (4 - Math.PI) * 100) * 50, -2);
@@ -160,22 +160,22 @@ describe('Curve.loft() resolution', () =>
     it('resolves a circle the same however it is lofted', () =>
     {
         // a full turn is LOFT_SEGMENTS_PER_TURN steps, so two half-circle spans give 64 sides
-        const tube = Curve.Circle(50).loft(Curve.Circle(50).move(0, 0, 100), false) as Mesh;
+        const tube = Curve.Circle(50).loft(Curve.Circle(50).move(0, 0, 100), false) as Solid;
         expect(tube.polygons().length).toBe(64);
     });
 
     it('falls back to uniform sampling when the profiles do not line up', () =>
     {
         // a rectangle has four segments and a circle two: there is no correspondence to follow
-        const cone = Curve.Rect(100, 50).loft(Curve.Circle(30).move(0, 0, 100)) as Mesh;
-        expect(cone).toBeInstanceOf(Mesh);
+        const cone = Curve.Rect(100, 50).loft(Curve.Circle(30).move(0, 0, 100)) as Solid;
+        expect(cone).toBeInstanceOf(Solid);
         expect(cone.volume()).toBeGreaterThan(0);
     });
 
     it('caps from the same points the sides are built from', () =>
     {
         // a cap sampled differently from the wall it closes leaves gaps along the seam
-        const solid = Curve.Circle(50).loft(Curve.Circle(50).move(0, 0, 100)) as Mesh;
+        const solid = Curve.Circle(50).loft(Curve.Circle(50).move(0, 0, 100)) as Solid;
         expect(solid.polygons().length).toBe(64 + 2);
         // a 64-gon prism, not the ideal cylinder: area is (n/2) * r^2 * sin(2*pi/n)
         expect(solid.volume()).toBeCloseTo(32 * 2500 * Math.sin(2 * Math.PI / 64) * 100, -2);
@@ -243,7 +243,7 @@ describe('Curve.loft() robustness', () =>
     };
 
     /** The faces of a loft, and its directed edges (a -> b per face side) with how often each occurs */
-    const topology = (result: Mesh | Polygon) =>
+    const topology = (result: Solid | Polygon) =>
     {
         const faces = (result instanceof Polygon) ? [result] : result.polygons().toArray();
         const edges = faces.flatMap( face =>
@@ -255,7 +255,7 @@ describe('Curve.loft() robustness', () =>
         return { faces, edges, unpaired };
     };
 
-    const expectLoft = (result: Mesh | Polygon | null, c: Case, closedSolid: boolean) =>
+    const expectLoft = (result: Solid | Polygon | null, c: Case, closedSolid: boolean) =>
     {
         expect(result).not.toBeNull();
         const profiles = c.profiles();
@@ -280,7 +280,7 @@ describe('Curve.loft() robustness', () =>
         // two faces running the same way along an edge: one of them is flipped
         expect([...edges.values()].filter( n => n > 1).length, 'flipped faces').toBe(0);
 
-        if (result instanceof Mesh)
+        if (result instanceof Solid)
         {
             const { normals } = result.toBuffer();
             const lengths = Array.from({ length: normals.length / 3 }, (_, i) => Math.hypot(normals[3 * i], normals[3 * i + 1], normals[3 * i + 2]));
@@ -290,7 +290,7 @@ describe('Curve.loft() robustness', () =>
         if (closedSolid)
         {
             expect(unpaired.length, 'open edges on a solid').toBe(0);
-            const volume = (result as Mesh).volume()!;
+            const volume = (result as Solid).volume()!;
             expect(volume).toBeGreaterThan(0);
             if (c.volume !== undefined) { expect(volume).toBeCloseTo(c.volume, 4); }
         }
@@ -299,16 +299,16 @@ describe('Curve.loft() robustness', () =>
     describe.each(Object.entries(CLOSED))('closed: %s', (_name, c) =>
     {
         // each loft is built once: on NURBS profiles (the ellipse) sampling costs seconds
-        const lofted = new Map<boolean, Mesh>();
-        const loft = (solid: boolean): Mesh =>
+        const lofted = new Map<boolean, Solid>();
+        const loft = (solid: boolean): Solid =>
         {
             const [first, ...others] = c.profiles();
-            return lofted.get(solid) ?? lofted.set(solid, first.loft(others, solid) as Mesh).get(solid)!;
+            return lofted.get(solid) ?? lofted.set(solid, first.loft(others, solid) as Solid).get(solid)!;
         };
 
         it('lofts into a sound solid', () =>
         {
-            expect(loft(true)).toBeInstanceOf(Mesh);
+            expect(loft(true)).toBeInstanceOf(Solid);
             expectLoft(loft(true), c, true);
         }, 30_000);
 

@@ -1,6 +1,6 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
-import { initAsync, Sketch, Curve, Mesh, ShapeCollection, HERSHEY_FONTS } from '../../src/index';
+import { initAsync, Sketch, Curve, Solid, ShapeCollection, HERSHEY_FONTS } from '../../src/index';
 import { save } from '../../src/utils';
 import { outputDir } from '../helpers/outputs';
 
@@ -27,7 +27,7 @@ describe('Example: native text', () =>
     it('extrudes outline text into a solid mesh preserving counters', () =>
     {
         const mesh = Sketch.textSolid('Ao', { font: ttf(), size: 20, depth: 3 });
-        expect(mesh).toBeInstanceOf(Mesh);
+        expect(mesh).toBeInstanceOf(Solid);
         const bb = mesh.bbox();
         expect(bb.max().z - bb.min().z).toBeCloseTo(3, 1);
         expect(bb.width()).toBeGreaterThan(0);

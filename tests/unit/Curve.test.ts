@@ -4,7 +4,7 @@ import { Curve } from '../../src/Curve';
 import { Point } from '../../src/Point';
 import { Vertex } from '../../src/Vertex';
 import { Polygon } from '../../src/Polygon';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { save } from '../../src/utils';
 import { outputDir } from '../helpers/outputs';
 
@@ -354,11 +354,11 @@ describe('Curve.toPolygon()', () =>
 
 describe('Curve.toMesh()', () =>
 {
-    it('returns a Mesh for a closed curve', () =>
+    it('returns a Solid for a closed curve', () =>
     {
         const c = Curve.Polyline([[0,0,0], [10,0,0], [10,10,0], [0,10,0]]).close();
         const m = c.toMesh();
-        expect(m).toBeInstanceOf(Mesh);
+        expect(m).toBeInstanceOf(Solid);
     });
 
     it('result mesh has triangles', () =>
@@ -588,22 +588,22 @@ describe('Curve.extrude()', () =>
         const c = Curve.Line([0, 0, 0], [10, 0, 0]);
         const p = c.extrude(5);
         expect(p).toBeInstanceOf(Polygon);
-        // ...and that Polygon can itself be extruded into a solid Mesh
-        expect((p as Polygon).extrude(5)).toBeInstanceOf(Mesh);
+        // ...and that Polygon can itself be extruded into a solid Solid
+        expect((p as Polygon).extrude(5)).toBeInstanceOf(Solid);
     });
 
-    it('returns a Mesh for a curved open curve (swept surface)', () =>
+    it('returns a Solid for a curved open curve (swept surface)', () =>
     {
         const c = Curve.Arc([0, 0, 0], [10, 40, 0], [20, 0, 0]);
         const m = c.extrude(5);
-        expect(m).toBeInstanceOf(Mesh);
+        expect(m).toBeInstanceOf(Solid);
     });
 
-    it('returns a Mesh for a closed curve', () =>
+    it('returns a Solid for a closed curve', () =>
     {
         const c = Curve.Rect(5, 3);
         const m = c.extrude(4);
-        expect(m).toBeInstanceOf(Mesh);
+        expect(m).toBeInstanceOf(Solid);
     });
 
     it('defaults to the curve\'s own planar normal, not world Z, for a curve on another plane', () =>
@@ -612,7 +612,7 @@ describe('Curve.extrude()', () =>
         const c = Curve.Rect(5, 3, [0, 0, 0], 'xz');
         expect(c.normal()!.y).toBeCloseTo(1, 5);
 
-        const m = c.extrude(4) as Mesh;
+        const m = c.extrude(4) as Solid;
         const bbox = m.bbox()!;
         // Extrusion should have grown along Y (the curve's normal), not Z.
         expect(bbox.max().y - bbox.min().y).toBeCloseTo(4, 5);
@@ -622,16 +622,16 @@ describe('Curve.extrude()', () =>
     it('extruded curved open curve has triangles', () =>
     {
         const c = Curve.Arc([0, 0, 0], [10, 40, 0], [20, 0, 0]);
-        const m = c.extrude(5) as Mesh;
+        const m = c.extrude(5) as Solid;
         expect(m!.inner().triangleCount()).toBeGreaterThan(0);
     });
 
     it('respects a custom direction', async () =>
     {
-        // Curve.extrude() is typed Mesh|Polygon|null; extruding these always yields a Mesh.
+        // Curve.extrude() is typed Solid|Polygon|null; extruding these always yields a Solid.
         const c = Curve.Line([0, 0, 0], [10, 0, 0]);
-        const mZ = c.extrude(5, [0, 0, 1]) as Mesh;
-        const mY = c.extrude(5, [1, 1, 1]) as Mesh;
+        const mZ = c.extrude(5, [0, 0, 1]) as Solid;
+        const mY = c.extrude(5, [1, 1, 1]) as Solid;
         // Both should produce geometry; bboxes should differ in the extruded axis
         expect(mZ!.bbox()!.max().z).toBeGreaterThan(0);
         expect(mY!.bbox()!.max().y).toBeGreaterThan(0);
@@ -640,7 +640,7 @@ describe('Curve.extrude()', () =>
         const mA = a.extrude(10, [0, 0, 1])!.color('blue');
         expect(mA!.bbox()!.max().z).toBeCloseTo(10,1);
 
-        await save(OUTPUT_DIR + 'test.curve.extrude.direction.gltf', await new ShapeCollection<Mesh>(mZ, mY, mA as Mesh).toGLTF());
+        await save(OUTPUT_DIR + 'test.curve.extrude.direction.gltf', await new ShapeCollection<Solid>(mZ, mY, mA as Solid).toGLTF());
     });
 
 
@@ -955,7 +955,7 @@ describe('Curve.cutoffBy()', () =>
         difference as "the smallest", so the pair was inverted whenever the cutter covered less
         than half the shape — which is the normal case. A post cut by the diagonal crossing its
         top corner came back as the small corner overlap instead of the post below it.
-        Mesh.cutoffBy(), Polygon.cutoffBy() and brep's Shape.cutoffBy() all keep the largest of
+        Solid.cutoffBy(), Polygon.cutoffBy() and brep's Shape.cutoffBy() all keep the largest of
         the pieces they split into; this now does too. */
     it('keeps the bigger of the two parts when the cutter is a closed region', () =>
     {
@@ -1716,7 +1716,7 @@ const roundedCoords = (p: { toArray(): [number, number, number?] }): Array<numbe
 
 describe('Curve rotation pivots', () =>
 {
-    /*  Regression: Curve.rotateAround() defaulted its pivot to the WORLD ORIGIN while Mesh and
+    /*  Regression: Curve.rotateAround() defaulted its pivot to the WORLD ORIGIN while Solid and
         Polygon defaulted to the shape's own centre, so the same script line meant one thing for
         a box and another for the circle next to it — `circle(20).move(100,100,10).rotateX(90)`
         swung the circle around the origin instead of standing it up where it was. Pinned as
@@ -2014,9 +2014,9 @@ describe('Curve.align() with start/end', () =>
     it('puts a shape on the start of a curve', () =>
     {
         const line = Curve.Line([10, 20, 30], [100, 50, 20]);
-        const box = Mesh.Box(10, 10, 10).align(line, 'center', 'start');
+        const box = Solid.Box(10, 10, 10).align(line, 'center', 'start');
         expect(box.bbox().center().toArray()).toEqual([10, 20, 30]);
-        const group = new ShapeCollection([Mesh.Box(10, 10, 10)]).align(line, 'center', 'start');
+        const group = new ShapeCollection([Solid.Box(10, 10, 10)]).align(line, 'center', 'start');
         expect(group.bbox().center().toArray()).toEqual([10, 20, 30]);
     });
 });

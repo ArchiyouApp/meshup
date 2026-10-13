@@ -302,7 +302,7 @@ export class Vector
   moveZ(dz: number): this { return this.move(0, 0, dz); }
 
   /** Set this Vector to `target`. A Vector is a direction rooted at the origin and has no
-   *  extent, so where Mesh.moveTo() and Curve.moveTo() re-centre a bbox on the target, this
+   *  extent, so where Solid.moveTo() and Curve.moveTo() re-centre a bbox on the target, this
    *  simply sets the components. Present for API parity: the same call reads the same on a
    *  Vector, a Point, a Vertex and a Shape.
    *  Takes loose coordinates too (`moveTo(200, 475, 0)`). */

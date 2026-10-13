@@ -8,7 +8,7 @@
  */
 
 import { beforeAll, describe, it, expect } from 'vitest';
-import { Curve, Mesh, Polygon, ShapeCollection, initAsync } from '../../src/index';
+import { Curve, Solid, Polygon, ShapeCollection, initAsync } from '../../src/index';
 
 beforeAll(async () =>
 {
@@ -45,11 +45,11 @@ describe('Polygon.toSVGElem', () =>
     });
 });
 
-describe('Mesh.toSVGElem', () =>
+describe('Solid.toSVGElem', () =>
 {
     it('draws every face of a flattened mesh', () =>
     {
-        const flat = Mesh.Box(100, 10, 30).flatten();
+        const flat = Solid.Box(100, 10, 30).flatten();
 
         expect(flat.isFlatOnXY()).toBe(true);
         expect(flat.toSVGElem('line', { omitDefaults: true }))
@@ -60,7 +60,7 @@ describe('Mesh.toSVGElem', () =>
     {
         // faces() hands out fresh Polygon wrappers with a default style each call, so a
         // colour set on the mesh reached the drawing nowhere.
-        const flat = Mesh.Box(10, 10, 10).flatten();
+        const flat = Solid.Box(10, 10, 10).flatten();
         flat.style.stroke = { color: 'blue' };
 
         expect(flat.toSVGElem('line', { omitDefaults: true })).toMatch(/stroke="#0000ff"/i);
@@ -71,8 +71,8 @@ describe('ShapeCollection.toSVG — faces', () =>
 {
     /** The reported case: two boxes, flattened, exported. */
     const flattenedBoxes = () => new ShapeCollection<any>(
-        Mesh.Box(100, 10, 30),
-        Mesh.Box(20, 40, 30).move(50, 0, 0).move(0, 0, 100),
+        Solid.Box(100, 10, 30),
+        Solid.Box(20, 40, 30).move(50, 0, 0).move(0, 0, 100),
     ).flatten();
 
     it('draws flattened meshes instead of the "nothing to draw" placeholder', () =>
@@ -109,7 +109,7 @@ describe('ShapeCollection.toSVG — faces', () =>
 
     it('draws faces and curves in one document', () =>
     {
-        const col = new ShapeCollection<any>(Mesh.Box(100, 10, 30).flatten(), Curve.Line([0, 0, 0], [0, 100, 0]));
+        const col = new ShapeCollection<any>(Solid.Box(100, 10, 30).flatten(), Curve.Line([0, 0, 0], [0, 100, 0]));
         const svg = col.toSVG();
 
         expect(svg).toContain('<polygon ');
@@ -121,7 +121,7 @@ describe('ShapeCollection.toSVG — faces', () =>
         // A 3D box has no footprint to draw; so has a face standing up in Z. Both need a
         // projection (isometry/elevation/section) or a flatten() first.
         const wall = new Polygon([[0, 0, 0], [10, 0, 0], [10, 0, 10], [0, 0, 10]]);
-        const svg = new ShapeCollection<any>(Mesh.Box(10, 10, 10), wall).toSVG();
+        const svg = new ShapeCollection<any>(Solid.Box(10, 10, 10), wall).toSVG();
 
         expect(svg).toContain('nothing 2D to draw');
     });

@@ -14,7 +14,7 @@ import { Point } from './Point';
 import { Vector } from './Vector';
 import { Vertex } from './Vertex';
 import { ShapeCollection } from './ShapeCollection';
-import { Mesh } from './Mesh';
+import { Solid } from './Solid';
 import { Curve } from './Curve';
 import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
@@ -28,7 +28,7 @@ import { sceneAdd, sceneReplace, sceneUpdate, sceneCarry } from './sceneDecorato
  *  Point.toVertexJs() defaults its normal to (0,0,0), and a zero-normal surface takes no
  *  light: the polygon renders flat grey in any PBR viewer whatever colour it carries, and
  *  exports a useless NORMAL buffer to glTF. Every such polygon therefore gets its own
- *  plane normal — the same rule as Mesh.fromPolygons().
+ *  plane normal — the same rule as Solid.fromPolygons().
  *
  *  NOT for vertices that already carry meaningful normals (a transformed polygon, say):
  *  setNewNormal() would flatten them. See _applyVertexTransform(), which maps the normals
@@ -94,7 +94,7 @@ export class Polygon extends Shape
     }
 
     /** Create a planar rectangular Polygon spanning between two points.
-     *  Mirrors Mesh.planeBetween() but yields a single Polygon instead of a Mesh. */
+     *  Mirrors Solid.planeBetween() but yields a single Polygon instead of a Solid. */
     static planeBetween(from: PointLike, to: PointLike): Polygon
     {
         const a = Point.from(from);
@@ -246,7 +246,7 @@ export class Polygon extends Shape
             norm => norm.copy().rotateQuaternion(w, xv, yv, zv),
         );
 
-        // Preserve center (match Mesh.rotateQuaternion behavior)
+        // Preserve center (match Solid.rotateQuaternion behavior)
         const newCenter = this.center();
         this.translate(
             originalCenter.x - newCenter.x,
@@ -447,18 +447,18 @@ export class Polygon extends Shape
     }
 
     /** Minimum distance from this polygon surface to a point, vertex, curve, polygon, or mesh. */
-    distance(other: PointLike | Mesh | Curve | Polygon): number
+    distance(other: PointLike | Solid | Curve | Polygon): number
     {
-        // Measure against this polygon's mesh; Mesh.distanceTo() handles every supported
-        // type (Point/Vertex/Curve/Polygon/Mesh), so we just reduce the point-like case.
+        // Measure against this polygon's mesh; Solid.distanceTo() handles every supported
+        // type (Point/Vertex/Curve/Polygon/Solid), so we just reduce the point-like case.
         const target = isPointLike(other) ? Point.from(other) : other;
 
-        if (target instanceof Point || target instanceof Mesh || target instanceof Curve || target instanceof Polygon)
+        if (target instanceof Point || target instanceof Solid || target instanceof Curve || target instanceof Polygon)
         {
             return this.toMesh().distanceTo(target);
         }
 
-        throw new Error('Polygon.distance(): Unsupported type. Expected PointLike, Vertex, Curve, Polygon, or Mesh.');
+        throw new Error('Polygon.distance(): Unsupported type. Expected PointLike, Vertex, Curve, Polygon, or Solid.');
     }
 
     //// MEASUREMENTS ////
@@ -1128,7 +1128,7 @@ export class Polygon extends Shape
      * The cut is the line where the world plane `{ <at> = coord }` meets this polygon's plane
      * (its direction is polygonNormal × axisNormal). By default the largest piece (by area) is
      * kept; set `smallest=true` to keep the smallest. This is a planar (2D) cut — polygons are
-     * flat, so it does not go through the solid boolean path used by Mesh.cutoff().
+     * flat, so it does not go through the solid boolean path used by Solid.cutoff().
      *
      * Mutates in place and returns `this`. Returns unchanged (with a warning) when the plane is
      * parallel to the polygon or does not actually split it.
@@ -1174,7 +1174,7 @@ export class Polygon extends Shape
     trim(at: Axis, coord?: number, smallest?: boolean): this;
     /** Trim this polygon with another Curve or Polygon — the same as cutoffBy(). */
     trim(other: Curve | Polygon, keepSmallest?: boolean): this;
-    /** Trim this polygon, like Mesh.trim(), Curve.trim() and brep's Shape.trim():
+    /** Trim this polygon, like Solid.trim(), Curve.trim() and brep's Shape.trim():
      *  - `trim(other, keepSmallest?)`: cut by a Curve or Polygon and keep a piece — see cutoffBy().
      *  - `trim(at, coord?, smallest?)`: cut by the plane `{ <at> = coord }` — see cutoff(). */
     trim(otherOrAt: Curve | Polygon | Axis, keepOrCoord?: boolean | number, smallest?: boolean): this
@@ -1187,12 +1187,12 @@ export class Polygon extends Shape
     //// 3D OPERATIONS ////
 
     /**
-     * Extrude this polygon into a closed solid Mesh.
+     * Extrude this polygon into a closed solid Solid.
      * @param length     Distance to extrude.
      * @param direction  Direction vector (default: polygon normal).
      */
     @sceneReplace
-    extrude(length: number, direction?: PointLike): Mesh
+    extrude(length: number, direction?: PointLike): Solid
     {
         const normal = this.normal();
         const baseDirection = direction ? Vector.from(direction) : normal;
@@ -1226,11 +1226,11 @@ export class Polygon extends Shape
         const along = baseDirection.normalize().dot(normal.normalize());
         const oriented = along < 0 ? faces.map(f => [...f].reverse()) : faces;
 
-        return Mesh.fromPolygons(oriented);
+        return Solid.fromPolygons(oriented);
     }
 
     /**
-     * Loft from this polygon's boundary to one or more other profiles, giving a solid Mesh.
+     * Loft from this polygon's boundary to one or more other profiles, giving a solid Solid.
      *
      * This polygon's boundary is a closed curve, so lofting to another closed profile caps
      * both ends into a watertight solid (see Curve.loft()). Polygon profiles are used as their
@@ -1240,7 +1240,7 @@ export class Polygon extends Shape
      * @param solid   Cap the ends into a watertight solid when all profiles are closed (default true).
      */
     @sceneReplace
-    loft(others: Curve | Polygon | Array<Curve | Polygon>, solid: boolean = true): Mesh | Polygon | null
+    loft(others: Curve | Polygon | Array<Curve | Polygon>, solid: boolean = true): Solid | Polygon | null
     {
         const otherList = Array.isArray(others) ? others : [others];
         if (otherList.some(o => !(o instanceof Curve) && !(o instanceof Polygon)))
@@ -1256,7 +1256,7 @@ export class Polygon extends Shape
     }
 
     /**
-     * Revolve this polygon around an axis into a Mesh — the lathe.
+     * Revolve this polygon around an axis into a Solid — the lathe.
      *
      * The boundary is a closed curve, so a full turn gives a watertight solid and a partial
      * one is shut with a flat cap at either end (see Curve.revolve()). Interior holes are
@@ -1268,7 +1268,7 @@ export class Polygon extends Shape
      * @param segments   Facets around the sweep.
      */
     @sceneReplace
-    revolve(angle: number = 360, axisStart?: PointLike|Axis, axisEnd?: PointLike|Axis, segments?: number): Mesh | null
+    revolve(angle: number = 360, axisStart?: PointLike|Axis, axisEnd?: PointLike|Axis, segments?: number): Solid | null
     {
         // Curve.revolve() is @sceneReplace too, but this boundary Curve is a throwaway that was
         // never added to a scene, so nothing gets replaced there — only this Polygon is.
@@ -1278,7 +1278,7 @@ export class Polygon extends Shape
     }
 
     /** Rotate this polygon so it lies flat on the XY plane (its normal pointing +Z) and drop
-     *  it onto z = 0. Unlike Mesh.layflat(), which has to guess the thin axis from an oriented
+     *  it onto z = 0. Unlike Solid.layflat(), which has to guess the thin axis from an oriented
      *  bounding box, a Polygon has an exact plane normal to rotate. Mutates and returns `this`. */
     @sceneUpdate
     layflat(): this
@@ -1293,7 +1293,7 @@ export class Polygon extends Shape
             const q = (dot <= -1 + TOLERANCE)
                 ? { x: 1, y: 0, z: 0, w: 0 }
                 : normal.copy().rotationBetween(up);
-            // about the polygon's own centre, as Mesh.layflat() turns about Mesh.center() — so the
+            // about the polygon's own centre, as Solid.layflat() turns about Solid.center() — so the
             // shape stays where it was instead of swinging around the world origin
             const c = this.center();
             this.translate(-c.x, -c.y, -c.z);
@@ -1307,14 +1307,14 @@ export class Polygon extends Shape
     //// SELECTION ////
 
     /** Select (sub)shapes with a selector string (see Selector.ts).
-     *  Delegates to the single-polygon Mesh so all Mesh selectors work here too. */
+     *  Delegates to the single-polygon Solid so all Solid selectors work here too. */
     @sceneCarry
     select(what: string)
     {
         const mesh = this.toMesh();
         const result = mesh.select(what);
 
-        // the Mesh is only a stand-in: the sub-shapes were selected from this Polygon
+        // the Solid is only a stand-in: the sub-shapes were selected from this Polygon
         const subs: Array<any> = (result instanceof ShapeCollection) ? result.toArray() : [result];
         subs.forEach(sub =>
         {
@@ -1392,11 +1392,11 @@ export class Polygon extends Shape
         return verts;
     }
 
-    /** Polygon is basically Mesh with one polygon */
+    /** Polygon is basically Solid with one polygon */
     @sceneCarry
-    toMesh(): Mesh
+    toMesh(): Solid
     {
-        return Mesh.fromPolygons([this.vertices().toArray()]);
+        return Solid.fromPolygons([this.vertices().toArray()]);
     }
 
     async toGLTF(up: Axis = 'z'): Promise<string | undefined>
@@ -1426,7 +1426,7 @@ export class Polygon extends Shape
 
     /**
      * Return just the SVG element for this Polygon — a `<polygon>`, or a `<path>` when it has
-     * holes — without the outer `<svg>` wrapper. Used by Mesh, ShapeCollection and SceneNode
+     * holes — without the outer `<svg>` wrapper. Used by Solid, ShapeCollection and SceneNode
      * to compose a drawing.
      *
      * The face is drawn as seen from above: x and y straight through with y negated (SVG's y

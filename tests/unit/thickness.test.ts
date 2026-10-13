@@ -8,7 +8,7 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { Curve } from '../../src/Curve';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { ShapeCollection } from '../../src/ShapeCollection';
 import { SceneNode } from '../../src/SceneNode';
 
@@ -34,7 +34,7 @@ describe('Shape', () =>
 
     it('is inherited by every Shape type, not just Curve', () =>
     {
-        expect(Mesh.Box(1, 1, 1).thickness(2).style.strokeWidth).toBe(2);
+        expect(Solid.Box(1, 1, 1).thickness(2).style.strokeWidth).toBe(2);
     });
 });
 
@@ -61,7 +61,7 @@ describe('ShapeCollection', () =>
     {
         // The fan-out uses optional invocation so a member without the method is skipped
         // rather than taking the whole call down.
-        const col = new ShapeCollection(Curve.Line([0, 0, 0], [10, 0, 0]), Mesh.Box(1, 1, 1));
+        const col = new ShapeCollection(Curve.Line([0, 0, 0], [10, 0, 0]), Solid.Box(1, 1, 1));
         expect(() => col.thickness(2)).not.toThrow();
     });
 });

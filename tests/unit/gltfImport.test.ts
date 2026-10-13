@@ -1,7 +1,7 @@
 /**
  * glTF import: buffers must resolve, and the axis convention must survive a round trip.
  *
- * `Mesh.fromGLTF` used to lean on the `gltf` crate's `import_slice`, which resolves buffers
+ * `Solid.fromGLTF` used to lean on the `gltf` crate's `import_slice`, which resolves buffers
  * *and* decodes every texture — so the wasm binary carried the whole `image` crate (JPEG,
  * PNG, TIFF, WebP, OpenEXR, GIF: ~1.5 MB) to produce images the importer immediately threw
  * away. `io/gltf.rs` now resolves buffers itself and the decoders are gone from the build.
@@ -22,7 +22,7 @@
  */
 
 import { beforeAll, describe, it, expect } from 'vitest';
-import { Mesh, initAsync } from '../../src/index';
+import { Solid, initAsync } from '../../src/index';
 
 beforeAll(async () =>
 {
@@ -30,16 +30,16 @@ beforeAll(async () =>
 });
 
 /** Per-axis extents — the whole point here is *which* axis each one lands on. */
-function extentsOf(m: Mesh): [number, number, number]
+function extentsOf(m: Solid): [number, number, number]
 {
     const bb = m.bbox()!;
     return [bb.width(), bb.depth(), bb.height()];
 }
 
 /** A box whose three extents are all different, so every axis is identifiable. */
-const box = () => Mesh.Cuboid(10, 20, 30);
+const box = () => Solid.Cuboid(10, 20, 30);
 
-describe('Mesh.fromGLTF()', () =>
+describe('Solid.fromGLTF()', () =>
 {
     it('reads geometry back from a .glb binary chunk', async () =>
     {
@@ -47,7 +47,7 @@ describe('Mesh.fromGLTF()', () =>
         const glb = await cube.toGLB();
         expect(glb).toBeTruthy();
 
-        const back = Mesh.fromGLTF(glb!);
+        const back = Solid.fromGLTF(glb!);
 
         // A buffer that failed to resolve reads as zero primitives, not as an error.
         expect(back.inner().triangleCount()).toBe(cube.inner().triangleCount());
@@ -62,7 +62,7 @@ describe('Mesh.fromGLTF()', () =>
         // Guard the premise: this test is only meaningful if the buffer really is inline.
         expect(json!).toContain('base64,');
 
-        const back = Mesh.fromGLTF(json!);
+        const back = Solid.fromGLTF(json!);
 
         expect(back.inner().triangleCount()).toBe(cube.inner().triangleCount());
         expect(extentsOf(back)).toEqual(extentsOf(cube));
@@ -75,7 +75,7 @@ describe('Mesh.fromGLTF()', () =>
         const external = json!.replace(/"uri"\s*:\s*"data:[^"]*"/, '"uri":"geometry.bin"');
         expect(external).toContain('geometry.bin');
 
-        expect(() => Mesh.fromGLTF(external)).toThrow(/external buffer/i);
+        expect(() => Solid.fromGLTF(external)).toThrow(/external buffer/i);
     });
 });
 
@@ -84,7 +84,7 @@ describe('glTF axis convention', () =>
     it('round-trips a box onto the same axes it was exported from', async () =>
     {
         const cube = box();
-        const back = Mesh.fromGLTF((await cube.toGLB())!);
+        const back = Solid.fromGLTF((await cube.toGLB())!);
 
         // The regression this pins: depth and height came back transposed (10 x 30 x 20).
         expect(extentsOf(back)).toEqual([10, 20, 30]);
@@ -103,7 +103,7 @@ describe('glTF axis convention', () =>
         const fileExtents = acc.max.map((v: number, i: number) => Math.round(v - acc.min[i]));
         expect(fileExtents).toEqual([10, 30, 20]);
 
-        expect(extentsOf(Mesh.fromGLTF(json, null, 'y'))).toEqual([10, 20, 30]);
+        expect(extentsOf(Solid.fromGLTF(json, null, 'y'))).toEqual([10, 20, 30]);
     });
 
     it('lands a Y-up file on its side when read with the default — hence the parameter', async () =>
@@ -111,6 +111,6 @@ describe('glTF axis convention', () =>
         // Not desirable, just undetectable: nothing in a glTF says which convention it
         // used, so a file from Blender/three.js has to be imported with up:'y'.
         const yUp = (await box().toGLTF('y'))!;
-        expect(extentsOf(Mesh.fromGLTF(yUp))).toEqual([10, 30, 20]);
+        expect(extentsOf(Solid.fromGLTF(yUp))).toEqual([10, 30, 20]);
     });
 });

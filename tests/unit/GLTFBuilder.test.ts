@@ -1,6 +1,6 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Vertex } from '../../src/Vertex';
 import { SceneNode } from '../../src/SceneNode';
 import { Curve } from '../../src/Curve';
@@ -105,14 +105,14 @@ describe('computeEdgeVisibilityBitfield: two orthogonal triangles', () =>
     });
 });
 
-// ─── Full GLTFBuilder pipeline with Mesh.Cube ────────────────────────────────
+// ─── Full GLTFBuilder pipeline with Solid.Cube ────────────────────────────────
 
 describe('GLTFBuilder: box mesh edge extension', () =>
 {
     it('toGLB() resolves to a non-empty Uint8Array', async () =>
     {
         const scene = SceneNode.root();
-        scene.add(Mesh.Cube(1));
+        scene.add(Solid.Cube(1));
         const glb = await new GLTFBuilder('z', 'test').addSceneNode(scene).applyExtensions().toGLB();
         expect(glb).toBeInstanceOf(Uint8Array);
         expect(glb.byteLength).toBeGreaterThan(0);
@@ -121,7 +121,7 @@ describe('GLTFBuilder: box mesh edge extension', () =>
     it('GLB binary starts with the glTF magic bytes (0x676C5446)', async () =>
     {
         const scene = SceneNode.root();
-        scene.add(Mesh.Cube(1));
+        scene.add(Solid.Cube(1));
         const glb = await new GLTFBuilder('z', 'test').addSceneNode(scene).applyExtensions().toGLB();
         const magic = (glb[0] << 24) | (glb[1] << 16) | (glb[2] << 8) | glb[3];
         expect(magic >>> 0).toBe(0x676C5446);
@@ -130,7 +130,7 @@ describe('GLTFBuilder: box mesh edge extension', () =>
     it('EXT_mesh_primitive_edge_visibility is listed in extensionsUsed', async () =>
     {
         const scene = SceneNode.root();
-        scene.add(Mesh.Cube(1));
+        scene.add(Solid.Cube(1));
         const glb = await new GLTFBuilder('z', 'test').addSceneNode(scene).applyExtensions().toGLB();
         const json = extractGLTFJson(glb);
         expect(json.extensionsUsed).toContain('EXT_mesh_primitive_edge_visibility');
@@ -139,7 +139,7 @@ describe('GLTFBuilder: box mesh edge extension', () =>
     it('at least one primitive carries the EXT_mesh_primitive_edge_visibility extension', async () =>
     {
         const scene = SceneNode.root();
-        scene.add(Mesh.Cube(1));
+        scene.add(Solid.Cube(1));
         const glb = await new GLTFBuilder('z', 'test').addSceneNode(scene).applyExtensions().toGLB();
         const json = extractGLTFJson(glb);
         const allPrimitives = (json.meshes ?? []).flatMap((m: any) => m.primitives ?? []);
@@ -152,7 +152,7 @@ describe('GLTFBuilder: box mesh edge extension', () =>
     it('bitfield is not all-hard (0xAA) — smooth interior edges are 0', async () =>
     {
         const scene = SceneNode.root();
-        scene.add(Mesh.Cube(1));
+        scene.add(Solid.Cube(1));
         const glb = await new GLTFBuilder('z', 'test').addSceneNode(scene).applyExtensions().toGLB();
         const json   = extractGLTFJson(glb);
         const bufBin = extractGLTFBin(glb);
@@ -177,7 +177,7 @@ describe('GLTFBuilder: box mesh edge extension', () =>
         //   12 box edges (90° creases, well above 30° threshold) × 2 adjacent slots = 24 hard
         //    6 face-interior diagonals (0° angle, coplanar)    × 2 adjacent slots = 12 smooth
         const scene = SceneNode.root();
-        scene.add(Mesh.Cube(1));
+        scene.add(Solid.Cube(1));
         const glb = await new GLTFBuilder('z', 'test').addSceneNode(scene).applyExtensions().toGLB();
         const json   = extractGLTFJson(glb);
         const bufBin = extractGLTFBin(glb);
@@ -217,7 +217,7 @@ describe('computeEdgeVisibilityBitfield: sphere with 30° threshold', () =>
     // would be hard.  Expected: 0 hard slots.
     it('smooth sphere produces 0 hard edge slots at 30° threshold', () =>
     {
-        const sphere = Mesh.Sphere(1);
+        const sphere = Solid.Sphere(1);
         const buf    = sphere.toBuffer();
         const posF32 = new Float32Array(buf.positions);
         const bf     = computeEdgeVisibilityBitfield(posF32, buf.indices, 30);

@@ -1,6 +1,6 @@
 /**
  * 
- *  Mesh.ts 
+ *  Solid.ts 
  *   Create and manage 2D/3D Meshes.
  *   Lightweight wrapper around csgrs functionality.
  *   - Has some abstractions specialized for TS/JS usage.
@@ -36,26 +36,26 @@ import { TOLERANCE, EDGE_PROJECTION_DEFAULTS, EDGE_PROJECTION_LIMITS,
 import { getQuality } from './quality';
 
 /** Largest turn, in degrees, at which two projected lines that meet end to end
- *  are joined into one polyline (see Mesh._joinPolylines). A tessellated circle
+ *  are joined into one polyline (see Solid._joinPolylines). A tessellated circle
  *  turns a few degrees per segment, a box corner 60 degrees or more in the usual
  *  views. Joining only changes how line work is grouped into Curves, never where
  *  the lines are. */
 const PROJECTION_JOIN_MAX_TURN = 30;
 
-export class Mesh extends Shape
+export class Solid extends Shape
 {
     // inherits: _id, type, _node, style, metadata from Shape
 
     _mesh: MeshJs | undefined; // Underlying MeshJs geometry
 
-    override readonly type = 'Mesh' as const;
+    override readonly type = 'Solid' as const;
 
     constructor()
     {
         super();
         if (!this._csgrs) 
         {
-            throw new Error('Mesh::constructor(): WASM module not initialized. Call init() or await initAsync() first.');
+            throw new Error('Solid::constructor(): WASM module not initialized. Call init() or await initAsync() first.');
         }
         this._mesh = new this._csgrs.MeshJs(); // create empty mesh
     }
@@ -85,16 +85,16 @@ export class Mesh extends Shape
     {
         if (!this._mesh)
         {
-            throw new Error('Mesh::inner(): Mesh not initialized');
+            throw new Error('Solid::inner(): Solid not initialized');
         }
         
         return this._mesh;
     }
 
     /** Update internal mesh */
-    update(mesh: MeshJs|Mesh): this
+    update(mesh: MeshJs|Solid): this
     {
-        if(mesh instanceof Mesh)
+        if(mesh instanceof Solid)
         {
             this._mesh = mesh._mesh;
         }
@@ -105,39 +105,39 @@ export class Mesh extends Shape
         return this;
     }
 
-    /** Create new Mesh instance from different other types */
-    static from(mesh: MeshJs|Mesh): Mesh
+    /** Create new Solid instance from different other types */
+    static from(mesh: MeshJs|Solid): Solid
     {
-        if(!mesh) { throw new Error('Mesh::from(): Invalid mesh'); }
+        if(!mesh) { throw new Error('Solid::from(): Invalid mesh'); }
 
         if(mesh instanceof MeshJs)
         {
-            const newMesh = new Mesh();
+            const newMesh = new Solid();
             newMesh._mesh = mesh;
             return newMesh;
         }
-        else if(mesh instanceof Mesh)
+        else if(mesh instanceof Solid)
         {
-            const newMesh = new Mesh();
+            const newMesh = new Solid();
             newMesh._mesh = mesh._mesh;
             return newMesh;
         }
         else
         {
-            throw new Error('Mesh::from(): Unsupported mesh type');
+            throw new Error('Solid::from(): Unsupported mesh type');
         }
     }
 
     //// BASIC DATA ////
 
-    /** Get all positions of vertices of Mesh */
+    /** Get all positions of vertices of Solid */
     positions(): Array<Point>
     {
         // TODO CSGRS: Return Point3 instead of flat buffer
         return Array.from(this._positionsIter());
     }
 
-    /** Get Vertices of Mesh — corner Vertices in a ShapeCollection, the way Curve.vertices()
+    /** Get Vertices of Solid — corner Vertices in a ShapeCollection, the way Curve.vertices()
      *  and Polygon.vertices() answer. Use positions() for the raw Points: it skips building a
      *  Vertex per corner, which matters on hot paths (export, bbox). */
     @sceneCarry
@@ -146,7 +146,7 @@ export class Mesh extends Shape
         return new ShapeCollection<Vertex>(...this.positions().map(p => new Vertex(p)));
     }
 
-    /** Get all positions of vertices of Mesh as an iterable */
+    /** Get all positions of vertices of Solid as an iterable */
     *_positionsIter(): IterableIterator<Point>
     {
         const buffer = this.inner()?.positions() || [];
@@ -156,7 +156,7 @@ export class Mesh extends Shape
         }
     }
 
-    /** Get normals of vertices of Mesh */
+    /** Get normals of vertices of Solid */
     normals():Array<Vector>
     {
         // TODO CSGRS: Return Vector3 instead of flat buffer
@@ -172,14 +172,14 @@ export class Mesh extends Shape
         }
     }
 
-    /** A Mesh is already a mesh — returns itself (parity with Curve/Polygon toMesh(), and
+    /** A Solid is already a mesh — returns itself (parity with Curve/Polygon toMesh(), and
      *  used by the GLTF export which calls toMesh() on every scene shape). */
     toMesh(): this
     {
         return this;
     }
 
-    /** Get polygons (faces) of the Mesh as a ShapeCollection of wrapped Polygon instances */
+    /** Get polygons (faces) of the Solid as a ShapeCollection of wrapped Polygon instances */
     @sceneCarry
     polygons(): ShapeCollection<Polygon>
     {
@@ -188,7 +188,7 @@ export class Mesh extends Shape
         );
     }
 
-    /** Get faces of the Mesh as a ShapeCollection of Polygons (alias of polygons()) */
+    /** Get faces of the Solid as a ShapeCollection of Polygons (alias of polygons()) */
     @sceneCarry
     faces(): ShapeCollection<Polygon>
     {
@@ -214,32 +214,32 @@ export class Mesh extends Shape
     /*  
         We use static class methods / factory methods for cleaner syntax 
         Example:
-            cube = Mesh.makeCube(10); // instead of new Mesh().makeCube(10);
+            cube = Solid.makeCube(10); // instead of new Solid().makeCube(10);
 
         NOTE: We use getCsgrs() because there is no this available in static methods
     
     */
 
-    /* Make a Mesh from points that span one Polygon */
-    static fromPoints(points: Array<PointLike>): Mesh
+    /* Make a Solid from points that span one Polygon */
+    static fromPoints(points: Array<PointLike>): Solid
     {
         if(!Array.isArray(points) || points.length === 0 || !points.every(p => isPointLike(p)))
         {
-            throw new Error(`Mesh::fromPoints(): Invalid points array. Supply something [<PointLike>, <PointLike>, ...]`);
+            throw new Error(`Solid::fromPoints(): Invalid points array. Supply something [<PointLike>, <PointLike>, ...]`);
         }
 
         return this.fromPolygons([points]);
     }
 
-    /** Create a Mesh from an outer boundary polygon with optional interior holes.
+    /** Create a Solid from an outer boundary polygon with optional interior holes.
      *  Each hole is an array of PointLike defining an interior boundary.
-     *  The polygon is triangulated (including proper hole subtraction) and returned as a Mesh.
+     *  The polygon is triangulated (including proper hole subtraction) and returned as a Solid.
      */
-    static fromPointsWithHoles(outerPoints: Array<PointLike>, holes: Array<Array<PointLike>>): Mesh
+    static fromPointsWithHoles(outerPoints: Array<PointLike>, holes: Array<Array<PointLike>>): Solid
     {
         if(!Array.isArray(outerPoints) || outerPoints.length < 3 || !outerPoints.every(p => isPointLike(p)))
         {
-            throw new Error(`Mesh::fromPointsWithHoles(): Invalid outer points array.`);
+            throw new Error(`Solid::fromPointsWithHoles(): Invalid outer points array.`);
         }
 
         // Flatten outer points to Float64Array [x, y, z, x, y, z, ...]
@@ -260,7 +260,7 @@ export class Mesh extends Shape
 
     // MESH FROM DATA
 
-    /** Create Mesh directly from planar polygons defined by (N >= 3) vertices
+    /** Create Solid directly from planar polygons defined by (N >= 3) vertices
      *  For some export formats (like STL) polygons are triangulated first
      *
      *  Only positions are given here, so every vertex would be born with a ZERO normal:
@@ -270,13 +270,13 @@ export class Mesh extends Shape
      *  polygon therefore gets its own plane normal assigned to its vertices, i.e. these
      *  meshes are flat-shaded. Callers that have real per-vertex normals (a tessellated
      *  curved surface, say) should build their own PolygonJs with them — see
-     *  Point.toVertexJs(normal) — and go through Mesh.from(MeshJs.fromPolygons(...)).
+     *  Point.toVertexJs(normal) — and go through Solid.from(MeshJs.fromPolygons(...)).
     */
-    static fromPolygons(verts: Array<Array<PointLike|PointLike|PointLike>>):Mesh
+    static fromPolygons(verts: Array<Array<PointLike|PointLike|PointLike>>):Solid
     {
         if(!Array.isArray(verts) || verts.length === 0)
         {
-            throw new Error(`Mesh::fromVertices(): Invalid vertices array. Supply something [[<PointLike>,<PointLike>,<PointLike>]]`);
+            throw new Error(`Solid::fromVertices(): Invalid vertices array. Supply something [[<PointLike>,<PointLike>,<PointLike>]]`);
         }
 
         const polygons: Array<PolygonJs> = [];
@@ -284,7 +284,7 @@ export class Mesh extends Shape
         {
             if (!Array.isArray(poly) || poly.length < 3)
             {
-                console.warn(`Mesh::fromVertices(): Invalid polygon at index ${i}. Supply something [<PointLike>,<PointLike>,<PointLike>]`);
+                console.warn(`Solid::fromVertices(): Invalid polygon at index ${i}. Supply something [<PointLike>,<PointLike>,<PointLike>]`);
             }
             else
             {
@@ -305,71 +305,71 @@ export class Mesh extends Shape
     /** Import a Wavefront OBJ mesh from its text content.
      *  NOTE: requires a WASM build that exposes MeshJs.fromOBJ (cast to any to
      *  decouple from the generated csgrs.d.ts — see Importer). */
-    static fromOBJ(obj: string, metadata: any = null): Mesh
+    static fromOBJ(obj: string, metadata: any = null): Solid
     {
         if(typeof obj !== 'string' || obj.trim().length === 0)
         {
-            throw new Error('Mesh.fromOBJ(): expected a non-empty OBJ string.');
+            throw new Error('Solid.fromOBJ(): expected a non-empty OBJ string.');
         }
         return this.from((getCsgrs().MeshJs as any).fromOBJ(obj, metadata));
     }
 
     /** Import a binary or ASCII STL mesh. Accepts raw bytes or ASCII text. */
-    static fromSTL(data: string|Uint8Array|ArrayBuffer, metadata: any = null): Mesh
+    static fromSTL(data: string|Uint8Array|ArrayBuffer, metadata: any = null): Solid
     {
-        const bytes = Mesh._toBytes(data);
-        if(bytes.length === 0){ throw new Error('Mesh.fromSTL(): empty STL data.'); }
+        const bytes = Solid._toBytes(data);
+        if(bytes.length === 0){ throw new Error('Solid.fromSTL(): empty STL data.'); }
         return this.from((getCsgrs().MeshJs as any).fromSTL(bytes, metadata));
     }
 
-    /** Import a DXF drawing as a Mesh. Accepts raw bytes or ASCII text. Only
+    /** Import a DXF drawing as a Solid. Accepts raw bytes or ASCII text. Only
      *  closed polylines / circles become faces (open line-art is dropped) — for
      *  2-D DXF curves use the planned Sketch.fromDXF instead. */
-    static fromDXF(data: string|Uint8Array|ArrayBuffer, metadata: any = null): Mesh
+    static fromDXF(data: string|Uint8Array|ArrayBuffer, metadata: any = null): Solid
     {
-        const bytes = Mesh._toBytes(data);
-        if(bytes.length === 0){ throw new Error('Mesh.fromDXF(): empty DXF data.'); }
+        const bytes = Solid._toBytes(data);
+        if(bytes.length === 0){ throw new Error('Solid.fromDXF(): empty DXF data.'); }
         return this.from((getCsgrs().MeshJs as any).fromDXF(bytes, metadata));
     }
 
-    /** Import a glTF 2.0 model (.glb or .gltf) as a single merged Mesh.
+    /** Import a glTF 2.0 model (.glb or .gltf) as a single merged Solid.
      *  Materials + node hierarchy are flattened.
      *  Self-contained .glb / base64 .gltf only (no Draco / external buffers).
      *
-     *  `up` is the up axis **inside the file**, and it mirrors {@link Mesh.toGLTF}'s
-     *  parameter so that `Mesh.fromGLTF(await m.toGLB())` returns `m` unrotated:
+     *  `up` is the up axis **inside the file**, and it mirrors {@link Solid.toGLTF}'s
+     *  parameter so that `Solid.fromGLTF(await m.toGLB())` returns `m` unrotated:
      *   - `'z'` (default) — what meshup writes. The Archiyou stack carries the kernel's
      *     native Z-up through to a Z-up viewer, so those files hold Z-up coordinates.
      *   - `'y'` — a conforming glTF, i.e. anything Blender / three.js produced.
      *
      *  Nothing in a glTF distinguishes the two, so a file from elsewhere needs
-     *  `Mesh.fromGLTF(data, null, 'y')` or it arrives lying on its side. */
-    static fromGLTF(data: string|Uint8Array|ArrayBuffer, metadata: any = null, up: Axis = 'z'): Mesh
+     *  `Solid.fromGLTF(data, null, 'y')` or it arrives lying on its side. */
+    static fromGLTF(data: string|Uint8Array|ArrayBuffer, metadata: any = null, up: Axis = 'z'): Solid
     {
-        const bytes = Mesh._toBytes(data);
-        if(bytes.length === 0){ throw new Error('Mesh.fromGLTF(): empty glTF data.'); }
+        const bytes = Solid._toBytes(data);
+        if(bytes.length === 0){ throw new Error('Solid.fromGLTF(): empty glTF data.'); }
         return this.from((getCsgrs().MeshJs as any).fromGLTF(bytes, metadata, up));
     }
 
-    /** Import a binary glTF (.glb). Alias for {@link Mesh.fromGLTF}. */
-    static fromGLB(data: Uint8Array|ArrayBuffer, metadata: any = null, up: Axis = 'z'): Mesh
+    /** Import a binary glTF (.glb). Alias for {@link Solid.fromGLTF}. */
+    static fromGLB(data: Uint8Array|ArrayBuffer, metadata: any = null, up: Axis = 'z'): Solid
     {
         return this.fromGLTF(data, metadata, up);
     }
 
-    /** Import an AMF model (plain XML or zipped) as a merged Mesh. */
-    static fromAMF(data: string|Uint8Array|ArrayBuffer, metadata: any = null): Mesh
+    /** Import an AMF model (plain XML or zipped) as a merged Solid. */
+    static fromAMF(data: string|Uint8Array|ArrayBuffer, metadata: any = null): Solid
     {
-        const bytes = Mesh._toBytes(data);
-        if(bytes.length === 0){ throw new Error('Mesh.fromAMF(): empty AMF data.'); }
+        const bytes = Solid._toBytes(data);
+        if(bytes.length === 0){ throw new Error('Solid.fromAMF(): empty AMF data.'); }
         return this.from((getCsgrs().MeshJs as any).fromAMF(bytes, metadata));
     }
 
-    /** Import a 3MF package as a merged Mesh (geometry only). */
-    static from3MF(data: Uint8Array|ArrayBuffer, metadata: any = null): Mesh
+    /** Import a 3MF package as a merged Solid (geometry only). */
+    static from3MF(data: Uint8Array|ArrayBuffer, metadata: any = null): Solid
     {
-        const bytes = Mesh._toBytes(data);
-        if(bytes.length === 0){ throw new Error('Mesh.from3MF(): empty 3MF data.'); }
+        const bytes = Solid._toBytes(data);
+        if(bytes.length === 0){ throw new Error('Solid.from3MF(): empty 3MF data.'); }
         return this.from((getCsgrs().MeshJs as any).from3MF(bytes, metadata));
     }
 
@@ -384,7 +384,7 @@ export class Mesh extends Shape
     // MESH PRIMITIVES
 
     /** Make a cube of given size with center at origin ([0,0,0]) */
-    static Cube(size: number): Mesh
+    static Cube(size: number): Solid
     {
         const mesh = this.from(
             getCsgrs().MeshJs.cube(size, {}));
@@ -400,7 +400,7 @@ export class Mesh extends Shape
      *  @param d Depth
      *  with center at the origin
      */
-    static Cuboid(w: number, d?: number, h?: number): Mesh
+    static Cuboid(w: number, d?: number, h?: number): Solid
     {
         if (d === undefined) d = w;
         if (h === undefined) h = w;
@@ -410,13 +410,13 @@ export class Mesh extends Shape
     }
 
     /** Alias for makeCuboid */
-    static Box(w: number, d?: number, h?: number): Mesh
+    static Box(w: number, d?: number, h?: number): Solid
     {
         return this.Cuboid(w, d, h);
     }
 
     /** Make Box between two points */
-    static BoxBetween(from: PointLike, to: PointLike): Mesh
+    static BoxBetween(from: PointLike, to: PointLike): Solid
     {
         const fromPoint = new Point(from);
         const toPoint = new Point(to);
@@ -435,17 +435,17 @@ export class Mesh extends Shape
         return this.from(mesh);
     }
 
-    /** Make a planar Mesh surface between two corner Points.
+    /** Make a planar Solid surface between two corner Points.
      *  Automatically picks the base plane whose normal axis varies least between the corners.
      */
-    static planeBetween(from: PointLike, to: PointLike): Mesh
+    static planeBetween(from: PointLike, to: PointLike): Solid
     {
         // Delegate the base-plane selection + rect construction to Polygon.planeBetween(),
-        // then convert to a Mesh — keeps the geometry logic in one place.
+        // then convert to a Solid — keeps the geometry logic in one place.
         return Polygon.planeBetween(from, to).toMesh();
     }
 
-    static Sphere(radius: number): Mesh
+    static Sphere(radius: number): Solid
     {
         const quality = getQuality();
         const meshJs = getCsgrs()?.MeshJs.sphere(radius,
@@ -456,7 +456,7 @@ export class Mesh extends Shape
         return mesh;
     }
 
-    static Cylinder(radius: number, height: number): Mesh
+    static Cylinder(radius: number, height: number): Solid
     {
         const meshJs = getCsgrs()?.MeshJs.cylinder(radius, height,
             getQuality().cylinderSegmentsRadial, {});
@@ -532,11 +532,11 @@ export class Mesh extends Shape
     /** Meshes have no single length — returns undefined */
     length(): undefined
     {
-        console.warn('Mesh.length(): a solid mesh has no single length; use bbox().diagonal(), perimeter of an edge, or a curve length instead.');
+        console.warn('Solid.length(): a solid mesh has no single length; use bbox().diagonal(), perimeter of an edge, or a curve length instead.');
         return undefined;
     }
 
-    /** Calculate outer bounding box of current Mesh.
+    /** Calculate outer bounding box of current Solid.
      *  The optional arg is ignored — kept for old-API compatibility.
      */
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -557,9 +557,9 @@ export class Mesh extends Shape
      *  rebuilds the original faces, so edges() reports real model edges rather than
      *  triangulation diagonals. */
     @sceneReplace
-    reconstructNgons(): Mesh
+    reconstructNgons(): Solid
     {
-        return Mesh.from(this.inner().reconstructNgons());
+        return Solid.from(this.inner().reconstructNgons());
     }
 
     /** The edges of this mesh as Curves, each unique edge returned once.
@@ -672,9 +672,9 @@ export class Mesh extends Shape
         return collection;
     }
 
-    /** Turn this Mesh into a plain wireframe: its edges as Curves, no hidden-line removal.
+    /** Turn this Solid into a plain wireframe: its edges as Curves, no hidden-line removal.
      *  Same edges as edges() (see there for the parameters and grouping), but this REPLACES
-     *  the Mesh in the scene, so `box(100).wireframe()` shows the wireframe, not the box. */
+     *  the Solid in the scene, so `box(100).wireframe()` shows the wireframe, not the box. */
     @sceneReplace
     wireframe(featureAngle: number = 10, all: boolean = false): ShapeCollection<Curve>
     {
@@ -684,13 +684,13 @@ export class Mesh extends Shape
         return wires;
     }
 
-    /** Calculate oriented bounding box of current Mesh using PCA */
+    /** Calculate oriented bounding box of current Solid using PCA */
     obbox(): OBbox
     {
         return OBbox.fromMesh(this);
     }
 
-    /** Whether this Mesh is essentially a cuboid (box / rectangular plate).
+    /** Whether this Solid is essentially a cuboid (box / rectangular plate).
      *
      *  Builds the PCA-based OBB and checks every unique vertex against the box
      *  surface in OBB-local coords: each vertex must lie within ±halfExtent on
@@ -749,16 +749,16 @@ export class Mesh extends Shape
         return Array.from({ length: Math.floor(tris.length / 9) }, (_, n) => n * 9).every(inFacePlane);
     }
 
-    /** Copy current Mesh into a new one
+    /** Copy current Solid into a new one
      *  NOTE: We use copy here instead of clone
      *  conventionally cloning is used for operations involving references to previous data
     */
     override _copy(): this
     {
         const c = this?.inner()?.clone();
-        if (!c) return new Mesh() as this;
+        if (!c) return new Solid() as this;
 
-        const m = Mesh.from(c);
+        const m = Solid.from(c);
 
         m.style.merge(this.style.explicitData() as any); // copy only explicit style properties so layer colors can cascade
         m.metadata = { ...this.metadata }; // copy metadata
@@ -769,26 +769,26 @@ export class Mesh extends Shape
         return m as this;
     }
 
-    /** Replicate this Mesh a given number of times and return in a ShapeCollection<Mesh> */
-    replicate(num: number, transform: (mesh: Mesh, index: number, prev: Mesh | undefined) => Mesh): ShapeCollection<Mesh>
+    /** Replicate this Solid a given number of times and return in a ShapeCollection<Solid> */
+    replicate(num: number, transform: (mesh: Solid, index: number, prev: Solid | undefined) => Solid): ShapeCollection<Solid>
     {
-        const newMeshes = new ShapeCollection<Mesh>();
+        const newMeshes = new ShapeCollection<Solid>();
         new Array(num).fill(0).map((_, i) =>
         {
             const newMesh = transform(
-                                this.copy() as Mesh,
+                                this.copy() as Solid,
                                 i,
-                                i > 0 ? newMeshes.get(i - 1) as Mesh : undefined);
+                                i > 0 ? newMeshes.get(i - 1) as Solid : undefined);
             if (newMesh) newMeshes.add(newMesh);
         });
         return newMeshes;
     }
 
-    /** Check if the Mesh is valid (has vertices) */
+    /** Check if the Solid is valid (has vertices) */
     validate(): boolean
     {
         const v = !!this._mesh && this.positions().length > 0;
-        if(!v){ console.warn('Mesh::validate(): Invalid Mesh!'); }
+        if(!v){ console.warn('Solid::validate(): Invalid Solid!'); }
         return v;
     }
 
@@ -815,7 +815,7 @@ export class Mesh extends Shape
     moveToY(y: number): this { return this.translate(0, y - this.bbox().center().y, 0); }
     moveToZ(z: number): this { return this.translate(0, 0, z - this.bbox().center().z); }
 
-    /** Rotate Mesh by angle (degrees) around an axis through the world origin */
+    /** Rotate Solid by angle (degrees) around an axis through the world origin */
     override rotate(angle: number, axis: Axis | PointLike = 'z'): this
     {
         if (typeof axis === 'string')
@@ -845,7 +845,7 @@ export class Mesh extends Shape
         return this;
     }
 
-    /** Rotate Mesh by a quaternion given as components `(w, x, y, z)`.
+    /** Rotate Solid by a quaternion given as components `(w, x, y, z)`.
      *  The quaternion is normalized internally, so non-unit input is safe.
      *  NOTE: We guarantee the center is always to origin one
      */
@@ -863,7 +863,7 @@ export class Mesh extends Shape
         return this;
     }
 
-    /** Rotate Mesh by angleDeg around an axis through a pivot point.
+    /** Rotate Solid by angleDeg around an axis through a pivot point.
      *  @param angleDeg - rotation angle in degrees
      *  @param axis     - 'x' | 'y' | 'z' or an arbitrary direction vector (PointLike)
      *  @param pivot    - point the axis passes through (default: world origin)
@@ -916,7 +916,7 @@ export class Mesh extends Shape
         );
     }
 
-    /** Align this Mesh by mapping 3 source points onto 3 target points.
+    /** Align this Solid by mapping 3 source points onto 3 target points.
      *
      *  - **withScale:** if true, apply a uniform scale (centered at q1) so edge lengths match.
      *
@@ -932,12 +932,12 @@ export class Mesh extends Shape
     {
         if( !Array.isArray(sourcePoints) || sourcePoints.length < 2 || sourcePoints.length > 3 || !sourcePoints.every(p => isPointLike(p)) )
         {
-            throw new Error('Mesh.alignByPoints(): sourcePoints must be an array of 2 or 3 PointLike objects');
+            throw new Error('Solid.alignByPoints(): sourcePoints must be an array of 2 or 3 PointLike objects');
         }
 
         if (sourcePoints.length !== targetPoints.length)
         {
-            throw new Error('Mesh.alignByPoints(): sourcePoints and targetPoints must have the same length.');
+            throw new Error('Solid.alignByPoints(): sourcePoints and targetPoints must have the same length.');
         }
 
         const p1 = Vector.from(sourcePoints[0]);
@@ -999,7 +999,7 @@ export class Mesh extends Shape
             }
 
             /* Step 3: rotate around q1 to align srcEdge → tgtEdge
-                NOTE: rotateQuaternion() re-centers the Mesh on its own bbox center, so wrapping it
+                NOTE: rotateQuaternion() re-centers the Solid on its own bbox center, so wrapping it
                 in translate(-q1)/translate(q1) does not pivot around q1. Feed the same rotation to
                 rotateAround() instead, which does rotate about a real pivot. */
             const R1 = srcEdge.copy().rotationBetween(tgtEdge);
@@ -1055,7 +1055,7 @@ export class Mesh extends Shape
         }
     }
 
-    /** Scale Mesh with a uniform factor or per-axis [sx, sy, sz] around an origin point (default: center of this Mesh) */
+    /** Scale Solid with a uniform factor or per-axis [sx, sy, sz] around an origin point (default: center of this Solid) */
     override scale(factor: number | PointLike, origin?: PointLike): this
     {
         const [sx, sy, sz] = (typeof factor === 'number') ? [factor, factor, factor] : [Point.from(factor).x, Point.from(factor).y, Point.from(factor).z];
@@ -1066,7 +1066,7 @@ export class Mesh extends Shape
         return this;
     }
 
-    /** Mirror Mesh along a plane defined by a normal and a position
+    /** Mirror Solid along a plane defined by a normal and a position
      *  @param dir - normal vector of the mirror plane, or an axis ('x', 'y', 'z') to mirror across the corresponding world plane
      *  @param pos - a coord (in case of axis) or point the mirror plane passes through (default: center of mass)
      */
@@ -1124,13 +1124,13 @@ export class Mesh extends Shape
         return this.mirror('z', [0, 0, z || 0]);
     }
 
-    /** Centers Mesh with center of mass at origin ([0,0,0]) */
+    /** Centers Solid with center of mass at origin ([0,0,0]) */
     moveToCenter():this
     {
         return this.update(this.inner()?.center());
     }
 
-    /** Place Mesh on a given height based on bbox, by default at 0 
+    /** Place Solid on a given height based on bbox, by default at 0 
      *  Used to place Meshes on a XY plane
     */
     place(z:number=0)
@@ -1156,18 +1156,18 @@ export class Mesh extends Shape
         return this.update(this.inner()?.renormalize());
     }
 
-    /** Turn all polygons of this Mesh into triangles */
+    /** Turn all polygons of this Solid into triangles */
     triangulate(): this
     {
         return this.update(this.inner()?.triangulate());
     }
 
-    /** Return new Mesh that is convex hull of current Mesh  */
+    /** Return new Solid that is convex hull of current Solid  */
     @sceneReplace
-    hull(): undefined|Mesh
+    hull(): undefined|Solid
     {
         const ch = this.inner()?.convexHull();
-        return ch ? Mesh.from(ch) : undefined;
+        return ch ? Solid.from(ch) : undefined;
     }
 
     /*
@@ -1181,17 +1181,17 @@ export class Mesh extends Shape
     //// BOOLEAN OPERATIONS ////
     /*
         NOTES:
-            - CSGRS always returns a new Mesh after operation: but we do override by default
+            - CSGRS always returns a new Solid after operation: but we do override by default
                 This is more in line with script cad conventions
             - Overriding CSGRS references will set it up for automatic garbage collection
     */
 
-    /** Add given Mesh to the current */
-    union(other:Mesh): this
+    /** Add given Solid to the current */
+    union(other:Solid): this
     {
-        if(!other || !(other instanceof Mesh))
+        if(!other || !(other instanceof Solid))
         {
-            throw new Error("Mesh::union(): Please supply a valid Mesh instance!");
+            throw new Error("Solid::union(): Please supply a valid Solid instance!");
         }
         return this.update(this.inner()?.union(other.inner() as MeshJs));
     }
@@ -1207,21 +1207,21 @@ export class Mesh extends Shape
      *
      * @param length     Distance to sweep.
      * @param direction  Direction to sweep in. Defaults to +Z.
-     * @returns A new solid Mesh, or null when there is nothing to sweep.
+     * @returns A new solid Solid, or null when there is nothing to sweep.
      */
     @sceneReplace
-    extrude(length: number, direction: PointLike = [0, 0, 1]): Mesh | null
+    extrude(length: number, direction: PointLike = [0, 0, 1]): Solid | null
     {
         const faceVerts = this.polygons().toArray().map(poly => poly.vertices().toArray().map(v => new Point(v.x, v.y, v.z)));
         if (faceVerts.length === 0)
         {
-            console.warn('Mesh.extrude(): the mesh has no faces to sweep. Returning null.');
+            console.warn('Solid.extrude(): the mesh has no faces to sweep. Returning null.');
             return null;
         }
 
         if ((this.volume() ?? 0) > TOLERANCE)
         {
-            console.warn('Mesh.extrude(): this mesh is already a closed solid — sweeping it makes a solid of its '
+            console.warn('Solid.extrude(): this mesh is already a closed solid — sweeping it makes a solid of its '
                        + 'whole hull. Extrude the surface or face you meant to sweep instead.');
         }
 
@@ -1270,23 +1270,23 @@ export class Mesh extends Shape
             : 1;
         const oriented = (along < 0) ? faces.map(f => [...f].reverse()) : faces;
 
-        return Mesh.fromPolygons(oriented);
+        return Solid.fromPolygons(oriented);
     }
 
-    /** Add given Mesh to the current (Alias for union) */
-    add(other:Mesh): this
+    /** Add given Solid to the current (Alias for union) */
+    add(other:Solid): this
     {
         return this.union(other);
     }
 
-    /** Subtract a Mesh — or every Mesh in a ShapeCollection — from the current.
+    /** Subtract a Solid — or every Solid in a ShapeCollection — from the current.
      *
      *  Auto-separates: when the cut passes through and splits the solid into genuinely-separate
-     *  parts, the original is replaced in the scene by one Mesh per part and a ShapeCollection is
+     *  parts, the original is replaced in the scene by one Solid per part and a ShapeCollection is
      *  returned. A cut that only hollows out the solid (an internal cavity) is cavity-aware and
-     *  kept as a single Mesh. See {@link separateIsolated}. */
+     *  kept as a single Solid. See {@link separateIsolated}. */
     @sceneReplaceOrKeep
-    difference(other:Mesh|ShapeCollection<Mesh>): this | ShapeCollection<Mesh>
+    difference(other:Solid|ShapeCollection<Solid>): this | ShapeCollection<Solid>
     {
         this._difference(other);
         const parts = this._separateSolids();
@@ -1295,17 +1295,17 @@ export class Mesh extends Shape
 
     /** Internal in-place boolean difference — skips scene management (no @scene* decorators
      *  fire), so it's safe to compose inside other ops without leaking intermediate geometry
-     *  into the scene. Used by cutoff/split/difference-collection where a single Mesh result is
+     *  into the scene. Used by cutoff/split/difference-collection where a single Solid result is
      *  required; the public difference()/subtract() wrap this and handle scene bookkeeping. */
-    private _difference(other:Mesh|ShapeCollection<Mesh>): this
+    private _difference(other:Solid|ShapeCollection<Solid>): this
     {
         if(ShapeCollection.isShapeCollection(other))
         {
-            const meshes = other.meshes().toArray();
+            const meshes = other._solids().toArray();
             const cutters = meshes.filter(mesh => mesh !== this);
             if(cutters.length !== meshes.length)
             {
-                console.warn('Mesh::difference(): skipped a cutter that is this very Mesh — a Mesh cannot be subtracted from itself. '
+                console.warn('Solid::difference(): skipped a cutter that is this very Solid — a Solid cannot be subtracted from itself. '
                     + 'Tip: a layer collection contains the shape you are cutting too; build the cut shape on another layer or filter the cutters.');
             }
             cutters.forEach(mesh => this._difference(mesh));
@@ -1313,53 +1313,53 @@ export class Mesh extends Shape
         }
         if(other === this)
         {
-            console.warn('Mesh::difference(): cutter is this very Mesh — a Mesh cannot be subtracted from itself. Returning it unchanged.');
+            console.warn('Solid::difference(): cutter is this very Solid — a Solid cannot be subtracted from itself. Returning it unchanged.');
             return this;
         }
-        if(!other || !(other instanceof Mesh))
+        if(!other || !(other instanceof Solid))
         {
-            throw new Error("Mesh::difference(): Please supply a valid Mesh instance or ShapeCollection<Mesh>!");
+            throw new Error("Solid::difference(): Please supply a valid Solid instance or ShapeCollection<Solid>!");
         }
         return this.update(this.inner()?.difference(other.inner() as MeshJs));
     }
 
     /** Subtract one or more Meshes (or ShapeCollections) from the current. Like difference(),
-     *  a cut that splits the solid into genuinely-separate parts auto-separates into one Mesh per
-     *  part (returned as a ShapeCollection); an internal cavity is kept as a single Mesh. */
+     *  a cut that splits the solid into genuinely-separate parts auto-separates into one Solid per
+     *  part (returned as a ShapeCollection); an internal cavity is kept as a single Solid. */
     @sceneReplaceOrKeep
-    subtract(...others: (Mesh|ShapeCollection<Mesh>)[]): this | ShapeCollection<Mesh>
+    subtract(...others: (Solid|ShapeCollection<Solid>)[]): this | ShapeCollection<Solid>
     {
         others.forEach(other => this._difference(other));
         const parts = this._separateSolids();
         return parts.length > 1 ? parts : this;
     }
 
-    /** The volume this Mesh shares with another (boolean AND).
+    /** The volume this Solid shares with another (boolean AND).
      *
-     *  NON-REPLACING: this Mesh is left exactly as it is; the shared volume comes back as a NEW
-     *  Mesh that is added to the active layer, so it is visible without an explicit
-     *  addToScene(). Mark this Mesh tmp() to keep the result out of the scene. */
+     *  NON-REPLACING: this Solid is left exactly as it is; the shared volume comes back as a NEW
+     *  Solid that is added to the active layer, so it is visible without an explicit
+     *  addToScene(). Mark this Solid tmp() to keep the result out of the scene. */
     @sceneAdd
-    intersection(other:Mesh): Mesh
+    intersection(other:Solid): Solid
     {
         return this._copy()._intersection(other);
     }
 
-    /** Keep only the volume this Mesh shares with another (boolean AND), replacing this Mesh by
+    /** Keep only the volume this Solid shares with another (boolean AND), replacing this Solid by
      *  it — the mutating counterpart of intersection(), spelled the way union() and difference()
      *  are (and the way brep's intersect() is). */
-    intersect(other:Mesh): this
+    intersect(other:Solid): this
     {
         return this._intersection(other);
     }
 
     /** Mutating intersection: keeps only the shared volume and returns `this`. The pure
      *  geometry op, used internally - it never touches the scene. */
-    _intersection(other:Mesh): this
+    _intersection(other:Solid): this
     {
-        if(!other || !(other instanceof Mesh))
+        if(!other || !(other instanceof Solid))
         {
-            throw new Error("Mesh::intersection(): Please supply a valid Mesh instance!");
+            throw new Error("Solid::intersection(): Please supply a valid Solid instance!");
         }
         return this.update(this.inner()?.intersection(other.inner() as MeshJs));
     }
@@ -1374,9 +1374,9 @@ export class Mesh extends Shape
     }
 
     /** A scene-free clone of this mesh (unlike copy(), never attaches to the scene graph). */
-    private _detachedClone(): Mesh
+    private _detachedClone(): Solid
     {
-        return Mesh.from(this.inner().clone());
+        return Solid.from(this.inner().clone());
     }
 
     /** From the two boolean sides of a cut (`a`, `b`), keep the single largest connected piece
@@ -1392,7 +1392,7 @@ export class Mesh extends Shape
      *  listed before `b`'s, so on a tie the largest keeps `a` (e.g. cutoff() passes the
      *  positive-normal side as `a`) and the smallest keeps `b`. Returns `this` unchanged with a
      *  warning if the cut degenerated (either side is empty). */
-    private _keepBySize(a: Mesh, b: Mesh, keepSmallest: boolean, warning: string): this
+    private _keepBySize(a: Solid, b: Solid, keepSmallest: boolean, warning: string): this
     {
         if (a.inner().triangleCount() === 0 || b.inner().triangleCount() === 0)
         {
@@ -1416,10 +1416,10 @@ export class Mesh extends Shape
     /** Build a large solid box filling one half-space of a plane (normal·x = offset), on the
      *  `side` (+1 = normal side, -1 = opposite) of it. Sized to fully cover this mesh so that
      *  subtracting it cleanly removes everything on that side. */
-    private _halfSpaceBox(normal: Vector, offset: number, side: number, size: number): Mesh
+    private _halfSpaceBox(normal: Vector, offset: number, side: number, size: number): Solid
     {
         const n = normal.copy().normalize();
-        const box = Mesh.Cube(size); // centred at origin, spans -size/2..size/2
+        const box = Solid.Cube(size); // centred at origin, spans -size/2..size/2
         // Orient the box's local +z axis onto the plane normal, then shift it so one face lies
         // on the plane and the box extends `size` along `side * n` — covering that half-space.
         const q = Vector.from(0, 0, 1).rotationBetween(n.toArray() as any);
@@ -1443,18 +1443,18 @@ export class Mesh extends Shape
     /**
      * Cut this mesh by `other` and keep one of the resulting pieces.
      * By default keeps the largest piece (by size()); set `keepSmallest=true` to keep the
-     * smallest. Cutting is done with boolean ops rather than a split: a Mesh/Polygon cutter
+     * smallest. Cutting is done with boolean ops rather than a split: a Solid/Polygon cutter
      * yields the outside piece (this − cutter) and the inside piece (this ∩ cutter); a PlaneJs
      * cutter yields the two half-spaces via boolean subtraction of a solid half-space box.
      *
-     * For Mesh and Polygon cutters, warns and returns `this` unchanged when `other`
+     * For Solid and Polygon cutters, warns and returns `this` unchanged when `other`
      * does not intersect this mesh. PlaneJs cutters always proceed (planes are infinite).
      */
-    cutoffBy(other: Mesh | Polygon | PlaneJs, keepSmallest = false): this
+    cutoffBy(other: Solid | Polygon | PlaneJs, keepSmallest = false): this
     {
         if (this.is2D())
         {
-            console.warn('Mesh.cutoffBy(): boolean cutting needs a solid (closed) mesh; this mesh is flat/2D. For flat shapes use Polygon.cutoffBy(). No cut performed.');
+            console.warn('Solid.cutoffBy(): boolean cutting needs a solid (closed) mesh; this mesh is flat/2D. For flat shapes use Polygon.cutoffBy(). No cut performed.');
             return this;
         }
         if (other instanceof PlaneJs)
@@ -1467,13 +1467,13 @@ export class Mesh extends Shape
             const keepOppositeSide = this._detachedClone()._difference(this._halfSpaceBox(normal, offset, +1, size));
             return this._keepBySize(
                 keepNormalSide, keepOppositeSide, keepSmallest,
-                'Mesh.cutoffBy(): the plane does not split this mesh — no cut performed.');
+                'Solid.cutoffBy(): the plane does not split this mesh — no cut performed.');
         }
 
         const cutter = other instanceof Polygon ? other.toMesh() : other;
         if (!this.hits(cutter))
         {
-            console.warn('Mesh.cutoffBy(): the cutter does not intersect this mesh — no cut performed.');
+            console.warn('Solid.cutoffBy(): the cutter does not intersect this mesh — no cut performed.');
             return this;
         }
 
@@ -1481,21 +1481,21 @@ export class Mesh extends Shape
         const inside  = this._detachedClone()._intersection(cutter);  // part of this inside the cutter
         return this._keepBySize(
             outside, inside, keepSmallest,
-            'Mesh.cutoffBy(): the cutter does not split this mesh — no cut performed.');
+            'Solid.cutoffBy(): the cutter does not split this mesh — no cut performed.');
     }
 
-    /** Cut off Mesh by an axis-aligned plane at `coord` and keep one piece.
+    /** Cut off Solid by an axis-aligned plane at `coord` and keep one piece.
      *  Keeps the larger piece by default (by size()); the smaller piece when `smallest=true`.
      *  For a symmetric cut the positive-normal side is kept by default. Uses boolean
      *  subtraction of half-space boxes rather than a mesh split.
      */
     cutoff(at: Axis, coord: number = 0, smallest: boolean = false): this
     {
-        if(!isAxis(at)){ throw new Error(`Mesh.cutoff(): Invalid axis '${at}'. Use 'x', 'y', or 'z'.`); }
+        if(!isAxis(at)){ throw new Error(`Solid.cutoff(): Invalid axis '${at}'. Use 'x', 'y', or 'z'.`); }
 
         if (this.is2D())
         {
-            console.warn('Mesh.cutoff(): boolean cutting needs a solid (closed) mesh; this mesh is flat/2D. For flat shapes use Polygon.cutoff(). No cut performed.');
+            console.warn('Solid.cutoff(): boolean cutting needs a solid (closed) mesh; this mesh is flat/2D. For flat shapes use Polygon.cutoff(). No cut performed.');
             return this;
         }
 
@@ -1503,32 +1503,32 @@ export class Mesh extends Shape
         const lo = bb.min()[at], hi = bb.max()[at];
         if (coord <= lo || coord >= hi)
         {
-            console.warn(`Mesh.cutoff(): plane '${at}=${coord}' does not split this mesh — nothing cut off.`);
+            console.warn(`Solid.cutoff(): plane '${at}=${coord}' does not split this mesh — nothing cut off.`);
             return this;
         }
 
         // Half-space cutter boxes: enlarge the bbox so the boxes fully cover the mesh cross-section.
         const big  = bb.enlarged(this._coverSize());
         const bmin = big.min(), bmax = big.max();
-        const posBox = Mesh.BoxBetween(bmin.copy().setComponent(at, coord), bmax); // region at > coord
-        const negBox = Mesh.BoxBetween(bmin, bmax.copy().setComponent(at, coord)); // region at < coord
+        const posBox = Solid.BoxBetween(bmin.copy().setComponent(at, coord), bmax); // region at > coord
+        const negBox = Solid.BoxBetween(bmin, bmax.copy().setComponent(at, coord)); // region at < coord
 
         const posPiece = this._detachedClone()._difference(negBox); // keep at > coord (positive side)
         const negPiece = this._detachedClone()._difference(posBox); // keep at < coord (negative side)
 
         return this._keepBySize(
             posPiece, negPiece, smallest,
-            `Mesh.cutoff(): plane '${at}=${coord}' does not split this mesh — nothing cut off.`);
+            `Solid.cutoff(): plane '${at}=${coord}' does not split this mesh — nothing cut off.`);
     }
 
     /** Trim this mesh with an axis-aligned plane — the same as cutoff(). */
     trim(at: Axis, coord?: number, smallest?: boolean): this;
-    /** Trim this mesh with another Mesh, Polygon or plane — the same as cutoffBy(). */
-    trim(other: Mesh | Polygon | PlaneJs, keepSmallest?: boolean): this;
+    /** Trim this mesh with another Solid, Polygon or plane — the same as cutoffBy(). */
+    trim(other: Solid | Polygon | PlaneJs, keepSmallest?: boolean): this;
     /** Trim this mesh, like Polygon.trim(), Curve.trim() and brep's Shape.trim():
-     *  - `trim(other, keepSmallest?)`: cut by a Mesh, Polygon or plane and keep a piece — see cutoffBy().
+     *  - `trim(other, keepSmallest?)`: cut by a Solid, Polygon or plane and keep a piece — see cutoffBy().
      *  - `trim(at, coord?, smallest?)`: cut by the plane `{ <at> = coord }` — see cutoff(). */
-    trim(otherOrAt: Mesh | Polygon | PlaneJs | Axis, keepOrCoord?: boolean | number, smallest?: boolean): this
+    trim(otherOrAt: Solid | Polygon | PlaneJs | Axis, keepOrCoord?: boolean | number, smallest?: boolean): this
     {
         return isAxis(otherOrAt)
             ? this.cutoff(otherOrAt, keepOrCoord as number | undefined, smallest)
@@ -1536,8 +1536,8 @@ export class Mesh extends Shape
     }
 
     /**
-     * Separate this Mesh into its genuinely-separate solid parts (e.g. after a subtract whose
-     * cut passes through and splits the solid). Returns a ShapeCollection<Mesh> with one entry
+     * Separate this Solid into its genuinely-separate solid parts (e.g. after a subtract whose
+     * cut passes through and splits the solid). Returns a ShapeCollection<Solid> with one entry
      * per part; a solid that is still one piece returns a collection containing only this mesh.
      *
      * Cavity-aware: connectivity is by shared surface vertices, so a solid with a fully-internal
@@ -1548,7 +1548,7 @@ export class Mesh extends Shape
      * Scene: when this mesh is in the scene and it does split into several parts, the original is
      * replaced by the parts on its layer; a still-single solid is left in place.
      */
-    separateIsolated(): ShapeCollection<Mesh>
+    separateIsolated(): ShapeCollection<Solid>
     {
         const parts = this._separateSolids();
         const items = parts.toArray();
@@ -1567,11 +1567,11 @@ export class Mesh extends Shape
     /** Cavity-aware separation (geometry only, no scene): groups the raw vertex-connected
      *  components by spatial containment so that a component wholly inside another (a cavity) is
      *  merged back into its solid. Returns [this] when everything belongs to one solid, else one
-     *  Mesh per genuinely-separate solid (each carrying its own cavities). */
-    private _separateSolids(): ShapeCollection<Mesh>
+     *  Solid per genuinely-separate solid (each carrying its own cavities). */
+    private _separateSolids(): ShapeCollection<Solid>
     {
         const raw = this._isolatedParts().toArray();
-        if (raw.length <= 1) return new ShapeCollection<Mesh>([this]);
+        if (raw.length <= 1) return new ShapeCollection<Solid>([this]);
 
         const bboxes = raw.map(m => m.bbox());
         const bboxVol = (b: any): number => b ? b.width() * b.depth() * b.height() : Infinity;
@@ -1602,7 +1602,7 @@ export class Mesh extends Shape
         };
 
         // Bucket every component under its top-level solid.
-        const byTop = new Map<number, Mesh[]>();
+        const byTop = new Map<number, Solid[]>();
         raw.forEach((m, i) =>
         {
             const t = topOf(i);
@@ -1610,29 +1610,29 @@ export class Mesh extends Shape
             byTop.get(t)!.push(m);
         });
 
-        if (byTop.size <= 1) return new ShapeCollection<Mesh>([this]); // all one solid (with cavities)
+        if (byTop.size <= 1) return new ShapeCollection<Solid>([this]); // all one solid (with cavities)
 
         const meshes = [...byTop.values()].map(group =>
         {
             if (group.length === 1) return group[0]; // a plain part, no cavities
             // A part plus its cavities → recombine their polygons into one mesh.
             const polys = group.flatMap(m => m.inner().polygons());
-            const mm = Mesh.from(getCsgrs().MeshJs.fromPolygons(polys, {}));
+            const mm = Solid.from(getCsgrs().MeshJs.fromPolygons(polys, {}));
             mm.style.merge(this.style.explicitData() as any);
             mm.metadata = { ...this.metadata };
             return mm;
         });
-        return new ShapeCollection<Mesh>(meshes);
+        return new ShapeCollection<Solid>(meshes);
     }
 
     /** Geometry-only isolation (no scene bookkeeping): returns a collection with [this] when
-     *  the mesh is fully connected, or one new Mesh per isolated component (style/metadata
+     *  the mesh is fully connected, or one new Solid per isolated component (style/metadata
      *  copied) when it is disconnected. Used by difference()/subtract() and split(). */
-    private _isolatedParts(): ShapeCollection<Mesh>
+    private _isolatedParts(): ShapeCollection<Solid>
     {
         const rawPolys = this.inner().polygons();
         const n = rawPolys.length;
-        if (n === 0) return new ShapeCollection<Mesh>([this]);
+        if (n === 0) return new ShapeCollection<Solid>([this]);
 
         // Union-Find
         const parent = Array.from({ length: n }, (_, i) => i);
@@ -1666,38 +1666,38 @@ export class Mesh extends Shape
             groups.get(root)!.push(rawPolys[pi]);
         }
 
-        if (groups.size === 1) return new ShapeCollection<Mesh>([this]);
+        if (groups.size === 1) return new ShapeCollection<Solid>([this]);
 
         const meshes = [...groups.values()].map(polys =>
         {
-            const m = Mesh.from(getCsgrs().MeshJs.fromPolygons(polys, {}));
+            const m = Solid.from(getCsgrs().MeshJs.fromPolygons(polys, {}));
             m.style.merge(this.style.explicitData() as any); // pieces inherit the source style
             m.metadata = { ...this.metadata };
             return m;
         });
-        return new ShapeCollection<Mesh>(meshes);
+        return new ShapeCollection<Solid>(meshes);
     }
 
     /**
      * Split this mesh into two pieces using a cutting `other`.
      *
-     * - `Mesh`    — the cutter volume is removed and the remaining isolated pieces are returned.
+     * - `Solid`    — the cutter volume is removed and the remaining isolated pieces are returned.
      * - `Polygon` — the polygon's plane is used as the cutting plane.
      * - `PlaneJs` — the plane is used directly (front side = direction the normal points).
      *
-     * Returns a `ShapeCollection<Mesh>` with one entry per remaining piece. For plane-based
+     * Returns a `ShapeCollection<Solid>` with one entry per remaining piece. For plane-based
      * splits this is typically up to two entries (front/positive side first, back/negative
      * side second). Empty results are omitted.
      */
     @sceneReplace
-    split(other: Mesh | Polygon | PlaneJs): ShapeCollection<Mesh>
+    split(other: Solid | Polygon | PlaneJs): ShapeCollection<Solid>
     {
-        if (other instanceof Mesh)
+        if (other instanceof Solid)
         {
             const remainder = this._copy()._difference(other);
             if (remainder.inner().triangleCount() === 0)
             {
-                return new ShapeCollection<Mesh>();
+                return new ShapeCollection<Solid>();
             }
 
             const parts = remainder
@@ -1705,7 +1705,7 @@ export class Mesh extends Shape
                 .toArray()
                 .filter(mesh => mesh.inner().triangleCount() > 0);
 
-            return new ShapeCollection<Mesh>(parts);
+            return new ShapeCollection<Solid>(parts);
         }
 
         // Resolve cutting plane
@@ -1720,17 +1720,17 @@ export class Mesh extends Shape
         }
 
         const halves = this.inner().splitByPlane(plane);
-        const parts: Mesh[] = [];
+        const parts: Solid[] = [];
         for (const half of halves)
         {
-            if (half.triangleCount() > 0) parts.push(Mesh.from(half));
+            if (half.triangleCount() > 0) parts.push(Solid.from(half));
         }
-        return new ShapeCollection<Mesh>(parts);
+        return new ShapeCollection<Solid>(parts);
     }
 
     //// CURVE–MESH INTERSECTION ////
 
-    /** Find intersection points between a Curve and this Mesh.
+    /** Find intersection points between a Curve and this Solid.
      *  The curve is tessellated into a polyline and each segment is tested
      *  against every triangle of the mesh surface.
      * 
@@ -1742,7 +1742,7 @@ export class Mesh extends Shape
     {
         if(!curve || typeof curve.inner !== 'function')
         {
-            throw new Error('Mesh::intersectionPointsCurve(): Please supply a valid Curve instance!');
+            throw new Error('Solid::intersectionPointsCurve(): Please supply a valid Curve instance!');
         }
 
         try 
@@ -1754,14 +1754,14 @@ export class Mesh extends Shape
         }
         catch (e)
         {
-            console.error('Mesh::intersectionPointsCurve(): Error:', e);
+            console.error('Solid::intersectionPointsCurve(): Error:', e);
             return [];
         }
     }
 
     //// CREATING MESH COLLECTIONS ////
 
-    /** Create a row of copies of this Mesh with specific spacing between them
+    /** Create a row of copies of this Solid with specific spacing between them
      * 
      *  Spacing is measured from the bounding boxes of the meshes, so they are placed adjacent plus the specified spacing.
      * 
@@ -1772,7 +1772,7 @@ export class Mesh extends Shape
      *  NOTE: We don't use csgrs distribute_linear() because it merges meshes into one
      *      We want to output a collection of individual meshes
     */
-    row(count:number, spacing:number=10, direction:PointLike|Axis='x'):ShapeCollection<Mesh>
+    row(count:number, spacing:number=10, direction:PointLike|Axis='x'):ShapeCollection<Solid>
     {
         const dirVec = Vector.from(direction).normalize(); // auto converts Axis
         const bbox = this.bbox();
@@ -1780,7 +1780,7 @@ export class Mesh extends Shape
                             .scale(dirVec)
                             .length();
 
-        const meshes = new ShapeCollection<Mesh>();
+        const meshes = new ShapeCollection<Solid>();
 
         new Array(count).fill(0).forEach((_, i) =>
         {
@@ -1796,23 +1796,23 @@ export class Mesh extends Shape
         return meshes;
     }
 
-    /** Arrange copies of this Mesh on a 3-D grid.
+    /** Arrange copies of this Solid on a 3-D grid.
      *  Counts are floored and clamped to at least 1, so `grid(4, 3, 0)` is a flat 4x3 grid
      *  in XY rather than an empty collection.
      *  @param spacing Distance between copy origins, uniform or per axis.
-     *  @returns ShapeCollection<Mesh> of all copies - this Mesh itself is the copy at
+     *  @returns ShapeCollection<Solid> of all copies - this Solid itself is the copy at
      *      cell [0,0,0] (like row()), so the scene never gets a duplicate on top of it.
      */
-    grid(cx:number=2, cy:number=2, cz:number=1, spacing:number|PointLike=2):ShapeCollection<Mesh>
+    grid(cx:number=2, cy:number=2, cz:number=1, spacing:number|PointLike=2):ShapeCollection<Solid>
     {
-        const [nx, ny, nz] = gridCounts([cx, cy, cz], 'Mesh::grid()');
+        const [nx, ny, nz] = gridCounts([cx, cy, cz], 'Solid::grid()');
 
         const spacingVector = (typeof spacing === 'number')
             ? new Vector(spacing, spacing, spacing)
             : Vector.from(spacing)
 
         const name = this.name() as string | undefined;
-        const meshes = new ShapeCollection<Mesh>();
+        const meshes = new ShapeCollection<Solid>();
         for(let x=0; x<nx; x++)
         {
             for(let y=0; y<ny; y++)
@@ -1836,31 +1836,31 @@ export class Mesh extends Shape
         return meshes;
     }
 
-    /** Arrange copies of this Mesh in a 3-D array.
+    /** Arrange copies of this Solid in a 3-D array.
      *  @param sizes   Number of copies along [x, y, z] axes (default [2, 2, 1]).
      *                 Non-integer values are floored; values < 1 map to 1.
      *  @param offsets Distance between copy origins along [x, y, z].
      *                 Defaults to the bbox extent on each axis so copies are placed adjacent.
-     *  @returns ShapeCollection<Mesh> containing all copies (the original sits at [0,0,0]).
+     *  @returns ShapeCollection<Solid> containing all copies (the original sits at [0,0,0]).
      */
-    array(sizes: PointLike = [2, 2, 1], offsets?: PointLike): ShapeCollection<Mesh>
+    array(sizes: PointLike = [2, 2, 1], offsets?: PointLike): ShapeCollection<Solid>
     {
         const s = Point.from(sizes);
-        const [nx, ny, nz] = gridCounts([s.x, s.y, s.z], 'Mesh::array()');
+        const [nx, ny, nz] = gridCounts([s.x, s.y, s.z], 'Solid::array()');
 
         const bb = this.bbox();
         const defaultOff = new Vector(bb.width(), bb.depth(), bb.height());
         const off = offsets ? Vector.from(offsets) : defaultOff;
 
         const name = this.name() as string | undefined;
-        const meshes = new ShapeCollection<Mesh>();
+        const meshes = new ShapeCollection<Solid>();
         for (let x = 0; x < nx; x++)
         {
             for (let y = 0; y < ny; y++)
             {
                 for (let z = 0; z < nz; z++)
                 {
-                    // Reuse this Mesh at [0,0,0] - copying it there would leave the original
+                    // Reuse this Solid at [0,0,0] - copying it there would leave the original
                     // in the scene under an identical copy.
                     const mesh = (x === 0 && y === 0 && z === 0) ? this : this.copy();
                     mesh.translate(x * off.x, y * off.y, z * off.z);
@@ -1893,7 +1893,7 @@ export class Mesh extends Shape
 
     toString(): string
     {
-        return `<Mesh id=${this.id()} vertices=${this.positions().length} polygons=${this.polygons().length} ${this.nodeString()}>`;
+        return `<Solid id=${this.id()} vertices=${this.positions().length} polygons=${this.polygons().length} ${this.nodeString()}>`;
     }
 
     toPolygons(): undefined|Array<PolygonJs>
@@ -1924,7 +1924,7 @@ export class Mesh extends Shape
         };
     }
 
-    /** Export Mesh to GLTF JSON string.
+    /** Export Solid to GLTF JSON string.
      *  @param up Up axis of the model (default Z)
      */
     async toGLTF(up: Axis = 'z'): Promise<string | undefined>
@@ -1933,7 +1933,7 @@ export class Mesh extends Shape
         return new GLTFBuilder(up).add(this).applyExtensions().toGLTF();
     }
 
-    /** Export Mesh to GLB binary (Uint8Array).
+    /** Export Solid to GLB binary (Uint8Array).
      *  @param up Up axis of the model (default Z)
      */
     async toGLB(up: Axis = 'z'): Promise<Uint8Array | undefined>
@@ -1944,7 +1944,7 @@ export class Mesh extends Shape
     
     //// SVG EXPORT ////
 
-    /** True when every face of this Mesh lies on one plane parallel to XY — a drawing SVG can
+    /** True when every face of this Solid lies on one plane parallel to XY — a drawing SVG can
      *  write out as it is, rather than one it would have to project. What flatten() leaves
      *  behind.
      *
@@ -1956,7 +1956,7 @@ export class Mesh extends Shape
         return !!bb && bb.height() <= TOLERANCE;
     }
 
-    /** Return the SVG elements for this Mesh's faces — one `<polygon>` (or `<path>`, for a
+    /** Return the SVG elements for this Solid's faces — one `<polygon>` (or `<path>`, for a
      *  face with holes) each — without the outer `<svg>` wrapper. Used by ShapeCollection and
      *  SceneNode to compose a drawing.
      *
@@ -1978,8 +1978,8 @@ export class Mesh extends Shape
             .join('\n');
     }
 
-    /** Export this Mesh's faces as a self-contained SVG string, drawn from above.
-     *  See toSVGElem() — a Mesh that is not flat on XY is projected, not refused. */
+    /** Export this Solid's faces as a self-contained SVG string, drawn from above.
+     *  See toSVGElem() — a Solid that is not flat on XY is projected, not refused. */
     toSVG(): string
     {
         const bb = this.bbox();
@@ -1987,7 +1987,7 @@ export class Mesh extends Shape
             bb ? { minX: bb.min().x, minY: bb.min().y, maxX: bb.max().x, maxY: bb.max().y } : null);
     }
 
-    /** Export Mesh to an AMF document (XML string).
+    /** Export Solid to an AMF document (XML string).
      *  @param name   Object name (also used as the object id in the document)
      *  @param units  AMF unit name: millimeter, inch, feet, meter or micron */
     toAMF(name: string = 'model', units: string = 'millimeter'): string | undefined
@@ -2090,7 +2090,7 @@ export class Mesh extends Shape
     /**
      * Test whether this mesh physically overlaps another (BVH-accelerated).
      */
-    hits(other: Mesh): boolean {
+    hits(other: Solid): boolean {
         const a = this.inner();
         const b = other.inner();
         if (!a || !b) return false;
@@ -2099,13 +2099,13 @@ export class Mesh extends Shape
 
     /** Alias for hits(): do these two meshes physically overlap?
      *  More stable than comparing distances when you only need a yes/no. */
-    intersects(other: Mesh): boolean
+    intersects(other: Solid): boolean
     {
         return this.hits(other);
     }
 
     /** Alias for hits() */
-    overlaps(other: Mesh): boolean
+    overlaps(other: Solid): boolean
     {
         return this.hits(other);
     }
@@ -2117,11 +2117,11 @@ export class Mesh extends Shape
      * `intersectionVolume / this.volume()`. Returns `0` for non-overlapping,
      * invalid, or zero-volume meshes.
      */
-    overlapPerc(other: Mesh): number
+    overlapPerc(other: Solid): number
     {
-        if (!other || !(other instanceof Mesh))
+        if (!other || !(other instanceof Solid))
         {
-            throw new Error('Mesh::overlapPerc(): Please supply a valid Mesh instance!');
+            throw new Error('Solid::overlapPerc(): Please supply a valid Solid instance!');
         }
 
         const thisVolume = this.volume();
@@ -2145,13 +2145,13 @@ export class Mesh extends Shape
         }
         catch (e)
         {
-            console.warn('Mesh::overlapPerc(): Failed to calculate overlap percentage.', e);
+            console.warn('Solid::overlapPerc(): Failed to calculate overlap percentage.', e);
             return 0.0;
         }
     }
 
     /** Legacy uncached mesh-to-mesh distance path for side-by-side comparisons. */
-    distanceToLegacy(other: Mesh): number
+    distanceToLegacy(other: Solid): number
     {
         const a = this.inner();
         const b = other.inner();
@@ -2160,7 +2160,7 @@ export class Mesh extends Shape
     }
 
     /**
-     * Minimum separating distance to another Mesh, Curve, Point, Vertex, or Polygon.
+     * Minimum separating distance to another Solid, Curve, Point, Vertex, or Polygon.
      * For Curves the curve is tessellated and the minimum closestPoint distance
      * across all samples is returned. Returns `0` if they intersect.
      * For Points the distance is measured from the point position to the
@@ -2169,7 +2169,7 @@ export class Mesh extends Shape
      * closest point on the mesh surface.
      * For Polygons the polygon is converted to a mesh first.
      */
-    distanceTo(other: Mesh | Curve | Point | Vertex | Polygon): number
+    distanceTo(other: Solid | Curve | Point | Vertex | Polygon): number
     {
         if (other instanceof Point)
         {
@@ -2193,19 +2193,19 @@ export class Mesh extends Shape
             return this._distanceToCurve(other);
         }
 
-        if(other instanceof Mesh)
+        if(other instanceof Solid)
         {
             const a = this.inner();
-            const b = (other as Mesh).inner();
+            const b = (other as Solid).inner();
             if (!a || !b) return Infinity;
             return a.distanceTo(b);
         }
 
-        throw new Error('Mesh.distanceTo(): Unsupported type. Expected Mesh, Curve, Point, Vertex, or Polygon.');
+        throw new Error('Solid.distanceTo(): Unsupported type. Expected Solid, Curve, Point, Vertex, or Polygon.');
     }
 
     /** Alias for distanceTo */
-    distance(other: Mesh | Curve | Point | Vertex | Polygon): number
+    distance(other: Solid | Curve | Point | Vertex | Polygon): number
     {
         return this.distanceTo(other);
     }
@@ -2276,13 +2276,13 @@ export class Mesh extends Shape
     projectToPlane(
         planeOrigin: [number, number, number],
         planeNormal: [number, number, number],
-    ): Mesh {
+    ): Solid {
         const m = this.inner()?.projectToPlane(
             planeOrigin[0], planeOrigin[1], planeOrigin[2],
             planeNormal[0], planeNormal[1], planeNormal[2],
         );
-        if (!m) return new Mesh();
-        return Mesh.from(m);
+        if (!m) return new Solid();
+        return Solid.from(m);
     }
 
     /**
@@ -2299,7 +2299,7 @@ export class Mesh extends Shape
     }
 
     /**
-     * Create a `Mesh` from a signed distance field by pre-sampling the SDF
+     * Create a `Solid` from a signed distance field by pre-sampling the SDF
      * on the TypeScript side and passing the resulting grid to the WASM layer.
      *
      * @param sdfFn      Function `(x, y, z) => signedDistance`.
@@ -2312,7 +2312,7 @@ export class Mesh extends Shape
         bounds: { min: [number, number, number]; max: [number, number, number] },
         resolution: [number, number, number] = [30, 30, 30],
         isoValue = 0.0,
-    ): Mesh {
+    ): Solid {
         const [nx, ny, nz] = resolution;
         const [minX, minY, minZ] = bounds.min;
         const [maxX, maxY, maxZ] = bounds.max;
@@ -2341,7 +2341,7 @@ export class Mesh extends Shape
             maxX, maxY, maxZ,
             isoValue,
         );
-        return Mesh.from(meshJs);
+        return Solid.from(meshJs);
     }
 
     //// LAYOUT & ALIGNMENT ////
@@ -2365,9 +2365,9 @@ export class Mesh extends Shape
         return (Math.abs(minZ) > 1e-10) ? this.translate(0, 0, -minZ) : this;
     }
 
-    /** Rotate this Mesh so that direction `from` ends up pointing along `to`, using the
+    /** Rotate this Solid so that direction `from` ends up pointing along `to`, using the
      *  shortest arc between the two.
-     *  @param pivot  point the rotation turns around (default: this Mesh's center)
+     *  @param pivot  point the rotation turns around (default: this Solid's center)
      */
     rotateVecToVec(from: PointLike, to: PointLike, pivot?: PointLike): this
     {
@@ -2378,7 +2378,7 @@ export class Mesh extends Shape
         return this.rotateAround(angle, axis, pivot ?? this.center());
     }
 
-    /** Rotate this Mesh so its oriented bounding box lines up with the world axes:
+    /** Rotate this Solid so its oriented bounding box lines up with the world axes:
      *  the OBB's thinnest axis onto +Z first, then its longest axis onto +X.
      *  Position of the center is kept.
      */
@@ -2392,7 +2392,7 @@ export class Mesh extends Shape
         return this;
     }
 
-    /** Rotate this Mesh so the normal of its dominant face direction is parallel to the Z axis.
+    /** Rotate this Solid so the normal of its dominant face direction is parallel to the Z axis.
      *
      *  Faces are grouped by normal (opposite normals count as one direction) and the group
      *  with the largest *total* area wins. Grouping matters here: a tessellated mesh has its
@@ -2427,7 +2427,7 @@ export class Mesh extends Shape
         return this.rotateVecToVec([dominant.x, dominant.y, dominant.z], [0, 0, 1], this.center());
     }
 
-    /** Rotate this Mesh to align it with the world axes as much as possible.
+    /** Rotate this Solid to align it with the world axes as much as possible.
      *
      *  Runs in three steps:
      *    1. `rotateToAxesOBbox()` — get the shape roughly flat on the XY plane
@@ -2455,14 +2455,14 @@ export class Mesh extends Shape
         return (angle === 0) ? this : this.rotateZ(angle, this.center());
     }
 
-    /** Rotate this Mesh to align as much as possible to the world axes.
+    /** Rotate this Solid to align as much as possible to the world axes.
      *  Alias for rotateToOrtho() */
     autoRotate(o: OrientationXY = 'vertical'): this
     {
         return this.rotateToOrtho(o);
     }
 
-    /** Flatten this Mesh onto a coordinate plane: keep the polygons whose normal is
+    /** Flatten this Solid onto a coordinate plane: keep the polygons whose normal is
      *  parallel to `axis`, collapse them onto the plane through the origin perpendicular
      *  to that axis, and drop the doubles that creates.
      *
@@ -2474,7 +2474,7 @@ export class Mesh extends Shape
      *               default 'z' — the horizontal faces, flattened onto the XY plane).
      */
     @sceneReplace
-    flatten(axis: Axis = 'z'): Mesh
+    flatten(axis: Axis = 'z'): Solid
     {
         const axisVec = axis === 'x' ? Vector.from(1, 0, 0)
                       : axis === 'y' ? Vector.from(0, 1, 0)
@@ -2500,8 +2500,8 @@ export class Mesh extends Shape
 
         if (flatPolys.length === 0)
         {
-            console.warn('Mesh.flatten(): no polygons found aligned with axis', axis, '\u2014 returning empty Mesh');
-            return new Mesh();
+            console.warn('Solid.flatten(): no polygons found aligned with axis', axis, '\u2014 returning empty Solid');
+            return new Solid();
         }
 
         // Flattening stacks geometry that was apart in 3D — a box's top and bottom face land
@@ -2518,10 +2518,10 @@ export class Mesh extends Shape
             return true;
         });
 
-        return Mesh.fromPolygons(uniquePolys);
+        return Solid.fromPolygons(uniquePolys);
     }
 
-    /** Order- and winding-independent key for this Mesh's geometry, used by
+    /** Order- and winding-independent key for this Solid's geometry, used by
      *  ShapeCollection.flatten() to filter out shapes that flattened onto each other. */
     _flatKey(tolerance: number = TOLERANCE): string
     {
@@ -2554,7 +2554,7 @@ export class Mesh extends Shape
     @sceneLayer('iso')
     isometry(cam: PointLike = ISOMETRY_CAM_DEFAULT, ...args: any[]): ShapeCollection<Shape>
     {
-        const o = resolveProjectionArgs(args, 'Mesh.isometry(cam, options)');
+        const o = resolveProjectionArgs(args, 'Solid.isometry(cam, options)');
 
         // from cam position to origin
         const camDirVec = (isPointLike(cam))
@@ -2569,14 +2569,14 @@ export class Mesh extends Shape
                 planeOrigin: [0, 0, 0],
                 featureAngle: o.featureAngle,
                 samples: o.samples,
-                strategy: Mesh._singleMeshStrategy(o.method),
+                strategy: Solid._singleMeshStrategy(o.method),
             } as ProjectEdgeOptions);
 
         if(!o.hiddenLines){ iso.removeGroup('hidden'); }
         ShapeCollection._inheritStyle(iso, this); // the line work takes this mesh's style
 
         // The flatten takes the normal toward the viewer; the reversed one gives a mirror image
-        return Mesh._flattenProjectionToScreen(iso, camDirVec);
+        return Solid._flattenProjectionToScreen(iso, camDirVec);
     }
 
     /** Shorthand alias for {@link isometry}. */
@@ -2605,11 +2605,11 @@ export class Mesh extends Shape
      * @param options  View direction, projection plane, optional feature angle and sample count.
      * @param occluders Other meshes that may occlude this mesh's edges. Their
      *   inner MeshJs handles are **cloned** before being passed to WASM, so the
-     *   original `Mesh` wrappers remain usable after this call (the cloned
+     *   original `Solid` wrappers remain usable after this call (the cloned
      *   handles are consumed by the WASM bridge — `Vec<MeshJs>` takes ownership).
      * @returns ShapeCollection<Curve> with two groups: 'visible' and 'hidden', containing the respective projected edges as Curves.
      */
-    _projectEdges(options: ProjectEdgeOptions, occluders: ShapeCollection<Mesh> = new ShapeCollection<Mesh>()): ShapeCollection<Shape>
+    _projectEdges(options: ProjectEdgeOptions, occluders: ShapeCollection<Solid> = new ShapeCollection<Solid>()): ShapeCollection<Shape>
     {
         const optionsWithDefaults = { 
             ...EDGE_PROJECTION_DEFAULTS, 
@@ -2636,7 +2636,7 @@ export class Mesh extends Shape
         // WASM `projectEdges` takes `Vec<MeshJs>` (by value), which consumes
         // each handle as wasm-bindgen reconstructs Rust values from the JS
         // pointers. Cloning the inner MeshJs before passing keeps the
-        // caller's Mesh wrappers alive for further use across multiple
+        // caller's Solid wrappers alive for further use across multiple
         // projection calls (e.g. front+side+top of the same scene).
         const occJs = occluders
             .map(m => m.inner()?.clone?.())
@@ -2645,11 +2645,11 @@ export class Mesh extends Shape
         const r = this.inner()?.projectEdges(vx, vy, vz || 0, ox, oy, oz || 0, nx, ny, nz || 0, fa, ns, occJs, strategy);
         if (!r)
         {
-            console.error(`Mesh::_projectEdges(): Projection failed. Check if the mesh is valid and the options are correct.`);
+            console.error(`Solid::_projectEdges(): Projection failed. Check if the mesh is valid and the options are correct.`);
             return new ShapeCollection<Shape>(); // empty result on failure
         }
 
-        const result = Mesh._projectionToShapeCollection(r);
+        const result = Solid._projectionToShapeCollection(r);
         r.free?.();
         return result;
     }
@@ -2671,22 +2671,22 @@ export class Mesh extends Shape
         const visible = r.visiblePolylines();
         const outline = new Set<number>(r.silhouetteIndices?.() ?? []);
         const chains = [
-            ...Mesh._joinPolylines(visible.map((p, i) => outline.has(i) ? p : null))
+            ...Solid._joinPolylines(visible.map((p, i) => outline.has(i) ? p : null))
                 .map(c => ({ ...c, outline: true })),
-            ...Mesh._joinPolylines(visible.map((p, i) => outline.has(i) ? null : p))
+            ...Solid._joinPolylines(visible.map((p, i) => outline.has(i) ? null : p))
                 .map(c => ({ ...c, outline: false })),
         ].sort((a, b) => a.first - b.first);
 
         const result = new ShapeCollection<Shape>();
         // First add hidden edges, so they are rendered below visible ones by default
-        result.addGroup('hidden', Mesh.projectedPolylinesToShapeCollection(
-            Mesh._joinPolylines(r.hiddenPolylines()).map(c => c.points)));
+        result.addGroup('hidden', Solid.projectedPolylinesToShapeCollection(
+            Solid._joinPolylines(r.hiddenPolylines()).map(c => c.points)));
 
         const visibleCurves = new ShapeCollection<Shape>();
         const silhouette = new ShapeCollection<Shape>();
         chains.forEach(c =>
         {
-            const curve = Mesh._polylineToCurve(c.points);
+            const curve = Solid._polylineToCurve(c.points);
             if (!curve) return;
             visibleCurves.add(curve);
             if (c.outline) silhouette.add(curve);
@@ -2726,7 +2726,7 @@ export class Mesh extends Shape
         const seen = new Set<string>();
         const lines = polylines.map(p =>
         {
-            if (!p || !Mesh._polylineHasLength(p)) return null;
+            if (!p || !Solid._polylineHasLength(p)) return null;
             const keys = p.map(key);
             const id = [keys.join(';'), [...keys].reverse().join(';')].sort()[0];
             if (seen.has(id)) return null;
@@ -2809,14 +2809,14 @@ export class Mesh extends Shape
      *
      *  Static because the conversion depends on nothing but the polylines, and
      *  the linear-shape projection in ShapeCollection needs it without having a
-     *  Mesh to hand.
+     *  Solid to hand.
      */
     static projectedPolylinesToShapeCollection(polylines: Array<[number, number, number][]>): ShapeCollection<Shape>
     {
         const curves = new ShapeCollection<Shape>();
         polylines.forEach(points =>
         {
-            const curve = Mesh._polylineToCurve(points);
+            const curve = Solid._polylineToCurve(points);
             if (curve) curves.add(curve);
         });
         return curves;
@@ -2827,7 +2827,7 @@ export class Mesh extends Shape
      *  collapses to coincident points), and Curve.Line/Polyline reject those. */
     static _polylineToCurve(points: Array<[number, number, number]>): Curve | null
     {
-        if (!Mesh._polylineHasLength(points)) return null;
+        if (!Solid._polylineHasLength(points)) return null;
         return (points.length === 2)
             ? Curve.Line(points[0], points[1])
             : Curve.Polyline(points);
@@ -2933,8 +2933,8 @@ export class Mesh extends Shape
     @sceneLayer('elevation')
     elevation(from: PointLike | BasePlane = 'front', ...args: any[]): ShapeCollection<Shape>
     {
-        const o = resolveProjectionArgs(args, 'Mesh.elevation(from, options)');
-        const camDirVec = Mesh._resolveViewDirection(from);
+        const o = resolveProjectionArgs(args, 'Solid.elevation(from, options)');
+        const camDirVec = Solid._resolveViewDirection(from);
         const planeNormal = camDirVec.copy().reverse();
 
         const elev = this._projectEdges(
@@ -2944,14 +2944,14 @@ export class Mesh extends Shape
                 planeOrigin:   [0, 0, 0],
                 featureAngle:  o.featureAngle,
                 samples:       o.samples,
-                strategy:      Mesh._singleMeshStrategy(o.method),
+                strategy:      Solid._singleMeshStrategy(o.method),
             } as ProjectEdgeOptions);
 
         if (!o.hiddenLines) elev.removeGroup('hidden');
         ShapeCollection._inheritStyle(elev, this); // the line work takes this mesh's style
 
         // The flatten takes the normal toward the viewer; the reversed one gives a mirror image
-        return Mesh._flattenProjectionToScreen(elev, camDirVec);
+        return Solid._flattenProjectionToScreen(elev, camDirVec);
     }
 
     /** Architectural section: cut the mesh with a plane and project the
@@ -2977,8 +2977,8 @@ export class Mesh extends Shape
     @sceneLayer('section')
     section(pivot: PointLike, normal: PointLike | BasePlane = [0, 0, 1], ...args: any[]): ShapeCollection<Shape>
     {
-        const o = resolveProjectionArgs(args, 'Mesh.section(pivot, normal, options)');
-        const sectionNormal = Mesh._resolveViewDirection(normal);
+        const o = resolveProjectionArgs(args, 'Solid.section(pivot, normal, options)');
+        const sectionNormal = Solid._resolveViewDirection(normal);
         const pivotPoint    = Point.from(pivot);
 
         const result = this._projectEdgesSection(
@@ -2987,7 +2987,7 @@ export class Mesh extends Shape
                 normal: sectionNormal,
                 featureAngle: o.featureAngle,
                 samples: o.samples,
-                strategy: Mesh._singleMeshStrategy(o.method),
+                strategy: Solid._singleMeshStrategy(o.method),
             });
 
         if (!o.hiddenLines) result.removeGroup('hidden');
@@ -2995,7 +2995,7 @@ export class Mesh extends Shape
 
         // The viewer looks along -normal, so the normal itself points toward the viewer: that is
         // what the flatten takes (the reversed one gives a mirror image)
-        return Mesh._flattenProjectionToScreen(result, sectionNormal);
+        return Solid._flattenProjectionToScreen(result, sectionNormal);
     }
 
     /** Slice + project edges through a section plane.
@@ -3014,7 +3014,7 @@ export class Mesh extends Shape
             samples?: number,
             strategy?: HlrStrategy,
         },
-        occluders: ShapeCollection<Mesh> = new ShapeCollection<Mesh>(),
+        occluders: ShapeCollection<Solid> = new ShapeCollection<Solid>(),
     ): ShapeCollection<Shape>
     {
         const { pivot, normal } = options;
@@ -3026,7 +3026,7 @@ export class Mesh extends Shape
 
         // Camera sits on the +normal side, looking along -normal (e.g. floor
         // plan: above, looking down). The WASM `view_normal` is the direction
-        // *toward the viewer* (matches Mesh.isometry()'s convention where
+        // *toward the viewer* (matches Solid.isometry()'s convention where
         // viewDirection = cam-position direction). The projection-plane
         // normal faces away from the viewer, into the scene (= -normal).
         const view   = normal.copy();
@@ -3042,7 +3042,7 @@ export class Mesh extends Shape
         const inner = this.inner();
         if (!inner)
         {
-            console.error('Mesh::_projectEdgesSection(): mesh is empty');
+            console.error('Solid::_projectEdgesSection(): mesh is empty');
             return new ShapeCollection<Shape>();
         }
 
@@ -3058,11 +3058,11 @@ export class Mesh extends Shape
         );
         if (!r)
         {
-            console.error(`Mesh::_projectEdgesSection(): projectEdgesSection unavailable or failed.`);
+            console.error(`Solid::_projectEdgesSection(): projectEdgesSection unavailable or failed.`);
             return new ShapeCollection<Shape>();
         }
 
-        const result = Mesh._projectionToShapeCollection(r);
+        const result = Solid._projectionToShapeCollection(r);
 
         // Cut sketch: pull rings as typed coordinate buffers and lift back to
         // 3D using the section plane equation. `rings()` is the strongly-typed
@@ -3073,11 +3073,11 @@ export class Mesh extends Shape
         const cut = r.cutSketch?.();
         if (cut)
         {
-            const rings = Mesh._extractSketchRings(cut);
+            const rings = Solid._extractSketchRings(cut);
             const cutCurves = new ShapeCollection<Shape>();
             for (const ring of rings)
             {
-                const pts3 = Mesh._liftPointsToSectionPlane(ring.points, normal, sectionOffset);
+                const pts3 = Solid._liftPointsToSectionPlane(ring.points, normal, sectionOffset);
                 if (ring.closed && pts3.length >= 2)
                 {
                     // Ensure ring is explicitly closed
@@ -3127,7 +3127,7 @@ export class Mesh extends Shape
             return out;
         }
         const debug: string = sketch?.debugGeometry?.() ?? '';
-        return Mesh._parseSketchDebugRings(debug);
+        return Solid._parseSketchDebugRings(debug);
     }
 
     /** Parse SketchJs.debugGeometry() output into a list of rings. Each ring
@@ -3183,7 +3183,7 @@ export class Mesh extends Shape
     {
         if (Math.abs(normal.z) < TOLERANCE)
         {
-            Mesh._warnVerticalSectionOnce();
+            Solid._warnVerticalSectionOnce();
             return points.map(([x, y]) => [x, y, 0] as [number, number, number]);
         }
         return points.map(([x, y]) =>
@@ -3196,10 +3196,10 @@ export class Mesh extends Shape
     private static _verticalSectionWarned = false;
     private static _warnVerticalSectionOnce(): void
     {
-        if (Mesh._verticalSectionWarned) return;
-        Mesh._verticalSectionWarned = true;
+        if (Solid._verticalSectionWarned) return;
+        Solid._verticalSectionWarned = true;
         console.warn(
-            'Mesh.section(): the cut plane is near-vertical (|normal.z| < TOLERANCE). ' +
+            'Solid.section(): the cut plane is near-vertical (|normal.z| < TOLERANCE). ' +
             'csgrs `slice()` drops Z when building the cut sketch, so the cut profile ' +
             'is collapsed to Z=0 and is geometrically degenerate. ' +
             'Visible/hidden projected edges remain correct.',

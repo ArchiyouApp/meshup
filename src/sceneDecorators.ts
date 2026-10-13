@@ -15,7 +15,7 @@
  *
  *  The plain kernel result is ALWAYS returned unchanged — decorators never wrap the result.
  *  This is what lets the modeler work with meshup shapes directly: `extrude()` still returns
- *  a `Mesh`, `split()` still returns a `ShapeCollection<Mesh>`, etc.
+ *  a `Solid`, `split()` still returns a `ShapeCollection<Solid>`, etc.
  *
  *    @sceneCarry     no scene mutation; results carry self's scene root (select, sub-shapes)
  *    @sceneReplace   add result(s) to self's own layer; detach self   (extrude, split, hull…)
@@ -372,7 +372,7 @@ function anchorOf(source: Any): Any
 }
 
 /** Add `result` to the scene the way an @sceneAdd method would, for shape *producers that are
- *  not Shapes themselves* — Bbox / OBbox, which build a Curve or Mesh from the shape they were
+ *  not Shapes themselves* — Bbox / OBbox, which build a Curve or Solid from the shape they were
  *  measured on. The measured shape is the source: results carry its `_modeler`/scene root and
  *  land on the active layer, but only when the source is really in a scene and not `tmp()`. */
 export function addResultToScene(source: Any, result: Any): void

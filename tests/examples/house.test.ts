@@ -4,7 +4,7 @@
  */
 import { beforeAll, describe, it, expect, should } from 'vitest';
 import { ShapeCollection, initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Sketch } from '../../src/Sketch';
 import { save, rad } from '../../src/utils';
 import { outputDir } from '../helpers/outputs';
@@ -40,7 +40,7 @@ describe('Example: House', () =>
 
         const backFacade = frontFacade?.copy()?.move(0, DEPTH-THICKNESS, 0);
 
-        const wallLeft = Mesh.BoxBetween([0,0,0], [THICKNESS, DEPTH-2*THICKNESS, HEIGHT])
+        const wallLeft = Solid.BoxBetween([0,0,0], [THICKNESS, DEPTH-2*THICKNESS, HEIGHT])
                             .move(0, THICKNESS, 0);
         const wallRight = wallLeft.copy()!.move(WIDTH - THICKNESS, 0, 0);
         const roof = new Sketch('xz')
@@ -52,7 +52,7 @@ describe('Example: House', () =>
                         .extrude(-(DEPTH+ROOF_OVERHANG_FRONT*2))! // extude in direction -y is normal for XZ plane
                         .move(0,-ROOF_OVERHANG_FRONT);
 
-        const door = Mesh.Box(100, 50, 200).move(WIDTH/2, 0, 200/2);
+        const door = Solid.Box(100, 50, 200).move(WIDTH/2, 0, 200/2);
         frontFacade?.subtract(door);
 
         const house = new ShapeCollection(frontFacade!, backFacade!, wallLeft, wallRight, roof!);

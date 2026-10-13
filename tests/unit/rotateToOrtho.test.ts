@@ -1,7 +1,7 @@
 /**
  *  rotateToOrtho.test.ts
  *
- *  Mesh.rotateToOrtho() / Curve.rotateToOrtho() — align a shape with the world axes
+ *  Solid.rotateToOrtho() / Curve.rotateToOrtho() — align a shape with the world axes
  *  (brep Shape.rotateToOrtho() parity), plus the helpers they build on:
  *  rotateVecToVec(), rotateToAxesOBbox(), rotateToAlignLargestFaceToZ()
  *  and the pure utils primaryOrthoXYAngle() / shortestArcAxisAngle().
@@ -9,7 +9,7 @@
 
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 import { Polygon } from '../../src/Polygon';
 import { Vector } from '../../src/Vector';
@@ -106,11 +106,11 @@ describe('utils.primaryOrthoXYAngle()', () =>
     });
 });
 
-describe('Mesh.rotateVecToVec()', () =>
+describe('Solid.rotateVecToVec()', () =>
 {
     it('rotates a box so its long axis follows the target direction', () =>
     {
-        const m = Mesh.Box(100, 10, 10);   // long along X
+        const m = Solid.Box(100, 10, 10);   // long along X
         m.rotateVecToVec([1, 0, 0], [0, 1, 0]);
         const bb = m.bbox();
         expect(bb.width()).toBeCloseTo(10, 3);   // X span
@@ -119,7 +119,7 @@ describe('Mesh.rotateVecToVec()', () =>
 
     it('keeps the pivot point fixed', () =>
     {
-        const m = Mesh.Box(100, 10, 10).moveTo(50, 0, 0);
+        const m = Solid.Box(100, 10, 10).moveTo(50, 0, 0);
         m.rotateVecToVec([1, 0, 0], [0, 1, 0], [0, 0, 0]);
         const bb = m.bbox();
         // rotated around the origin: the box now spans Y from ~0 to ~100
@@ -129,7 +129,7 @@ describe('Mesh.rotateVecToVec()', () =>
 
     it('is a no-op for directions that already match', () =>
     {
-        const m = Mesh.Box(100, 10, 10);
+        const m = Solid.Box(100, 10, 10);
         const before = m.bbox();
         m.rotateVecToVec([0, 0, 1], [0, 0, 2]);
         expect(m.bbox().width()).toBeCloseTo(before.width(), 6);
@@ -137,22 +137,22 @@ describe('Mesh.rotateVecToVec()', () =>
     });
 });
 
-describe('Mesh.rotateToAlignLargestFaceToZ()', () =>
+describe('Solid.rotateToAlignLargestFaceToZ()', () =>
 {
     it('brings the dominant face of a tilted plate parallel to XY', () =>
     {
-        const m = Mesh.Box(200, 100, 10).rotateX(35);
+        const m = Solid.Box(200, 100, 10).rotateX(35);
         m.rotateToAlignLargestFaceToZ();
         const bb = m.bbox();
         expect(bb.height()).toBeCloseTo(10, 1); // thinnest again along Z
     });
 });
 
-describe('Mesh.rotateToOrtho()', () =>
+describe('Solid.rotateToOrtho()', () =>
 {
     it('aligns a plate rotated around Z back to the axes (vertical: long side on Y)', () =>
     {
-        const m = Mesh.Box(200, 100, 10).rotateZ(37);
+        const m = Solid.Box(200, 100, 10).rotateZ(37);
         m.rotateToOrtho('vertical');
         const bb = m.bbox();
         expect(bb.height()).toBeCloseTo(10, 1);
@@ -162,7 +162,7 @@ describe('Mesh.rotateToOrtho()', () =>
 
     it('aligns the same plate with the long side on X (horizontal)', () =>
     {
-        const m = Mesh.Box(200, 100, 10).rotateZ(37);
+        const m = Solid.Box(200, 100, 10).rotateZ(37);
         m.rotateToOrtho('horizontal');
         const bb = m.bbox();
         expect(bb.height()).toBeCloseTo(10, 1);
@@ -172,7 +172,7 @@ describe('Mesh.rotateToOrtho()', () =>
 
     it('aligns a plate tumbled around all three axes', () =>
     {
-        const m = Mesh.Box(200, 100, 10).rotateX(20).rotateY(-15).rotateZ(40);
+        const m = Solid.Box(200, 100, 10).rotateX(20).rotateY(-15).rotateZ(40);
         m.rotateToOrtho('horizontal');
         const bb = m.bbox();
         expect(bb.height()).toBeCloseTo(10, 0);
@@ -182,7 +182,7 @@ describe('Mesh.rotateToOrtho()', () =>
 
     it('leaves an already aligned box alone', () =>
     {
-        const m = Mesh.Box(200, 100, 10);
+        const m = Solid.Box(200, 100, 10);
         const before = m.bbox();
         m.rotateToOrtho('horizontal');
         const bb = m.bbox();
@@ -195,7 +195,7 @@ describe('Mesh.rotateToOrtho()', () =>
 
     it('autoRotate() is an alias', () =>
     {
-        const m = Mesh.Box(200, 100, 10).rotateZ(37);
+        const m = Solid.Box(200, 100, 10).rotateZ(37);
         m.autoRotate('horizontal');
         const bb = m.bbox();
         expect(bb.width()).toBeCloseTo(200, 1);

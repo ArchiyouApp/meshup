@@ -15,7 +15,7 @@
  *        .applyExtensions()
  *        .toGLB();
  *
- *  Shapes (Mesh, Curve) and SceneNode can be passed to add() / addSceneNode().
+ *  Shapes (Solid, Curve) and SceneNode can be passed to add() / addSceneNode().
  */
 
 import
@@ -57,12 +57,13 @@ function decodeImageData(data: string): { bytes: Uint8Array; mime: string }
     return { bytes, mime };
 }
 import { EDGE_PROJECTION_DEFAULTS, SHAPE_DEFAULT_STYLE } from './constants';
-import { Mesh } from './Mesh';
+import { Solid } from './Solid';
 import { Curve } from './Curve';
 import { Polygon } from './Polygon';
 import { Vertex } from './Vertex';
 import type { SceneNode } from './SceneNode';
 import type { Axis, SceneNodeExport } from './types';
+import { isSolidType } from './types';
 
 // ─── Utility: dash array → 16-bit repeating bitmask ──────────────────────────
 
@@ -579,14 +580,14 @@ export class GLTFBuilder
     //// GEOMETRY PASS ////
 
     /**
-     * Add a Mesh or Curve to this builder.
+     * Add a Solid or Curve to this builder.
      * Geometry is written to the Document immediately; extension data is
      * queued for the applyExtensions() pass. Curve holes are added automatically.
      */
-    add(item: Mesh | Curve | Polygon | Vertex, name?: string): this
+    add(item: Solid | Curve | Polygon | Vertex, name?: string): this
     {
         if (item.style.visible === false) return this;
-        if (item instanceof Mesh)
+        if (item instanceof Solid)
         {
             const n = name ?? 'mesh';
             if (!item._mesh) return this;
@@ -747,9 +748,9 @@ export class GLTFBuilder
             if (cascadedStyle.visible === false)
                 gltfNode.setExtras({ defaultVisible: false });
 
-            if (shape instanceof Mesh || shape.type === 'Mesh')
+            if (shape instanceof Solid || isSolidType(shape.type))
             {
-                const mesh = shape as unknown as Mesh;
+                const mesh = shape as unknown as Solid;
                 if (!mesh._mesh) return;
                 const buffer = mesh.toBuffer(); // triangulated once, reused below
                 if (buffer.positions.length === 0) return;
@@ -793,8 +794,8 @@ export class GLTFBuilder
 
     //// PRIVATE: GEOMETRY BUILDERS ////
 
-    /** Assemble a GltfNode for a Mesh from its raw toBuffer() data. */
-    private _meshToGLTFNode(mesh: Mesh, name = 'mesh', style?: Style, buffer?: ReturnType<Mesh['toBuffer']>): { node: GltfNode; primitive: Primitive; indices: Uint32Array; positions: Float32Array; normals: Float32Array }
+    /** Assemble a GltfNode for a Solid from its raw toBuffer() data. */
+    private _meshToGLTFNode(mesh: Solid, name = 'mesh', style?: Style, buffer?: ReturnType<Solid['toBuffer']>): { node: GltfNode; primitive: Primitive; indices: Uint32Array; positions: Float32Array; normals: Float32Array }
     {
         const { positions: posRaw, normals: normRaw, indices } = buffer ?? mesh.toBuffer();
         const count = posRaw.length / 3;

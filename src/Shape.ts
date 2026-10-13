@@ -1,11 +1,11 @@
 /**
  *  Shape.ts
  *
- *  Abstract base class for all geometry types in Meshup (Mesh, Curve, Polygon, Vertex).
+ *  Abstract base class for all geometry types in Meshup (Solid, Curve, Polygon, Vertex).
  *
  *  Provides:
  *    - id()           — UUID for this instance
- *    - type()         — 'Mesh' | 'Curve' | 'Polygon' | 'Vertex', implemented by each subclass
+ *    - type()         — 'Solid' | 'Curve' | 'Polygon' | 'Vertex', implemented by each subclass
  *    - subtype()      — finer classification, implemented by each subclass
  *    - Shape.isShape() — type guard
  *    - Common transforms: translate, move, rotate, scale, mirror, copy (abstract)
@@ -18,7 +18,7 @@ import { activeLayerOf } from './sceneDecorators';
 import { Bbox } from './Bbox';
 
 import type { PointLike, Axis } from './types';
-import { isPointLike } from './types';
+import { isPointLike, isSolidType } from './types';
 import type { ShapeCollection } from './ShapeCollection';
 import type { Curve } from './Curve';
 import { Point } from './Point';
@@ -32,7 +32,7 @@ export type AlignTarget = Shape | ShapeCollection<any> | Point | PointLike;
 export abstract class Shape
 {
     private _id: string;
-    abstract readonly type: 'Curve' | 'Mesh' | 'Polygon' | 'Vertex';
+    abstract readonly type: 'Curve' | 'Solid' | 'Polygon' | 'Vertex';
     _node: SceneNode | null = null;
     style: Style = new Style();
     metadata: Record<string, any> = {};
@@ -254,7 +254,7 @@ export abstract class Shape
     }
 
     /** Whether this Shape has extent along all three axes — the complement of is2D(), which
-     *  Mesh and Curve each define from their bbox. Kept on the base class because callers
+     *  Solid and Curve each define from their bbox. Kept on the base class because callers
      *  outside meshup (the host annotator deciding which way to offset a dimension line) ask
      *  any Shape, and a missing method there is a crash, not a `false`. */
     is3D(): boolean
@@ -262,11 +262,12 @@ export abstract class Shape
         return !(this as any).is2D?.();
     }
 
-    /** True for solid-like shapes: mesh Mesh (brep Shell/Solid once wired). */
+    /** True for solid-like shapes: a Solid ('Mesh' is its type from before the rename), or a
+     *  brep Shell. */
     isSolid(): boolean
     {
         const t = this.type as string;
-        return t === 'Mesh' || t === 'Shell' || t === 'Solid';
+        return isSolidType(t) || t === 'Shell';
     }
 
     get shapeKind(): 'closed' | 'linear'

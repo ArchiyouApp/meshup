@@ -1,5 +1,5 @@
 /** Vertex.moveTo() / moveToX/Y/Z().
- *  A Vertex is dimensionless, so its bbox centre is the vertex itself: where Mesh.moveTo()
+ *  A Vertex is dimensionless, so its bbox centre is the vertex itself: where Solid.moveTo()
  *  and Curve.moveTo() re-centre a bbox on the target, these simply set the position — while
  *  still carrying the vertex normal along untouched. */
 import { beforeAll, describe, it, expect } from 'vitest';

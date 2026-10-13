@@ -7,7 +7,7 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
 import { SceneNode } from '../../src/SceneNode';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 
 beforeAll(async () =>
@@ -29,9 +29,9 @@ describe('sid: assignment on adoption', () =>
     it('numbers shapes 1,2,3… in the order they enter the scene', () =>
     {
         const { root, peek } = hostScene();
-        const a = Mesh.Box(10, 10, 10);
+        const a = Solid.Box(10, 10, 10);
         const b = Curve.Circle(5);
-        const c = Mesh.Box(2, 2, 2);
+        const c = Solid.Box(2, 2, 2);
 
         expect([a.sid(), b.sid(), c.sid()]).toEqual([0, 0, 0]); // not adopted yet
 
@@ -45,14 +45,14 @@ describe('sid: assignment on adoption', () =>
 
     it('leaves sid 0 on a shape that never enters a scene', () =>
     {
-        const m = Mesh.Box(1, 1, 1);
+        const m = Solid.Box(1, 1, 1);
         expect(m.sid()).toEqual(0);
     });
 
     it('leaves sid 0 and does not throw when the scene has no host provider', () =>
     {
         const root = SceneNode.root('root'); // bare meshup scene: no setSidProvider
-        const m = Mesh.Box(1, 1, 1);
+        const m = Solid.Box(1, 1, 1);
         expect(() => root.addShape(m as any)).not.toThrow();
         expect(m.sid()).toEqual(0);
     });
@@ -63,8 +63,8 @@ describe('sid: assignment on adoption', () =>
         const layerA = root.ensureLayer('a');
         const layerB = root.ensureLayer('b');
 
-        const one = Mesh.Box(1, 1, 1);
-        const two = Mesh.Box(2, 2, 2);
+        const one = Solid.Box(1, 1, 1);
+        const two = Solid.Box(2, 2, 2);
         layerA.addShape(one as any);
         layerB.addShape(two as any);
 
@@ -81,7 +81,7 @@ describe('sid: stability', () =>
         const layerA = root.ensureLayer('a');
         const layerB = root.ensureLayer('b');
 
-        const m = Mesh.Box(1, 1, 1);
+        const m = Solid.Box(1, 1, 1);
         layerA.addShape(m as any);
         expect(m.sid()).toEqual(1);
 
@@ -93,7 +93,7 @@ describe('sid: stability', () =>
     it('does not clear sid when a shape is detached from its node', () =>
     {
         const { root } = hostScene();
-        const m = Mesh.Box(1, 1, 1);
+        const m = Solid.Box(1, 1, 1);
         root.addShape(m as any);
         const sid = m.sid();
 
@@ -106,7 +106,7 @@ describe('sid: stability', () =>
         const build = () =>
         {
             const { root } = hostScene();
-            const shapes = [Mesh.Box(1, 1, 1), Curve.Circle(3), Mesh.Box(4, 4, 4)];
+            const shapes = [Solid.Box(1, 1, 1), Curve.Circle(3), Solid.Box(4, 4, 4)];
             shapes.forEach(s => root.addShape(s as any));
             return shapes.map(s => s.sid());
         };
@@ -119,7 +119,7 @@ describe('sid: copies', () =>
     it('gives a copy its own sid and records _sidFrom', () =>
     {
         const { root } = hostScene();
-        const m = Mesh.Box(10, 10, 10);
+        const m = Solid.Box(10, 10, 10);
         root.addShape(m as any);
         root.setActiveLayer(root); // copy() adds to the active layer
 
@@ -133,7 +133,7 @@ describe('sid: copies', () =>
     it('carries provenance through a chain of copies', () =>
     {
         const { root } = hostScene();
-        const m = Mesh.Box(10, 10, 10);
+        const m = Solid.Box(10, 10, 10);
         root.addShape(m as any);
         root.setActiveLayer(root);
 
@@ -147,7 +147,7 @@ describe('sid: copies', () =>
     it('carries _sidFrom from an unadopted source via its own _sidFrom', () =>
     {
         const { root } = hostScene();
-        const m = Mesh.Box(10, 10, 10);
+        const m = Solid.Box(10, 10, 10);
         root.addShape(m as any);
 
         const detached = m._copy();      // pure clone, never adopted -> sid 0
@@ -165,7 +165,7 @@ describe('sid: serialisation', () =>
     {
         const { root } = hostScene();
         const layer = root.ensureLayer('walls');
-        const m = Mesh.Box(1, 1, 1);
+        const m = Solid.Box(1, 1, 1);
         layer.addShape(m as any);
 
         const data = root.toData();

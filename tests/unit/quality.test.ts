@@ -5,14 +5,14 @@
  *  kernel read their chord error as an ABSOLUTE distance, so a circle's point count grew
  *  with its radius (r=10 → 226 points, r=1000 → 2224) and with the model's choice of unit.
  *  Every mesh built from a curve — extrude, loft, toPolygon, sweep — inherited it: extruding
- *  a `Curve.Circle(100)` cost 708 polygons and 220 ms where `Mesh.Cylinder(100, 50)` cost 96
+ *  a `Curve.Circle(100)` cost 708 polygons and 220 ms where `Solid.Cylinder(100, 50)` cost 96
  *  and 1 ms. The size-independence tests below are the ones that would catch it coming back.
  */
 
 import { beforeAll, afterEach, describe, it, expect } from 'vitest';
 import { initAsync, setQuality, getQuality, resetQuality, QUALITY_PRESETS } from '../../src/index';
 import { Curve } from '../../src/Curve';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 
 beforeAll(async () =>
 {
@@ -46,10 +46,10 @@ describe('quality profile — size and unit independence', () =>
         expect(Math.abs(inMillimetres - inMetres)).toBeLessThanOrEqual(1);
     });
 
-    it('extruding a circle is in the same range as the equivalent Mesh.Cylinder', () =>
+    it('extruding a circle is in the same range as the equivalent Solid.Cylinder', () =>
     {
-        const extruded = Curve.Circle(100).extrude(50) as Mesh;
-        const cylinder = Mesh.Cylinder(100, 50);
+        const extruded = Curve.Circle(100).extrude(50) as Solid;
+        const cylinder = Solid.Cylinder(100, 50);
         // Not equal — the two build their walls and caps differently — but the same order,
         // where extrude() used to be ~7x the cylinder and grew from there with the radius.
         expect(extruded.polygons().length).toBeLessThan(cylinder.polygons().length * 2);
@@ -125,10 +125,10 @@ describe('setQuality()', () =>
 
     it('reaches loft, revolve and the mesh primitives too', () =>
     {
-        const sphere = () => Mesh.Sphere(10).polygons().length;
-        const cylinder = () => Mesh.Cylinder(10, 20).polygons().length;
-        const revolved = () => (Curve.Line([10, 0, 0], [10, 0, 50]).revolve() as Mesh).polygons().length;
-        const lofted = () => (Curve.Circle(10).loft(Curve.Circle(5).moveZ(10)) as Mesh).polygons().length;
+        const sphere = () => Solid.Sphere(10).polygons().length;
+        const cylinder = () => Solid.Cylinder(10, 20).polygons().length;
+        const revolved = () => (Curve.Line([10, 0, 0], [10, 0, 50]).revolve() as Solid).polygons().length;
+        const lofted = () => (Curve.Circle(10).loft(Curve.Circle(5).moveZ(10)) as Solid).polygons().length;
 
         setQuality('draft');
         const coarse = [sphere(), cylinder(), revolved(), lofted()];
@@ -192,7 +192,7 @@ describe('per-call override', () =>
     it('an explicit revolve segment count still wins', () =>
     {
         setQuality('draft');
-        const wall = Curve.Line([10, 0, 0], [10, 0, 50]).revolve(360, undefined, undefined, 40) as Mesh;
+        const wall = Curve.Line([10, 0, 0], [10, 0, 50]).revolve(360, undefined, undefined, 40) as Solid;
         expect(wall.polygons().length).toBe(40);
     });
 });

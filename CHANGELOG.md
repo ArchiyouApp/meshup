@@ -46,6 +46,17 @@ versions may contain breaking changes.
 
 ### Changed
 
+- **`Mesh` is renamed to `Solid`**: what a script makes with it is a solid (a box, a
+  cylinder, a loft), and how it is stored is meshup's business. `Mesh` stays as a deprecated
+  alias of the same class: `Mesh.Box()`, `new Mesh()` and `instanceof Mesh` keep working. What
+  changes:
+  - `shape.type` is `'Solid'`. Checks in meshup accept `'Mesh'` too (`isSolidType()`); code
+    that compares `type === 'Mesh'` itself should use `isSolid()`.
+  - An unnamed shape's scene label is `'Solid:Box'` instead of `'Mesh:Box'`, and its scene
+    path changes with it.
+  - `ShapeCollection.solids()` is the main name; `meshes()` stays as an alias.
+  - The source file is `Solid.ts` (deep imports of `@archiyou/meshup/src/Mesh` break).
+
 - **Breaking: every projection takes one options object after its view arguments** — on
   `Mesh`, `Curve` and `ShapeCollection`:
 

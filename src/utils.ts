@@ -35,7 +35,7 @@ const MOVE_UNTIL_MAX_STEPS = 500;
  * overlapping) stays where it is.
  *
  * @param distance The current distance from mover to other (0 when touching or overlapping)
- * @param method   For the error messages, e.g. 'Mesh.moveUntil()'
+ * @param method   For the error messages, e.g. 'Solid.moveUntil()'
  */
 export function moveUntilTouching(
     mover: { bbox(): ContactBox | undefined | null; move(x: number, y: number, z: number): unknown },
@@ -473,7 +473,7 @@ export interface Box2D { minX: number, minY: number, maxX: number, maxY: number 
  *
  *  The y flip and the 5% pad live here rather than in each shape's toSVG(): SVG's y axis
  *  points down, so model y [min,max] is svg y [-max,-min], and a shape's own document pads
- *  itself by 5% of its longest side. Curve, Polygon and Mesh each carried their own copy of
+ *  itself by 5% of its longest side. Curve, Polygon and Solid each carried their own copy of
  *  those four lines, which is how they came to disagree about framing.
  *
  *  A null box (no geometry to measure) gives a unit viewBox rather than NaNs. */

@@ -1,5 +1,5 @@
 import { beforeAll, describe, it, expect } from 'vitest';
-import { Curve, initAsync, Mesh, Polygon } from '../../src/index';
+import { Curve, initAsync, Solid, Polygon } from '../../src/index';
 import { Bbox } from '../../src/Bbox';
 import { Vertex } from '../../src/Vertex';
 import { SceneNode } from '../../src/SceneNode';
@@ -231,11 +231,11 @@ describe('Bbox shape generation', () =>
 
 describe('Bbox.shape()', () =>
 {
-    it('3D bbox gives a box Mesh of the right size and place', () =>
+    it('3D bbox gives a box Solid of the right size and place', () =>
     {
         const bbox = new Bbox([0, 0, 0], [10, 20, 30]);
-        const shape = bbox.shape() as Mesh;
-        expect(shape).toBeInstanceOf(Mesh);
+        const shape = bbox.shape() as Solid;
+        expect(shape).toBeInstanceOf(Solid);
         expect(shape.bbox().min().toArray()).toEqual([0, 0, 0]);
         expect(shape.bbox().max().toArray()).toEqual([10, 20, 30]);
         expect(shape.volume()!).toBeCloseTo(10 * 20 * 30, 6);
@@ -281,7 +281,7 @@ describe('Bbox.shape()', () =>
     it('toShape() is an alias for shape()', () =>
     {
         const bbox = new Bbox([0, 0, 0], [10, 20, 30]);
-        expect(bbox.toShape()).toBeInstanceOf(Mesh);
+        expect(bbox.toShape()).toBeInstanceOf(Solid);
     });
 });
 

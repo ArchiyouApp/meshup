@@ -4,7 +4,7 @@ import { Point } from './Point';
 import { Vertex } from './Vertex';
 import { Polygon } from './Polygon.js';
 import { Curve } from './Curve';
-import { Mesh } from './Mesh';
+import { Solid } from './Solid';
 import { ShapeCollection } from './ShapeCollection';
 
 
@@ -43,12 +43,12 @@ export class Bbox
         Object.defineProperty(this, '_source', { value: null, writable: true, enumerable: false });
     }
 
-    static fromMesh(m:Mesh): Bbox
+    static fromMesh(m:Solid): Bbox
     {
         const bbox = m?._mesh?.boundingBox();
         if (!bbox)
         {
-            throw new Error('Mesh has no bounding box.');
+            throw new Error('Solid has no bounding box.');
         }
         return new Bbox(bbox.min, bbox.max)._fromShape(m);
     }
@@ -356,7 +356,7 @@ export class Bbox
 
     /**
      * The real geometry of this bounding box, matching its dimensionality:
-     *   - 3D → a box `Mesh`
+     *   - 3D → a box `Solid`
      *   - 2D → a closed rectangle `Curve` in the plane the bbox is flat in
      *   - 1D → a straight line `Curve` along the bbox' one axis
      *   - a zero-size (point) bbox → a `Vertex` at its centre
@@ -367,7 +367,7 @@ export class Bbox
      * `@sceneAdd` result would land on). Measured off a standalone or `tmp()` shape it stays
      * out of the scene, as does a bbox built straight from points.
      */
-    shape(): Vertex|Curve|Mesh|null
+    shape(): Vertex|Curve|Solid|null
     {
         // vertex()/line()/rect()/box() attach the result themselves
         return this.isPoint() ? this.vertex()
@@ -377,7 +377,7 @@ export class Bbox
     }
 
     /** Alias for shape() */
-    toShape(): Vertex|Curve|Mesh|null
+    toShape(): Vertex|Curve|Solid|null
     {
         return this.shape();
     }
@@ -419,17 +419,17 @@ export class Bbox
         return this._attach(Curve.RectBetween(this._min, this._max, plane));
     }
 
-    /** Generate a box Mesh representation of this bbox.
+    /** Generate a box Solid representation of this bbox.
      *  Added to the scene the measured shape lives in - see _attach(). */
-    box(): Mesh
+    box(): Solid
     {
         return this._attach(this._boxRaw());
     }
 
-    /** The box Mesh without any scene bookkeeping - for measuring/derivation inside meshup */
-    _boxRaw(): Mesh
+    /** The box Solid without any scene bookkeeping - for measuring/derivation inside meshup */
+    _boxRaw(): Solid
     {
-        return Mesh.Box(this.width(), this.depth(), this.height())
+        return Solid.Box(this.width(), this.depth(), this.height())
                 .translate(this.center());
     }
 
@@ -441,7 +441,7 @@ export class Bbox
 
     /** Get side face of bbox  
      *  front/back, left/right, top/bottom
-     *  NOTE: polygons are converted to Mesh
+     *  NOTE: polygons are converted to Solid
     */
     getPlane(alignment: string): Polygon|undefined
     {

@@ -1,6 +1,6 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 import { Polygon } from '../../src/Polygon';
 import { ShapeCollection } from '../../src/ShapeCollection';
@@ -13,11 +13,11 @@ beforeAll(async () =>
 
 describe('@sceneLayer projections group under the ACTIVE layer', () =>
 {
-    it('Mesh.iso() lands in an "iso" group inside the active layer, not a root layer', () =>
+    it('Solid.iso() lands in an "iso" group inside the active layer, not a root layer', () =>
     {
         // Reproduces: layer('test'); bx = box(100); bx.iso();
         const root = new SceneNode('root');
-        const bx = Mesh.Cube(100);
+        const bx = Solid.Cube(100);
         const testLayer = root.addLayer('test', bx);
         root.setActiveLayer(testLayer);
 
@@ -38,12 +38,12 @@ describe('@sceneLayer projections group under the ACTIVE layer', () =>
     it('ShapeCollection.iso() lands in an "iso" group inside the active layer', () =>
     {
         const root = new SceneNode('root');
-        const a = Mesh.Cube(100);
-        const b = Mesh.Cube(50).move(200, 0, 0);
-        const testLayer = root.addLayer('test', new ShapeCollection<Mesh>(a, b));
+        const a = Solid.Cube(100);
+        const b = Solid.Cube(50).move(200, 0, 0);
+        const testLayer = root.addLayer('test', new ShapeCollection<Solid>(a, b));
         root.setActiveLayer(testLayer);
 
-        const iso = new ShapeCollection<Mesh>(a, b).iso();
+        const iso = new ShapeCollection<Solid>(a, b).iso();
 
         expect(root.children().map(c => c.name)).not.toContain('iso');
         const isoGroup = testLayer.children().find(c => c.name === 'iso');
@@ -55,17 +55,17 @@ describe('@sceneLayer projections group under the ACTIVE layer', () =>
     {
         // Reproduces: all().section([0,0,50]) drew nothing, the cut never reached the scene
         const root = new SceneNode('root');
-        const a = Mesh.Cube(100).color('blue');
-        const b = Mesh.Cube(50).move(200, 0, 0).color('green');
-        const c = Mesh.Cube(30).move(400, 0, 0);
-        const d = Mesh.Cube(30).move(600, 0, 0);
-        const testLayer = root.addLayer('test', new ShapeCollection<Mesh>(a, b, c, d));
+        const a = Solid.Cube(100).color('blue');
+        const b = Solid.Cube(50).move(200, 0, 0).color('green');
+        const c = Solid.Cube(30).move(400, 0, 0);
+        const d = Solid.Cube(30).move(600, 0, 0);
+        const testLayer = root.addLayer('test', new ShapeCollection<Solid>(a, b, c, d));
         root.setActiveLayer(testLayer);
 
         const sections = [
-            new ShapeCollection<Mesh>(a, b), // styled apart: a section per style
-            new ShapeCollection<Mesh>(c, d), // styled alike: one merged section
-            new ShapeCollection<Mesh>(c),    // a lone mesh: Mesh.section(), which adds it too
+            new ShapeCollection<Solid>(a, b), // styled apart: a section per style
+            new ShapeCollection<Solid>(c, d), // styled alike: one merged section
+            new ShapeCollection<Solid>(c),    // a lone mesh: Solid.section(), which adds it too
         ].map(col => col.section([0, 0, 10]).toArray());
 
         expect(sections.every(s => s.length > 0)).toBe(true);
@@ -77,7 +77,7 @@ describe('@sceneLayer projections group under the ACTIVE layer', () =>
     it('falls back to the root when no active layer is set', () =>
     {
         const root = new SceneNode('root');
-        const bx = Mesh.Cube(100);
+        const bx = Solid.Cube(100);
         root.addShape(bx);
 
         bx.iso();
@@ -88,10 +88,10 @@ describe('@sceneLayer projections group under the ACTIVE layer', () =>
 
 describe('select() does not add to the scene', () =>
 {
-    it('Mesh.select() leaves the scene untouched, select().copy() adds the copy', () =>
+    it('Solid.select() leaves the scene untouched, select().copy() adds the copy', () =>
     {
         const root = new SceneNode('root');
-        const bx = Mesh.Cube(100);
+        const bx = Solid.Cube(100);
         const testLayer = root.addLayer('test', bx);
         root.setActiveLayer(testLayer);
 
@@ -143,7 +143,7 @@ describe('bbox()/obbox() shapes join the measured shape\'s scene', () =>
     it('bbox().box() and bbox().rect() do the same', () =>
     {
         const root = new SceneNode('root');
-        const bx = Mesh.Cube(100);
+        const bx = Solid.Cube(100);
         root.addShape(bx);
 
         const box = bx.bbox().box();
@@ -158,7 +158,7 @@ describe('bbox()/obbox() shapes join the measured shape\'s scene', () =>
     it('planes() does not drag its helper box into the scene', () =>
     {
         const root = new SceneNode('root');
-        const bx = Mesh.Cube(100);
+        const bx = Solid.Cube(100);
         root.addShape(bx);
 
         const before = root.shapes().toArray().length;
@@ -169,12 +169,12 @@ describe('bbox()/obbox() shapes join the measured shape\'s scene', () =>
     it('leaves standalone and tmp() shapes alone', () =>
     {
         // standalone meshup: no scene at all
-        const loose = Mesh.Cube(10);
+        const loose = Solid.Cube(10);
         expect(loose.obbox().shape()!.node()).toBeNull();
 
         // tmp() opts out, and stays opted out
         const root = new SceneNode('root');
-        const bx = Mesh.Cube(100);
+        const bx = Solid.Cube(100);
         root.addShape(bx);
         bx.tmp();
 

@@ -1,6 +1,6 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { GLTFBuilder } from '../../src/GLTFBuilder';
 
 beforeAll(async () => { await initAsync(); });
@@ -13,7 +13,7 @@ describe('material PBR + texture reaches the GLB', () =>
 {
     it('applies pbr metallic/roughness/color from a threaded render spec', async () =>
     {
-        const box = Mesh.Box(100, 100, 2000);
+        const box = Solid.Box(100, 100, 2000);
         box.style.material = { name: 'douglas', pbr: { color: '#c08a4a', metallic: 0.1, roughness: 0.72 } };
 
         const builder = new GLTFBuilder().add(box).applyExtensions();
@@ -35,7 +35,7 @@ describe('material PBR + texture reaches the GLB', () =>
 
     it('embeds a base-color texture with UVs when texture data is present', async () =>
     {
-        const box = Mesh.Box(100, 100, 2000);
+        const box = Solid.Box(100, 100, 2000);
         box.style.material = {
             name: 'douglas',
             pbr: { color: '#c08a4a', metallic: 0, roughness: 0.7 },
@@ -54,7 +54,7 @@ describe('material PBR + texture reaches the GLB', () =>
     it('splits a beam into section (2 end faces) + sides (4 long faces) primitives', async () =>
     {
         // Beam: longest axis is Y (2000) → the two 20×100 end faces are `section`.
-        const box = Mesh.Box(20, 2000, 100);
+        const box = Solid.Box(20, 2000, 100);
         box.style.material = {
             name: 'hardwood',
             pbr: { color: '#8a5a2b', metallic: 0, roughness: 0.7 },
@@ -108,7 +108,7 @@ describe('non-repeating, randomly aligned sides UVs', () =>
     it('clamps when the part fits inside one tile', () =>
     {
         // 100×100×400 mm fits inside the 500×889 mm tile.
-        const doc = build(Mesh.Box(100, 400, 100), spec());
+        const doc = build(Solid.Box(100, 400, 100), spec());
         const info = doc.getRoot().listMeshes()[0].listPrimitives()[0]
             .getMaterial().getBaseColorTextureInfo();
         expect(info.getWrapS()).toBe(33071); // CLAMP_TO_EDGE — no repeat needed
@@ -118,7 +118,7 @@ describe('non-repeating, randomly aligned sides UVs', () =>
     {
         // A 4 m beam is longer than the 889 mm tile; clamping would smear the edge
         // pixel down the whole length, so it must tile instead.
-        const doc = build(Mesh.Box(100, 4000, 100), spec());
+        const doc = build(Solid.Box(100, 4000, 100), spec());
         const info = doc.getRoot().listMeshes()[0].listPrimitives()[0]
             .getMaterial().getBaseColorTextureInfo();
         expect(info.getWrapS()).toBe(10497); // REPEAT
@@ -126,7 +126,7 @@ describe('non-repeating, randomly aligned sides UVs', () =>
 
     it('keeps UVs inside 0..1 for a part that fits', () =>
     {
-        const uv = uvs(build(Mesh.Box(100, 400, 100), spec()));
+        const uv = uvs(build(Solid.Box(100, 400, 100), spec()));
         for (const v of uv)
         {
             expect(v).toBeGreaterThanOrEqual(0);
@@ -136,15 +136,15 @@ describe('non-repeating, randomly aligned sides UVs', () =>
 
     it('is deterministic — the same shape twice gives identical UVs', () =>
     {
-        const a = uvs(build(Mesh.Box(100, 400, 100), spec()));
-        const b = uvs(build(Mesh.Box(100, 400, 100), spec()));
+        const a = uvs(build(Solid.Box(100, 400, 100), spec()));
+        const b = uvs(build(Solid.Box(100, 400, 100), spec()));
         expect(Array.from(a)).toEqual(Array.from(b));
     });
 
     it('gives two identical parts at different positions a different crop', () =>
     {
-        const a = uvs(build(Mesh.Box(100, 400, 100), spec()));
-        const moved = Mesh.Box(100, 400, 100);
+        const a = uvs(build(Solid.Box(100, 400, 100), spec()));
+        const moved = Solid.Box(100, 400, 100);
         moved.move(1000, 0, 0);
         const b = uvs(build(moved, spec()));
         // same size → same span, but a different random offset
@@ -158,7 +158,7 @@ describe('material edge outline', () =>
 
     it('creates a black 80% edge material from the render spec alone', () =>
     {
-        const doc = build(Mesh.Box(100, 100, 100), { name: 'steel', edge });
+        const doc = build(Solid.Box(100, 100, 100), { name: 'steel', edge });
         const mat = doc.getRoot().listMaterials().find((m: any) => m.getName() === 'material_edge');
         expect(mat).toBeTruthy();
         const [r, g, b, a] = mat.getBaseColorFactor();
@@ -169,7 +169,7 @@ describe('material edge outline', () =>
 
     it('honours a custom edge color and opacity', () =>
     {
-        const doc = build(Mesh.Box(100, 100, 100),
+        const doc = build(Solid.Box(100, 100, 100),
             { name: 'steel', edge: { color: '#ff0000', opacity: 0.5, width: 2 } });
         const mat = doc.getRoot().listMaterials().find((m: any) => m.getName() === 'material_edge');
         const [r, , , a] = mat.getBaseColorFactor();
@@ -184,8 +184,8 @@ describe('material edge outline', () =>
         // Style.merge() runs the stroke setter, which marks it explicit, and every style
         // cascaded from SHAPE_DEFAULT_STYLE goes through merge — so in the app every shape
         // looked like it had a deliberate stroke and the material outline never applied.
-        // A bare Mesh.Box never merges, which is exactly why the other tests missed it.
-        const box = Mesh.Box(100, 100, 100);
+        // A bare Solid.Box never merges, which is exactly why the other tests missed it.
+        const box = Solid.Box(100, 100, 100);
         box.style.merge({
             color: undefined, opacity: 1,
             fill: { color: 'red', opacity: 1 },
@@ -203,7 +203,7 @@ describe('material edge outline', () =>
     {
         // REGRESSION: Style.toGltfMaterial applied material.pbr.color even when isLine,
         // so every edge came out the same colour as the surface it sat on — invisible.
-        const box = Mesh.Box(100, 100, 100);
+        const box = Solid.Box(100, 100, 100);
         box.style.stroke = { color: '#00ff00' };
         box.style.strokeWidth = 3;
 
@@ -217,7 +217,7 @@ describe('material edge outline', () =>
 
     it('lets an explicit user stroke win over the material outline', () =>
     {
-        const box = Mesh.Box(100, 100, 100);
+        const box = Solid.Box(100, 100, 100);
         box.style.stroke = { color: '#00ff00' };
         box.style.strokeWidth = 3;
         const doc = build(box, { name: 'steel', edge });
@@ -232,7 +232,7 @@ describe('material edge outline', () =>
     {
         // strokeWidth is 1 by default, so every mesh already gets an edge material —
         // applying a material changes its colour/opacity, it does not switch edges on.
-        const doc = (new GLTFBuilder().add(Mesh.Box(100, 100, 100)).applyExtensions() as any)._doc;
+        const doc = (new GLTFBuilder().add(Solid.Box(100, 100, 100)).applyExtensions() as any)._doc;
         const names = doc.getRoot().listMaterials().map((m: any) => m.getName());
         expect(names).toContain('edge_material');
         expect(names).not.toContain('material_edge');

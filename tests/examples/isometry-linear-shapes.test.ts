@@ -12,7 +12,7 @@
  */
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 import { save } from '../../src/utils';
 import { ShapeCollection } from '../../src/ShapeCollection';
@@ -54,8 +54,8 @@ describe('isometry: linear shapes', () =>
     it('includes a wireframe box in the projection, with its styling', async () =>
     {
         // The reported case, verbatim.
-        const bs = Mesh.Box(100, 200, 300).color('blue');
-        const bsw = Mesh.Box(300, 50, 50).wireframe().dashed();
+        const bs = Solid.Box(100, 200, 300).color('blue');
+        const bsw = Solid.Box(300, 50, 50).wireframe().dashed();
         const mixed = new ShapeCollection<any>(bs, bsw);
 
         const iso = mixed._iso([-1, -1, 1]);
@@ -71,7 +71,7 @@ describe('isometry: linear shapes', () =>
     it('drops the linear shapes if they are not collected — the old behaviour', () =>
     {
         // A collection of only Meshes must be unaffected by any of this.
-        const solids = new ShapeCollection<any>(Mesh.Box(100, 100, 100), Mesh.Box(50, 50, 50).move(200));
+        const solids = new ShapeCollection<any>(Solid.Box(100, 100, 100), Solid.Box(50, 50, 50).move(200));
         const iso = solids._iso([-1, -1, 1]);
         expect(iso.length).toBe(18); // two boxes, 9 visible edges each
     });
@@ -80,7 +80,7 @@ describe('isometry: linear shapes', () =>
     {
         // A line running through the middle of a box, seen down -Y so the box
         // is squarely in front of the line's midsection.
-        const box = Mesh.Box(100, 100, 100);
+        const box = Solid.Box(100, 100, 100);
         const line = Curve.Line([-300, 0, 0], [300, 0, 0]);
         const scene = new ShapeCollection<any>(box, line);
 
@@ -95,7 +95,7 @@ describe('isometry: linear shapes', () =>
     it('projects a collection made only of curves', () =>
     {
         // No solids at all: nothing to occlude, everything survives.
-        const scene = Mesh.Box(100, 100, 100).wireframe();
+        const scene = Solid.Box(100, 100, 100).wireframe();
         const iso = scene._iso([-1, -1, 1]);
         expect(iso.length).toBeGreaterThan(0);
     });
@@ -105,8 +105,8 @@ describe('isometry: linear shapes', () =>
         for (const strategy of ALL_STRATEGIES)
         {
             const scene = new ShapeCollection<any>(
-                Mesh.Box(100, 100, 100),
-                Mesh.Box(60, 60, 60).move(200).wireframe().dashed(),
+                Solid.Box(100, 100, 100),
+                Solid.Box(60, 60, 60).move(200).wireframe().dashed(),
             );
             const iso = scene._iso([-1, -1, 1], { method: strategy });
             expect(dashedCount(iso), `${strategy}: wireframe missing`).toBeGreaterThan(0);
@@ -121,8 +121,8 @@ describe('isometry: style inheritance', () =>
     {
         // 'clip' projects each shape separately, so each one's colour is known.
         const scene = new ShapeCollection<any>(
-            Mesh.Box(100, 100, 100).color('red'),
-            Mesh.Box(100, 100, 100).move(300).color('green'),
+            Solid.Box(100, 100, 100).color('red'),
+            Solid.Box(100, 100, 100).move(300).color('green'),
         );
         const iso = scene._iso([-1, -1, 1], { method: 'clip' });
         const found = colours(iso);
@@ -133,16 +133,16 @@ describe('isometry: style inheritance', () =>
     it('keeps each colour on the merged path, one merged pass per style', () =>
     {
         const same = new ShapeCollection<any>(
-            Mesh.Box(100, 100, 100).color('red'),
-            Mesh.Box(100, 100, 100).move(300).color('red'),
+            Solid.Box(100, 100, 100).color('red'),
+            Solid.Box(100, 100, 100).move(300).color('red'),
         );
         expect([...colours(same._iso([-1, -1, 1]))]).toEqual(['#ff0000']);
 
         // Merging forgets which mesh an edge came from, so meshes styled apart are
         // projected apart and each keeps its colour.
         const mixed = new ShapeCollection<any>(
-            Mesh.Box(100, 100, 100).color('red'),
-            Mesh.Box(100, 100, 100).move(300).color('green'),
+            Solid.Box(100, 100, 100).color('red'),
+            Solid.Box(100, 100, 100).move(300).color('green'),
         );
         expect([...colours(mixed._iso([-1, -1, 1]))].sort()).toEqual(['#008000', '#ff0000']);
     });
@@ -152,7 +152,7 @@ describe('Shape.resetStyle', () =>
 {
     it('clears styling back to the defaults', () =>
     {
-        const box = Mesh.Box(10, 10, 10).color('blue');
+        const box = Solid.Box(10, 10, 10).color('blue');
         expect(box.style.explicitData().color).toBeDefined();
 
         box.resetStyle();
@@ -165,8 +165,8 @@ describe('Shape.resetStyle', () =>
     it('clears styling across a collection', () =>
     {
         const col = new ShapeCollection<any>(
-            Mesh.Box(10, 10, 10).color('blue'),
-            Mesh.Box(10, 10, 10).color('red'),
+            Solid.Box(10, 10, 10).color('blue'),
+            Solid.Box(10, 10, 10).color('red'),
         );
         col.resetStyle();
         col.toArray().forEach((s: any) =>
@@ -176,8 +176,8 @@ describe('Shape.resetStyle', () =>
     it('stops a reset shape from colouring its projection', () =>
     {
         const scene = new ShapeCollection<any>(
-            Mesh.Box(100, 100, 100).color('red').resetStyle(),
-            Mesh.Box(100, 100, 100).move(300).color('red').resetStyle(),
+            Solid.Box(100, 100, 100).color('red').resetStyle(),
+            Solid.Box(100, 100, 100).move(300).color('red').resetStyle(),
         );
         expect(colours(scene._iso([-1, -1, 1])).size).toBe(0);
     });

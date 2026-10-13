@@ -43,7 +43,7 @@ import { Point3Js } from './wasm/meshup.js';
 
 import { Point } from './Point';
 import { Vector } from './Vector';
-import { Mesh } from './Mesh';
+import { Solid } from './Solid';
 import { Curve } from './Curve';
 import type { PointLike } from './types';
 import { addResultToScene } from './sceneDecorators';
@@ -184,8 +184,8 @@ export class OBbox
         return OBbox._onFrame(pts, [a0, a1, OBbox._cross(a0, a1)]);
     }
 
-    /** Build an OBbox from all vertices of a Mesh. */
-    static fromMesh(m: Mesh): OBbox
+    /** Build an OBbox from all vertices of a Solid. */
+    static fromMesh(m: Solid): OBbox
     {
         // Straight off the flat position buffer: a triangulated mesh repeats every corner many
         // times, and making (and rounding) a Point per repeat before deduplicating was most of
@@ -441,7 +441,7 @@ export class OBbox
 
     /**
      * The real geometry of this oriented bounding box, matching its dimensionality:
-     *   - 3D → a box `Mesh`
+     *   - 3D → a box `Solid`
      *   - 2D → a closed rectangle `Curve` in the box's own plane
      *   - 1D → a straight line `Curve` along the box's one axis
      *   - a zero-size (point) box has no geometry → `null`
@@ -453,7 +453,7 @@ export class OBbox
      * `@sceneAdd` result would land on). Measured off a standalone or `tmp()` shape it stays
      * out of the scene, as does a box built straight from points.
      */
-    shape(): Mesh | Curve | null
+    shape(): Solid | Curve | null
     {
         if (this.isPoint())
         {
@@ -465,7 +465,7 @@ export class OBbox
     }
 
     /** Alias for shape() */
-    toShape(): Mesh | Curve | null
+    toShape(): Solid | Curve | null
     {
         return this.shape();
     }
@@ -514,13 +514,13 @@ export class OBbox
         return this._attach(Curve.Polyline([...ring, ring[0]])); // repeating the first point closes it
     }
 
-    /** A box Mesh following this box's own axes. Null when not 3D.
+    /** A box Solid following this box's own axes. Null when not 3D.
      *  Built straight from the 8 corners as 6 outward-facing quads. */
-    box(): Mesh | null
+    box(): Solid | null
     {
         if (!this.is3D())
         {
-            console.warn(`OBbox::box(): OBbox is not 3D, so can't turn it into a box Mesh. Returned null`);
+            console.warn(`OBbox::box(): OBbox is not 3D, so can't turn it into a box Solid. Returned null`);
             return null;
         }
 
@@ -532,7 +532,7 @@ export class OBbox
             [0, 2, 6, 4], [1, 5, 7, 3],   // -axis2, +axis2
         ];
 
-        return this._attach(Mesh.fromPolygons(FACES.map(ring => ring.map(i => c[i]))));
+        return this._attach(Solid.fromPolygons(FACES.map(ring => ring.map(i => c[i]))));
     }
 
     /**

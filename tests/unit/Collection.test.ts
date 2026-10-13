@@ -1,21 +1,21 @@
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 import { ShapeCollection as Collection } from '../../src/ShapeCollection';
 import { SceneNode } from '../../src/SceneNode';
 import { Point } from '../../src/Point';
 import { Vertex } from '../../src/Vertex';
 
-let cube1: Mesh;
-let cube2: Mesh;
+let cube1: Solid;
+let cube2: Solid;
 let line: Curve;
 
 beforeAll(async () =>
 {
     await initAsync();
-    cube1 = Mesh.Cube(10);
-    cube2 = Mesh.Cube(5);
+    cube1 = Solid.Cube(10);
+    cube2 = Solid.Cube(5);
     line = Curve.Line([0, 0, 0], [10, 0, 0]);
 });
 
@@ -28,7 +28,7 @@ describe('Collection construction', () =>
         expect(c.length).toBe(0);
     });
 
-    it('constructs with initial Mesh shapes', () =>
+    it('constructs with initial Solid shapes', () =>
     {
         const c = new Collection(cube1, cube2);
         expect(c.count()).toBe(2);
@@ -50,7 +50,7 @@ describe('Collection construction', () =>
 
 describe('Collection.add()', () =>
 {
-    it('adds a single Mesh', () =>
+    it('adds a single Solid', () =>
     {
         const c = new Collection();
         c.add(cube1);
@@ -112,11 +112,11 @@ describe('Collection accessors', () =>
         expect(c.get(1)).toBe(cube2);
     });
 
-    it('meshes() filters to Mesh instances only', () =>
+    it('meshes() filters to Solid instances only', () =>
     {
         const c = new Collection(cube1, line);
-        const meshes = c.meshes();
-        expect(meshes.toArray().every(s => s instanceof Mesh)).toBe(true);
+        const meshes = c.solids();
+        expect(meshes.toArray().every(s => s instanceof Solid)).toBe(true);
         expect(meshes.length).toBe(1);
     });
 
@@ -141,10 +141,10 @@ describe('Collection.union() — no argument, merge by type', () =>
         expect(result).toBeInstanceOf(Curve);
     });
 
-    it('unions all meshes into a single Mesh', () =>
+    it('unions all meshes into a single Solid', () =>
     {
         const result = new Collection(cube1.copy(), cube2.copy().moveX(3)).union();
-        expect(result).toBeInstanceOf(Mesh);
+        expect(result).toBeInstanceOf(Solid);
     });
 
     it('returns a mixed collection when both meshes and curves are present', () =>
@@ -173,11 +173,11 @@ describe('Collection.moveTo()', () =>
     });
 });
 
-describe('ShapeCollection<Mesh>', () =>
+describe('ShapeCollection<Solid>', () =>
 {
     it('creates a typed mesh collection', () =>
     {
-        const mc = new Collection<Mesh>(cube1, cube2);
+        const mc = new Collection<Solid>(cube1, cube2);
         expect(mc.count()).toBe(2);
     });
 });
@@ -227,25 +227,25 @@ describe('Collection.intersections() / intersection()', () =>
         expect(col.intersections(others).length).toBeGreaterThanOrEqual(2);
     });
 
-    it('intersects Meshes: returns the boolean-intersection volume Mesh', () =>
+    it('intersects Meshes: returns the boolean-intersection volume Solid', () =>
     {
-        const a = Mesh.Cube(40);
-        const b = Mesh.Cube(40).move(15, 10, 5);
-        const col = new Collection<Mesh>(a);
+        const a = Solid.Cube(40);
+        const b = Solid.Cube(40).move(15, 10, 5);
+        const col = new Collection<Solid>(a);
         const hits = col.intersections(b);
         expect(hits.length).toBe(1);
-        expect(hits.first()).toBeInstanceOf(Mesh);
-        expect((hits.first() as Mesh).inner().triangleCount()).toBeGreaterThan(0);
-        // source mesh must be left intact (Mesh.intersection mutates in place)
+        expect(hits.first()).toBeInstanceOf(Solid);
+        expect((hits.first() as Solid).inner().triangleCount()).toBeGreaterThan(0);
+        // source mesh must be left intact (Solid.intersection mutates in place)
         expect(a.inner().triangleCount()).toBeGreaterThan(0);
     });
 
-    it('intersection() returns the first Mesh volume; empty/null when meshes do not overlap', () =>
+    it('intersection() returns the first Solid volume; empty/null when meshes do not overlap', () =>
     {
-        const a = Mesh.Cube(20);
-        const col = new Collection<Mesh>(a);
-        expect(col.intersection(Mesh.Cube(20).move(5, 5, 5))).toBeInstanceOf(Mesh);
-        const far = Mesh.Cube(10).move(1000, 0, 0);
+        const a = Solid.Cube(20);
+        const col = new Collection<Solid>(a);
+        expect(col.intersection(Solid.Cube(20).move(5, 5, 5))).toBeInstanceOf(Solid);
+        const far = Solid.Cube(10).move(1000, 0, 0);
         expect(col.intersections(far).length).toBe(0);
         expect(col.intersection(far)).toBeNull();
     });
@@ -254,15 +254,15 @@ describe('Collection.intersections() / intersection()', () =>
     {
         // Reproduces the two-layer script: sources on 'bxs', cutter on the active 'cut' layer.
         const root = new SceneNode('root');
-        const a = Mesh.Cube(40);
-        const b = Mesh.Cube(40).move(15, 10, 5);
-        const bxsLayer = root.addLayer('bxs', new Collection<Mesh>(a, b));
+        const a = Solid.Cube(40);
+        const b = Solid.Cube(40).move(15, 10, 5);
+        const bxsLayer = root.addLayer('bxs', new Collection<Solid>(a, b));
 
-        const cutter = Mesh.Cube(40).move(5, 5, 5);
+        const cutter = Solid.Cube(40).move(5, 5, 5);
         const cutLayer = root.addLayer('cut', cutter);
         root.setActiveLayer(cutLayer);
 
-        const col = new Collection<Mesh>(a, b);
+        const col = new Collection<Solid>(a, b);
         const hits = col.intersections(cutter);
 
         expect(hits.length).toBe(2);
@@ -279,21 +279,21 @@ describe('Collection.subtract() scene layer behaviour', () =>
     it('a splitting subtract keeps the pieces on the source layer, not the active layer', () =>
     {
         // Source box on 'bxs'; a full-height slab cutter on the active 'cut' layer that slices
-        // the box into two separate solids (exercising Mesh.subtract's split → replace path).
+        // the box into two separate solids (exercising Solid.subtract's split → replace path).
         const root = new SceneNode('root');
-        const a = Mesh.Box(40, 10, 10);              // spans x -20..20
+        const a = Solid.Box(40, 10, 10);              // spans x -20..20
         const bxsLayer = root.addLayer('bxs', a);
 
-        const cutter = Mesh.Box(4, 40, 40);          // middle slab → splits a in two
+        const cutter = Solid.Box(4, 40, 40);          // middle slab → splits a in two
         const cutLayer = root.addLayer('cut', cutter);
         root.setActiveLayer(cutLayer);
 
-        const col = new Collection<Mesh>(a);
+        const col = new Collection<Solid>(a);
         col.subtract(cutter);
 
         // Collection is updated IN PLACE: the split member is replaced by its two pieces.
         expect(col.toArray().length).toBe(2);
-        expect(col.toArray().every(s => s instanceof Mesh)).toBe(true);
+        expect(col.toArray().every(s => s instanceof Solid)).toBe(true);
         // Both pieces land on the source layer 'bxs', flat (not parked under a stray group).
         expect(bxsLayer.shapes().toArray()).toEqual(col.toArray());
         expect(bxsLayer.children().every(c => c.hasShape())).toBe(true);
@@ -304,14 +304,14 @@ describe('Collection.subtract() scene layer behaviour', () =>
     it('a non-splitting subtract mutates members in place and keeps them on their layer', () =>
     {
         const root = new SceneNode('root');
-        const a = Mesh.Box(40, 10, 10);
+        const a = Solid.Box(40, 10, 10);
         const bxsLayer = root.addLayer('bxs', a);
 
-        const cutter = Mesh.Box(6, 6, 6);            // small bite → stays a single solid
+        const cutter = Solid.Box(6, 6, 6);            // small bite → stays a single solid
         const cutLayer = root.addLayer('cut', cutter);
         root.setActiveLayer(cutLayer);
 
-        const col = new Collection<Mesh>(a);
+        const col = new Collection<Solid>(a);
         col.subtract(cutter);
 
         expect(col.toArray()).toEqual([a]);          // same member object, mutated in place
@@ -326,7 +326,7 @@ describe('ShapeCollection.grid()', () =>
     {
         // Regression: `.grid(nx, ny, 0, [100,100,0])` used to return an empty collection,
         // so nothing was added to the scene.
-        const col = new Collection<Mesh>(Mesh.Cube(2));
+        const col = new Collection<Solid>(Solid.Cube(2));
         const grid = col.grid(4, 3, 0, [100, 100, 0]);
         expect(grid.count()).toBe(12);
     });
@@ -334,7 +334,7 @@ describe('ShapeCollection.grid()', () =>
     it('adds every cell to the active layer, with the source shapes as cell [0,0,0]', () =>
     {
         const root = new SceneNode('root');
-        const screw = Mesh.Cube(2);
+        const screw = Solid.Cube(2);
         const layer = root.addLayer('foundation', screw);
         root.setActiveLayer(layer);
 
@@ -349,9 +349,9 @@ describe('ShapeCollection.grid()', () =>
 
     it('spaces cells by the given per-axis distance between origins', () =>
     {
-        const col = new Collection<Mesh>(Mesh.Cube(2));
+        const col = new Collection<Solid>(Solid.Cube(2));
         const centers = col.grid(2, 2, 1, [100, 50, 0]).toArray()
-            .map(m => (m as Mesh).center().round(1e-9).toArray());
+            .map(m => (m as Solid).center().round(1e-9).toArray());
 
         expect(centers).toContainEqual([0, 0, 0]);
         expect(centers).toContainEqual([100, 0, 0]);
@@ -361,7 +361,7 @@ describe('ShapeCollection.grid()', () =>
 
     it('floors non-integer counts and throws on non-finite ones', () =>
     {
-        const col = new Collection<Mesh>(Mesh.Cube(2));
+        const col = new Collection<Solid>(Solid.Cube(2));
         expect(col.copy().grid(2.9, 2, 1, 10).count()).toBe(4);
         expect(() => col.copy().grid(NaN, 2, 1, 10)).toThrow(/grid/);
     });
@@ -373,9 +373,9 @@ describe('Collection group transforms', () =>
         as one. rotate*() did not: with no origin it called each shape's own rotate(), which turns
         about the WORLD ORIGIN — so a group of shapes could not be turned about itself at all, and
         the two group transforms disagreed about what "no origin given" means. */
-    const pair = () => new Collection<Mesh>(
-        Mesh.Cube(10).moveTo(-50, 0, 0),
-        Mesh.Cube(10).moveTo(50, 0, 0));
+    const pair = () => new Collection<Solid>(
+        Solid.Cube(10).moveTo(-50, 0, 0),
+        Solid.Cube(10).moveTo(50, 0, 0));
 
     // `+ 0` folds -0 into 0: a rotation lands components on -0 as readily as on 0
     const at = (col: Collection<any>) => col.toArray().map(s => s.center().toArray().map((v: number) => Math.round(v) + 0));
@@ -419,7 +419,7 @@ describe('Collection.map()', () =>
         not be styled, named or moved as a group the way filter() and sort() results can. It now
         answers with a ShapeCollection when EVERY result is a Shape, and stays an Array
         otherwise — a value map like `col.map(s => s.bbox().maxZ())` is unchanged. */
-    const pair = () => new Collection<Mesh>(Mesh.Cube(10).moveTo(-50, 0, 0), Mesh.Cube(10).moveTo(50, 0, 0));
+    const pair = () => new Collection<Solid>(Solid.Cube(10).moveTo(-50, 0, 0), Solid.Cube(10).moveTo(50, 0, 0));
 
     it('answers with a ShapeCollection when every result is a Shape', () =>
     {
@@ -431,7 +431,7 @@ describe('Collection.map()', () =>
 
     it('lets collection methods chain off the result', () =>
     {
-        const mapped = pair().map(m => m.copy()) as Collection<Mesh>;
+        const mapped = pair().map(m => m.copy()) as Collection<Solid>;
 
         expect(mapped.move(0, 0, 10).toArray().map(m => Math.round(m.center().z))).toEqual([10, 10]);
     });
@@ -457,29 +457,29 @@ describe('Collection.map()', () =>
     {
         // The static type still reads ShapeCollection here — with nothing to map there is no
         // result to judge, so only the runtime value can tell you which one you got.
-        const mapped: unknown = new Collection<Mesh>().map(m => m.copy());
+        const mapped: unknown = new Collection<Solid>().map(m => m.copy());
 
         expect(Array.isArray(mapped)).toBe(true);
-        expect(mapped as Array<Mesh>).toHaveLength(0);
+        expect(mapped as Array<Solid>).toHaveLength(0);
     });
 
     it('flattens collections the callback returns into one collection', () =>
     {
-        const mapped = pair().map(m => new Collection<Mesh>(m.copy(), m.copy())) as unknown as Collection<Mesh>;
+        const mapped = pair().map(m => new Collection<Solid>(m.copy(), m.copy())) as unknown as Collection<Solid>;
 
         expect(Collection.isShapeCollection(mapped)).toBe(true);
         expect(mapped.length).toEqual(4);
     });
 });
 
-describe('Mesh.vertices() as a collection', () =>
+describe('Solid.vertices() as a collection', () =>
 {
-    /*  Mesh.vertices() was an alias for positions(), so it answered with an Array of Points
+    /*  Solid.vertices() was an alias for positions(), so it answered with an Array of Points
         while Curve/Polygon answered with a ShapeCollection of Vertices. Collection.vertices()
         then fed those Points to add(), which drops non-Shapes — mesh vertices vanished. */
     it('answers with a ShapeCollection of Vertices', () =>
     {
-        const verts = Mesh.Cube(10).vertices();
+        const verts = Solid.Cube(10).vertices();
 
         expect(Collection.isShapeCollection(verts)).toBe(true);
         expect(verts.length).toBeGreaterThan(0);
@@ -488,18 +488,18 @@ describe('Mesh.vertices() as a collection', () =>
 
     it('keeps positions() as the raw Point accessor', () =>
     {
-        const cube = Mesh.Cube(10);
+        const cube = Solid.Cube(10);
 
         expect(Array.isArray(cube.positions())).toBe(true);
         expect(cube.positions()[0]).toBeInstanceOf(Point);
         expect(cube.positions().length).toEqual(cube.vertices().length);
     });
 
-    it('reports a Mesh\'s vertices through Collection.vertices()', () =>
+    it('reports a Solid\'s vertices through Collection.vertices()', () =>
     {
-        const verts = new Collection<Mesh>(Mesh.Cube(10)).vertices();
+        const verts = new Collection<Solid>(Solid.Cube(10)).vertices();
 
-        expect(verts.length).toEqual(Mesh.Cube(10).positions().length);
+        expect(verts.length).toEqual(Solid.Cube(10).positions().length);
     });
 });
 
@@ -523,7 +523,7 @@ describe('Collection.toScreen()', () =>
 {
     it('places a 3D point where the projection drew it, also after a move', () =>
     {
-        const box = Mesh.Cube(10).translate(5, 5, 5); // 0..10 on every axis
+        const box = Solid.Cube(10).translate(5, 5, 5); // 0..10 on every axis
         const iso = box.isometry([-1, -1, 1]).move(100, 20);
 
         // The top corner nearest the camera: a vertex of the drawing
@@ -536,13 +536,13 @@ describe('Collection.toScreen()', () =>
 
     it('is null for a collection that is not a projection', () =>
     {
-        expect(new Collection(Mesh.Cube(10)).toScreen([0, 0, 0])).toBeNull();
+        expect(new Collection(Solid.Cube(10)).toScreen([0, 0, 0])).toBeNull();
     });
 
     it('moves linked annotations along with the collection', () =>
     {
         const moves: Array<Array<number>> = [];
-        const col = new Collection(Mesh.Cube(10)).addAnnotations({ translate: (...d: number[]) => moves.push(d) });
+        const col = new Collection(Solid.Cube(10)).addAnnotations({ translate: (...d: number[]) => moves.push(d) });
         col.move(5, 6, 7);
         expect(moves).toEqual([[5, 6, 7]]);
     });

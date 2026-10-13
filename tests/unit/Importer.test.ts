@@ -4,7 +4,7 @@
  * Phase 0A: SVG + GeoJSON import through the already-compiled WASM.
  */
 import { beforeAll, describe, it, expect, vi } from 'vitest';
-import { Importer, Sketch, Curve, Mesh, ShapeCollection, initAsync } from '../../src/index';
+import { Importer, Sketch, Curve, Solid, ShapeCollection, initAsync } from '../../src/index';
 
 beforeAll(async () =>
 {
@@ -283,8 +283,8 @@ describe('Importer: OBJ', () =>
 {
     it('imports an OBJ tetrahedron', () =>
     {
-        const mesh = Mesh.fromOBJ(OBJ_TETRA);
-        expect(mesh).toBeInstanceOf(Mesh);
+        const mesh = Solid.fromOBJ(OBJ_TETRA);
+        expect(mesh).toBeInstanceOf(Solid);
         const bbox = mesh.bbox()!;
         expect(bbox.width()).toBeCloseTo(10, 3);
         expect(bbox.depth()).toBeCloseTo(10, 3);
@@ -296,7 +296,7 @@ describe('Importer: OBJ', () =>
         expect(Importer.detectFormat(OBJ_TETRA)).toBe('obj');
         const col = Importer.load(OBJ_TETRA);
         expect(col.toArray().length).toBe(1);
-        expect(col.toArray()[0]).toBeInstanceOf(Mesh);
+        expect(col.toArray()[0]).toBeInstanceOf(Solid);
     });
 });
 
@@ -304,11 +304,11 @@ describe('Importer: STL (round-trip)', () =>
 {
     it('exports a cube to binary STL and re-imports it', () =>
     {
-        const cube = Mesh.Cube(10);
+        const cube = Solid.Cube(10);
         const stl = cube.toSTLBinary()!;
         expect(stl).toBeInstanceOf(Uint8Array);
 
-        const imported = Mesh.fromSTL(stl);
+        const imported = Solid.fromSTL(stl);
         const bbox = imported.bbox()!;
         expect(bbox.width()).toBeCloseTo(10, 2);
         expect(bbox.depth()).toBeCloseTo(10, 2);
@@ -319,10 +319,10 @@ describe('Importer: STL (round-trip)', () =>
 
     it('re-imports ASCII STL and auto-detects it', () =>
     {
-        const cube = Mesh.Cube(20);
+        const cube = Solid.Cube(20);
         const ascii = cube.toSTLAscii()!;
         expect(Importer.detectFormat(ascii)).toBe('stl');
-        const imported = Importer.load(ascii).toArray()[0] as Mesh;
+        const imported = Importer.load(ascii).toArray()[0] as Solid;
         expect(imported.bbox()!.width()).toBeCloseTo(20, 2);
     });
 });
@@ -331,7 +331,7 @@ describe('Importer: DXF (mesh)', () =>
 {
     it('imports a DXF circle as a flat mesh', () =>
     {
-        const mesh = Mesh.fromDXF(DXF_CIRCLE);
+        const mesh = Solid.fromDXF(DXF_CIRCLE);
         const bbox = mesh.bbox()!;
         expect(bbox.width()).toBeCloseTo(10, 1);   // diameter = 2*r
         expect(bbox.depth()).toBeCloseTo(10, 1);
@@ -343,11 +343,11 @@ describe('Importer: glTF/GLB (round-trip)', () =>
 {
     it('exports a cube to GLB and re-imports it', async () =>
     {
-        const cube = Mesh.Cube(10);
+        const cube = Solid.Cube(10);
         const glb = await cube.toGLB();
         expect(glb).toBeInstanceOf(Uint8Array);
 
-        const imported = Mesh.fromGLB(glb!);
+        const imported = Solid.fromGLB(glb!);
         const bb = imported.bbox()!;
         // Cube dims are axis-invariant, so a 10-cube stays 10×10×10 whatever the up-axis.
         const dims = [bb.width(), bb.depth(), bb.height()].sort((a, b) => a - b);
@@ -361,10 +361,10 @@ describe('Importer: AMF (round-trip)', () =>
 {
     it('exports a cube to AMF and re-imports it', () =>
     {
-        const cube = Mesh.Cube(10);
+        const cube = Solid.Cube(10);
         const amf = cube.toAMF()!;
         expect(typeof amf).toBe('string');
-        const imported = Mesh.fromAMF(amf);
+        const imported = Solid.fromAMF(amf);
         const bb = imported.bbox()!;
         expect(bb.width()).toBeCloseTo(10, 2);
         expect(bb.depth()).toBeCloseTo(10, 2);
@@ -379,7 +379,7 @@ describe('Importer: 3MF', () =>
     {
         const zip = makeStoredZip('3D/3dmodel.model', TETRA_3MF_MODEL);
         expect(Importer.detectFormat(zip)).toBe('3mf');
-        const mesh = Mesh.from3MF(zip);
+        const mesh = Solid.from3MF(zip);
         const bb = mesh.bbox()!;
         expect(bb.width()).toBeCloseTo(10, 2);
         expect(bb.depth()).toBeCloseTo(10, 2);

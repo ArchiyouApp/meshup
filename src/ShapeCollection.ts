@@ -4,19 +4,19 @@
  *  A generic, typed collection of Shape instances.
  *
  *  ShapeCollection<S extends Shape = Shape> is the single collection class.
- *  Use ShapeCollection<Mesh> or ShapeCollection<Curve> for typed access.
- *  Curve-specific and Mesh-specific methods are included here; they throw
+ *  Use ShapeCollection<Solid> or ShapeCollection<Curve> for typed access.
+ *  Curve-specific and Solid-specific methods are included here; they throw
  *  or no-op when called on the wrong shape type.
  * 
  */
 
 import type { Axis, BasePlane, PointLike, ProjectEdgeOptions, RaycastHit, HlrStrategy,
     ProjectionOptions, ResolvedProjectionOptions } from './types';
-import { resolveProjectionArgs, resolveProjectionOptions } from './types';
+import { resolveProjectionArgs, resolveProjectionOptions, isSolidType } from './types';
 
 import { Vector } from './Vector';
 import { Vertex } from './Vertex';
-import { Mesh } from './Mesh';
+import { Solid } from './Solid';
 import { Curve } from './Curve';
 import { Style } from './Style';
 import { Shape } from './Shape';
@@ -33,14 +33,14 @@ import { GLTFBuilder } from './GLTFBuilder';
 import { TOLERANCE, ISOMETRY_HLR_STRATEGY_DEFAULT, ISOMETRY_CAM_DEFAULT, EDGE_PROJECTION_DEFAULTS } from './constants';
 import { gridCounts, moveUntilTouching } from './utils';
 
-/** A Shape that SVG can draw as a FACE: a Mesh or a Polygon lying on a plane parallel to XY.
+/** A Shape that SVG can draw as a FACE: a Solid or a Polygon lying on a plane parallel to XY.
  *
  *  Kept as a duck-typed check rather than `instanceof Polygon`: Polygon imports this module,
  *  so importing it back would make the cycle real and leave `Polygon extends Shape`
  *  undefined at load time. */
 function isDrawableFace(shape: any): boolean
 {
-    return (shape?.type === 'Mesh' || shape?.type === 'Polygon') && shape.isFlatOnXY?.() === true;
+    return (isSolidType(shape?.type) || shape?.type === 'Polygon') && shape.isFlatOnXY?.() === true;
 }
 
 /*  Annotations in an exported drawing.
@@ -190,7 +190,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     }
 
     /** Name every shape in a 1-D row `${name}1`, `${name}2`, … (no-op without a source name).
-     *  Used by Mesh/Curve row(). */
+     *  Used by Solid/Curve row(). */
     static _nameRow(col: ShapeCollection<any>, name?: string): void
     {
         if (!name) return;
@@ -199,7 +199,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     }
 
     /** Name every shape in a 3-D grid/array `${name}{x}{y}` (or `${name}{x}{y}{z}` when
-     *  nz > 1), assuming x-outer / y-mid / z-inner iteration order. Used by Mesh/Curve
+     *  nz > 1), assuming x-outer / y-mid / z-inner iteration order. Used by Solid/Curve
      *  grid() and array(). */
     static _nameGrid(col: ShapeCollection<any>, name: string | undefined, _nx: number, ny: number, nz: number): void
     {
@@ -358,21 +358,28 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     //// TYPE FILTERS ////
 
-    meshes(): ShapeCollection<Mesh>
+    /** The Solids in this collection. */
+    @sceneCarry
+    solids(): ShapeCollection<Solid>
     {
-        return new ShapeCollection<Mesh>(...this._shapes.filter(s => s instanceof Mesh) as Mesh[]);
+        return this._solids();
+    }
+
+    /** Alias for solids(): its name from before Mesh was renamed to Solid. */
+    meshes(): ShapeCollection<Solid>
+    {
+        return this._solids();
+    }
+
+    /** (scene-free implementation of solids()) */
+    _solids(): ShapeCollection<Solid>
+    {
+        return new ShapeCollection<Solid>(...this._shapes.filter(s => s instanceof Solid) as Solid[]);
     }
 
     curves(): ShapeCollection<Curve>
     {
         return new ShapeCollection<Curve>(...this._shapes.filter(s => s instanceof Curve) as Curve[]);
-    }
-
-    /** Alias for meshes() - the mesh kernel's equivalent of brep solids */
-    @sceneCarry
-    solids(): ShapeCollection<Mesh>
-    {
-        return this.meshes();
     }
 
     /** Only the Shapes that are visible (not hidden with hide())
@@ -881,7 +888,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     /** Flatten every shape in the collection onto the plane perpendicular to `axis`, then
      *  drop the doubles that creates — both across shapes (two identical walls flattened
-     *  onto the same rectangle) and within them (see Mesh.flatten() / Curve.flatten()).
+     *  onto the same rectangle) and within them (see Solid.flatten() / Curve.flatten()).
      *  Dropped shapes are removed from the scene; shapes that cannot be flattened are kept
      *  untouched. Mutates this collection.
      *
@@ -891,7 +898,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     {
         const results = this._shapes.flatMap(s =>
         {
-            // Mesh.flatten() returns a replacement shape, Curve.flatten() flattens in place.
+            // Solid.flatten() returns a replacement shape, Curve.flatten() flattens in place.
             if (typeof (s as any).flatten !== 'function')
             {
                 console.warn(`ShapeCollection::flatten(): cannot flatten a ${(s as any).type ?? 'Shape'} — kept as is`);
@@ -904,7 +911,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         });
 
         // Shapes that were apart along the axis can flatten onto each other — keep the first
-        // of each identical geometry (see Mesh._flatKey() / Curve._flatKey()). Brep shapes
+        // of each identical geometry (see Solid._flatKey() / Curve._flatKey()). Brep shapes
         // have a _flatKey() too; their id is `_id`, not `id()`.
         const seen = new Set<string>();
         const kept = results.filter(s =>
@@ -949,16 +956,16 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     alpha(a: number): this { return this.opacity(a); }
 
-    /** Separate every Mesh in this collection into its geometrically isolated parts, returning
+    /** Separate every Solid in this collection into its geometrically isolated parts, returning
      *  a flat collection (non-mesh shapes and already-connected meshes pass through unchanged).
-     *  Mesh.subtract()/difference() already auto-separate, so this is mainly for chaining and
+     *  Solid.subtract()/difference() already auto-separate, so this is mainly for chaining and
      *  for collections assembled by other means. Geometry only — no scene bookkeeping. */
     separateIsolated(): ShapeCollection<any>
     {
         const out = new ShapeCollection<any>();
         this._shapes.forEach(s =>
         {
-            const parts = (s instanceof Mesh) ? (s as any)._isolatedParts?.() : null;
+            const parts = (s instanceof Solid) ? (s as any)._isolatedParts?.() : null;
             if (parts && parts.length) out.add(parts);
             else out.add(s as any);
         });
@@ -1125,13 +1132,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     }
 
 
-    /** Merge all polygons into one Mesh (without booleans).
+    /** Merge all polygons into one Solid (without booleans).
      *
-     *  The merged Mesh TAKES THE PLACE of the collection's shapes in the scene: a merge is a
+     *  The merged Solid TAKES THE PLACE of the collection's shapes in the scene: a merge is a
      *  replacement, not an extra shape beside the originals. Without that the result was a
-     *  brand-new Mesh that belonged to no scene at all, so `c.merge().color('red')` built the
+     *  brand-new Solid that belonged to no scene at all, so `c.merge().color('red')` built the
      *  geometry and then showed nothing — and `.addToScene()` on it was a silent no-op too,
-     *  because the fresh Mesh carried no scene to go back to.
+     *  because the fresh Solid carried no scene to go back to.
      *
      *  Use `_merged()` for the geometry alone: internal callers that merge scene shapes only to
      *  project them must not pull those shapes out of the scene. */
@@ -1149,31 +1156,31 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return this._merged();
     }
 
-    /** Merge all polygons into one Mesh, leaving the scene alone (private). */
-    _merged(): Mesh
+    /** Merge all polygons into one Solid, leaving the scene alone (private). */
+    _merged(): Solid
     {
         const allPolygons = this._shapes
-            .filter(shape => shape instanceof Mesh)
+            .filter(shape => shape instanceof Solid)
             .flatMap(shape =>
             {
-                const inner = (shape as Mesh).inner();
+                const inner = (shape as Solid).inner();
                 return inner ? inner.polygons() : [];
             });
-        if (!allPolygons.length) { console.error('ShapeCollection::merge(): No meshes. Returning empty mesh.'); return new Mesh(); }
-        return Mesh.from(MeshJs.fromPolygons(allPolygons, {}));
+        if (!allPolygons.length) { console.error('ShapeCollection::merge(): No meshes. Returning empty mesh.'); return new Solid(); }
+        return Solid.from(MeshJs.fromPolygons(allPolygons, {}));
     }
 
     //// BOOLEAN OPERATIONS ////
 
     /** Boolean union.
      *  - `union(other)`  : union all Meshes in this collection together with `other`
-     *                      (mesh boolean), returning a single Mesh.
+     *                      (mesh boolean), returning a single Solid.
      *  - `union()`       : no argument → merge the collection's own shapes *by type*.
-     *                      Unions Meshes into one Mesh and closed Curves into their
+     *                      Unions Meshes into one Solid and closed Curves into their
      *                      combined outline(s). Returns the single result when there is
      *                      only one, otherwise a ShapeCollection of the per-type results.
      */
-    union(other?: Mesh | ShapeCollection<Mesh>): Mesh | Curve | ShapeCollection<any> | null
+    union(other?: Solid | ShapeCollection<Solid>): Solid | Curve | ShapeCollection<any> | null
     {
         // Shapes of another kernel fuse through that kernel's own collection (see select())
         const foreign = this._shapes.filter(s => ShapeCollection.isForeignShape(s));
@@ -1184,23 +1191,23 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         }
         if (other === undefined) return this._unionByType();
 
-        const meshesToUnion = this.meshes().toArray();
-        if (other instanceof Mesh) meshesToUnion.push(other);
-        else if (ShapeCollection.isShapeCollection(other)) meshesToUnion.push(...other.meshes().toArray());
-        else console.warn(`ShapeCollection::union(): Invalid argument. Only Mesh or ShapeCollection allowed.`, other);
-        if (!meshesToUnion.length) { console.warn('ShapeCollection::union(): No meshes. Returning empty mesh.'); return new Mesh(); }
+        const meshesToUnion = this._solids().toArray();
+        if (other instanceof Solid) meshesToUnion.push(other);
+        else if (ShapeCollection.isShapeCollection(other)) meshesToUnion.push(...other._solids().toArray());
+        else console.warn(`ShapeCollection::union(): Invalid argument. Only Solid or ShapeCollection allowed.`, other);
+        if (!meshesToUnion.length) { console.warn('ShapeCollection::union(): No meshes. Returning empty mesh.'); return new Solid(); }
         return meshesToUnion.slice(1).reduce((acc, mesh) => acc.union(mesh), meshesToUnion[0]);
     }
 
     /** Merge the collection's own shapes grouped by type: all Meshes union into a single
-     *  Mesh, all closed Curves union into their combined outline(s). Used by `union()`
+     *  Solid, all closed Curves union into their combined outline(s). Used by `union()`
      *  when called with no argument. */
-    private _unionByType(): Mesh | Curve | ShapeCollection<any> | null
+    private _unionByType(): Solid | Curve | ShapeCollection<any> | null
     {
-        const results: Array<Mesh | Curve | ShapeCollection<Curve>> = [];
+        const results: Array<Solid | Curve | ShapeCollection<Curve>> = [];
 
-        // Meshes → single Mesh
-        if (this.meshes().length) results.push(this.mergeAll());
+        // Meshes → single Solid
+        if (this._solids().length) results.push(this.mergeAll());
 
         // Curves → chained boolean union. NOTE: we don't use unionAll() here because
         // Curve.union() returns a single Curve, so chaining must keep that result as the
@@ -1218,7 +1225,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             results.push(acc);
         }
 
-        if (results.length === 0) { console.warn('ShapeCollection::union(): No Mesh or Curve shapes to union.'); return null; }
+        if (results.length === 0) { console.warn('ShapeCollection::union(): No Solid or Curve shapes to union.'); return null; }
         if (results.length === 1) return results[0] instanceof ShapeCollection ? results[0].checkSingle() as any : results[0];
 
         // Mixed types: flatten any curve-collection result into the combined collection
@@ -1226,28 +1233,28 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return new ShapeCollection<any>(...flat as any[]);
     }
 
-    /** Subtract `other` from every Mesh in this collection, updating the collection IN PLACE.
+    /** Subtract `other` from every Solid in this collection, updating the collection IN PLACE.
      *  When a cut splits a member into genuinely-separate solids, that member is replaced by its
      *  pieces (both in `_shapes` and, when scene-attached, on the member's OWN layer — flat, not
      *  under a fresh group sub-layer). This is why we drive the internal, scene-skipping kernel
      *  ops (`_difference` + `_separateSolids`) directly instead of the scene-managing
-     *  `Mesh.subtract`: the latter discards the split pieces from the collection and parks them in
+     *  `Solid.subtract`: the latter discards the split pieces from the collection and parks them in
      *  a stray group node. */
-    subtract(other: Mesh | ShapeCollection<Mesh>): this
+    subtract(other: Solid | ShapeCollection<Solid>): this
     {
         const otherMeshes = ShapeCollection.isShapeCollection(other)
-            ? (other as ShapeCollection<any>).meshes()
-            : (other instanceof Mesh ? new ShapeCollection<Mesh>(other) : new ShapeCollection<Mesh>());
+            ? (other as ShapeCollection<any>)._solids()
+            : (other instanceof Solid ? new ShapeCollection<Solid>(other) : new ShapeCollection<Solid>());
         if (!otherMeshes.length) { console.warn('ShapeCollection::subtract(): No valid meshes. Returning original.'); return this; }
 
         const next: Array<CollectableShape> = [];
         this._shapes.forEach(shape =>
         {
-            if (!(shape instanceof Mesh)) { next.push(shape); return; }
+            if (!(shape instanceof Solid)) { next.push(shape); return; }
             // Internal in-place difference (no scene-decorator side effects), then separate solids.
             // A member that is also one of the cutters is skipped there (self-subtraction).
             (shape as any)._difference(otherMeshes);
-            const parts = ((shape as any)._separateSolids() as ShapeCollection<Mesh>).toArray();
+            const parts = ((shape as any)._separateSolids() as ShapeCollection<Solid>).toArray();
             if (parts.length > 1)
             {
                 // The cut split this member: replace it with its pieces on its own layer, flat.
@@ -1275,11 +1282,11 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return this;
     }
 
-    /** Union all Mesh shapes into a single Mesh */
-    mergeAll(): Mesh
+    /** Union all Solid shapes into a single Solid */
+    mergeAll(): Solid
     {
-        const meshes = this.meshes().toArray();
-        if (!meshes.length) { console.warn('ShapeCollection::mergeAll(): No meshes. Returning empty mesh.'); return new Mesh(); }
+        const meshes = this._solids().toArray();
+        if (!meshes.length) { console.warn('ShapeCollection::mergeAll(): No meshes. Returning empty mesh.'); return new Solid(); }
         return meshes.slice(1).reduce((acc, mesh) => acc.union(mesh), meshes[0]);
     }
 
@@ -1335,10 +1342,10 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return ShapeCollection._pairIntersection(shape, other) !== null;
     }
 
-    /** Intersect every shape in this collection with `other` (a Curve, Mesh, or another
+    /** Intersect every shape in this collection with `other` (a Curve, Solid, or another
      *  ShapeCollection), aggregating all resulting intersections into one collection:
      *    - Curves yield their intersection Curves (curve∩curve outlines, curve∩mesh cuts)
-     *    - Meshes yield the boolean-intersection volume Mesh (mesh∩mesh)
+     *    - Meshes yield the boolean-intersection volume Solid (mesh∩mesh)
      *  When `other` is a collection, each of this collection's shapes is intersected with
      *  each of its shapes. Returns an empty ShapeCollection when there are no intersections. */
     /** Intersect every shape with `other`, aggregating results.
@@ -1347,13 +1354,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  results are NEW shapes added to the active layer, so they are visible without an
      *  explicit addToScene(). */
     @colSceneAdd
-    intersections(other: Curve | Mesh | ShapeCollection<any>): ShapeCollection<any>
+    intersections(other: Curve | Solid | ShapeCollection<any>): ShapeCollection<any>
     {
         return this._intersections(other);
     }
 
     /** Pure intersection geometry — never touches the scene. Used internally (intersection()). */
-    private _intersections(other: Curve | Mesh | ShapeCollection<any>): ShapeCollection<any>
+    private _intersections(other: Curve | Solid | ShapeCollection<any>): ShapeCollection<any>
     {
         const others = ShapeCollection.isShapeCollection(other) ? (other as ShapeCollection<any>).toArray() : [other];
         const result = new ShapeCollection<any>();
@@ -1368,13 +1375,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return result;
     }
 
-    /** Get only the first intersection (of possibly many) — a Curve or Mesh. Returns null
+    /** Get only the first intersection (of possibly many) — a Curve or Solid. Returns null
      *  if none. Same non-replacing, added-to-the-active-layer contract as intersections(). */
     @colSceneAdd
-    intersection(other: Curve | Mesh | ShapeCollection<any>): Curve | Mesh | null
+    intersection(other: Curve | Solid | ShapeCollection<any>): Curve | Solid | null
     {
         const all = this._intersections(other);
-        return all.length ? all.first() as Curve | Mesh : null;
+        return all.length ? all.first() as Curve | Solid : null;
     }
 
     /** Extrude every shape in the collection, forwarding to each shape's own extrude() —
@@ -1389,9 +1396,9 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     }
 
     /** Intersect a single shape with a single other shape, dispatched by kernel type.
-     *  Returns the intersection geometry (a ShapeCollection<Curve>, a Mesh, or a Curve),
+     *  Returns the intersection geometry (a ShapeCollection<Curve>, a Solid, or a Curve),
      *  or null when they do not intersect / the pair is unsupported. */
-    private static _pairIntersection(shape: CollectableShape, other: any): ShapeCollection<any> | Mesh | Curve | null
+    private static _pairIntersection(shape: CollectableShape, other: any): ShapeCollection<any> | Solid | Curve | null
     {
         // Curve (or any shape exposing intersections()) → intersection Curves. Go through the
         // undecorated _intersections(): the scene work is this collection's own decorator's job,
@@ -1401,18 +1408,18 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             const hit = (shape as any)._intersections(other) as ShapeCollection<Curve> | null;
             return (hit && hit.length) ? hit : null;
         }
-        // Mesh ∩ Mesh → boolean-intersection volume. Work on a detached clone (not Mesh.copy(),
+        // Solid ∩ Solid → boolean-intersection volume. Work on a detached clone (not Solid.copy(),
         // which attaches a scene sibling) with the mutating _intersection(), to keep the
         // collection's meshes and the scene graph untouched.
-        if (shape instanceof Mesh && other instanceof Mesh)
+        if (shape instanceof Solid && other instanceof Solid)
         {
             const clone = shape.inner()?.clone();
             if (!clone) return null;
-            const volume = Mesh.from(clone)._intersection(other);
+            const volume = Solid.from(clone)._intersection(other);
             return (volume?.inner()?.triangleCount() ?? 0) > 0 ? volume : null;
         }
-        // Mesh ∩ Curve → delegate to the Curve so we still get intersection Curves.
-        if (shape instanceof Mesh && typeof (other as any)?.intersections === 'function')
+        // Solid ∩ Curve → delegate to the Curve so we still get intersection Curves.
+        if (shape instanceof Solid && typeof (other as any)?.intersections === 'function')
         {
             const hit = (other as Curve)._intersections(shape) as ShapeCollection<Curve> | null;
             return (hit && hit.length) ? hit : null;
@@ -1420,7 +1427,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return null;
     }
 
-    private _visibleProjectionMeshes(includeHiddenShapes: boolean): Mesh[]
+    private _visibleProjectionMeshes(includeHiddenShapes: boolean): Solid[]
     {
         const shapes = this._shapes as any[];
         const projectedShapes = includeHiddenShapes
@@ -1428,10 +1435,10 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             : shapes.filter(shape => shape.style?.visible !== false);
 
         // Return DETACHED copies (no scene node): the projection internally calls decorated
-        // Mesh ops (isometry/section/merge) on these, which must not touch the scene graph.
+        // Solid ops (isometry/section/merge) on these, which must not touch the scene graph.
         // This replaces the old SmartShapeCollection._toMeshCollection() "plain-ify" trick.
         return projectedShapes
-            .filter((shape): shape is Mesh => shape instanceof Mesh)
+            .filter((shape): shape is Solid => shape instanceof Solid)
             .map(shape => ShapeCollection._projectionCopy(shape));
     }
 
@@ -1484,7 +1491,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     /** A detached copy of `shape` to project, with its scene style (see {@link _sceneStyle})
      *  made its own: the copy is out of the scene, and would lose what its layers gave it. */
-    private static _projectionCopy<T extends Mesh | Curve>(shape: T): T
+    private static _projectionCopy<T extends Solid | Curve>(shape: T): T
     {
         const copy = shape._copy() as T;
         copy.style.merge(ShapeCollection._sceneStyle(shape) as any);
@@ -1527,7 +1534,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      */
     private static _projectLinearShapes(
         curves: Curve[],
-        occluders: Mesh[],
+        occluders: Solid[],
         viewDir: Vector,
         planeNormal: Vector,
     ): ShapeCollection<any>
@@ -1564,7 +1571,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             }
             if (!counts.length) continue;
 
-            // Same ownership rule as Mesh._projectEdges: WASM takes the handles
+            // Same ownership rule as Solid._projectEdges: WASM takes the handles
             // by value, so clone or the caller's Meshes are consumed.
             const occJs = occluders
                 .map(m => m.inner()?.clone?.())
@@ -1577,10 +1584,10 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
             // The solver returns every segment on its own; join the ones of
             // one smooth curve again.
-            const hidden = Mesh.projectedPolylinesToShapeCollection(
-                Mesh._joinPolylines(r.hiddenPolylines()).map(c => c.points));
-            const visible = Mesh.projectedPolylinesToShapeCollection(
-                Mesh._joinPolylines(r.visiblePolylines()).map(c => c.points));
+            const hidden = Solid.projectedPolylinesToShapeCollection(
+                Solid._joinPolylines(r.hiddenPolylines()).map(c => c.points));
+            const visible = Solid.projectedPolylinesToShapeCollection(
+                Solid._joinPolylines(r.visiblePolylines()).map(c => c.points));
             r.free?.();
 
             // The source shape's own styling rides along with its line work.
@@ -1597,7 +1604,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     /** Project the outlines of the contact faces between touching cuboids, all
      *  in one call, hidden by the merged scene.
      *
-     *  Each contact face used to be a small Mesh of its own, projected against
+     *  Each contact face used to be a small Solid of its own, projected against
      *  a copy of the whole scene per touching pair; that rebuilt the occluder
      *  set every time and was most of the cost of a drawing with many touching
      *  boxes. The outline edges of such a face are boundary edges, so as
@@ -1607,7 +1614,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      */
     private static _projectContactOutlines(
         outlines: Array<Array<[number, number, number]>>,
-        occluder: Mesh,
+        occluder: Solid,
         viewDir: Vector,
         planeNormal: Vector,
     ): ShapeCollection<any>
@@ -1616,7 +1623,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
         const [vx, vy, vz] = viewDir.toArray();
         const [nx, ny, nz] = planeNormal.toArray();
-        // Same ownership rule as Mesh._projectEdges: clone, or WASM consumes it.
+        // Same ownership rule as Solid._projectEdges: clone, or WASM consumes it.
         const occJs = [occluder.inner()?.clone?.()].filter((m): m is any => m != null);
 
         const r = MeshJs.projectPolylines(
@@ -1624,7 +1631,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             vx, vy, vz, 0, 0, 0, nx, ny, nz, occJs);
         if (!r) return new ShapeCollection<any>();
 
-        const projected = Mesh._projectionToShapeCollection(r);
+        const projected = Solid._projectionToShapeCollection(r);
         r.free?.();
         return projected;
     }
@@ -1675,7 +1682,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  caller is told, rather than quietly getting a different drawing than the
      *  one they asked for; pass `fallback: true` to downgrade with a warning.
      */
-    private static _resolveStrategy(meshes: Mesh[], requested: HlrStrategy | undefined, fallback: boolean = false): HlrStrategy
+    private static _resolveStrategy(meshes: Solid[], requested: HlrStrategy | undefined, fallback: boolean = false): HlrStrategy
     {
         const strategy = requested ?? ISOMETRY_HLR_STRATEGY_DEFAULT;
         if (strategy !== 'clip' && strategy !== 'painter') return strategy;
@@ -1694,7 +1701,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     }
 
     /** Why the per-shape strategies cannot run, or `null` if they can. */
-    private static _perShapeBlocker(meshes: Mesh[]): string | null
+    private static _perShapeBlocker(meshes: Solid[]): string | null
     {
         for (let i = 0; i < meshes.length; i++)
         {
@@ -1734,7 +1741,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  `'exact'`); accepting one it cannot would silently produce a wrong
      *  drawing, which is not.
      */
-    private static _sharesVolume(a: Mesh, b: Mesh): boolean
+    private static _sharesVolume(a: Solid, b: Solid): boolean
     {
         const ba = a.bbox();
         const bb = b.bbox();
@@ -1771,7 +1778,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  computed here is only for paint order and grouping.
      */
     private static _projectPerShape(
-        meshes: Mesh[],
+        meshes: Solid[],
         viewDir: Vector,
         planeNormal: Vector,
         hiddenLines: boolean,
@@ -1795,8 +1802,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             // clip this shape against its siblings, which costs more but keeps
             // the output pure line work.
             const occluders = painter
-                ? new ShapeCollection<Mesh>()
-                : new ShapeCollection<Mesh>(...meshes.filter((_, j) => j !== i));
+                ? new ShapeCollection<Solid>()
+                : new ShapeCollection<Solid>(...meshes.filter((_, j) => j !== i));
 
             const options = ShapeCollection._makeProjectionOptions(
                 viewDir, planeNormal, featureAngle, 0, 'exact');
@@ -1837,7 +1844,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         ShapeCollection._appendProjectionGroups(
             result, ShapeCollection._projectLinearShapes(curves, meshes, viewDir, planeNormal));
 
-        return Mesh._flattenProjectionToScreen(result, planeNormal);
+        return Solid._flattenProjectionToScreen(result, planeNormal);
     }
 
     /** Closed outlines of the faces of `mesh` that point at the viewer.
@@ -1849,7 +1856,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  in one colour does it.
      */
     private static _frontFaceOutlines(
-        mesh: Mesh,
+        mesh: Solid,
         viewDir: Vector,
         planeNormal: Vector,
     ): ShapeCollection<any>
@@ -1888,7 +1895,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  the true occlusion order wherever the two shapes actually overlap on
      *  screen, which is the only place paint order is observable.
      */
-    private static _depthOrder(meshes: Mesh[], viewDir: Vector): number[]
+    private static _depthOrder(meshes: Solid[], viewDir: Vector): number[]
     {
         const dir = viewDir.copy().normalize();
         const depth = meshes.map(m =>
@@ -1909,7 +1916,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     }
 
     private static _projectMergedProjectionWithContactFaces(
-        meshes: Mesh[],
+        meshes: Solid[],
         viewDir: Vector,
         planeNormal: Vector,
         hiddenLines: boolean,
@@ -1953,15 +1960,15 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             iso.removeGroup('hidden');
         }
 
-        return Mesh._flattenProjectionToScreen(iso, planeNormal);
+        return Solid._flattenProjectionToScreen(iso, planeNormal);
     }
 
     /** The merged-solid projection of `meshes`, hidden by `occluders` too, plus the outlines
      *  of the faces where cuboids in it touch. UNFLATTENED and unstyled: the caller combines
      *  the groups, then flattens once (flattening recentres on the origin). */
     private static _projectMergedGroup(
-        meshes: Mesh[],
-        occluders: Mesh[],
+        meshes: Solid[],
+        occluders: Solid[],
         viewDir: Vector,
         planeNormal: Vector,
         samples: number,
@@ -1971,7 +1978,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     {
         // _merged(): these meshes are in the scene and only merged to be projected as one -
         // merge() would replace them in the scene, deleting the model we are drawing.
-        const merged = new ShapeCollection<Mesh>(...meshes)._merged();
+        const merged = new ShapeCollection<Solid>(...meshes)._merged();
         const options = ShapeCollection._makeProjectionOptions(
             viewDir,
             planeNormal,
@@ -1979,7 +1986,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             samples,
             strategy,
         );
-        const iso = merged._projectEdges(options, new ShapeCollection<Mesh>(...occluders));
+        const iso = merged._projectEdges(options, new ShapeCollection<Solid>(...occluders));
 
         const TOL = 1e-3;
         const AXES: Array<'x'|'y'|'z'> = ['x', 'y', 'z'];
@@ -2070,7 +2077,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         });
         // The contact outlines are hidden by everything: this group and the other styles'
         const everything = (occluders.length && contactOutlines.length)
-            ? new ShapeCollection<Mesh>(...meshes, ...occluders)._merged()
+            ? new ShapeCollection<Solid>(...meshes, ...occluders)._merged()
             : merged;
         ShapeCollection._appendProjectionGroups(
             iso, ShapeCollection._projectContactOutlines(contactOutlines, everything, viewDir, planeNormal));
@@ -2262,7 +2269,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         ];
         if (!shapes.length) return new ShapeCollection<any>();
 
-        const viewDir = Mesh._resolveViewDirection(from);
+        const viewDir = Solid._resolveViewDirection(from);
         const planeNormal = viewDir.copy().reverse();
         const [vx, vy, vz] = viewDir.toArray();
         const [nx, ny, nz] = planeNormal.toArray();
@@ -2272,12 +2279,12 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         const result = new ShapeCollection<any>();
         ShapeCollection._groupByStyle(shapes).forEach(group =>
         {
-            const meshes = group.filter(s => s instanceof Mesh) as Mesh[];
+            const meshes = group.filter(s => s instanceof Solid) as Solid[];
             // Curves go in as points: tessellated, so arcs and splines project as what they are
             const lines = group.filter(s => s instanceof Curve)
                 .map(c => (c.tessellate?.() ?? c.points?.() ?? []).map((p: any) => [p.x, p.y, p.z]))
                 .filter((line: any[]) => line.length >= 2);
-            // Same ownership rule as Mesh._projectEdges: clone, or WASM consumes the handles
+            // Same ownership rule as Solid._projectEdges: clone, or WASM consumes the handles
             const meshJs = meshes.map(m => m.inner()?.clone?.()).filter((m): m is any => m != null);
 
             const r = MeshJs.projectFlat(meshJs,
@@ -2293,19 +2300,19 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             if (silhouette?.length) result.tagGroup('silhouette', silhouette);
         });
         // The flatten takes the normal toward the viewer; the reversed one gives a mirror image
-        return Mesh._flattenProjectionToScreen(result, viewDir);
+        return Solid._flattenProjectionToScreen(result, viewDir);
     }
 
     /** The lines of a plain projection as Curves, the outline tagged 'silhouette'. Lines that
-     *  continue each other are joined (see Mesh._joinPolylines), outline and others apart. */
+     *  continue each other are joined (see Solid._joinPolylines), outline and others apart. */
     private static _flatLinesToCurves(lines: Array<Array<[number, number, number]>>, outlineIndices: Uint32Array): ShapeCollection<any>
     {
         const outline = new Set<number>(outlineIndices);
         const result = new ShapeCollection<any>();
         const silhouette = new ShapeCollection<any>();
         [true, false].forEach(isOutline =>
-            Mesh._joinPolylines(lines.map((line, i) => (outline.has(i) === isOutline) ? line : null))
-                .map(chain => Mesh._polylineToCurve(chain.points))
+            Solid._joinPolylines(lines.map((line, i) => (outline.has(i) === isOutline) ? line : null))
+                .map(chain => Solid._polylineToCurve(chain.points))
                 .forEach(curve =>
                 {
                     if (!curve) return;
@@ -2338,7 +2345,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             return meshes[0].elevation(from, o);
         }
 
-        const viewDir = Mesh._resolveViewDirection(from);
+        const viewDir = Solid._resolveViewDirection(from);
         const planeNormal = viewDir.copy(); // toward the viewer, as _flattenProjectionToScreen takes it
 
         const strategy = ShapeCollection._resolveStrategy(meshes, o.method, o.fallback);
@@ -2360,8 +2367,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         );
     }
 
-    /** Architectural section across every Mesh in this collection, added to a dedicated
-     *  'section' scene layer. See {@link Mesh.section} for parameter semantics.
+    /** Architectural section across every Solid in this collection, added to a dedicated
+     *  'section' scene layer. See {@link Solid.section} for parameter semantics.
      */
     section(pivot: PointLike, normal?: PointLike | BasePlane, options?: ProjectionOptions): ShapeCollection<any>;
     @colSceneLayer('section')
@@ -2383,11 +2390,11 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
         // A section cuts the assembly into one solid, so there are no separate
         // shapes left to order — the per-shape strategies have nothing to do
-        // here and Mesh.section resolves them to 'exact'.
+        // here and Solid.section resolves them to 'exact'.
         const groups = ShapeCollection._groupByStyle(meshes);
         if (groups.length === 1)
         {
-            const result = new ShapeCollection<Mesh>(...meshes)
+            const result = new ShapeCollection<Solid>(...meshes)
                 ._merged() // scene-free merge: the source meshes must stay in the scene
                 .section(pivot, normal, o);
             ShapeCollection._inheritStyle(result, meshes[0]);
@@ -2396,20 +2403,20 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
         // Styled apart: one section per style, hidden by the other styles' meshes too, so each
         // keeps its style (as in _projectMergedProjectionWithContactFaces); flattened once
-        const sectionNormal = Mesh._resolveViewDirection(normal);
+        const sectionNormal = Solid._resolveViewDirection(normal);
         const result = new ShapeCollection<any>();
         groups.forEach(group =>
         {
             const others = meshes.filter(m => !group.includes(m));
-            const cut = new ShapeCollection<Mesh>(...group)._merged()._projectEdgesSection(
+            const cut = new ShapeCollection<Solid>(...group)._merged()._projectEdgesSection(
                 {
                     pivot: Point.from(pivot),
                     normal: sectionNormal,
                     featureAngle: o.featureAngle,
                     samples: o.samples,
-                    strategy: Mesh._singleMeshStrategy(o.method),
+                    strategy: Solid._singleMeshStrategy(o.method),
                 },
-                new ShapeCollection<Mesh>(...others));
+                new ShapeCollection<Solid>(...others));
             ShapeCollection._inheritStyle(cut, group[0]);
             const cutLines = cut.group('cut');
             if (cutLines?.length) result.addGroup('cut', cutLines);
@@ -2417,7 +2424,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         });
         if (!o.hiddenLines) result.removeGroup('hidden');
         // the viewer looks along -normal: the normal points toward the viewer, as the flatten takes it
-        return Mesh._flattenProjectionToScreen(result, sectionNormal);
+        return Solid._flattenProjectionToScreen(result, sectionNormal);
     }
 
     //// OUTPUTS ////
@@ -2446,7 +2453,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             flatten() — which answers with Meshes, not Curves — used to serialize to the
             "no curves" placeholder below and look like a broken export. Only faces that LIE
             on a plane parallel to XY are taken: drawing a standing wall from above would
-            collapse it to a line and say nothing about it (see Mesh.isFlatOnXY). */
+            collapse it to a line and say nothing about it (see Solid.isFlatOnXY). */
         const drawables: Array<any> = [
             ...this._shapes.filter(s => isDrawableFace(s)),
             ...this.curves().toArray(),
@@ -2551,7 +2558,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
 
     /** All vertices of all shapes in this collection (Curve control/segment vertices,
-     *  Polygon and Mesh corner vertices). Vertices in the collection are passed through. */
+     *  Polygon and Solid corner vertices). Vertices in the collection are passed through. */
     @sceneCarry
     vertices(): ShapeCollection<Vertex>
     {
@@ -2575,13 +2582,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     }
 
     @sceneCarry
-    toMesh(): ShapeCollection<Mesh>
+    toMesh(): ShapeCollection<Solid>
     {
         const meshes = this._shapes
             .map(curve => (curve as any).toMesh?.())
             // a shape from another kernel is its own mesh (brep Shape.toMesh() returns itself)
-            .filter((mesh: any) => ShapeCollection.isForeignShape(mesh) || mesh?.validate?.()) as Mesh[];
-        return new ShapeCollection<Mesh>(...meshes);
+            .filter((mesh: any) => ShapeCollection.isForeignShape(mesh) || mesh?.validate?.()) as Solid[];
+        return new ShapeCollection<Solid>(...meshes);
     }
 
 
@@ -2800,11 +2807,11 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     //// MESH-SPECIFIC (BVH) ////
 
-    hits(other: Mesh | ShapeCollection<Mesh>): Array<[Mesh, Mesh]>
+    hits(other: Solid | ShapeCollection<Solid>): Array<[Solid, Solid]>
     {
-        const aList = this.meshes().toArray();
-        const bList = other instanceof Mesh ? [other] : other.meshes().toArray();
-        return aList.flatMap(a => bList.filter(b => a.hits(b)).map(b => [a, b] as [Mesh, Mesh]));
+        const aList = this._solids().toArray();
+        const bList = other instanceof Solid ? [other] : other._solids().toArray();
+        return aList.flatMap(a => bList.filter(b => a.hits(b)).map(b => [a, b] as [Solid, Solid]));
     }
 
     raycast(
@@ -2812,20 +2819,20 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         direction: [number, number, number],
         maxDist = Infinity,
         all = true,
-    ): Array<{ mesh: Mesh; hit: RaycastHit }> | { mesh: Mesh; hit: RaycastHit } | null
+    ): Array<{ mesh: Solid; hit: RaycastHit }> | { mesh: Solid; hit: RaycastHit } | null
     {
-        const results = this.meshes().toArray()
+        const results = this._solids().toArray()
             .map(mesh => ({ mesh, hit: mesh.raycast(origin, direction, maxDist, false) }))
-            .filter((r): r is { mesh: Mesh; hit: RaycastHit } => r.hit !== null)
+            .filter((r): r is { mesh: Solid; hit: RaycastHit } => r.hit !== null)
             .sort((a, b) => a.hit.distance - b.hit.distance);
         if (all) return results;
         return results[0] ?? null;
     }
 
-    distanceTo(other: Mesh | ShapeCollection<Mesh>): number
+    distanceTo(other: Solid | ShapeCollection<Solid>): number
     {
-        const aList = this.meshes().toArray();
-        const bList = other instanceof Mesh ? [other] : other.meshes().toArray();
+        const aList = this._solids().toArray();
+        const bList = other instanceof Solid ? [other] : other._solids().toArray();
         return aList.reduce((minSoFar, a) =>
         {
             if (minSoFar === 0) return 0;
@@ -2833,13 +2840,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         }, Infinity);
     }
 
-    closestPair(other: ShapeCollection<Mesh>): { mesh1: Mesh; mesh2: Mesh; distance: number } | null
+    closestPair(other: ShapeCollection<Solid>): { mesh1: Solid; mesh2: Solid; distance: number } | null
     {
-        const aList = this.meshes().toArray();
-        const bList = other.meshes().toArray();
+        const aList = this._solids().toArray();
+        const bList = other._solids().toArray();
         if (!aList.length || !bList.length) return null;
         return aList.flatMap(a => bList.map(b => ({ mesh1: a, mesh2: b, distance: a.distanceTo(b) })))
-            .reduce((best, pair) => best === null || pair.distance < best.distance ? pair : best, null as { mesh1: Mesh; mesh2: Mesh; distance: number } | null);
+            .reduce((best, pair) => best === null || pair.distance < best.distance ? pair : best, null as { mesh1: Solid; mesh2: Solid; distance: number } | null);
     }
 
     _projectEdges(_options: ProjectEdgeOptions): void
@@ -2943,7 +2950,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      */
     static _addCuboidContactPerimeters(
         iso: ShapeCollection<any>,
-        meshes: Mesh[],
+        meshes: Solid[],
         viewDir: Vector,
         planeNormal: Vector,
         featureAngle: number,

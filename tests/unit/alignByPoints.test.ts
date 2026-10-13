@@ -7,7 +7,7 @@
  */
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 import { Point } from '../../src/Point';
 
@@ -17,7 +17,7 @@ beforeAll(async () =>
 });
 
 /** Closest point of the mesh geometry to `p` — used to check a reference point really landed there */
-const distToMesh = (m: Mesh, p: [number, number, number]): number =>
+const distToMesh = (m: Solid, p: [number, number, number]): number =>
 {
     let best = Infinity;
     m.vertices().forEach(v =>
@@ -28,12 +28,12 @@ const distToMesh = (m: Mesh, p: [number, number, number]): number =>
     return best;
 };
 
-describe('Mesh.alignByPoints()', () =>
+describe('Solid.alignByPoints()', () =>
 {
     it('maps 3 source points onto 3 target points (p1 off the origin)', () =>
     {
         // Box from [10,10,10] to [60,30,25]: source points are box corners, none at the origin
-        const box = Mesh.BoxBetween([10, 10, 10], [60, 30, 25]);
+        const box = Solid.BoxBetween([10, 10, 10], [60, 30, 25]);
 
         const src: [number, number, number][] = [[10, 10, 10], [60, 10, 10], [10, 30, 10]];
         const tgt: [number, number, number][] = [[100, 5, -20], [150, 5, -20], [100, 25, -20]];
@@ -48,7 +48,7 @@ describe('Mesh.alignByPoints()', () =>
 
     it('maps 3 points with withScale=true (edge lengths differ)', () =>
     {
-        const box = Mesh.BoxBetween([10, 10, 10], [60, 30, 25]);
+        const box = Solid.BoxBetween([10, 10, 10], [60, 30, 25]);
 
         // First target edge is twice the source edge → uniform scale of 2
         const src: [number, number, number][] = [[10, 10, 10], [60, 10, 10], [10, 30, 10]];
@@ -69,7 +69,7 @@ describe('Mesh.alignByPoints()', () =>
 
     it('maps 2 source points onto 2 target points with scale', () =>
     {
-        const box = Mesh.BoxBetween([10, 10, 10], [60, 30, 25]);
+        const box = Solid.BoxBetween([10, 10, 10], [60, 30, 25]);
         const src: [number, number, number][] = [[10, 10, 10], [60, 10, 10]];
         const tgt: [number, number, number][] = [[100, 5, -20], [200, 5, -20]];
 

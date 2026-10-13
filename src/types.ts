@@ -34,13 +34,19 @@ export type CsgrsModule =
   // TODO: more
 };
 
+/** Type string of a solid. 'Mesh' is the name of the Solid class before the rename (kept as
+ *  an alias), accepted so shapes and data from code that still says 'Mesh' keep working. */
+export function isSolidType(type: unknown): boolean {
+  return type === 'Solid' || type === 'Mesh';
+}
+
 export type Axis = 'x'|'y'|'z';
 export function isAxis(obj: any): obj is Axis {
   return obj === 'x' || obj === 'y' || obj === 'z';
 }
 
 /** In-plane orientation of a Shape: aligned with the X axis ('horizontal')
- *  or with the Y axis ('vertical'). See Mesh/Curve.rotateToOrtho(). */
+ *  or with the Y axis ('vertical'). See Solid/Curve.rotateToOrtho(). */
 export type OrientationXY = 'horizontal'|'vertical';
 export function isOrientationXY(obj: any): obj is OrientationXY {
   return obj === 'horizontal' || obj === 'vertical';
@@ -295,7 +301,7 @@ export function resolveProjectionOptions(options: Partial<ResolvedProjectionOpti
  * (`elevation('front', true, false, 16, 10)`).
  *
  * @param args  The arguments after the view ones.
- * @param usage The call, for the error message: like `'Mesh.elevation(from, options)'`.
+ * @param usage The call, for the error message: like `'Solid.elevation(from, options)'`.
  */
 export function resolveProjectionArgs(args: any[], usage: string): ResolvedProjectionOptions
 {
@@ -317,9 +323,9 @@ export function resolveProjectionArgs(args: any[], usage: string): ResolvedProje
 //// SCENE NODE TYPES ////
 
 /** Union of all concrete shape classes usable in a SceneNode. */
-// Note: the concrete Mesh / Curve types are imported by SceneNode.ts at runtime;
+// Note: the concrete Solid / Curve types are imported by SceneNode.ts at runtime;
 // here we use a structural alias to avoid circular imports.
-export type ShapeType = 'Mesh' | 'Curve' | 'unknown';
+export type ShapeType = 'Solid' | 'Curve' | 'unknown';
 
 /** Plain-object representation of a SceneNode for inspection/serialisation. */
 export interface SceneNodeGraphNode

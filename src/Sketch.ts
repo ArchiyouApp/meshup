@@ -76,7 +76,7 @@ import { Vector } from "./Vector";
 import { Point } from "./Point";
 import { ShapeCollection } from "./ShapeCollection";
 import { Curve } from "./Curve";
-import { Mesh, getCsgrs } from "./index";
+import { Solid, getCsgrs } from "./index";
 import { Importer } from "./Importer";
 
 import type { Axis, BasePlane, PointLike } from "./types";
@@ -200,10 +200,10 @@ export class Sketch
         finally { sk?.free?.(); }
     }
 
-    /** Render `text` as a **solid extruded Mesh** from outline glyphs. Glyph
+    /** Render `text` as a **solid extruded Solid** from outline glyphs. Glyph
      *  counters (the hole in O/e/A …) are preserved because extrusion happens in
      *  the kernel before the geometry is flattened to curves. */
-    static textSolid(text: string, opts: TextSolidOptions): Mesh
+    static textSolid(text: string, opts: TextSolidOptions): Solid
     {
         if(typeof text !== 'string'){ throw new Error('Sketch.textSolid(): `text` must be a string.'); }
         if(!opts?.font){ throw new Error('Sketch.textSolid(): `opts.font` (TTF/OTF bytes) is required.'); }
@@ -219,7 +219,7 @@ export class Sketch
             sk = SketchJsCls.text(text, bytes, size, null);
             if(sk.isEmpty()){ throw new Error('no renderable glyphs (empty text or font missing glyphs).'); }
             // Extrude in-kernel along +Z so counters stay holes.
-            const mesh = Mesh.from(sk.extrudeVector(Vector.from(0, 0, depth).inner()));
+            const mesh = Solid.from(sk.extrudeVector(Vector.from(0, 0, depth).inner()));
             return Sketch._alignMesh(mesh, opts.align);
         }
         catch(e)
@@ -285,7 +285,7 @@ export class Sketch
     }
 
     /** Shift a text mesh horizontally for the requested alignment (default left). */
-    private static _alignMesh(mesh: Mesh, align: TextAlign = 'left'): Mesh
+    private static _alignMesh(mesh: Solid, align: TextAlign = 'left'): Solid
     {
         const dx = Sketch._alignShiftX(mesh.bbox(), align);
         if(dx !== 0){ mesh.translate(dx, 0, 0); }
@@ -604,14 +604,14 @@ export class Sketch
         }
     }
 
-    /** Extrude all closed curves in this sketch into a solid Mesh.
+    /** Extrude all closed curves in this sketch into a solid Solid.
      *  Extrudes `length` units along the specified `direction` and places the
      *  result correctly in world space for any sketch plane orientation.
      *
      *  @param length - Extrusion distance (positive = along sketch normal)
-     *  @returns Mesh in world space, or null if no closed curves are present.
+     *  @returns Solid in world space, or null if no closed curves are present.
      */
-    extrude(length: number): Mesh | null
+    extrude(length: number): Solid | null
     {
         const sketch = this._toSketchJs();
         
@@ -621,7 +621,7 @@ export class Sketch
             return null;
         }
         // Always extrude along local +Z; _alignMeshToWorld rotates that into the correct world normal.
-        const mesh = Mesh.from(sketch.extrudeVector(Vector.from(0, 0, length).inner()));
+        const mesh = Solid.from(sketch.extrudeVector(Vector.from(0, 0, length).inner()));
         return this._alignMeshToWorld(mesh);
     }
 
@@ -630,9 +630,9 @@ export class Sketch
      *  path point and oriented perpendicular to the path tangent.
      *
      *  @param path - 3D path Curve to sweep along (world space)
-     *  @returns Mesh, or null on error.
+     *  @returns Solid, or null on error.
      */
-    sweep(path: Curve): Mesh | null
+    sweep(path: Curve): Solid | null
     {
        if(!(path instanceof Curve)){ throw new Error('Sketch.sweep(): Invalid path. Please supply a Curve instance.'); }
        const points = path.tessellate().map(p => p.toPoint3Js()); // make sure path is tessellated for sweep
@@ -644,12 +644,12 @@ export class Sketch
            return null;
        }
        // SketchJs sweeps along +Z, rotate to align with sketch normal
-       const mesh = Mesh.from(sketch.sweep(points));
+       const mesh = Solid.from(sketch.sweep(points));
        // align mesh from sketch plan into world space
        return this._alignMeshToWorld(mesh);
     }
 
-    /** Revolve the sketch's closed curves around an axis into a solid Mesh — the lathe.
+    /** Revolve the sketch's closed curves around an axis into a solid Solid — the lathe.
      *
      *  The axis is given in the sketch's own 2D coordinates, like everything else drawn here:
      *  `revolve(360, [0, 0], [0, 1])` turns about the sketch's vertical centre line. Left out,
@@ -664,9 +664,9 @@ export class Sketch
      *  @param axisStart  Axis base point in sketch coordinates — or the direction, when `axisEnd` is left out.
      *  @param axisEnd    A second point on the axis, in sketch coordinates.
      *  @param segments   Facets around the sweep (default: the quality profile's count for a full turn).
-     *  @returns Mesh in world space, or null if there are no closed curves to revolve.
+     *  @returns Solid in world space, or null if there are no closed curves to revolve.
      */
-    revolve(angle: number = 360, axisStart?: PointLike|Axis, axisEnd?: PointLike|Axis, segments?: number): Mesh | null
+    revolve(angle: number = 360, axisStart?: PointLike|Axis, axisEnd?: PointLike|Axis, segments?: number): Solid | null
     {
         this.combine();
         const closed = this._curves.curves().toArray().filter( c => c.isClosed());
@@ -686,14 +686,14 @@ export class Sketch
         return mesh ? this._alignMeshToWorld(mesh) : null;
     }
 
-    loft(other: Sketch): Mesh | null
+    loft(other: Sketch): Solid | null
     {
         // TODO: is this really practical?
         throw new Error('Sketch.loft(): Not implemented yet!');
         return null;
     }
 
-    private _alignMeshToWorld(mesh: Mesh): Mesh
+    private _alignMeshToWorld(mesh: Solid): Solid
     {
         // align mesh from sketch plan into world space
         mesh.alignByPoints(

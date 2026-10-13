@@ -8,7 +8,7 @@
 
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initAsync } from '../../src/index';
-import { Mesh } from '../../src/Mesh';
+import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
 import { Vertex } from '../../src/Vertex';
 import { Polygon } from '../../src/Polygon';
@@ -50,7 +50,7 @@ describe('Shape.toString() scene membership', () =>
 {
     const shapes = () => (
     {
-        Mesh: Mesh.Box(10),
+        Solid: Solid.Box(10),
         Curve: Curve.Line([0, 0, 0], [10, 0, 0]),
         Vertex: new Vertex([1, 2, 3]),
         Polygon: Polygon.from([[0, 0, 0], [10, 0, 0], [10, 10, 0]]),
@@ -79,7 +79,7 @@ describe('Shape.toString() scene membership', () =>
 
     it('goes back to <not in scene> after removeFromScene()', () =>
     {
-        const m = Mesh.Box(10);
+        const m = Solid.Box(10);
         new SceneNode('root').addShape(m);
         expect(m.toString()).toContain('node={');
 
