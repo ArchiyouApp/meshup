@@ -547,8 +547,50 @@ describe('Mesh.trim()', () =>
     });
 });
 
+describe('Mesh.area()', () =>
+{
+    /** The face-by-face sum area() used to take: every face a Polygon, every corner a Vertex. */
+    const polygonSum = (m: Mesh) => m.polygons().toArray().reduce((sum, p) => sum + p.area(), 0);
+
+    it('is the surface of a cuboid', () =>
+    {
+        expect(Mesh.Cuboid(10, 20, 30).area()).toBeCloseTo(2 * (10 * 20 + 10 * 30 + 20 * 30), 6);
+    });
+
+    it('counts the walls of a hole and leaves out what the hole took', () =>
+    {
+        // 600 of the cube, minus two 4x4 openings, plus four 4x10 walls inside
+        const holed = Mesh.Cube(10).subtract(Mesh.Cuboid(4, 4, 20)) as Mesh;
+        expect(holed.area()).toBeCloseTo(600 - 2 * 16 + 4 * 40, 4);
+    });
+
+    it('matches the sum over the faces on a curved mesh', () =>
+    {
+        const sphere = Mesh.Sphere(10);
+        expect(sphere.area()).toBeCloseTo(polygonSum(sphere), 6);
+    });
+
+    it('is 0 for an empty mesh', () =>
+    {
+        // two cubes that do not meet
+        const nothing = Mesh.Cube(10).intersection(Mesh.Cube(10).move(100, 0, 0)) as Mesh;
+        expect(nothing.area()).toBe(0);
+    });
+});
+
 describe('center() of a flat mesh', () =>
 {
+    it('is the area centroid of a concave face', () =>
+    {
+        // an L of 300 in area: a 20x10 strip with a 10x10 block on its left half. Its first
+        // corner, (20, 10), does not see the whole face, so a fan from it counts outside area.
+        const l = new Polygon([[20, 10, 0], [10, 10, 0], [10, 20, 0], [0, 20, 0], [0, 0, 0], [20, 0, 0]]).toMesh();
+        const [x, y, z] = l.center().toArray();
+        expect(x).toBeCloseTo(25 / 3, 6);
+        expect(y).toBeCloseTo(25 / 3, 6);
+        expect(z).toBeCloseTo(0, 6);
+    });
+
     it('is the area centroid, not the undefined mass centre', () =>
     {
         // a right triangle as a zero-volume mesh: centroid at the mean of its corners

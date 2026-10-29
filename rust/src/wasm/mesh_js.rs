@@ -753,6 +753,20 @@ impl MeshJs {
         obj.into()
     }
 
+    //// +MESHUP
+    /// Surface area: the sum of the areas of all polygons.
+    #[wasm_bindgen(js_name = area)]
+    pub fn area(&self) -> Real {
+        self.inner.surface_area()
+    }
+
+    //// +MESHUP
+    /// Area-weighted centroid of the surface, or undefined when it has no area.
+    #[wasm_bindgen(js_name = areaCentroid)]
+    pub fn area_centroid(&self) -> Option<Point3Js> {
+        self.inner.area_centroid().map(Point3Js::from)
+    }
+
     // Subdivision
     #[wasm_bindgen(js_name = subdivideTriangles)]
     pub fn subdivide_triangles(&self, levels: u32) -> Self {

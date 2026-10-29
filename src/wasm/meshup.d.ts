@@ -514,6 +514,10 @@ export class MeshJs {
   isConvex(): boolean;
   toSTLASCII(): string;
   vertexCount(): number;
+  /**
+   * Area-weighted centroid of the surface, or undefined when it has no area.
+   */
+  areaCentroid(): Point3Js | undefined;
   static fromPolygons(polygons: PolygonJs[], metadata: any): MeshJs;
   minkowskiSum(other: MeshJs): MeshJs;
   sameMetadata(other: MeshJs): boolean;
@@ -701,6 +705,10 @@ export class MeshJs {
   static egg(width: number, length: number, revolve_segments: number, outline_segments: number, metadata: any): MeshJs;
   constructor();
   xor(other: MeshJs): MeshJs;
+  /**
+   * Surface area: the sum of the areas of all polygons.
+   */
+  area(): number;
   static cube(size: number, metadata: any): MeshJs;
   static arrow(start: Point3Js, direction: Vector3Js, segments: number, orientation: boolean, metadata: any): MeshJs;
   clone(): MeshJs;
@@ -1206,6 +1214,8 @@ export interface InitOutput {
   readonly matrix4js_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
   readonly matrix4js_toArray: (a: number) => [number, number];
   readonly meshjs_adaptiveRefine: (a: number, b: number, c: number, d: number) => number;
+  readonly meshjs_area: (a: number) => number;
+  readonly meshjs_areaCentroid: (a: number) => number;
   readonly meshjs_arrow: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly meshjs_boundingBox: (a: number) => any;
   readonly meshjs_center: (a: number) => number;

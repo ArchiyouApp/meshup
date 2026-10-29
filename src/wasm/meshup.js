@@ -1742,6 +1742,14 @@ export class MeshJs {
         return ret >>> 0;
     }
     /**
+     * Area-weighted centroid of the surface, or undefined when it has no area.
+     * @returns {Point3Js | undefined}
+     */
+    areaCentroid() {
+        const ret = wasm.meshjs_areaCentroid(this.__wbg_ptr);
+        return ret === 0 ? undefined : Point3Js.__wrap(ret);
+    }
+    /**
      * @param {PolygonJs[]} polygons
      * @param {any} metadata
      * @returns {MeshJs}
@@ -2440,6 +2448,14 @@ export class MeshJs {
         _assertClass(other, MeshJs);
         const ret = wasm.meshjs_xor(this.__wbg_ptr, other.__wbg_ptr);
         return MeshJs.__wrap(ret);
+    }
+    /**
+     * Surface area: the sum of the areas of all polygons.
+     * @returns {number}
+     */
+    area() {
+        const ret = wasm.meshjs_area(this.__wbg_ptr);
+        return ret;
     }
     /**
      * @param {number} size

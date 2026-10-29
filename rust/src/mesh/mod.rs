@@ -539,6 +539,36 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S>
         )
     }
 
+    /// +MESHUP
+    /// Surface area: the sum of the areas of all polygons, holes left out.
+    pub fn surface_area(&self) -> Real {
+        self.area_moments().0
+    }
+
+    /// +MESHUP
+    /// Area-weighted centroid of the surface, or `None` when it has no area. A flat mesh has
+    /// no volume and so no centre of mass: this is its centre.
+    pub fn area_centroid(&self) -> Option<Point3<Real>> {
+        let (area, moment) = self.area_moments();
+        (area > 0.0).then(|| Point3::from(moment / area))
+    }
+
+    /// +MESHUP
+    /// Total area and first moment of area (each triangle's area times its centroid), in one
+    /// pass over the triangulation of every polygon. Triangulated, not fanned from a corner:
+    /// a fan from a corner that does not see the whole of a concave face covers area outside
+    /// it, and a fan knows nothing of holes.
+    fn area_moments(&self) -> (Real, Vector3<Real>) {
+        self.polygons
+            .iter()
+            .flat_map(|poly| poly.triangulate())
+            .fold((0.0, Vector3::zeros()), |(area, moment), [a, b, c]| {
+                let (a, b, c) = (a.position, b.position, c.position);
+                let t = 0.5 * (b - a).cross(&(c - a)).norm();
+                (area + t, moment + (a.coords + b.coords + c.coords) * (t / 3.0))
+            })
+    }
+
     /// Create a Rapier rigid body + collider from this Mesh, using
     /// an axis-angle `rotation` in 3D (the vector’s length is the
     /// rotation in radians, and its direction is the axis).

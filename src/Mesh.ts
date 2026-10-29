@@ -484,36 +484,22 @@ export class Mesh extends Shape
         return new Point(props?.centerOfMass);
     }
 
-    /** Area-weighted centroid of all polygons (each polygon fan-triangulated), or null for an
-     *  empty mesh. */
+    /** Area-weighted centroid of the surface (computed in the kernel), or null for an empty
+     *  mesh. */
     _areaCentroid(): Point | null
     {
-        let ax = 0, ay = 0, az = 0, total = 0;
-        this.polygons().toArray().forEach(poly =>
-        {
-            const v = poly.vertices().toArray();
-            for (let i = 1; i + 1 < v.length; i++)
-            {
-                const [a, b, c] = [v[0], v[i], v[i + 1]];
-                const ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
-                const wx = c.x - a.x, wy = c.y - a.y, wz = c.z - a.z;
-                const area = 0.5 * Math.hypot(uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx);
-                if (!(area > 0)) continue;
-                ax += area * (a.x + b.x + c.x) / 3;
-                ay += area * (a.y + b.y + c.y) / 3;
-                az += area * (a.z + b.z + c.z) / 3;
-                total += area;
-            }
-        });
-        return total > 0 ? new Point(ax / total, ay / total, az / total) : null;
+        const centroid = this.inner()?.areaCentroid();
+        return centroid ? new Point(centroid) : null;
     }
 
-    
-
-    /** Surface area — sum of all polygon face areas */
+    /** Surface area: the sum of the polygon areas, computed in the kernel.
+     *
+     *  Through polygons() every face became a Polygon and every corner a Vertex, each with an
+     *  id and a style, only to be added up: that was most of the time of measuring a model
+     *  of many parts. */
     area(): number
     {
-        return this.polygons().toArray().reduce((sum, poly) => sum + poly.area(), 0);
+        return this.inner()?.area() ?? 0;
     }
 
     /** No polygons at all: the result of merging nothing, or a failed operation. */
