@@ -863,7 +863,9 @@ export class OBbox
         };
     }
 
-    private static quaternionFromRotationMatrix(
+    /** The quaternion of a rotation matrix, given row by row (a frame's axes as the rows turn that frame onto
+     *  world XYZ). Public so the brep kernel's OBbox can answer toOrthoQuaternion() the same way. */
+    static quaternionFromRotationMatrix(
         m00: number, m01: number, m02: number,
         m10: number, m11: number, m12: number,
         m20: number, m21: number, m22: number,
