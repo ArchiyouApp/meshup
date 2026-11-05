@@ -482,6 +482,32 @@ export abstract class Shape
 
     alpha(a: number): this { return this.opacity(a); }
 
+    /** Say what this shape is, for drawings: `stud.addClass('wood')`. A drawing writes the
+     *  classes on its line work, and the styler draws them (`styler.set('.cut.wood', { weight: 0.5 })`).
+     *  Classes travel to the sections and elevations made of the shape. */
+    addClass(...names: string[]): this
+    {
+        this.style.addClass(...names);
+        return this;
+    }
+
+    removeClass(...names: string[]): this
+    {
+        this.style.removeClass(...names);
+        return this;
+    }
+
+    /** The classes of this shape (see {@link addClass}). Those of its layers are added when it is drawn. */
+    classes(): string[]
+    {
+        return this.style.classes;
+    }
+
+    hasClass(name: string): boolean
+    {
+        return this.style.hasClass(name);
+    }
+
     /**
      * Line width in SCREEN PIXELS — not model units.
      *

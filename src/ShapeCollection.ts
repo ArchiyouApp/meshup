@@ -949,6 +949,25 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     alpha(a: number): this { return this.opacity(a); }
 
+    /** Give every Shape in this Collection these classes, for drawings. See {@link Shape.addClass}. */
+    addClass(...names: string[]): this
+    {
+        this._shapes.forEach(shape => (shape as any).addClass?.(...names));
+        return this;
+    }
+
+    removeClass(...names: string[]): this
+    {
+        this._shapes.forEach(shape => (shape as any).removeClass?.(...names));
+        return this;
+    }
+
+    /** Every class that a Shape in this Collection has, once each. */
+    classes(): string[]
+    {
+        return [...new Set((this._shapes as any[]).flatMap(shape => shape.classes?.() ?? []))];
+    }
+
     /** Separate every Mesh in this collection into its geometrically isolated parts, returning
      *  a flat collection (non-mesh shapes and already-connected meshes pass through unchanged).
      *  Mesh.subtract()/difference() already auto-separate, so this is mainly for chaining and
@@ -2411,7 +2430,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
                 },
                 new ShapeCollection<Mesh>(...others));
             ShapeCollection._inheritStyle(cut, group[0]);
-            const cutLines = cut.group('cut');
+            const cutLines = cut._groups.has('cut') ? cut.group('cut') : undefined; // this style may not reach the plane
             if (cutLines?.length) result.addGroup('cut', cutLines);
             ShapeCollection._appendProjectionGroups(result, cut);
         });
