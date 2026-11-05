@@ -153,6 +153,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
                 );
             }
         });
+        // the outline of a projection was called 'silhouette' before: `sect.silhouette` still works
+        const outlines = this._groups.get('outline');
+        if (outlines && !this._groups.has('silhouette') && ((this as any).silhouette === undefined || this._fakeGroupKeys.has('silhouette')))
+        {
+            (this as any).silhouette = outlines;
+            this._fakeGroupKeys.add('silhouette');
+        }
     }
 
     //// STATIC FACTORIES ////
@@ -309,7 +316,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     /** Tag shapes that are already in this collection as members of a named
      *  group, without adding duplicate references to the parent.
      *
-     *  Use this for cross-cutting classifications (e.g. silhouette ⊂ visible)
+     *  Use this for cross-cutting classifications (e.g. outline ⊂ visible)
      *  where the group is a logical subset of shapes already tracked elsewhere.
      *  The caller is responsible for ensuring the shapes are already in `this`.
      */
@@ -339,6 +346,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  (see add()). Also reachable as a shortcut property: `table.spine`. */
     getGroup(groupName: string): ShapeCollection<S> | undefined
     {
+        // the outline of a projection was called 'silhouette' before: scripts that ask for it still get it
+        if (groupName === 'silhouette' && !this._groups.has('silhouette')) groupName = 'outline';
         const g = this._groups.get(groupName);
         if (!g) { console.error(`ShapeCollection::getGroup(): No group '${groupName}'. Available:`, Array.from(this._groups.keys())); return undefined; }
         return g;
@@ -378,7 +387,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     /** Only the Shapes that are visible (not hidden with hide())
      *
      *  NOT named visible(): projections (iso/elevation/section) put their line
-     *  work in groups called 'visible', 'hidden' and 'silhouette', and a group
+     *  work in groups called 'visible', 'hidden' and 'outline', and a group
      *  is reachable as a shortcut property (iso.visible). A method of the same
      *  name would occupy that property and force the shortcut to be skipped.
      *  `only-` also disambiguates from the two other meanings the word carries:
@@ -1620,7 +1629,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  a copy of the whole scene per touching pair; that rebuilt the occluder
      *  set every time and was most of the cost of a drawing with many touching
      *  boxes. The outline edges of such a face are boundary edges, so as
-     *  polylines they come out as the same visible, hidden and silhouette line
+     *  polylines they come out as the same visible, hidden and outline line
      *  work. Returns an UNFLATTENED collection, like
      *  {@link _projectLinearShapes}.
      */
@@ -1673,16 +1682,16 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     private static _appendProjectionGroups(target: ShapeCollection<any>, projected: ShapeCollection<any>): void
     {
-        // Read _groups directly: a projection without hidden lines or silhouettes is normal,
+        // Read _groups directly: a projection without hidden lines or outlines is normal,
         // and group() reports a missing group as an error
         const hidden = projected._groups.get('hidden');
         const visible = projected._groups.get('visible');
-        const silhouette = projected._groups.get('silhouette');
+        const outlines = projected._groups.get('outline');
         if (hidden?.length) target.addGroup('hidden', hidden);
         if (visible?.length) target.addGroup('visible', visible);
-        // silhouette is a subset of visible — use tagGroup so the same Curve
+        // the outline is a subset of visible — use tagGroup so the same Curve
         // objects aren't pushed into _shapes a second time (addGroup would duplicate them)
-        if (silhouette?.length) target.tagGroup('silhouette', silhouette);
+        if (outlines?.length) target.tagGroup('outline', outlines);
     }
 
     /** Decide which HLR algorithm this projection will actually run.
@@ -2237,7 +2246,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *               'bottom', 'xy', 'xz', 'yz') or a direction like `[1, -1, 0]`.
      *  @param options Projection settings, like `{ hiddenLines: true }` or `{ method: 'raycast' }`
      *    — see {@link ProjectionOptions}.
-     *  @returns ShapeCollection with groups 'visible', 'silhouette' (outer contour, subset of
+     *  @returns ShapeCollection with groups 'visible', 'outline' (outer contour, subset of
      *    'visible'), and 'hidden' (only with `hiddenLines`).
      */
     elevation(from?: PointLike | BasePlane, options?: ProjectionOptions): ShapeCollection<any>;
@@ -2259,7 +2268,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *               'bottom', 'xy', 'xz', 'yz') or a direction like `[1, -1, 0]`.
      *  @param options `featureAngle` and `includeHiddenShapes` — see {@link ProjectionOptions}.
      *    The others are about hiding lines, and have nothing to act on here.
-     *  @returns ShapeCollection of the lines, with the outline tagged as group 'silhouette'.
+     *  @returns ShapeCollection of the lines, with the outline tagged as group 'outline'.
      */
     project(from?: PointLike | BasePlane, options?: ProjectionOptions): ShapeCollection<any>;
     @colSceneLayer('projection')
@@ -2308,20 +2317,20 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
             ShapeCollection._inheritStyle(projected, group[0]);
             result.add(projected.toArray());
-            const silhouette = projected._groups.get('silhouette');
-            if (silhouette?.length) result.tagGroup('silhouette', silhouette);
+            const outlines = projected._groups.get('outline');
+            if (outlines?.length) result.tagGroup('outline', outlines);
         });
         // The flatten takes the normal toward the viewer; the reversed one gives a mirror image
         return Mesh._flattenProjectionToScreen(result, viewDir);
     }
 
-    /** The lines of a plain projection as Curves, the outline tagged 'silhouette'. Lines that
+    /** The lines of a plain projection as Curves, the outline tagged 'outline'. Lines that
      *  continue each other are joined (see Mesh._joinPolylines), outline and others apart. */
     private static _flatLinesToCurves(lines: Array<Array<[number, number, number]>>, outlineIndices: Uint32Array): ShapeCollection<any>
     {
         const outline = new Set<number>(outlineIndices);
         const result = new ShapeCollection<any>();
-        const silhouette = new ShapeCollection<any>();
+        const outlines = new ShapeCollection<any>();
         [true, false].forEach(isOutline =>
             Mesh._joinPolylines(lines.map((line, i) => (outline.has(i) === isOutline) ? line : null))
                 .map(chain => Mesh._polylineToCurve(chain.points))
@@ -2329,9 +2338,9 @@ export class ShapeCollection<S extends CollectableShape = Shape>
                 {
                     if (!curve) return;
                     result.add(curve);
-                    if (isOutline) silhouette.add(curve);
+                    if (isOutline) outlines.add(curve);
                 }));
-        if (silhouette.length) result.tagGroup('silhouette', silhouette);
+        if (outlines.length) result.tagGroup('outline', outlines);
         return result;
     }
 
@@ -2490,7 +2499,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             // groups win. The per-shape provenance tags the per-shape
             // strategies add (`shape-0`, `shape-1`, …) are registered last and
             // would otherwise displace the group that says how to *draw* the
-            // curve — 'fill', 'hidden', 'silhouette'. Provenance is for
+            // curve — 'fill', 'hidden', 'outline'. Provenance is for
             // grouping and ordering, not styling, so it only fills a gap.
             const isProvenance = /^shape-\d+$/.test(groupName);
             groupCol.toArray().forEach(shape =>

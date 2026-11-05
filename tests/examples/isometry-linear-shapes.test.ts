@@ -11,6 +11,7 @@
  * wireframe stays dashed.
  */
 import { beforeAll, describe, it, expect } from 'vitest';
+import { segmentCount, segmentLengths, segmentsText } from '../helpers/segments';
 import { initAsync } from '../../src/index';
 import { Mesh } from '../../src/Mesh';
 import { Curve } from '../../src/Curve';
@@ -73,7 +74,7 @@ describe('isometry: linear shapes', () =>
         // A collection of only Meshes must be unaffected by any of this.
         const solids = new ShapeCollection<any>(Mesh.Box(100, 100, 100), Mesh.Box(50, 50, 50).move(200));
         const iso = solids._iso([-1, -1, 1]);
-        expect(iso.length).toBe(18); // two boxes, 9 visible edges each
+        expect(segmentCount(iso)).toBe(18); // two boxes, 9 visible edges each
     });
 
     it('hides a curve where a solid stands in front of it', async () =>

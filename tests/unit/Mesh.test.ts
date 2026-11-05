@@ -83,10 +83,29 @@ describe('Projected line work of a Mesh', () =>
         expect(top.group('hidden')!.length).toBe(1);
     });
 
-    it('keeps the corners of a box as separate lines', () =>
+    it('joins the outline of a box into one closed polyline, corners and all', () =>
     {
+        // one polyline: a real line join at each corner, and in CAD one outline selected whole
         const top = Mesh.Box(100, 50, 10).elevation('top');
-        expect(top.group('visible')!.length).toBe(4);
+        const visible = top.group('visible')!.toArray() as Curve[];
+        expect(visible.length).toBe(1);
+        expect(visible[0].isClosed()).toBe(true);
+        expect(visible[0].controlPoints().length).toBe(4);   // a closed Curve does not repeat its first point
+        expect(visible[0].length()).toBeCloseTo(300, 6);
+    });
+
+    it('stops a line where three meet: which two belong together, the lines do not say', () =>
+    {
+        // a narrower box against the side of a wider one: its corners make T-junctions at (50, ±15)
+        const top = new ShapeCollection<any>(Mesh.Box(100, 50, 10), Mesh.Box(50, 30, 10).move(75, 0, 0)).elevation('top');
+        const atJunction = (p: any) => Math.abs(Math.abs(p.x) - 50) < 1e-6 && Math.abs(Math.abs(p.y) - 15) < 1e-6;
+        top.group('visible')!.toArray().forEach((c: any) =>
+        {
+            const pts = c.controlPoints();
+            // a junction can end a line, never sit in the middle of one
+            const inner = c.isClosed() ? pts : pts.slice(1, -1);
+            expect(inner.some(atJunction)).toBe(false);
+        });
     });
 });
 

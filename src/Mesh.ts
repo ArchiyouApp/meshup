@@ -35,13 +35,6 @@ import { TOLERANCE, EDGE_PROJECTION_DEFAULTS, EDGE_PROJECTION_LIMITS,
     ISOMETRY_HLR_STRATEGY_DEFAULT, ISOMETRY_CAM_DEFAULT, BASE_PLANE_NAME_TO_PLANE } from './constants';
 import { getQuality } from './quality';
 
-/** Largest turn, in degrees, at which two projected lines that meet end to end
- *  are joined into one polyline (see Mesh._joinPolylines). A tessellated circle
- *  turns a few degrees per segment, a box corner 60 degrees or more in the usual
- *  views. Joining only changes how line work is grouped into Curves, never where
- *  the lines are. */
-const PROJECTION_JOIN_MAX_TURN = 30;
-
 export class Mesh extends Shape
 {
     // inherits: _id, type, _node, style, metadata from Shape
@@ -2580,7 +2573,7 @@ export class Mesh extends Shape
      * @return ShapeCollection with groups:
      *   - `'visible'`: unoccluded projected edges
      *   - `'hidden'`: occluded edges (only present when `hiddenLines` is set)
-     *   - `'silhouette'`: subset of `'visible'` forming the outer contour
+     *   - `'outline'`: subset of `'visible'` forming the outer contour
      *     (silhouette + open-mesh boundary edges) as classified by the Rust HLR
      */
     isometry(cam?: PointLike, options?: ProjectionOptions): ShapeCollection<Shape>;
@@ -2688,11 +2681,11 @@ export class Mesh extends Shape
     }
 
     /** The line work of a WASM hidden-line result as Curves: a 'hidden' and a
-     *  'visible' group, and the 'silhouette' subset of 'visible' (outer contour)
+     *  'visible' group, and the 'outline' subset of 'visible' (outer contour)
      *  tagged on the same Curve instances, so the shape count does not grow.
      *
      *  The solver returns one polyline per mesh edge; the ones that continue each
-     *  other smoothly are joined first (see {@link _joinPolylines}). Silhouette
+     *  other are joined first (see {@link _joinPolylines}). Silhouette
      *  and other visible lines are joined apart, so each Curve is wholly one or
      *  the other, and they keep the order the solver gave them. */
     static _projectionToShapeCollection(r: {
@@ -2716,16 +2709,16 @@ export class Mesh extends Shape
             Mesh._joinPolylines(r.hiddenPolylines()).map(c => c.points)));
 
         const visibleCurves = new ShapeCollection<Shape>();
-        const silhouette = new ShapeCollection<Shape>();
+        const outlines = new ShapeCollection<Shape>();
         chains.forEach(c =>
         {
             const curve = Mesh._polylineToCurve(c.points);
             if (!curve) return;
             visibleCurves.add(curve);
-            if (c.outline) silhouette.add(curve);
+            if (c.outline) outlines.add(curve);
         });
         result.addGroup('visible', visibleCurves);
-        if (silhouette.length) result.tagGroup('silhouette', silhouette);
+        if (outlines.length) result.tagGroup('outline', outlines);
         return result;
     }
 
@@ -2733,11 +2726,16 @@ export class Mesh extends Shape
      *
      *  The hidden-line solvers return one polyline per mesh edge, so a
      *  tessellated circle comes out as dozens of separate lines, each its own
-     *  Curve and its own SVG path. Where exactly two polylines end at the same
-     *  point and the line turns less than {@link PROJECTION_JOIN_MAX_TURN}
-     *  degrees there, they are one smooth curve and are joined. Corners stay
-     *  separate lines, and so does any point where three or more lines meet.
-     *  Exact copies of a line are dropped first.
+     *  Curve and its own SVG path, and the outline of a box as four. Where exactly
+     *  two polylines end at the same point they are joined, at any angle: a corner
+     *  then gets a real line join instead of two line ends on top of each other, a
+     *  dash pattern runs on around it, and in CAD the outline is one polyline that
+     *  is selected whole. A chain that comes back to where it started is closed.
+     *  Where three or more lines meet each one stops: which two belong together,
+     *  the lines do not say. Exact copies of a line are dropped first.
+     *
+     *  Joining only changes how line work is grouped into Curves, never where the
+     *  lines are.
      *
      *  `null` entries are skipped, so a caller can join a subset and keep the
      *  indices. Returns each joined polyline with the index of the first
@@ -2783,32 +2781,16 @@ export class Mesh extends Shape
             });
         });
 
-        // Direction in which a polyline leaves one of its ends, towards the
-        // nearest of its points that does not coincide with that end.
-        const leaving = (e: End): P =>
-        {
-            const pts = e.atStart ? lines[e.line]! : [...lines[e.line]!].reverse();
-            const [x, y, z] = pts[0];
-            const to = pts.find(q => Math.hypot(q[0] - x, q[1] - y, q[2] - z) >= Curve.ZERO_LENGTH_TOLERANCE)!;
-            return [to[0] - x, to[1] - y, to[2] - z];
-        };
-
-        const cosMaxTurn = Math.cos(PROJECTION_JOIN_MAX_TURN * Math.PI / 180);
         const used = lines.map(p => p === null);
 
         // The line that continues the chain at its free end `e`, or null when
-        // that end meets no line, meets several, or turns too sharply.
+        // that end meets no line or meets several.
         const next = (e: End): End | null =>
         {
             const meeting = ends.get(key(endPoint(e)))!;
             if (meeting.length !== 2) return null;
             const other = meeting.find(m => m.line !== e.line || m.atStart !== e.atStart)!;
-            if (used[other.line]) return null;
-            // Both directions point away from the shared point: going straight
-            // on, they are opposite.
-            const [a, b] = [leaving(e), leaving(other)];
-            const cos = -(a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (Math.hypot(...a) * Math.hypot(...b));
-            return (cos >= cosMaxTurn) ? other : null;
+            return used[other.line] ? null : other;
         };
 
         // Follow the chain from the free end `e` of `line`, marking every line it
@@ -2899,6 +2881,14 @@ export class Mesh extends Shape
         moveTo(x: number, y: number, z: number): T;
     }>(projection: T, planeNormal: Vector): T
     {
+        // what each line is in the drawing goes on the line as a class too, so it stays known
+        // where the groups are not: in the scene, an export, a copy (see Mesh.PROJECTION_GROUPS)
+        if (projection instanceof ShapeCollection)
+        {
+            Mesh.PROJECTION_GROUPS.forEach(name =>
+                projection._groups.get(name)?.forEach((s: any) => s?.style?.addClass?.(name)));
+        }
+
         // Flatten onto XY plane (Z = [0,0,1]) via shortest-arc rotation
         const flattenRot = planeNormal.rotationBetween(Vector.from(0, 0, 1));
         const flattened = projection.rotateQuaternion(flattenRot);
@@ -2934,6 +2924,11 @@ export class Mesh extends Shape
         return screen;
     }
 
+    /** The groups a projection sorts its line work in, by what a line is in the drawing: what a
+     *  section cuts, what is seen beyond it, its outer contour, what is hidden, and the opaque
+     *  faces of the painter strategy. Each line also carries its group's name as a class. */
+    static readonly PROJECTION_GROUPS = ['cut', 'visible', 'outline', 'hidden', 'fill'];
+
     /** Resolve a BasePlane name or PointLike direction into a normalized
      *  camera-side direction vector (pointing from origin toward viewer).
      *  For BasePlane, returns the plane's outward normal.
@@ -2959,7 +2954,7 @@ export class Mesh extends Shape
      *               'xy', 'xz', 'yz') or a `PointLike` direction.
      *  @param options Projection settings, like `{ hiddenLines: true }` or `{ method: 'raycast' }` — see {@link ProjectionOptions}.
      *    `includeHiddenShapes` and `fallback` have nothing to act on for a single mesh.
-     *  @returns ShapeCollection with groups 'visible', 'silhouette' (outer
+     *  @returns ShapeCollection with groups 'visible', 'outline' (outer
      *    contour, subset of 'visible'), and 'hidden' (only if requested).
      */
     elevation(from?: PointLike | BasePlane, options?: ProjectionOptions): ShapeCollection<Shape>;
@@ -2998,7 +2993,7 @@ export class Mesh extends Shape
      *                Default `[0,0,1]` (horizontal cut).
      *  @param options Projection settings, like `{ hiddenLines: true }` or `{ method: 'raycast' }` — see {@link ProjectionOptions}.
      *    `includeHiddenShapes` and `fallback` have nothing to act on for a single mesh.
-     *  @returns ShapeCollection with groups 'cut', 'visible', 'silhouette'
+     *  @returns ShapeCollection with groups 'cut', 'visible', 'outline'
      *    (outer contour, subset of 'visible'), and 'hidden' (if requested).
      *
      *  @remarks The underlying csgrs `slice()` drops Z when building the cut

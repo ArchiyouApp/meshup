@@ -483,7 +483,7 @@ export abstract class Shape
     alpha(a: number): this { return this.opacity(a); }
 
     /** Say what this shape is, for drawings: `stud.addClass('wood')`. A drawing writes the
-     *  classes on its line work, and the styler draws them (`styler.set('.cut.wood', { weight: 0.5 })`).
+     *  classes on its line work, and the styler draws them (`styler.set('cut.wood', { weight: 0.5 })`).
      *  Classes travel to the sections and elevations made of the shape. */
     addClass(...names: string[]): this
     {

@@ -61,6 +61,15 @@ versions may contain breaking changes.
 
 ### Changed
 
+- **Projections join their lines at corners too, and the outer contour is the group `outline`.**
+  Where exactly two lines of a projection meet they are now one polyline at any angle, not only
+  where they continue smoothly: the outline of a box is one closed Curve rather than four. A
+  corner gets a real line join, a dash pattern runs on around it, and in CAD an outline is one
+  polyline that is selected whole. Where three or more lines meet each line still stops. The
+  outer contour was the group `'silhouette'`; it is `'outline'` now, and `group('silhouette')`
+  and `col.silhouette` still reach it. Counting Curves no longer counts edges: a box seen from
+  the top is one Curve.
+
 - **Breaking: every projection takes one options object after its view arguments** — on
   `Mesh`, `Curve` and `ShapeCollection`:
 
