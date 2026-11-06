@@ -406,6 +406,27 @@ describe('Curve.offset()', () =>
         expect(offsetCircle!.center().distance(offsetCircle!.start())).toBeCloseTo(7, 6);
         expect(offsetCircle!.normal()!.isParallel(circle.normal()!)).toBe(true);
     });
+
+    it('offsets a straight line to the side its plane normal gives, like the brep kernel', () =>
+    {
+        // a shed roof line rising to the right: -10 with normal -Y is below it (normal × direction)
+        const roof = Curve.Line([0, 0, 0], [100, 0, 50]);
+        const below = roof.copy().offset(-10, null, [0, -1, 0])!;
+        const above = roof.copy().offset(10, null, [0, -1, 0])!;
+        const d = 10 / Math.hypot(100, 50);
+
+        expect(below.start().toArray()).toEqual([expect.closeTo(50 * d, 6), 0, expect.closeTo(-100 * d, 6)]);
+        expect(above.start().toArray()).toEqual([expect.closeTo(-50 * d, 6), 0, expect.closeTo(100 * d, 6)]);
+        expect(below.length()).toBeCloseTo(roof.length(), 6);
+    });
+
+    it('direction(true) is the unit direction, as in the brep kernel', () =>
+    {
+        const roof = Curve.Line([0, 0, 0], [300, 0, 400]);
+
+        expect(roof.direction().toArray()).toEqual([300, 0, 400]);
+        expect(roof.direction(true).toArray()).toEqual([expect.closeTo(0.6, 9), 0, expect.closeTo(0.8, 9)]);
+    });
 });
 
 describe('Curve.extend()', async () =>

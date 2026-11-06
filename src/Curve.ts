@@ -1536,10 +1536,12 @@ export class Curve extends Shape
         return bb.width() === 0 || bb.depth() === 0 || bb.height() === 0;
     }
 
-    /** Direction vector from start to end point (not normalised) */
-    direction(): Vector
+    /** Direction vector from start to end point; not normalised unless `normalize` is true
+     *  (as in the brep kernel) */
+    direction(normalize: boolean = false): Vector
     {
-        return Vector.from(this.end()).subtract(Vector.from(this.start()));
+        const v = Vector.from(this.end()).subtract(Vector.from(this.start()));
+        return normalize ? v.normalize() : v;
     }
 
     //// SELECT ////
@@ -2698,11 +2700,16 @@ export class Curve extends Shape
      *  - `'round'`: an arc of radius `|distance|` centred on the original corner.
      *  - `'smooth'`: mitred, but a corner sharper than ~29° — whose miter would run out past
      *    four times the offset distance — is arced instead. The historical behaviour.
+     *
+     *  `planeNormal` picks the side for a single straight line, as in the brep kernel: it offsets
+     *  along `planeNormal × direction`, so `line([0,0,0],[100,0,50]).offset(-10, null, [0,-1,0])`
+     *  goes down, below the line. Without it a line offsets to a fixed side (see below).
      */
     @sceneUpdate
-    offset(distance: number, cornerType:'sharp'|'round'|'smooth'='sharp'): Curve|null
+    offset(distance: number, cornerType:'sharp'|'round'|'smooth'|null='sharp', planeNormal?: PointLike): Curve|null
     {
         if(!this.isPlanar()){ throw new Error(`Curve::offset(): Cannot offset a non-planar curve!`);}
+        cornerType = cornerType ?? 'sharp';
 
         // NOTE: there used to be a fast path here that rebuilt a circle at radius + distance,
         // because the native offset returned a tessellated ring. The native offset now
@@ -2717,6 +2724,15 @@ export class Curve extends Shape
         if(!this.isClosed() && this.isStraight())
         {
             const t = this.direction().normalize();
+            if(planeNormal)
+            {
+                const d = Vector.from(planeNormal).cross(t);
+                if(d.length() > 1e-6)
+                {
+                    const off = d.normalize().scale(distance);
+                    return this.translate(off.x, off.y, off.z);
+                }
+            }
             const n = this.normal();
             if(n && n.length() > 1e-6)
             {
