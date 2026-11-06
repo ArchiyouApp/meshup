@@ -9,8 +9,8 @@
  * 
  */
 
-import type { CsgrsModule, Axis, BasePlane, OrientationXY, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions, HlrStrategy, ProjectionOptions, AxisDirection, RowFillDistribute } from './types';
-import { isAxis, isBasePlane, isPointLike, resolveProjectionArgs } from './types';
+import type { CsgrsModule, Axis, BasePlane, OrientationXY, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions, HlrStrategy, ProjectionOptions, ResolvedProjectionOptions, AxisDirection, RowFillDistribute } from './types';
+import { isAxis, isBasePlane, isPointLike, resolveProjectionArgs, resolveProjectionOptions } from './types';
 
 import { Curve, getCsgrs } from './index';
 import { Shape } from './Shape';
@@ -2983,7 +2983,8 @@ export class Mesh extends Shape
     }
 
     /** Architectural section: cut the mesh with a plane and project the
-     *  geometry beyond the cut onto that same plane with HLR.
+     *  geometry beyond the cut onto that same plane with HLR. What is on the
+     *  viewer's side of the plane is left out (a floor plan does not show the roof).
      *
      *  The viewer looks along `-normal` (so for the default normal=[0,0,1]
      *  the camera is above, looking down — the standard floor-plan setup).
@@ -3005,7 +3006,16 @@ export class Mesh extends Shape
     @sceneLayer('section')
     section(pivot: PointLike, normal: PointLike | BasePlane = [0, 0, 1], ...args: any[]): ShapeCollection<Shape>
     {
-        const o = resolveProjectionArgs(args, 'Mesh.section(pivot, normal, options)');
+        return this._section(pivot, normal, resolveProjectionArgs(args, 'Mesh.section(pivot, normal, options)'));
+    }
+
+    /** Internal section — skips scene management, like {@link _elevation}.
+     *
+     *  @param options The method and the {@link ProjectionOptions}; whatever is left out takes its
+     *    default from {@link PROJECTION_DEFAULTS}. */
+    _section(pivot: PointLike, normal: PointLike | BasePlane = [0, 0, 1], options: Partial<ResolvedProjectionOptions> = {}): ShapeCollection<Shape>
+    {
+        const o = resolveProjectionOptions(options);
         const sectionNormal = Mesh._resolveViewDirection(normal);
         const pivotPoint    = Point.from(pivot);
 
@@ -3106,6 +3116,7 @@ export class Mesh extends Shape
             for (const ring of rings)
             {
                 const pts3 = Mesh._liftPointsToSectionPlane(ring.points, normal, sectionOffset);
+                if (!Mesh._polylineHasLength(pts3)) continue; // a sliver of a slice: no line to draw
                 if (ring.closed && pts3.length >= 2)
                 {
                     // Ensure ring is explicitly closed

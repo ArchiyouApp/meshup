@@ -2395,7 +2395,16 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     @colSceneLayer('section')
     section(pivot: PointLike, normal: PointLike | BasePlane = [0, 0, 1], ...args: any[]): ShapeCollection<any>
     {
-        const o = resolveProjectionArgs(args, 'ShapeCollection.section(pivot, normal, options)');
+        return this._section(pivot, normal, resolveProjectionArgs(args, 'ShapeCollection.section(pivot, normal, options)'));
+    }
+
+    /** Internal section — skips scene management, like {@link _elevation}.
+     *
+     *  @param options The method and the {@link ProjectionOptions}; whatever is left out takes its
+     *    default from {@link PROJECTION_DEFAULTS}. */
+    _section(pivot: PointLike, normal: PointLike | BasePlane = [0, 0, 1], options: Partial<ResolvedProjectionOptions> = {}): ShapeCollection<any>
+    {
+        const o = resolveProjectionOptions(options);
         const foreign = this._foreignProjection('section', col => col._section(pivot, normal, o));
         if (foreign) return foreign;
 
@@ -2406,7 +2415,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         }
         if (meshes.length === 1)
         {
-            return meshes[0].section(pivot, normal, o);
+            return meshes[0]._section(pivot, normal, o);
         }
 
         // A section cuts the assembly into one solid, so there are no separate
@@ -2417,7 +2426,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         {
             const result = new ShapeCollection<Mesh>(...meshes)
                 ._merged() // scene-free merge: the source meshes must stay in the scene
-                .section(pivot, normal, o);
+                ._section(pivot, normal, o);
             ShapeCollection._inheritStyle(result, meshes[0]);
             return result;
         }

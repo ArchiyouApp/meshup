@@ -510,8 +510,8 @@ describe('Example: Isometric projection with hidden lines', async () =>
     it('collection section merges visible meshes and forwards samples', () =>
     {
         const seen: Array<{ samples: number; featureAngle: number; bboxWidth: number }> = [];
-        const original = (Mesh as any).prototype.section;
-        (Mesh as any).prototype.section = function (
+        const original = (Mesh as any).prototype._section; // the collection calls the scene-free one
+        (Mesh as any).prototype._section = function (
             pivot: any,
             normal: any,
             options: any,
@@ -536,7 +536,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         }
         finally
         {
-            (Mesh as any).prototype.section = original;
+            (Mesh as any).prototype._section = original;
         }
 
         expect(seen.length).toBe(1);

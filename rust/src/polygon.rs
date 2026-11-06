@@ -469,10 +469,14 @@ impl<S: Clone + Send + Sync> Polygon<S> {
                 .map(|i| [i, (i + 1) % n])
                 .collect();
 
-            // Build CDT with constraints in one go
-            let mut cdt = match ConstrainedDelaunayTriangulation::<SpadePoint2<Real>>::bulk_load_cdt(
+            // Build CDT with constraints in one go. The exact check above misses edges that only
+            // cross in floating point (slivers, as a plane split leaves them), and bulk_load_cdt()
+            // panics on those, which ends a WASM run: skip such an edge instead. The faces are
+            // filtered by the ring below, so a skipped edge does not let triangles out.
+            let mut cdt = match ConstrainedDelaunayTriangulation::<SpadePoint2<Real>>::try_bulk_load_cdt(
                 vertices_spade,
                 edges,
+                |_| {},
             ) {
                 Ok(cdt) => cdt,
                 Err(_) => {
