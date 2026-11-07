@@ -43,6 +43,9 @@ export abstract class Shape
     _modeler: any = null;
     /** Assigned material name (see the host's materials module). Set via `.material('wood')`. */
     _material?: string;
+    /** What this shape is as a part of a build, set by the host's products module. Opaque to
+     *  meshup: it only carries it to a copy, so a copied stud is still a stud. */
+    _product?: unknown;
     /** True when this shape's name was inherited from a copy() source; the host auto-namer
      *  may then rename it after the variable it is assigned to. */
     _nameInherited?: boolean;
@@ -135,6 +138,7 @@ export abstract class Shape
         c._scene = this._node?.root() ?? this._scene;
         c._nameInherited = true;
         c._material = this._material;
+        c._product = this._product;
 
         if (this._suppressScene)
         {
