@@ -318,4 +318,47 @@ mod tests {
             assert!(side.union(&front).reconstruct_ngons().is_manifold());
         });
     }
+
+    /// A side wall under a sloping roof (top 5478 at x = 0, 5569 at x = 250, as the house sketch
+    /// makes it) and a row of doors flush with its bottom, cut one after the other. Triangulating
+    /// the wall's n-gons must give back their exact corners: lifted back from 2D, the bottom
+    /// drifted off z = 0 by a few ulps and the next door left a zero-thickness sheet (an open
+    /// mesh, about one run in three).
+    #[test]
+    fn doors_flush_with_the_bottom_stay_closed() {
+        use crate::polygon::Polygon;
+        use crate::vertex::Vertex;
+        use nalgebra::Point3;
+        let (top0, top1, x1) = (5478.000205481719, 5568.992764048269, 249.99999999999997);
+        let tris: [[f64; 9]; 12] = [
+            [0.0, 10750.0, 0.0, 0.0, 10750.0, top0, 250.0, 10750.0, 0.0],
+            [250.0, 10750.0, top1, 250.0, 10750.0, 0.0, 0.0, 10750.0, top0],
+            [0.0, 250.0, top0, x1, 10750.0, top1, 0.0, 10750.0, top0],
+            [x1, 250.0, top1, x1, 10750.0, top1, 0.0, 250.0, top0],
+            [250.0, 250.0, 0.0, 0.0, 250.0, top0, 0.0, 250.0, 0.0],
+            [250.0, 250.0, top1, 0.0, 250.0, top0, 250.0, 250.0, 0.0],
+            [250.0, 250.0, 0.0, 250.0, 10750.0, top1, 250.0, 250.0, top1],
+            [250.0, 10750.0, 0.0, 250.0, 10750.0, top1, 250.0, 250.0, 0.0],
+            [0.0, 10750.0, 0.0, 0.0, 250.0, top0, 0.0, 10750.0, top0],
+            [0.0, 250.0, 0.0, 0.0, 250.0, top0, 0.0, 10750.0, 0.0],
+            [250.0, 250.0, 0.0, 0.0, 10750.0, 0.0, 250.0, 10750.0, 0.0],
+            [0.0, 250.0, 0.0, 0.0, 10750.0, 0.0, 250.0, 250.0, 0.0],
+        ];
+        let polygons: Vec<Polygon<()>> = tris.iter().map(|t| {
+            let p: Vec<Point3<f64>> = t.chunks(3).map(|c| Point3::new(c[0], c[1], c[2])).collect();
+            let n = (p[1] - p[0]).cross(&(p[2] - p[0])).normalize();
+            Polygon::new(p.iter().map(|q| Vertex::new(*q, n)).collect(), None)
+        }).collect();
+        let volume = |m: &Mesh<()>| m.polygons.iter().flat_map(|p| p.triangulate())
+            .map(|t| t[0].position.coords.dot(&t[1].position.coords.cross(&t[2].position.coords)) / 6.0).sum::<f64>();
+        (0..30).for_each(|_| {
+            let mut wall = Mesh::from_polygons(&polygons, None).reconstruct_ngons();
+            let full = volume(&wall);
+            [9136.0, 7521.0, 5907.0, 4293.0, 2679.0, 1064.0].iter().enumerate().for_each(|(i, &y)| {
+                wall = wall.difference(&cuboid([-500.0, y, 0.0], [1000.0, 800.0, 2000.0])).reconstruct_ngons();
+                assert!(wall.is_manifold(), "open after door {i}");
+                assert!((volume(&wall) - (full - (i + 1) as f64 * 250.0 * 800.0 * 2000.0)).abs() < 1.0, "volume after door {i}");
+            });
+        });
+    }
 }
