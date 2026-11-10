@@ -157,6 +157,81 @@ describe('Collection.union() — no argument, merge by type', () =>
     {
         expect(new Collection().union()).toBeNull();
     });
+
+    it('returns a new Mesh and leaves the shapes in the collection as they were', () =>
+    {
+        const a = Mesh.Cube(10);
+        const b = Mesh.Cube(10).moveX(5);
+        const result = new Collection(a, b).union();
+        expect(result).not.toBe(a);
+        expect(result).not.toBe(b);
+        expect(a.volume()).toBeCloseTo(1000);
+        expect((result as Mesh).volume()).toBeCloseTo(1500);
+    });
+
+    it('leaves the first Curve as it was', () =>
+    {
+        const r = Curve.Rect(100, 60);
+        const c = Curve.Circle(30).moveY(30);
+        const result = new Collection(r, c).union();
+        expect(result).not.toBe(r);
+        expect(r.area()).toBeCloseTo(6000);
+        expect((result as Curve).area()).toBeGreaterThan(6000);
+    });
+
+    it('with an argument returns a new Mesh too', () =>
+    {
+        const a = Mesh.Cube(10);
+        const result = new Collection(a).union(Mesh.Cube(10).moveX(5));
+        expect(result).not.toBe(a);
+        expect(a.volume()).toBeCloseTo(1000);
+        expect((result as Mesh).volume()).toBeCloseTo(1500);
+    });
+
+    it('takes the place of the shapes in the scene, on their layer', () =>
+    {
+        const root = new SceneNode('root');
+        const a = Mesh.Cube(10);
+        const b = Mesh.Cube(10).moveX(5);
+        const walls = root.addLayer('walls', new Collection<Mesh>(a, b));
+        const marker = Mesh.Cube(1).moveX(100);
+        const other = root.addLayer('other', marker);
+        root.setActiveLayer(other);
+
+        const result = walls.shapes().union();
+
+        expect(walls.shapes().toArray()).toEqual([result]);
+        expect(other.shapes().toArray()).toEqual([marker]);
+    });
+
+    it('the pieces of a split, unioned, land on the layer the group was on', () =>
+    {
+        // subtract() splits the bar in two and groups the pieces under a sub-layer of 'bxs';
+        // union() detaches that group layer, so the result must go to 'bxs' itself.
+        const root = new SceneNode('root');
+        const bar = Mesh.Box(40, 10, 10);
+        const bxs = root.addLayer('bxs', bar);
+        const pieces = bar.subtract(Mesh.Box(4, 40, 40)) as any as Collection<Mesh>;
+        expect(Collection.isShapeCollection(pieces)).toBe(true);
+
+        const result = pieces.union();
+
+        expect(bxs.shapes().toArray()).toEqual([result]);
+    });
+
+    it('mergeAll() also returns a new Mesh in place of the shapes', () =>
+    {
+        const root = new SceneNode('root');
+        const a = Mesh.Cube(10);
+        const b = Mesh.Cube(10).moveX(5);
+        const layer = root.addLayer('walls', new Collection<Mesh>(a, b));
+
+        const result = layer.shapes().mergeAll();
+
+        expect(result).not.toBe(a);
+        expect(a.volume()).toBeCloseTo(1000);
+        expect(layer.shapes().toArray()).toEqual([result]);
+    });
 });
 
 describe('Collection.moveTo()', () =>

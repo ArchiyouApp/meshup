@@ -1200,7 +1200,11 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *                      Unions Meshes into one Mesh and closed Curves into their
      *                      combined outline(s). Returns the single result when there is
      *                      only one, otherwise a ShapeCollection of the per-type results.
-     */
+     *
+     *  The result is a NEW shape: the shapes in the collection are left as they were (it used
+     *  to be built into the first one, so `c.union()` changed `c.first()`). Like merge(), the
+     *  result takes the place of the collection's shapes in the scene, on their layer. */
+    @colSceneReplace
     union(other?: Mesh | ShapeCollection<Mesh>): Mesh | Curve | ShapeCollection<any> | null
     {
         // Shapes of another kernel fuse through that kernel's own collection (see select())
@@ -1217,7 +1221,14 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         else if (ShapeCollection.isShapeCollection(other)) meshesToUnion.push(...other.meshes().toArray());
         else console.warn(`ShapeCollection::union(): Invalid argument. Only Mesh or ShapeCollection allowed.`, other);
         if (!meshesToUnion.length) { console.warn('ShapeCollection::union(): No meshes. Returning empty mesh.'); return new Mesh(); }
-        return meshesToUnion.slice(1).reduce((acc, mesh) => acc.union(mesh), meshesToUnion[0]);
+        return ShapeCollection._unionMeshes(meshesToUnion);
+    }
+
+    /** Union Meshes into a new Mesh, built on a scene-free clone of the first: none of them
+     *  changes and nothing enters the scene (the callers' decorators place the result). */
+    private static _unionMeshes(meshes: Array<Mesh>): Mesh
+    {
+        return meshes.slice(1).reduce((acc, mesh) => acc.union(mesh), meshes[0]._copy());
     }
 
     /** Merge the collection's own shapes grouped by type: all Meshes union into a single
@@ -1228,7 +1239,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         const results: Array<Mesh | Curve | ShapeCollection<Curve>> = [];
 
         // Meshes → single Mesh
-        if (this.meshes().length) results.push(this.mergeAll());
+        if (this.meshes().length) results.push(ShapeCollection._unionMeshes(this.meshes().toArray()));
 
         // Curves → chained boolean union. NOTE: we don't use unionAll() here because
         // Curve.union() returns a single Curve, so chaining must keep that result as the
@@ -1236,7 +1247,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         const curves = this.curves().toArray();
         if (curves.length)
         {
-            let acc: Curve | ShapeCollection<Curve> = curves[0];
+            // A scene-free clone, so the first Curve is not changed (or replaced in the scene)
+            let acc: Curve | ShapeCollection<Curve> = curves[0]._copy();
             for (let i = 1; i < curves.length; i++)
             {
                 if (!(acc instanceof Curve)) break; // disjoint result: stop chaining
@@ -1303,12 +1315,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return this;
     }
 
-    /** Union all Mesh shapes into a single Mesh */
+    /** Union all Mesh shapes into a new Mesh, which takes their place in the scene (see union()) */
+    @colSceneReplace
     mergeAll(): Mesh
     {
         const meshes = this.meshes().toArray();
         if (!meshes.length) { console.warn('ShapeCollection::mergeAll(): No meshes. Returning empty mesh.'); return new Mesh(); }
-        return meshes.slice(1).reduce((acc, mesh) => acc.union(mesh), meshes[0]);
+        return ShapeCollection._unionMeshes(meshes);
     }
 
     /** Union all Curve shapes sequentially (curve boolean union) */
