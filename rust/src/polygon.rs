@@ -761,8 +761,13 @@ fn segments_intersect_2d(
     let d2y = by2 - ay2;
 
     let denom = d1x * d2y - d1y * d2x;
-    if denom.abs() < 1e-12 {
-        return false; // parallel or collinear — treat as non-intersecting
+    // parallel or collinear — treat as non-intersecting. Relative to the segments' lengths: for
+    // two nearly collinear edges at a scale of millimetres the cross product is far above any
+    // fixed epsilon, and t and u below then come from rounding (a spurious crossing drops the
+    // whole polygon from triangulate()).
+    let lengths = (d1x * d1x + d1y * d1y).sqrt() * (d2x * d2x + d2y * d2y).sqrt();
+    if denom.abs() < 1e-12 || denom.abs() <= 1e-9 * lengths {
+        return false;
     }
 
     let dx = ax2 - ax1;
