@@ -377,11 +377,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return new ShapeCollection<Curve>(...this._shapes.filter(s => s instanceof Curve) as Curve[]);
     }
 
-    /** Alias for meshes() - the mesh kernel's equivalent of brep solids */
+    /** The solids: the Meshes, and the Solids of another kernel (brep) when this collection
+     *  holds its shapes, as all() does there */
     @sceneCarry
     solids(): ShapeCollection<Mesh>
     {
-        return this.meshes();
+        return new ShapeCollection<Mesh>(...this._shapes.filter(s =>
+            s instanceof Mesh || (ShapeCollection.isForeignShape(s) && (s as any).type === 'Solid')) as unknown as Mesh[]);
     }
 
     /** Only the Shapes that are visible (not hidden with hide())
