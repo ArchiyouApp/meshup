@@ -77,6 +77,11 @@ function debugString(val) {
     return className;
 }
 
+function getArrayF32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getFloat32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
 function getArrayF64FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getFloat64ArrayMemory0().subarray(ptr / 8, ptr / 8 + len);
@@ -109,6 +114,14 @@ function getDataViewMemory0() {
         cachedDataViewMemory0 = new DataView(wasm.memory.buffer);
     }
     return cachedDataViewMemory0;
+}
+
+let cachedFloat32ArrayMemory0 = null;
+function getFloat32ArrayMemory0() {
+    if (cachedFloat32ArrayMemory0 === null || cachedFloat32ArrayMemory0.byteLength === 0) {
+        cachedFloat32ArrayMemory0 = new Float32Array(wasm.memory.buffer);
+    }
+    return cachedFloat32ArrayMemory0;
 }
 
 let cachedFloat64ArrayMemory0 = null;
@@ -2377,6 +2390,26 @@ export class MeshJs {
     containsVertexComponents(x, y, z) {
         const ret = wasm.meshjs_containsVertexComponents(this.__wbg_ptr, x, y, z);
         return ret !== 0;
+    }
+    /**
+     * Batch first-hit incidence test.
+     *
+     * `origins` — flat `Float64Array` with 3×N floats; `dx, dy, dz` — shared ray direction.
+     *
+     * Returns a `Float32Array` of length N: `-1` = the ray hits nothing, otherwise the
+     * cosine of the angle between the ray and the normal of the surface it hits first
+     * (0 grazing … 1 head-on). The BVH is built once per mesh and reused across calls,
+     * so calling this once per sun position is cheap.
+     * @param {Float64Array} origins
+     * @param {number} dx
+     * @param {number} dy
+     * @param {number} dz
+     * @param {number} max_dist
+     * @returns {Float32Array}
+     */
+    raycastBatchIncidence(origins, dx, dy, dz, max_dist) {
+        const ret = wasm.meshjs_raycastBatchIncidence(this.__wbg_ptr, origins, dx, dy, dz, max_dist);
+        return ret;
     }
     /**
      * @param {any} needle
@@ -4812,6 +4845,10 @@ function __wbg_get_imports() {
         const ret = new Date(arg0);
         return ret;
     };
+    imports.wbg.__wbg_new_from_slice_41e2764a343e3cb1 = function(arg0, arg1) {
+        const ret = new Float32Array(getArrayF32FromWasm0(arg0, arg1));
+        return ret;
+    };
     imports.wbg.__wbg_new_from_slice_9a48ef80d2a51f94 = function(arg0, arg1) {
         const ret = new Float64Array(getArrayF64FromWasm0(arg0, arg1));
         return ret;
@@ -4936,6 +4973,7 @@ function __wbg_finalize_init(instance, module) {
     wasm = instance.exports;
     __wbg_init.__wbindgen_wasm_module = module;
     cachedDataViewMemory0 = null;
+    cachedFloat32ArrayMemory0 = null;
     cachedFloat64ArrayMemory0 = null;
     cachedUint32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;

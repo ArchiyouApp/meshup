@@ -664,7 +664,7 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S> {
         direction: &Vector3<Real>,
         max_dist: Real,
     ) -> Option<bvh::RaycastHit> {
-        let trimesh = self.to_trimesh()?;
+        let trimesh = self.cached_trimesh()?;
         let dir = direction.normalize();
         let ray = Ray::new(*origin, dir);
         let hit = trimesh.cast_local_ray_and_get_normal(&ray, max_dist, true)?;
@@ -679,8 +679,8 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S> {
 
     /// Batch first-hit visibility test for multiple origins along a shared ray direction.
     ///
-    /// Calls `to_trimesh()` **once** to build the BVH, then dispatches one ray per
-    /// origin.  Returns a `Vec<bool>` where `true` means the ray hit something
+    /// Uses the mesh's cached BVH (built on the first spatial query), then dispatches one
+    /// ray per origin.  Returns a `Vec<bool>` where `true` means the ray hit something
     /// (sample is occluded / hidden) and `false` means no hit (sample is visible).
     ///
     /// This is much cheaper than calling `raycast_first` N times from the JS side
@@ -692,7 +692,7 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S> {
         max_dist: Real,
     ) -> Vec<bool> {
         let dir = direction.normalize();
-        let Some(trimesh) = self.to_trimesh() else {
+        let Some(trimesh) = self.cached_trimesh() else {
             return vec![false; origins.len()];
         };
         origins
@@ -700,6 +700,36 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S> {
             .map(|&(ox, oy, oz)| {
                 let ray = Ray::new(Point3::new(ox, oy, oz), dir);
                 trimesh.cast_local_ray(&ray, max_dist, true).is_some()
+            })
+            .collect()
+    }
+
+    /// Batch first-hit incidence test for multiple origins along a shared ray direction.
+    ///
+    /// Like [`Self::raycast_batch_visibility`], but tells how the ray meets the surface it
+    /// hits first: the result holds, per origin, `-1.0` when the ray hits nothing and
+    /// otherwise the cosine of the angle between the ray and the surface normal at the
+    /// hit (`0.0` grazing … `1.0` head-on, whichever side of the surface is hit).
+    ///
+    /// Made for sun studies: on an occluder mesh any value `>= 0` means "in shadow", and
+    /// on a glazing mesh the cosine is the angle of incidence the glass transmits at.
+    pub fn raycast_batch_incidence(
+        &self,
+        origins: &[(Real, Real, Real)],
+        direction: &Vector3<Real>,
+        max_dist: Real,
+    ) -> Vec<f32> {
+        let dir = direction.normalize();
+        let Some(trimesh) = self.cached_trimesh() else {
+            return vec![-1.0; origins.len()];
+        };
+        origins
+            .iter()
+            .map(|&(ox, oy, oz)| {
+                let ray = Ray::new(Point3::new(ox, oy, oz), dir);
+                trimesh
+                    .cast_local_ray_and_get_normal(&ray, max_dist, true)
+                    .map_or(-1.0, |hit| hit.normal.dot(&dir).abs() as f32)
             })
             .collect()
     }

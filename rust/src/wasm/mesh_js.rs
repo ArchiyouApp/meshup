@@ -6,7 +6,7 @@ use crate::wasm::{
     polygon_js::PolygonJs, sketch_js::SketchJs, vector_js::Vector3Js,
 };
 use crate::io::gltf::{UpAxis};
-use js_sys::{Float64Array, Object, Reflect, Uint32Array, Uint8Array};
+use js_sys::{Float32Array, Float64Array, Object, Reflect, Uint32Array, Uint8Array};
 use nalgebra::{Matrix4, Point3, Quaternion, UnitQuaternion, Vector3};
 use serde_wasm_bindgen::from_value;
 use wasm_bindgen::prelude::*;
@@ -1177,6 +1177,31 @@ impl MeshJs {
         let flags = self.inner.raycast_batch_visibility(&pts, &direction, max_dist);
         let bytes: Vec<u8> = flags.iter().map(|&hit| hit as u8).collect();
         Uint8Array::from(bytes.as_slice())
+    }
+
+    /// Batch first-hit incidence test.
+    ///
+    /// `origins` — flat `Float64Array` with 3×N floats; `dx, dy, dz` — shared ray direction.
+    ///
+    /// Returns a `Float32Array` of length N: `-1` = the ray hits nothing, otherwise the
+    /// cosine of the angle between the ray and the normal of the surface it hits first
+    /// (0 grazing … 1 head-on). The BVH is built once per mesh and reused across calls,
+    /// so calling this once per sun position is cheap.
+    #[wasm_bindgen(js_name = raycastBatchIncidence)]
+    pub fn raycast_batch_incidence_js(
+        &self,
+        origins: &Float64Array,
+        dx: Real, dy: Real, dz: Real,
+        max_dist: Real,
+    ) -> Float32Array {
+        let raw = origins.to_vec();
+        let n = raw.len() / 3;
+        let direction = Vector3::new(dx, dy, dz);
+        let pts: Vec<(Real, Real, Real)> = (0..n)
+            .map(|i| (raw[i * 3] as Real, raw[i * 3 + 1] as Real, raw[i * 3 + 2] as Real))
+            .collect();
+        let cosines = self.inner.raycast_batch_incidence(&pts, &direction, max_dist);
+        Float32Array::from(cosines.as_slice())
     }
 
     /// All-hits raycast: every triangle intersection along the ray, sorted by distance.

@@ -2080,6 +2080,26 @@ export class Mesh extends Shape
     }
 
     /**
+     * Many rays in one direction, one per origin: how each meets the first surface it hits.
+     *
+     * Made for sun and visibility studies, where thousands of points look the same way. The
+     * BVH is built once per mesh and kept, so calling this for every sun position is cheap
+     * (millions of rays per second).
+     *
+     * @param origins   Flat coordinates x0,y0,z0, x1,y1,z1, …
+     * @param direction Shared ray direction (need not be normalised).
+     * @param maxDist   Maximum hit distance. Default: unlimited.
+     * @returns Per origin: `-1` when the ray hits nothing, otherwise the cosine of the angle
+     *          between the ray and the surface normal at the hit (0 grazing … 1 head-on).
+     */
+    raycastIncidence(origins: Float64Array | Array<number>, direction: [number, number, number], maxDist: number = Number.MAX_VALUE): Float32Array
+    {
+        const flat = origins instanceof Float64Array ? origins : new Float64Array(origins);
+        return this.inner()?.raycastBatchIncidence(flat, direction[0], direction[1], direction[2], maxDist)
+            ?? new Float32Array(flat.length / 3).fill(-1);
+    }
+
+    /**
      * Project a query point onto the nearest mesh surface (BVH-accelerated).
      * @returns Closest-point result, or `null` if the mesh is empty.
      */
