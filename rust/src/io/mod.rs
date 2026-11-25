@@ -16,9 +16,9 @@ mod dxf;
 #[cfg(feature = "dxf-io")]
 pub mod dxf_curves;
 
-// `serde` as well as `dxf-io`: the whole point of this module is a document that crosses to
-// JS in one `serde_json` call, and `serde` is an optional dependency the `wasm` feature turns
-// on. A plain `cargo test` has neither.
+// `serde` as well as `dxf-io`: the whole point of this module is a document that crosses a
+// binding in one serialised call. The `wasm` feature turns `serde` on; natively it is
+// `--features serde`, which `pnpm rust:test` passes.
 #[cfg(all(feature = "dxf-io", feature = "serde"))]
 pub mod dxf_entities;
 
@@ -180,4 +180,5 @@ impl From<String> for IoError {
 }
 
 // Re-export for use in WASM bindings
+#[cfg(feature = "gltf-io")]
 pub use gltf::UpAxis;

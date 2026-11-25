@@ -11,8 +11,8 @@ use stl_io;
 /// # use std::error::Error;
 /// # fn main() -> Result<(), Box<dyn Error>> {
 /// let mesh  = Mesh::<()>::cube(1.0, None);
-/// let bytes = mesh.to_stl_ascii("my_solid");
-/// std::fs::write("stl/my_solid.stl", bytes)?;
+/// let text = mesh.to_stl_ascii("my_solid");
+/// assert!(text.starts_with("solid my_solid"));
 /// # Ok(())
 /// # }
 /// ```
@@ -57,7 +57,8 @@ pub fn to_stl_ascii<T: Triangulated3D>(
 /// # fn main() -> Result<(), Box<dyn Error>> {
 /// let object = Mesh::<()>::cube(1.0, None);
 /// let bytes  = object.to_stl_binary("my_solid")?;
-/// std::fs::write("stl/my_solid.stl", bytes)?;
+/// // An 80 byte header, a 4 byte count and 50 bytes per triangle.
+/// assert_eq!((bytes.len() - 84) % 50, 0);
 /// # Ok(())
 /// # }
 /// ```

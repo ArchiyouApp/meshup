@@ -54,7 +54,7 @@ pub enum BoolAlgorithm
 #[cfg(feature = "parallel")]
 use rayon::{iter::IntoParallelRefIterator, prelude::*};
 
-#[cfg(not(feature = "parallel"))]
+// Always compiled: `bsp_parallel` replaces single methods of `bsp::Node`, which are gated inside `bsp.rs`.
 pub mod bsp;
 
 #[cfg(feature = "parallel")]
