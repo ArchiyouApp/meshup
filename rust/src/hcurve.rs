@@ -10,10 +10,9 @@
 //!   ([`tessellate_open`] / [`tessellate_closed`]), which sample exact geometry
 //!   to `f64` polylines with a bounded chord error.
 //!
-//! Only the planar (2D) surface is modelled here; meshup lifts these local‑XY
-//! results back into 3D via the curve's stored plane/frame on the TypeScript
-//! side. Everything is expressed with owned `Vec<[f64; 2]>` rings so the WASM
-//! bindings can stay thin.
+//! Only the planar (2D) surface is modelled here. The lift back into 3D (a frame
+//! plus this local‑XY geometry) is `Curve3DJs` in `wasm/curve_js.rs`. Everything is
+//! expressed with owned `Vec<[f64; 2]>` rings so bindings can stay thin.
 
 use hypercurve::{
     Aabb2, ArcArcIntersection, BezierParallelVerificationOptions,
@@ -127,29 +126,29 @@ impl TessQuality
     }
 }
 
-thread_local! {
-    static QUALITY: std::cell::Cell<TessQuality> = const {
-        std::cell::Cell::new(TessQuality {
-            segments_per_turn: DEFAULT_SEGMENTS_PER_TURN,
-            chord_tolerance: DEFAULT_CHORD_ERROR,
-            min_segments: DEFAULT_MIN_SEGMENTS,
-            max_segments: DEFAULT_MAX_SEGMENTS,
-        })
-    };
-}
+/// One profile for the whole process, not one per thread: a profile set on the calling thread has to
+/// reach the worker threads too (rayon, a Python host). Sampling routes take their profile as an
+/// argument, so this is only the default a binding reads when the caller gave none.
+static QUALITY: std::sync::RwLock<TessQuality> = std::sync::RwLock::new(TessQuality {
+    segments_per_turn: DEFAULT_SEGMENTS_PER_TURN,
+    chord_tolerance: DEFAULT_CHORD_ERROR,
+    min_segments: DEFAULT_MIN_SEGMENTS,
+    max_segments: DEFAULT_MAX_SEGMENTS,
+});
 
 /// The tessellation profile in force. Every default-quality sampling route reads this.
 #[inline]
 pub fn quality() -> TessQuality
 {
-    QUALITY.with(|q| q.get())
+    // The value is `Copy` and replaced whole, so a poisoned lock still holds a valid profile.
+    *QUALITY.read().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Install a new tessellation profile. Sanitised first, so a caller cannot install a dial
 /// that would produce an empty polyline or an unbounded loop.
 pub fn set_quality(q: TessQuality)
 {
-    QUALITY.with(|cell| cell.set(q.sanitised()));
+    *QUALITY.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = q.sanitised();
 }
 
 /// Convert an f64 to an exact [`Real`], rejecting NaN / infinities.

@@ -394,3 +394,45 @@ describe('ShapeCollection.raycast() — first hit (all=false)', () =>
         expect(result).toBeNull();
     });
 });
+
+// ── Mesh.raycastIncidence (batch, one direction) ─────────────────────────────
+
+describe('Mesh.raycastIncidence() — many origins, one direction', () =>
+{
+    it('answers -1 for a miss and the cosine of incidence for a hit', () =>
+    {
+        const cube = Solid.Cube(10);     // centred on the origin: top face at z = 5
+        const result = cube.raycastIncidence([0, 0, 20, 100, 100, 20], [0, 0, -1]);
+        expect(Array.from(result)).toEqual([1, -1]);
+    });
+
+    it('gives the cosine of the angle to the surface normal, whichever side is hit', () =>
+    {
+        const cube = Solid.Cube(10);
+        // 45° onto the top face, from above and (from inside the cube) from below
+        const [fromAbove] = cube.raycastIncidence([-15, 0, 20], [1, 0, -1]);
+        const [fromInside] = cube.raycastIncidence([0, 0, 0], [1, 0, 2]);
+        expect(fromAbove).toBeCloseTo(Math.SQRT1_2, 5);
+        expect(fromInside).toBeCloseTo(2 / Math.sqrt(5), 5);
+    });
+
+    it('sees the mesh where it is after a move, not where the cached BVH had it', () =>
+    {
+        const cube = Solid.Cube(10);
+        expect(cube.raycastIncidence([0, 0, 20], [0, 0, -1])[0]).toBe(1);      // builds the BVH
+        cube.move(100, 0, 0);
+        expect(cube.raycastIncidence([0, 0, 20], [0, 0, -1])[0]).toBe(-1);
+        expect(cube.raycastIncidence([100, 0, 20], [0, 0, -1])[0]).toBe(1);
+    });
+
+    it('does not rebuild the BVH per call', () =>
+    {
+        const sphere = Solid.Sphere(10);
+        const origins = new Float64Array(3000).map((_, i) => (i % 3 === 2) ? 50 : (i % 7) - 3);
+        sphere.raycastIncidence(origins, [0, 0, -1]);                           // first call builds it
+        const start = performance.now();
+        Array.from({ length: 200 }, (_, i) => sphere.raycastIncidence(origins, [i * 1e-4, 0, -1]));
+        // 200 000 rays: well under a second with a kept BVH; rebuilding it took ~7 ms per call
+        expect(performance.now() - start).toBeLessThan(1000);
+    });
+});

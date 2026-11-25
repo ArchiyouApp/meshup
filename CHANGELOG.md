@@ -8,6 +8,21 @@ versions may contain breaking changes.
 
 ### Added
 
+- **`Mesh/Curve.rowFill(until, spacing, direction, distribute, close)`: fill a span with a row.**
+  Copies of the shape every `spacing` (centre to centre) along `direction`, over a length or up
+  to another shape, like studs in a wall or joists in a floor. `'grid'` (default) keeps the
+  members on the grid from the start with a closing member flush at the end; `'even'` splits the
+  span in equal bays of at most `spacing`. `close: false` leaves the end member out. The
+  placement is in `rowFillOffsets()`, so the brep kernel can share it.
+
+  ```js
+  studs = stud.rowFill(3000, 600);
+  joists = joist.rowFill(wallB, 400, 'y', 'even', false);
+  ```
+
+- **`AxisDirection`: `'-x'`, `'-y'` and `'-z'` as directions.** `Vector.from('-x')` is
+  `[-1, 0, 0]`. `Axis` itself stays `'x'|'y'|'z'`.
+
 - **`ShapeCollection.project(from, options)`: a plain projection.** Every edge as seen from
   `from`, the ones at the back too, flattened onto the view plane with each line drawn once,
   and added to a 'projection' scene layer. There is no hidden-line pass, so it is fast and
@@ -56,6 +71,14 @@ versions may contain breaking changes.
     path changes with it.
   - `ShapeCollection.solids()` is the main name; `meshes()` stays as an alias.
   - The source file is `Solid.ts` (deep imports of `@archiyou/meshup/src/Mesh` break).
+- **Projections join their lines at corners too, and the outer contour is the group `outline`.**
+  Where exactly two lines of a projection meet they are now one polyline at any angle, not only
+  where they continue smoothly: the outline of a box is one closed Curve rather than four. A
+  corner gets a real line join, a dash pattern runs on around it, and in CAD an outline is one
+  polyline that is selected whole. Where three or more lines meet each line still stops. The
+  outer contour was the group `'silhouette'`; it is `'outline'` now, and `group('silhouette')`
+  and `col.silhouette` still reach it. Counting Curves no longer counts edges: a box seen from
+  the top is one Curve.
 
 - **Breaking: every projection takes one options object after its view arguments** — on
   `Mesh`, `Curve` and `ShapeCollection`:

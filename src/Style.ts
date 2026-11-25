@@ -55,6 +55,10 @@ export type StyleData = {
      */
     gradient?: GradientData;
     material?: any; // TODO
+    /** Names that say what a shape IS (`wall`, `insulation`, `wood`), for drawings: a drawing
+     *  writes them as CSS classes and styles them from one stylesheet. A set, not a value:
+     *  merging adds to it, so the classes of a layer and of its shapes add up. */
+    classes?: string[];
 }
 
 /** A normalised colour ramp: stops sorted by position, colours resolved to '#rrggbb'. */
@@ -126,6 +130,7 @@ export class Style
         if (data.point !== undefined) this.point = data.point;
         if (data.gradient !== undefined) this.gradient = data.gradient;
         if (data.material !== undefined) this._style.material = data.material;
+        if (data.classes !== undefined) this.addClass(...data.classes);
         return this;
     }
 
@@ -147,6 +152,7 @@ export class Style
         if (point) d.point = point;
         if (this._explicit.has('gradient')) d.gradient = Style._cloneGradient(this._style.gradient);
         if (this._explicit.has('material')) d.material = this._style.material;
+        if (this._style.classes?.length) d.classes = [...this._style.classes];
         return d;
     }
 
@@ -359,6 +365,49 @@ export class Style
     {
         this._style.material = v;
         this._explicit.add('material');
+    }
+
+    //// CLASSES ////
+
+    /** A class name as CSS reads it: a letter or underscore (or a dash and one of those) first,
+     *  then letters, digits, underscores and dashes. */
+    static readonly CLASS_NAME_RE = /^-?[_a-zA-Z][_a-zA-Z0-9-]*$/;
+
+    /** The classes of this style, in the order they were added. */
+    get classes(): string[] {
+        return [...(this._style.classes ?? [])];
+    }
+    set classes(v: string[])
+    {
+        this._style.classes = [];
+        this.addClass(...v);
+    }
+
+    /** Add classes (see StyleData.classes); one already there is not added twice. */
+    addClass(...names: string[]): this
+    {
+        const own = this._style.classes ?? [];
+        names.flat().forEach(name =>
+        {
+            if (typeof name !== 'string' || !Style.CLASS_NAME_RE.test(name))
+            {
+                throw new TypeError(`Style.addClass(): "${name}" is not a valid class name: use letters, digits, '-' and '_', starting with a letter`);
+            }
+            if (!own.includes(name)) own.push(name);
+        });
+        this._style.classes = own;
+        return this;
+    }
+
+    removeClass(...names: string[]): this
+    {
+        this._style.classes = (this._style.classes ?? []).filter(c => !names.flat().includes(c));
+        return this;
+    }
+
+    hasClass(name: string): boolean
+    {
+        return (this._style.classes ?? []).includes(name);
     }
 
     //// FILL ////
@@ -852,6 +901,7 @@ export class Style
             point: { ...this._style.point },
             gradient: Style._cloneGradient(this._style.gradient),
             material: this._style.material,
+            ...(this._style.classes?.length ? { classes: this.classes } : {}),
         };
     }
 

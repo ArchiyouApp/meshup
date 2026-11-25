@@ -238,6 +238,9 @@ wasm = [
   "truetype-text",
   "hershey-text",
 ]
+# Serialisable documents (`io::dxf_entities`). Part of `wasm`; named here so a native build and
+# `cargo test` can turn it on too.
+serde = ["dep:serde"]
 spade = ["dep:spade"]
 boolmesh = ["dep:boolmesh"]
 parry3d-f64 = ["dep:parry3d-f64"]

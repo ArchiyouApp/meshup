@@ -153,6 +153,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
                 );
             }
         });
+        // the outline of a projection was called 'silhouette' before: `sect.silhouette` still works
+        const outlines = this._groups.get('outline');
+        if (outlines && !this._groups.has('silhouette') && ((this as any).silhouette === undefined || this._fakeGroupKeys.has('silhouette')))
+        {
+            (this as any).silhouette = outlines;
+            this._fakeGroupKeys.add('silhouette');
+        }
     }
 
     //// STATIC FACTORIES ////
@@ -309,7 +316,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     /** Tag shapes that are already in this collection as members of a named
      *  group, without adding duplicate references to the parent.
      *
-     *  Use this for cross-cutting classifications (e.g. silhouette ⊂ visible)
+     *  Use this for cross-cutting classifications (e.g. outline ⊂ visible)
      *  where the group is a logical subset of shapes already tracked elsewhere.
      *  The caller is responsible for ensuring the shapes are already in `this`.
      */
@@ -339,6 +346,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  (see add()). Also reachable as a shortcut property: `table.spine`. */
     getGroup(groupName: string): ShapeCollection<S> | undefined
     {
+        // the outline of a projection was called 'silhouette' before: scripts that ask for it still get it
+        if (groupName === 'silhouette' && !this._groups.has('silhouette')) groupName = 'outline';
         const g = this._groups.get(groupName);
         if (!g) { console.error(`ShapeCollection::getGroup(): No group '${groupName}'. Available:`, Array.from(this._groups.keys())); return undefined; }
         return g;
@@ -358,11 +367,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     //// TYPE FILTERS ////
 
-    /** The Solids in this collection. */
+    /** The Solids in this collection, and the Solids of another kernel (brep) when it holds its
+     *  shapes, as all() does there. */
     @sceneCarry
     solids(): ShapeCollection<Solid>
     {
-        return this._solids();
+        return new ShapeCollection<Solid>(...this._shapes.filter(s =>
+            s instanceof Solid || (ShapeCollection.isForeignShape(s) && (s as any).type === 'Solid')) as unknown as Solid[]);
     }
 
     /** Alias for solids(): its name from before Mesh was renamed to Solid. */
@@ -385,7 +396,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     /** Only the Shapes that are visible (not hidden with hide())
      *
      *  NOT named visible(): projections (iso/elevation/section) put their line
-     *  work in groups called 'visible', 'hidden' and 'silhouette', and a group
+     *  work in groups called 'visible', 'hidden' and 'outline', and a group
      *  is reachable as a shortcut property (iso.visible). A method of the same
      *  name would occupy that property and force the shortcut to be skipped.
      *  `only-` also disambiguates from the two other meanings the word carries:
@@ -956,6 +967,25 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     alpha(a: number): this { return this.opacity(a); }
 
+    /** Give every Shape in this Collection these classes, for drawings. See {@link Shape.addClass}. */
+    addClass(...names: string[]): this
+    {
+        this._shapes.forEach(shape => (shape as any).addClass?.(...names));
+        return this;
+    }
+
+    removeClass(...names: string[]): this
+    {
+        this._shapes.forEach(shape => (shape as any).removeClass?.(...names));
+        return this;
+    }
+
+    /** Every class that a Shape in this Collection has, once each. */
+    classes(): string[]
+    {
+        return [...new Set((this._shapes as any[]).flatMap(shape => shape.classes?.() ?? []))];
+    }
+
     /** Separate every Solid in this collection into its geometrically isolated parts, returning
      *  a flat collection (non-mesh shapes and already-connected meshes pass through unchanged).
      *  Solid.subtract()/difference() already auto-separate, so this is mainly for chaining and
@@ -1179,7 +1209,11 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *                      Unions Meshes into one Solid and closed Curves into their
      *                      combined outline(s). Returns the single result when there is
      *                      only one, otherwise a ShapeCollection of the per-type results.
-     */
+     *
+     *  The result is a NEW shape: the shapes in the collection are left as they were (it used
+     *  to be built into the first one, so `c.union()` changed `c.first()`). Like merge(), the
+     *  result takes the place of the collection's shapes in the scene, on their layer. */
+    @colSceneReplace
     union(other?: Solid | ShapeCollection<Solid>): Solid | Curve | ShapeCollection<any> | null
     {
         // Shapes of another kernel fuse through that kernel's own collection (see select())
@@ -1196,7 +1230,14 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         else if (ShapeCollection.isShapeCollection(other)) meshesToUnion.push(...other._solids().toArray());
         else console.warn(`ShapeCollection::union(): Invalid argument. Only Solid or ShapeCollection allowed.`, other);
         if (!meshesToUnion.length) { console.warn('ShapeCollection::union(): No meshes. Returning empty mesh.'); return new Solid(); }
-        return meshesToUnion.slice(1).reduce((acc, mesh) => acc.union(mesh), meshesToUnion[0]);
+        return ShapeCollection._unionMeshes(meshesToUnion);
+    }
+
+    /** Union Meshes into a new Solid, built on a scene-free clone of the first: none of them
+     *  changes and nothing enters the scene (the callers' decorators place the result). */
+    private static _unionMeshes(meshes: Array<Solid>): Solid
+    {
+        return meshes.slice(1).reduce((acc, mesh) => acc.union(mesh), meshes[0]._copy());
     }
 
     /** Merge the collection's own shapes grouped by type: all Meshes union into a single
@@ -1207,7 +1248,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         const results: Array<Solid | Curve | ShapeCollection<Curve>> = [];
 
         // Meshes → single Solid
-        if (this._solids().length) results.push(this.mergeAll());
+        if (this._solids().length) results.push(ShapeCollection._unionMeshes(this._solids().toArray()));
 
         // Curves → chained boolean union. NOTE: we don't use unionAll() here because
         // Curve.union() returns a single Curve, so chaining must keep that result as the
@@ -1215,7 +1256,8 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         const curves = this.curves().toArray();
         if (curves.length)
         {
-            let acc: Curve | ShapeCollection<Curve> = curves[0];
+            // A scene-free clone, so the first Curve is not changed (or replaced in the scene)
+            let acc: Curve | ShapeCollection<Curve> = curves[0]._copy();
             for (let i = 1; i < curves.length; i++)
             {
                 if (!(acc instanceof Curve)) break; // disjoint result: stop chaining
@@ -1282,12 +1324,13 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         return this;
     }
 
-    /** Union all Solid shapes into a single Solid */
+    /** Union all Solid shapes into a new Solid, which takes their place in the scene (see union()) */
+    @colSceneReplace
     mergeAll(): Solid
     {
         const meshes = this._solids().toArray();
         if (!meshes.length) { console.warn('ShapeCollection::mergeAll(): No meshes. Returning empty mesh.'); return new Solid(); }
-        return meshes.slice(1).reduce((acc, mesh) => acc.union(mesh), meshes[0]);
+        return ShapeCollection._unionMeshes(meshes);
     }
 
     /** Union all Curve shapes sequentially (curve boolean union) */
@@ -1608,7 +1651,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *  a copy of the whole scene per touching pair; that rebuilt the occluder
      *  set every time and was most of the cost of a drawing with many touching
      *  boxes. The outline edges of such a face are boundary edges, so as
-     *  polylines they come out as the same visible, hidden and silhouette line
+     *  polylines they come out as the same visible, hidden and outline line
      *  work. Returns an UNFLATTENED collection, like
      *  {@link _projectLinearShapes}.
      */
@@ -1661,16 +1704,16 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
     private static _appendProjectionGroups(target: ShapeCollection<any>, projected: ShapeCollection<any>): void
     {
-        // Read _groups directly: a projection without hidden lines or silhouettes is normal,
+        // Read _groups directly: a projection without hidden lines or outlines is normal,
         // and group() reports a missing group as an error
         const hidden = projected._groups.get('hidden');
         const visible = projected._groups.get('visible');
-        const silhouette = projected._groups.get('silhouette');
+        const outlines = projected._groups.get('outline');
         if (hidden?.length) target.addGroup('hidden', hidden);
         if (visible?.length) target.addGroup('visible', visible);
-        // silhouette is a subset of visible — use tagGroup so the same Curve
+        // the outline is a subset of visible — use tagGroup so the same Curve
         // objects aren't pushed into _shapes a second time (addGroup would duplicate them)
-        if (silhouette?.length) target.tagGroup('silhouette', silhouette);
+        if (outlines?.length) target.tagGroup('outline', outlines);
     }
 
     /** Decide which HLR algorithm this projection will actually run.
@@ -2225,7 +2268,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *               'bottom', 'xy', 'xz', 'yz') or a direction like `[1, -1, 0]`.
      *  @param options Projection settings, like `{ hiddenLines: true }` or `{ method: 'raycast' }`
      *    — see {@link ProjectionOptions}.
-     *  @returns ShapeCollection with groups 'visible', 'silhouette' (outer contour, subset of
+     *  @returns ShapeCollection with groups 'visible', 'outline' (outer contour, subset of
      *    'visible'), and 'hidden' (only with `hiddenLines`).
      */
     elevation(from?: PointLike | BasePlane, options?: ProjectionOptions): ShapeCollection<any>;
@@ -2247,7 +2290,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
      *               'bottom', 'xy', 'xz', 'yz') or a direction like `[1, -1, 0]`.
      *  @param options `featureAngle` and `includeHiddenShapes` — see {@link ProjectionOptions}.
      *    The others are about hiding lines, and have nothing to act on here.
-     *  @returns ShapeCollection of the lines, with the outline tagged as group 'silhouette'.
+     *  @returns ShapeCollection of the lines, with the outline tagged as group 'outline'.
      */
     project(from?: PointLike | BasePlane, options?: ProjectionOptions): ShapeCollection<any>;
     @colSceneLayer('projection')
@@ -2296,20 +2339,20 @@ export class ShapeCollection<S extends CollectableShape = Shape>
 
             ShapeCollection._inheritStyle(projected, group[0]);
             result.add(projected.toArray());
-            const silhouette = projected._groups.get('silhouette');
-            if (silhouette?.length) result.tagGroup('silhouette', silhouette);
+            const outlines = projected._groups.get('outline');
+            if (outlines?.length) result.tagGroup('outline', outlines);
         });
         // The flatten takes the normal toward the viewer; the reversed one gives a mirror image
         return Solid._flattenProjectionToScreen(result, viewDir);
     }
 
-    /** The lines of a plain projection as Curves, the outline tagged 'silhouette'. Lines that
+    /** The lines of a plain projection as Curves, the outline tagged 'outline'. Lines that
      *  continue each other are joined (see Solid._joinPolylines), outline and others apart. */
     private static _flatLinesToCurves(lines: Array<Array<[number, number, number]>>, outlineIndices: Uint32Array): ShapeCollection<any>
     {
         const outline = new Set<number>(outlineIndices);
         const result = new ShapeCollection<any>();
-        const silhouette = new ShapeCollection<any>();
+        const outlines = new ShapeCollection<any>();
         [true, false].forEach(isOutline =>
             Solid._joinPolylines(lines.map((line, i) => (outline.has(i) === isOutline) ? line : null))
                 .map(chain => Solid._polylineToCurve(chain.points))
@@ -2317,9 +2360,9 @@ export class ShapeCollection<S extends CollectableShape = Shape>
                 {
                     if (!curve) return;
                     result.add(curve);
-                    if (isOutline) silhouette.add(curve);
+                    if (isOutline) outlines.add(curve);
                 }));
-        if (silhouette.length) result.tagGroup('silhouette', silhouette);
+        if (outlines.length) result.tagGroup('outline', outlines);
         return result;
     }
 
@@ -2374,7 +2417,16 @@ export class ShapeCollection<S extends CollectableShape = Shape>
     @colSceneLayer('section')
     section(pivot: PointLike, normal: PointLike | BasePlane = [0, 0, 1], ...args: any[]): ShapeCollection<any>
     {
-        const o = resolveProjectionArgs(args, 'ShapeCollection.section(pivot, normal, options)');
+        return this._section(pivot, normal, resolveProjectionArgs(args, 'ShapeCollection.section(pivot, normal, options)'));
+    }
+
+    /** Internal section — skips scene management, like {@link _elevation}.
+     *
+     *  @param options The method and the {@link ProjectionOptions}; whatever is left out takes its
+     *    default from {@link PROJECTION_DEFAULTS}. */
+    _section(pivot: PointLike, normal: PointLike | BasePlane = [0, 0, 1], options: Partial<ResolvedProjectionOptions> = {}): ShapeCollection<any>
+    {
+        const o = resolveProjectionOptions(options);
         const foreign = this._foreignProjection('section', col => col._section(pivot, normal, o));
         if (foreign) return foreign;
 
@@ -2385,7 +2437,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         }
         if (meshes.length === 1)
         {
-            return meshes[0].section(pivot, normal, o);
+            return meshes[0]._section(pivot, normal, o);
         }
 
         // A section cuts the assembly into one solid, so there are no separate
@@ -2396,7 +2448,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
         {
             const result = new ShapeCollection<Solid>(...meshes)
                 ._merged() // scene-free merge: the source meshes must stay in the scene
-                .section(pivot, normal, o);
+                ._section(pivot, normal, o);
             ShapeCollection._inheritStyle(result, meshes[0]);
             return result;
         }
@@ -2418,7 +2470,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
                 },
                 new ShapeCollection<Solid>(...others));
             ShapeCollection._inheritStyle(cut, group[0]);
-            const cutLines = cut.group('cut');
+            const cutLines = cut._groups.has('cut') ? cut.group('cut') : undefined; // this style may not reach the plane
             if (cutLines?.length) result.addGroup('cut', cutLines);
             ShapeCollection._appendProjectionGroups(result, cut);
         });
@@ -2478,7 +2530,7 @@ export class ShapeCollection<S extends CollectableShape = Shape>
             // groups win. The per-shape provenance tags the per-shape
             // strategies add (`shape-0`, `shape-1`, …) are registered last and
             // would otherwise displace the group that says how to *draw* the
-            // curve — 'fill', 'hidden', 'silhouette'. Provenance is for
+            // curve — 'fill', 'hidden', 'outline'. Provenance is for
             // grouping and ordering, not styling, so it only fills a gap.
             const isProvenance = /^shape-\d+$/.test(groupName);
             groupCol.toArray().forEach(shape =>

@@ -951,7 +951,17 @@ mod tests {
         let sketch = Sketch::<()>::from_svg(svg_in, None).unwrap();
         let svg_out = sketch.to_svg();
 
-        assert_eq!(svg_in.trim(), svg_out.trim());
+        // The union inside `from_svg` may start the ring at another vertex, so compare the ring up to rotation.
+        let ring = |svg: &str| -> Vec<String> {
+            let d = svg.split("d=\"M").nth(1).unwrap().split(" z\"").next().unwrap();
+            let numbers: Vec<&str> = d.split(',').collect();
+            numbers.chunks(2).map(|xy| xy.join(",")).collect()
+        };
+        let (ring_in, ring_out) = (ring(svg_in), ring(&svg_out));
+        let start = ring_out.iter().position(|p| p == &ring_in[0]).unwrap();
+        let rotated: Vec<String> = ring_out.iter().cycle().skip(start).take(ring_out.len()).cloned().collect();
+        assert_eq!(ring_in, rotated);
+        assert_eq!(svg_in.trim().replace(&ring_in.join(","), ""), svg_out.trim().replace(&ring_out.join(","), ""));
     }
 
     #[test]

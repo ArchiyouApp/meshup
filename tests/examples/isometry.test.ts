@@ -1,4 +1,5 @@
 import { beforeAll, describe, it, expect } from 'vitest';
+import { segments, segmentCount, segmentLengths, segmentsText } from '../helpers/segments';
 import { initAsync } from '../../src/index';
 import { Solid } from '../../src/Solid';
 import { save } from '../../src/utils';
@@ -9,15 +10,8 @@ const OUTPUT_DIR = outputDir(import.meta.url);
 
 function collectPolylineEndpoints(shape: ShapeCollection<any>): Array<[number, number]>
 {
-    const endpoints: Array<[number, number]> = [];
-    shape.toArray().forEach((curve: any) =>
-    {
-        const pts = curve.controlPoints?.() ?? curve.points?.();
-        if (!pts || pts.length < 2) return;
-        endpoints.push([pts[0].x, pts[0].y]);
-        endpoints.push([pts[pts.length - 1].x, pts[pts.length - 1].y]);
-    });
-    return endpoints;
+    // the ends of every edge: a joined outline has corners, not ends (see helpers/segments)
+    return segments(shape).flat() as Array<[number, number]>;
 }
 
 function countOrphanEndpoints(endpoints: Array<[number, number]>, eps: number): number
@@ -42,17 +36,17 @@ describe('Example: Isometric projection with hidden lines', async () =>
         // collapsing total length to 9.
         const boxIso = box.isometry([-1, -1, 1], { hiddenLines: true });
         expect(boxIso).toBeTruthy();
-        expect(boxIso.length).toBe(12);
-        expect(boxIso.group('hidden')?.length).toBe(3);
-        expect(boxIso.group('visible')?.length).toBe(9);
+        expect(segmentCount(boxIso)).toBe(12);
+        expect(segmentCount(boxIso.group('hidden'))).toBe(3);
+        expect(segmentCount(boxIso.group('visible'))).toBe(9);
         // Isometric silhouette of a cube is the hexagonal outline → 6 edges.
         // Silhouette is a tagged subset of 'visible'; it must NOT inflate
         // the total shape count.
-        expect(boxIso.group('silhouette')?.length).toBe(6);
+        expect(segmentCount(boxIso.group('outline'))).toBe(6);
 
         boxIso.group('hidden')?.color('blue').dashed();
         boxIso.group('visible')?.color('red');
-        boxIso.group('silhouette')?.color('green');
+        boxIso.group('outline')?.color('green');
 
         const col = new ShapeCollection(box.move(-200), boxIso!)
 
@@ -66,7 +60,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         const endpoints = collectPolylineEndpoints(boxIso);
         const orphanCount = countOrphanEndpoints(endpoints, 1e-6);
 
-        expect(boxIso.length).toBe(12);
+        expect(segmentCount(boxIso)).toBe(12);
         expect(orphanCount).toBe(0);
     });
 
@@ -177,7 +171,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         // of how the contact rectangles cut into the projection. We assert
         // ≥ 100 so the regression bites loudly if contact edges start
         // collapsing again (pre-fix this was 86).
-        expect(visible?.length ?? 0).toBeGreaterThanOrEqual(100);
+        expect(segmentCount(visible)).toBeGreaterThanOrEqual(100);
     }, 30_000);
 
     // Plumbing regression: `samples` from ShapeCollection.iso() reaches
@@ -382,7 +376,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
             await new ShapeCollection(pair, (visible ?? new ShapeCollection()).copy().translate(800, 0, 0))
                 .toGLTF());
 
-        expect(visible?.length ?? 0).toBeGreaterThanOrEqual(15);
+        expect(segmentCount(visible)).toBeGreaterThanOrEqual(15);
     }, 30_000);
 
     it('isoTest preserves contact edges between one vertical + one horizontal beam', () =>
@@ -398,8 +392,8 @@ describe('Example: Isometric projection with hidden lines', async () =>
         const mergedVisible = pair.merge().isometry([-1, -1, 1], { samples: 500, featureAngle: 5 }).group('visible');
         const visible = pair.isoTest([-1, -1, 1], false, false, 500, 5).group('visible');
 
-        expect(visible?.length ?? 0).toBeGreaterThan(mergedVisible?.length ?? 0);
-        expect(visible?.length ?? 0).toBeGreaterThanOrEqual(15);
+        expect(segmentCount(visible)).toBeGreaterThan(segmentCount(mergedVisible));
+        expect(segmentCount(visible)).toBeGreaterThanOrEqual(15);
     }, 30_000);
 
     it('isoTest handles beam floor collections without wasm array-type errors', () =>
@@ -415,7 +409,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
 
         const visible = floor.isoTest([-1, -1, 1], false, false, 200, 10).group('visible');
 
-        expect(visible?.length ?? 0).toBeGreaterThan(0);
+        expect(segmentCount(visible)).toBeGreaterThan(0);
     }, 30_000);
 
     // Regression: merged-base collection isometry should still recover one
@@ -439,7 +433,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
             // box silhouette, then each shared face adds back one visible
             // four-edge perimeter. Total ≥ 9 + 4(n-1).
             const minExpected = 9 + 4 * (n - 1);
-            expect(iso.length).toBeGreaterThanOrEqual(minExpected);
+            expect(segmentCount(iso)).toBeGreaterThanOrEqual(minExpected);
         },
         30_000,
     );
@@ -495,7 +489,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         const mergedVisible = pair.merge().elevation('left', { samples: 500, featureAngle: 5 }).group('visible');
         const visible = pair.elevation('left', { samples: 500, featureAngle: 5 }).group('visible');
 
-        expect(visible?.length ?? 0).toBeGreaterThan(mergedVisible?.length ?? 0);
+        expect(segmentCount(visible)).toBeGreaterThan(segmentCount(mergedVisible));
     });
 
     it('collection elevation draws no contact face where a cylinder stands on a box', () =>
@@ -516,8 +510,8 @@ describe('Example: Isometric projection with hidden lines', async () =>
     it('collection section merges visible meshes and forwards samples', () =>
     {
         const seen: Array<{ samples: number; featureAngle: number; bboxWidth: number }> = [];
-        const original = (Solid as any).prototype.section;
-        (Solid as any).prototype.section = function (
+        const original = (Solid as any).prototype._section; // the collection calls the scene-free one
+        (Solid as any).prototype._section = function (
             pivot: any,
             normal: any,
             options: any,
@@ -542,7 +536,7 @@ describe('Example: Isometric projection with hidden lines', async () =>
         }
         finally
         {
-            (Solid as any).prototype.section = original;
+            (Solid as any).prototype._section = original;
         }
 
         expect(seen.length).toBe(1);

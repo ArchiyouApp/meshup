@@ -451,6 +451,67 @@ describe('GLTFBuilder: curve vertex colors', () =>
     });
 });
 
+// ─── Instancing: shared accessors ────────────────────────────────────────────
+
+describe('GLTFBuilder: copies share their geometry', () =>
+{
+    /** The primitive of each mesh node, in scene order. */
+    const primitives = (json: any) => (json.meshes ?? []).map((m: any) => m.primitives[0]);
+
+    it('translated copies point at the same accessors, each with its own node, mesh and material', async () =>
+    {
+        const scene = SceneNode.root();
+        const cube = Solid.Cube(10);
+        scene.add(cube);
+        scene.add(cube._copy().move(100, 0, 0));
+        scene.add(cube._copy().move(0, 250, -40).color('red'));
+
+        const json = extractGLTFJson(await scene.toGLB());
+        const [a, b, c] = primitives(json);
+
+        expect(json.meshes.length).toBe(3);
+        [b, c].forEach(p =>
+        {
+            expect(p.attributes.POSITION).toBe(a.attributes.POSITION);
+            expect(p.attributes.NORMAL).toBe(a.attributes.NORMAL);
+            expect(p.indices).toBe(a.indices);
+            expect(p.extensions['EXT_mesh_primitive_edge_visibility'].visibility)
+                .toBe(a.extensions['EXT_mesh_primitive_edge_visibility'].visibility);
+        });
+        expect(new Set([a.material, b.material, c.material]).size).toBe(3);
+
+        const offsets = json.nodes.filter((n: any) => n.mesh !== undefined).map((n: any) => n.translation ?? [0, 0, 0]); // the default is left out
+        expect(offsets[1][0] - offsets[0][0]).toBeCloseTo(100);
+        expect(offsets[2][1] - offsets[0][1]).toBeCloseTo(250);
+    });
+
+    it('a rotated or different shape keeps its own positions', async () =>
+    {
+        const scene = SceneNode.root();
+        const beam = Solid.Box(100, 10, 10);
+        scene.add(beam);
+        scene.add(beam._copy().rotateZ(90));
+        scene.add(Solid.Box(100, 10, 11));
+
+        const [a, b, c] = primitives(extractGLTFJson(await scene.toGLB()));
+        expect(b.attributes.POSITION).not.toBe(a.attributes.POSITION);
+        expect(c.attributes.POSITION).not.toBe(a.attributes.POSITION);
+    });
+
+    it('writes the vertex data of a row of copies once', async () =>
+    {
+        const one = SceneNode.root();
+        one.add(Solid.Cube(10));
+        const row = SceneNode.root();
+        const cube = Solid.Cube(10);
+        row.add(cube);
+        Array.from({ length: 49 }, (_, i) => row.add(cube._copy().move((i + 1) * 20, 0, 0)));
+
+        const bin = (glb: Uint8Array) => extractGLTFBin(glb).byteLength;
+        expect(bin(await row.toGLB())).toBe(bin(await one.toGLB()));
+    });
+});
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Extract the JSON chunk from a GLB binary. */

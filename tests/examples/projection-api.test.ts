@@ -9,6 +9,7 @@
  * instead, rather than guessed at.
  */
 import { beforeAll, describe, it, expect } from 'vitest';
+import { segmentCount, segmentLengths, segmentsText } from '../helpers/segments';
 import { initAsync } from '../../src/index';
 import { Solid } from '../../src/Solid';
 import { Curve } from '../../src/Curve';
@@ -20,14 +21,7 @@ import { PROJECTION_DEFAULTS } from '../../src/constants';
 /** Compare two projections by their line work, ignoring object identity. */
 function shape(result: ShapeCollection<any>): string
 {
-    return result.toArray()
-        .map((c: any) =>
-        {
-            const pts = c.controlPoints?.() ?? c.points?.() ?? [];
-            return pts.map((p: any) => `${p.x.toFixed(6)},${p.y.toFixed(6)}`).join(' ');
-        })
-        .sort()
-        .join('|');
+    return segmentsText(result);
 }
 
 /** Run `fn` while recording the options of every call to one of Solid's kernel projections. */
@@ -63,14 +57,14 @@ describe('isometry(cam, options)', () =>
     it('takes its options on Solid', () =>
     {
         const iso = Solid.Box(100, 100, 100).isometry([-1, -1, 1], { method: 'exact', hiddenLines: true });
-        expect(iso.group('visible')?.length).toBe(9);
-        expect(iso.group('hidden')?.length).toBe(3);
+        expect(segmentCount(iso.group('visible'))).toBe(9);
+        expect(segmentCount(iso.group('hidden'))).toBe(3);
     });
 
     it('takes its options on ShapeCollection', () =>
     {
         const iso = twoBoxes().isometry([-1, -1, 1], { method: 'clip', hiddenLines: false });
-        expect(iso.group('visible')?.length).toBe(18);
+        expect(segmentCount(iso.group('visible'))).toBe(18);
     });
 
     it('defaults to the exact method and no hidden lines', () =>
@@ -137,7 +131,7 @@ describe('elevation(from, options)', () =>
 describe('ShapeCollection.project(from, options)', () =>
 {
     /** Length of every line in a projection, sorted: compares drawings without their order. */
-    const lengths = (c: ShapeCollection<any>) => c.toArray().map((l: any) => +l.length().toFixed(6)).sort((a, b) => a - b);
+    const lengths = (c: ShapeCollection<any>) => segmentLengths(c);
 
     it('draws every edge once, the ones at the back too, with nothing hidden', () =>
     {
@@ -145,7 +139,10 @@ describe('ShapeCollection.project(from, options)', () =>
         const square = new ShapeCollection<any>(Solid.Box(20, 20, 20)).project('front');
         expect(lengths(square)).toEqual([20, 20, 20, 20]);
         expect(square.group('hidden')).toBeFalsy();
-        expect(square.group('silhouette')?.length).toBe(4);
+        expect(segmentCount(square.group('outline'))).toBe(4);
+        // its old name still reaches it, as a group and as a property
+        expect(square.group('silhouette')).toBe(square.group('outline'));
+        expect((square as any).silhouette).toBe(square.group('outline'));
 
         // Two touching boxes: top and bottom run through, the shared side is drawn once
         const pair = new ShapeCollection<any>(Solid.Box(20, 20, 20), Solid.Box(20, 20, 20).move(20, 0, 0)).project('front');
@@ -158,7 +155,7 @@ describe('ShapeCollection.project(from, options)', () =>
         const scene = () => new ShapeCollection<any>(Solid.Box(100, 10, 100), Solid.Box(20, 20, 20).move(0, 50, 0));
         const elevated = scene().elevation('front');
         const projected = scene().project('front');
-        expect(projected.length).toBeGreaterThan(elevated.length);
+        expect(segmentCount(projected)).toBeGreaterThan(segmentCount(elevated));
         expect(lengths(projected)).toEqual([20, 20, 20, 20, 100, 100, 100, 100]);
     });
 
@@ -168,8 +165,8 @@ describe('ShapeCollection.project(from, options)', () =>
         expect(new ShapeCollection<any>(line).project('front').length).toBe(1);
 
         const withHidden = () => new ShapeCollection<any>(Solid.Box(20, 20, 20), Solid.Box(20, 20, 20).move(100, 0, 0).hide());
-        expect(withHidden().project('front').length).toBe(4);
-        expect(withHidden().project('front', { includeHiddenShapes: true }).length).toBe(8);
+        expect(segmentCount(withHidden().project('front'))).toBe(4);
+        expect(segmentCount(withHidden().project('front', { includeHiddenShapes: true }))).toBe(8);
     });
 });
 
@@ -236,7 +233,7 @@ describe('projections keep the style of their shapes', () =>
         scene.addLayer('model', new ShapeCollection<any>(box)).color('red').hide();
 
         const drawing = new ShapeCollection<any>(box).elevation('front');
-        expect(drawing.length).toBe(4);
+        expect(segmentCount(drawing)).toBe(4);
         expect(drawing.toArray().every((s: any) => s.style.visible !== false)).toBe(true);
         expect(colours(drawing)).toEqual([RED]);
     });
@@ -364,7 +361,7 @@ describe('projection group shortcuts', () =>
 
         expect(warns.filter(w => w.includes('conflicts with an existing'))).toEqual([]);
 
-        for (const name of ['visible', 'hidden', 'silhouette'])
+        for (const name of ['visible', 'hidden', 'outline'])
         {
             expect(ShapeCollection.isShapeCollection(iso[name])).toBe(true);
             expect(iso[name].length).toBe(iso.group(name)!.length);

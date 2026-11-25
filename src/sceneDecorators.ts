@@ -323,7 +323,8 @@ export function colSceneLayer(name: string): Decorator
 }
 
 /** Collection op: remove self's shapes (and layer node) from the scene, then add result
- *  shape(s) to the active layer (replace-in-place for the whole collection). */
+ *  shape(s) to the active layer (replace-in-place for the whole collection). A null result
+ *  (nothing to do, or the op failed) leaves the scene alone. */
 export const colSceneReplace: Decorator = (_t, _k, desc) =>
 {
     const fn = desc.value
@@ -332,10 +333,11 @@ export const colSceneReplace: Decorator = (_t, _k, desc) =>
         const root = colSceneRoot(this)
         const modeler = colModeler(this)
         // Capture the layer the source shapes live on BEFORE detaching them, so the results
-        // stay on that layer rather than moving to the (possibly different) active layer.
-        const sourceLayer = colSourceLayer(this)
+        // stay on that layer rather than moving to the (possibly different) active layer. A
+        // group collection's own layer is detached below: its results go to the group's parent.
+        const sourceLayer = this._layer ? (this._layer.parent?.() ?? null) : colSourceLayer(this)
         const result = fn.apply(this, args)
-        if (root)
+        if (root && result != null)
         {
             this._shapes?.forEach((s: Any) => s?._node?.detach?.())
             if (this._layer) { this._layer.detach(); this._layer = null }

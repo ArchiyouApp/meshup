@@ -184,6 +184,19 @@ impl<S: Clone + Send + Sync> Polygon<S> {
         let (u, v) = build_orthonormal_basis(normal_3d);
         let origin_3d = self.vertices[0].position;
 
+        // A triangle corner is one of the polygon's own vertices, looked up by the exact 2D point
+        // it was flattened to. Lifting the 2D point back (origin + x·u + y·v) moves it by a few
+        // ulps: a face at z = 0 comes back at z ≈ 1e-31, and the next boolean then sees two
+        // faces that should be coplanar as merely close (a cutter flush with a wall's bottom left
+        // a zero-thickness sheet). Only points the triangulator adds itself are lifted.
+        #[cfg(feature = "delaunay")]
+        let mut flat_to_3d: std::collections::HashMap<(u64, u64), Point3<Real>> = std::collections::HashMap::new();
+        #[cfg(feature = "delaunay")]
+        let lift = |flat: &std::collections::HashMap<(u64, u64), Point3<Real>>, x: Real, y: Real| -> Point3<Real>
+        {
+            flat.get(&(x.to_bits(), y.to_bits())).copied().unwrap_or_else(|| Point3::from(origin_3d.coords + x * u + y * v))
+        };
+
         #[cfg(feature = "earcut")]
         {
 			use earcutr::earcut;
@@ -270,8 +283,8 @@ impl<S: Clone + Send + Sync> Polygon<S> {
                 #[allow(clippy::excessive_precision)]
                 const MIN_ALLOWED_VALUE: Real = 1.793662034335766e-43;
 
-                // Helper: project a ring of Vertex to 2D Coords
-                let project_ring = |ring: &[Vertex]| -> Vec<geo::Coord<Real>> {
+                // Helper: project a ring of Vertex to 2D Coords (with the 3D point each came from)
+                let project_ring = |ring: &[Vertex]| -> Vec<(geo::Coord<Real>, Point3<Real>)> {
                     ring.iter()
                         .filter_map(|vert| {
                             let offset = vert.position.coords - origin_3d.coords;
@@ -282,12 +295,16 @@ impl<S: Clone + Send + Sync> Polygon<S> {
                             }
                             let x_c = if x.abs() < MIN_ALLOWED_VALUE { 0.0 } else { x };
                             let y_c = if y.abs() < MIN_ALLOWED_VALUE { 0.0 } else { y };
-                            Some(coord! { x: x_c, y: y_c })
+                            Some((coord! { x: x_c, y: y_c }, vert.position))
                         })
                         .collect()
                 };
+                let mut keep = |ring: Vec<(geo::Coord<Real>, Point3<Real>)>| -> Vec<geo::Coord<Real>>
+                {
+                    ring.into_iter().map(|(c, p)| { flat_to_3d.insert((c.x.to_bits(), c.y.to_bits()), p); c }).collect()
+                };
 
-                let outer_coords = project_ring(&self.vertices);
+                let outer_coords = keep(project_ring(&self.vertices));
                 if outer_coords.len() < 3 {
                     return Vec::new();
                 }
@@ -295,7 +312,7 @@ impl<S: Clone + Send + Sync> Polygon<S> {
                 let hole_linestrings: Vec<GeoLineString<Real>> = self
                     .holes
                     .iter()
-                    .map(|h| GeoLineString::new(project_ring(h)))
+                    .map(|h| GeoLineString::new(keep(project_ring(h))))
                     .collect();
 
                 let geo_poly = GeoPolygon::new(
@@ -310,18 +327,9 @@ impl<S: Clone + Send + Sync> Polygon<S> {
                 let mut final_triangles = Vec::with_capacity(tris.len());
                 for triangle in tris {
                     let [a, b, c] = [triangle.0, triangle.1, triangle.2];
-                    let va = Vertex::new(
-                        Point3::from(origin_3d.coords + a.x * u + a.y * v),
-                        normal_3d,
-                    );
-                    let vb = Vertex::new(
-                        Point3::from(origin_3d.coords + b.x * u + b.y * v),
-                        normal_3d,
-                    );
-                    let vc = Vertex::new(
-                        Point3::from(origin_3d.coords + c.x * u + c.y * v),
-                        normal_3d,
-                    );
+                    let va = Vertex::new(lift(&flat_to_3d, a.x, a.y), normal_3d);
+                    let vb = Vertex::new(lift(&flat_to_3d, b.x, b.y), normal_3d);
+                    let vc = Vertex::new(lift(&flat_to_3d, c.x, c.y), normal_3d);
 
                     // Skip degenerate (zero-area) triangles
                     let edge1 = vb.position - va.position;
@@ -371,6 +379,7 @@ impl<S: Clone + Send + Sync> Polygon<S> {
                     continue;
                 }
 
+                flat_to_3d.insert((x_clamped.to_bits(), y_clamped.to_bits()), vert.position);
                 all_vertices_2d.push(coord! { x: x_clamped, y: y_clamped });
             }
 
@@ -469,10 +478,14 @@ impl<S: Clone + Send + Sync> Polygon<S> {
                 .map(|i| [i, (i + 1) % n])
                 .collect();
 
-            // Build CDT with constraints in one go
-            let mut cdt = match ConstrainedDelaunayTriangulation::<SpadePoint2<Real>>::bulk_load_cdt(
+            // Build CDT with constraints in one go. The exact check above misses edges that only
+            // cross in floating point (slivers, as a plane split leaves them), and bulk_load_cdt()
+            // panics on those, which ends a WASM run: skip such an edge instead. The faces are
+            // filtered by the ring below, so a skipped edge does not let triangles out.
+            let mut cdt = match ConstrainedDelaunayTriangulation::<SpadePoint2<Real>>::try_bulk_load_cdt(
                 vertices_spade,
                 edges,
+                |_| {},
             ) {
                 Ok(cdt) => cdt,
                 Err(_) => {
@@ -535,11 +548,10 @@ impl<S: Clone + Send + Sync> Polygon<S> {
                     3
                 ];
 
-                // Map each 2D vertex back to 3D via the plane basis
+                // Map each 2D vertex back to the polygon's own 3D vertex
                 for (k, v_handle) in verts.iter().enumerate() {
                     let p = v_handle.position(); // &Point2<Real>
-                    let pos_3d = origin_3d.coords + p.x * u + p.y * v;
-                    tri_vertices[k] = Vertex::new(Point3::from(pos_3d), normal_3d);
+                    tri_vertices[k] = Vertex::new(lift(&flat_to_3d, p.x, p.y), normal_3d);
                 }
 
                 // Skip degenerate (zero-area) triangles
@@ -757,8 +769,13 @@ fn segments_intersect_2d(
     let d2y = by2 - ay2;
 
     let denom = d1x * d2y - d1y * d2x;
-    if denom.abs() < 1e-12 {
-        return false; // parallel or collinear — treat as non-intersecting
+    // parallel or collinear — treat as non-intersecting. Relative to the segments' lengths: for
+    // two nearly collinear edges at a scale of millimetres the cross product is far above any
+    // fixed epsilon, and t and u below then come from rounding (a spurious crossing drops the
+    // whole polygon from triangulate()).
+    let lengths = (d1x * d1x + d1y * d1y).sqrt() * (d2x * d2x + d2y * d2y).sqrt();
+    if denom.abs() < 1e-12 || denom.abs() <= 1e-9 * lengths {
+        return false;
     }
 
     let dx = ax2 - ax1;
@@ -824,4 +841,28 @@ fn point_in_ring_2d(px: Real, py: Real, ring: &[geo::Coord<Real>]) -> bool {
     }
 
     inside
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Polygon;
+    use crate::vertex::Vertex;
+    use nalgebra::{Point3, Vector3};
+
+    /// The triangles of an n-gon are made of its own corners, bit for bit: lifting the flattened
+    /// 2D points back to 3D would move them off the polygon's plane by a few ulps.
+    #[test]
+    fn triangulate_keeps_exact_corners() {
+        let n = Vector3::new(1.0, 0.0, -0.0164);
+        let corners = [
+            Point3::new(249.99999999999997, 250.0, 0.0), Point3::new(250.0, 9136.0, 0.0),
+            Point3::new(250.0, 9136.0, 2000.0), Point3::new(250.0, 9936.0, 2000.0),
+            Point3::new(250.0, 9936.0, 0.0), Point3::new(250.0, 10750.0, 0.0),
+            Point3::new(249.99999999999997, 10750.0, 5568.992764048269), Point3::new(249.99999999999994, 250.0, 5568.992764048269),
+        ];
+        let polygon: Polygon<()> = Polygon::new(corners.iter().map(|c| Vertex::new(*c, n)).collect(), None);
+        let tris = polygon.triangulate();
+        assert_eq!(tris.len(), corners.len() - 2);
+        assert!(tris.iter().flatten().all(|v| corners.contains(&v.position)));
+    }
 }

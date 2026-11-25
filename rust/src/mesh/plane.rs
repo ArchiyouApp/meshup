@@ -282,6 +282,18 @@ impl Plane {
                 z: point.z,
             },
         );
+        // The determinant is |(b - a) × (c - a)| times the signed distance of the point
+        // to the plane, so it grows with the size of the defining triangle. Compare the
+        // distance with the tolerance instead: on large faces the raw determinant turns
+        // rounding noise (1e-13) into a split, and the BSP then never stops splitting.
+        let area2 = (self.point_b - self.point_a)
+            .cross(&(self.point_c - self.point_a))
+            .norm();
+        let sign = if area2 > Real::EPSILON {
+            sign / area2
+        } else {
+            sign
+        };
         if sign > tolerance() {
             BACK
         } else if sign < -tolerance() {
@@ -520,4 +532,26 @@ fn test_plane_orientation() {
             plane.normal(),
         );
     }
+}
+
+#[test]
+fn test_orient_point_scale_invariant() {
+    // A 10.66 m by 3.18 m wall face in mm: rounding noise must stay coplanar,
+    // however large the face, and a real offset must not.
+    let plane = Plane {
+        point_a: Point3::new(0.0, 0.0, 0.0),
+        point_b: Point3::new(10660.0, 0.0, 0.0),
+        point_c: Point3::new(0.0, 3180.0, 0.0),
+    };
+    assert_eq!(plane.orient_point(&Point3::new(5000.0, 1000.0, 4.5e-13)), COPLANAR);
+    assert_eq!(plane.orient_point(&Point3::new(5000.0, 1000.0, 1e-3)), FRONT);
+    assert_eq!(plane.orient_point(&Point3::new(5000.0, 1000.0, -1e-3)), BACK);
+
+    // and a small face does not get a looser tolerance
+    let small = Plane {
+        point_a: Point3::new(0.0, 0.0, 0.0),
+        point_b: Point3::new(0.01, 0.0, 0.0),
+        point_c: Point3::new(0.0, 0.01, 0.0),
+    };
+    assert_eq!(small.orient_point(&Point3::new(0.001, 0.001, 1e-5)), FRONT);
 }

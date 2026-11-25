@@ -15,6 +15,7 @@
  *  - a dense grid, where merging every shape into one solid is the bottleneck.
  */
 import { beforeAll, describe, it, expect } from 'vitest';
+import { segmentCount, segmentLengths, segmentsText } from '../helpers/segments';
 import { initAsync } from '../../src/index';
 import { Solid } from '../../src/Solid';
 import { save } from '../../src/utils';
@@ -30,10 +31,10 @@ const GENERAL_STRATEGIES: HlrStrategy[] = ['raycast', 'exact'];
 const PER_SHAPE_STRATEGIES: HlrStrategy[] = ['clip', 'painter'];
 const ALL_STRATEGIES: HlrStrategy[] = [...GENERAL_STRATEGIES, ...PER_SHAPE_STRATEGIES];
 
-/** Total curve count across the visible group. */
+/** Total edge count across the visible group, in straight segments (see helpers/segments). */
 function visibleCount(result: ShapeCollection<any>): number
 {
-    return result.group('visible')?.length ?? 0;
+    return segmentCount(result.group('visible'));
 }
 
 /** A grid of separated boxes — the shape of a real assembly drawing. */
@@ -62,8 +63,8 @@ describe('HLR strategies: agreement on the easy cases', () =>
 
             // 12 edges: 9 visible, 3 hidden behind the solid.
             expect(visibleCount(iso), `${strategy}: visible`).toBe(9);
-            expect(iso.group('hidden')?.length ?? 0, `${strategy}: hidden`).toBe(3);
-            expect(iso.group('silhouette')?.length ?? 0, `${strategy}: silhouette`).toBe(6);
+            expect(segmentCount(iso.group('hidden')), `${strategy}: hidden`).toBe(3);
+            expect(segmentCount(iso.group('outline')), `${strategy}: outline`).toBe(6);
 
             await save(OUTPUT_DIR + `cube.${strategy}.svg`, iso.toSVG());
         }

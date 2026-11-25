@@ -105,10 +105,29 @@ describe('Projected line work of a Solid', () =>
         expect(top.group('hidden')!.length).toBe(1);
     });
 
-    it('keeps the corners of a box as separate lines', () =>
+    it('joins the outline of a box into one closed polyline, corners and all', () =>
     {
+        // one polyline: a real line join at each corner, and in CAD one outline selected whole
         const top = Solid.Box(100, 50, 10).elevation('top');
-        expect(top.group('visible')!.length).toBe(4);
+        const visible = top.group('visible')!.toArray() as Curve[];
+        expect(visible.length).toBe(1);
+        expect(visible[0].isClosed()).toBe(true);
+        expect(visible[0].controlPoints().length).toBe(4);   // a closed Curve does not repeat its first point
+        expect(visible[0].length()).toBeCloseTo(300, 6);
+    });
+
+    it('stops a line where three meet: which two belong together, the lines do not say', () =>
+    {
+        // a narrower box against the side of a wider one: its corners make T-junctions at (50, ±15)
+        const top = new ShapeCollection<any>(Solid.Box(100, 50, 10), Solid.Box(50, 30, 10).move(75, 0, 0)).elevation('top');
+        const atJunction = (p: any) => Math.abs(Math.abs(p.x) - 50) < 1e-6 && Math.abs(Math.abs(p.y) - 15) < 1e-6;
+        top.group('visible')!.toArray().forEach((c: any) =>
+        {
+            const pts = c.controlPoints();
+            // a junction can end a line, never sit in the middle of one
+            const inner = c.isClosed() ? pts : pts.slice(1, -1);
+            expect(inner.some(atJunction)).toBe(false);
+        });
     });
 });
 
@@ -569,8 +588,50 @@ describe('Solid.trim()', () =>
     });
 });
 
+describe('Mesh.area()', () =>
+{
+    /** The face-by-face sum area() used to take: every face a Polygon, every corner a Vertex. */
+    const polygonSum = (m: Mesh) => m.polygons().toArray().reduce((sum, p) => sum + p.area(), 0);
+
+    it('is the surface of a cuboid', () =>
+    {
+        expect(Mesh.Cuboid(10, 20, 30).area()).toBeCloseTo(2 * (10 * 20 + 10 * 30 + 20 * 30), 6);
+    });
+
+    it('counts the walls of a hole and leaves out what the hole took', () =>
+    {
+        // 600 of the cube, minus two 4x4 openings, plus four 4x10 walls inside
+        const holed = Mesh.Cube(10).subtract(Mesh.Cuboid(4, 4, 20)) as Mesh;
+        expect(holed.area()).toBeCloseTo(600 - 2 * 16 + 4 * 40, 4);
+    });
+
+    it('matches the sum over the faces on a curved mesh', () =>
+    {
+        const sphere = Mesh.Sphere(10);
+        expect(sphere.area()).toBeCloseTo(polygonSum(sphere), 6);
+    });
+
+    it('is 0 for an empty mesh', () =>
+    {
+        // two cubes that do not meet
+        const nothing = Mesh.Cube(10).intersection(Mesh.Cube(10).move(100, 0, 0)) as Mesh;
+        expect(nothing.area()).toBe(0);
+    });
+});
+
 describe('center() of a flat mesh', () =>
 {
+    it('is the area centroid of a concave face', () =>
+    {
+        // an L of 300 in area: a 20x10 strip with a 10x10 block on its left half. Its first
+        // corner, (20, 10), does not see the whole face, so a fan from it counts outside area.
+        const l = new Polygon([[20, 10, 0], [10, 10, 0], [10, 20, 0], [0, 20, 0], [0, 0, 0], [20, 0, 0]]).toMesh();
+        const [x, y, z] = l.center().toArray();
+        expect(x).toBeCloseTo(25 / 3, 6);
+        expect(y).toBeCloseTo(25 / 3, 6);
+        expect(z).toBeCloseTo(0, 6);
+    });
+
     it('is the area centroid, not the undefined mass centre', () =>
     {
         // a right triangle as a zero-volume mesh: centroid at the mean of its corners

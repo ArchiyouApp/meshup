@@ -489,6 +489,25 @@ export class SceneNode<S extends SceneNodeShape = Shape>
         return this;
     }
 
+    /** Give this container classes, for drawings: the shapes under it are drawn with them.
+     *  See {@link Shape.addClass}. */
+    addClass(...names: string[]): this
+    {
+        this.style.addClass(...names);
+        return this;
+    }
+
+    removeClass(...names: string[]): this
+    {
+        this.style.removeClass(...names);
+        return this;
+    }
+
+    classes(): string[]
+    {
+        return this.style.classes;
+    }
+
     /** Make this container's lines dashed. Pass a custom dash pattern
      *  (e.g. [10, 4]) or omit for the default 5px dash / 5px gap. */
     dashed(dash: number[] = [5, 5]): this

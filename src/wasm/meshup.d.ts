@@ -514,6 +514,10 @@ export class MeshJs {
   isConvex(): boolean;
   toSTLASCII(): string;
   vertexCount(): number;
+  /**
+   * Area-weighted centroid of the surface, or undefined when it has no area.
+   */
+  areaCentroid(): Point3Js | undefined;
   static fromPolygons(polygons: PolygonJs[], metadata: any): MeshJs;
   minkowskiSum(other: MeshJs): MeshJs;
   sameMetadata(other: MeshJs): boolean;
@@ -681,6 +685,17 @@ export class MeshJs {
    */
   projectEdgesSection(snx: number, sny: number, snz: number, section_offset: number, vx: number, vy: number, vz: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, feature_angle_deg: number, n_samples: number, occluders: MeshJs[], strategy?: string | null): SectionElevationResultJs;
   containsVertexComponents(x: number, y: number, z: number): boolean;
+  /**
+   * Batch first-hit incidence test.
+   *
+   * `origins` — flat `Float64Array` with 3×N floats; `dx, dy, dz` — shared ray direction.
+   *
+   * Returns a `Float32Array` of length N: `-1` = the ray hits nothing, otherwise the
+   * cosine of the angle between the ray and the normal of the surface it hits first
+   * (0 grazing … 1 head-on). The BVH is built once per mesh and reused across calls,
+   * so calling this once per sun position is cheap.
+   */
+  raycastBatchIncidence(origins: Float64Array, dx: number, dy: number, dz: number, max_dist: number): Float32Array;
   filterPolygonsByMetadata(needle: any): MeshJs;
   /**
    * Batch first-hit visibility test.
@@ -701,6 +716,10 @@ export class MeshJs {
   static egg(width: number, length: number, revolve_segments: number, outline_segments: number, metadata: any): MeshJs;
   constructor();
   xor(other: MeshJs): MeshJs;
+  /**
+   * Surface area: the sum of the areas of all polygons.
+   */
+  area(): number;
   static cube(size: number, metadata: any): MeshJs;
   static arrow(start: Point3Js, direction: Vector3Js, segments: number, orientation: boolean, metadata: any): MeshJs;
   clone(): MeshJs;
@@ -1206,6 +1225,8 @@ export interface InitOutput {
   readonly matrix4js_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
   readonly matrix4js_toArray: (a: number) => [number, number];
   readonly meshjs_adaptiveRefine: (a: number, b: number, c: number, d: number) => number;
+  readonly meshjs_area: (a: number) => number;
+  readonly meshjs_areaCentroid: (a: number) => number;
   readonly meshjs_arrow: (a: number, b: number, c: number, d: number, e: any) => number;
   readonly meshjs_boundingBox: (a: number) => any;
   readonly meshjs_center: (a: number) => number;
@@ -1268,6 +1289,7 @@ export interface InitOutput {
   readonly meshjs_projectPolylines: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => number;
   readonly meshjs_projectToPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
   readonly meshjs_raycastAll: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+  readonly meshjs_raycastBatchIncidence: (a: number, b: any, c: number, d: number, e: number, f: number) => any;
   readonly meshjs_raycastBatchVisibility: (a: number, b: any, c: number, d: number, e: number, f: number) => any;
   readonly meshjs_raycastFirst: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
   readonly meshjs_reconstructNgons: (a: number) => number;
@@ -1428,9 +1450,6 @@ export interface InitOutput {
   readonly vertexjs_position: (a: number) => number;
   readonly vertexjs_toArray: (a: number) => [number, number];
   readonly vertexjs_toString: (a: number) => [number, number];
-  readonly init_panic_hook: () => void;
-  readonly setTessellationQuality: (a: number, b: number, c: number, d: number) => void;
-  readonly vector3js_new: (a: number, b: number, c: number) => number;
   readonly polygonjs_new: (a: number, b: number, c: any) => number;
   readonly point3js_x: (a: number) => number;
   readonly point3js_y: (a: number) => number;
@@ -1450,16 +1469,19 @@ export interface InitOutput {
   readonly vector3js_y: (a: number) => number;
   readonly vector3js_z: (a: number) => number;
   readonly planejs_new: (a: number, b: number) => number;
+  readonly vector3js_new: (a: number, b: number, c: number) => number;
   readonly __wbg_raycasthitjs_free: (a: number, b: number) => void;
   readonly __wbg_vector3js_free: (a: number, b: number) => void;
+  readonly setTessellationQuality: (a: number, b: number, c: number, d: number) => void;
+  readonly init_panic_hook: () => void;
   readonly __wbindgen_malloc: (a: number, b: number) => number;
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
   readonly __wbindgen_exn_store: (a: number) => void;
   readonly __externref_table_alloc: () => number;
   readonly __wbindgen_externrefs: WebAssembly.Table;
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;
-  readonly __externref_drop_slice: (a: number, b: number) => void;
   readonly __externref_table_dealloc: (a: number) => void;
+  readonly __externref_drop_slice: (a: number, b: number) => void;
   readonly __wbindgen_start: () => void;
 }
 

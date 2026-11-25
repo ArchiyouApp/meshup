@@ -24,6 +24,7 @@ import
     Document,
     Extension,
     ExtensionProperty,
+    type GLTF,
     Material,
     NodeIO,
     Primitive,
@@ -77,6 +78,27 @@ function hashSeed(s: string): number
         h = Math.imul(h, 0x01000193);
     }
     return h >>> 0;
+}
+
+// ─── Utility: matching accessor contents ─────────────────────────────────────
+
+/** The arrays GLTFBuilder writes into accessors it shares between copies. */
+type SharedArray = Float32Array<ArrayBuffer> | Uint32Array<ArrayBuffer>;
+
+/** The grid two arrays are matched on: about a millionth of the largest value, rounded up to
+ *  a power of two. Copies of a shape differ by float noise, and the power of two keeps that
+ *  noise from giving them different grids. */
+function matchQuantum(array: SharedArray): number
+{
+    const largest = (array as Float32Array).reduce((max, v) => Math.max(max, Math.abs(v)), 0);
+    return (largest > 0) ? 2 ** Math.ceil(Math.log2(largest * 1e-6)) : 1;
+}
+
+/** Key of an array's contents on its grid (an FNV-1a hash), so equal arrays meet in one bucket. */
+function contentKey(array: SharedArray, type: string, quantum: number): string
+{
+    const hash = (array as Float32Array).reduce((h, v) => Math.imul(h ^ Math.round(v / quantum), 0x01000193), 0x811c9dc5);
+    return `${array.constructor.name}:${type}:${array.length}:${quantum}:${hash >>> 0}`;
 }
 
 /** mulberry32 PRNG — small, seedable, good enough for texture offsets. */
@@ -560,6 +582,10 @@ export class GLTFBuilder
     private _scene: GltfScene;
     private _up: Axis;
     private _pending: PendingExt[] = [];
+    /** Accessors written so far, by content key — see _sharedAccessor(). */
+    private _accessorsByContent = new Map<string, Array<Accessor>>();
+    /** Edge visibility accessors, by the indices and then the positions they were computed from. */
+    private _edgeVisibilityCache = new Map<Accessor, Map<Accessor, Accessor>>();
 
     constructor(up: Axis = 'z', sceneName = 'scene')
     {
@@ -794,6 +820,36 @@ export class GLTFBuilder
 
     //// PRIVATE: GEOMETRY BUILDERS ////
 
+    /** An accessor holding `array`: one written before with the same contents, else a new one.
+     *
+     *  This is how repeated shapes get instanced. Geometry is written centred on its own bbox
+     *  with the offset on the node, so the translated copies that row(), grid(), array() and
+     *  copy().move() make have the same local buffers, and their primitives end up pointing at
+     *  one set of accessors. The GLB stores them once, and three.js's GLTFLoader, which caches
+     *  geometry by accessor indices, uploads one BufferGeometry for all of them.
+     *
+     *  Only the accessors are shared. Every copy keeps its own node, mesh, primitive and
+     *  material, so selecting, hiding, styling and animating one copy still touches only that
+     *  copy. Copies that are rotated or mirrored have different local buffers and are not
+     *  matched. */
+    private _sharedAccessor(type: GLTF.AccessorType, array: SharedArray): Accessor
+    {
+        const quantum = matchQuantum(array);
+        const key = contentKey(array, type, quantum);
+        const candidates = this._accessorsByContent.get(key) ?? [];
+        const match = candidates.find(acc =>
+        {
+            const other = acc.getArray()!;
+            return (other as Float32Array).every((v, i) => Math.abs(v - array[i]) <= quantum);
+        });
+        if (match) return match;
+
+        const gtBuf = this._doc.getRoot().listBuffers()[0] ?? this._doc.createBuffer();
+        const accessor = this._doc.createAccessor().setType(type).setArray(array).setBuffer(gtBuf);
+        this._accessorsByContent.set(key, [...candidates, accessor]);
+        return accessor;
+    }
+
     /** Assemble a GltfNode for a Solid from its raw toBuffer() data. */
     private _meshToGLTFNode(mesh: Solid, name = 'mesh', style?: Style, buffer?: ReturnType<Solid['toBuffer']>): { node: GltfNode; primitive: Primitive; indices: Uint32Array; positions: Float32Array; normals: Float32Array }
     {
@@ -810,8 +866,8 @@ export class GLTFBuilder
         const idxCopy = new Uint32Array(indices.buffer.slice(0) as ArrayBuffer);
 
         const gtBuf = this._doc.getRoot().listBuffers()[0] ?? this._doc.createBuffer();
-        const posAcc = this._doc.createAccessor().setType(Accessor.Type.VEC3).setArray(posF32).setBuffer(gtBuf);
-        const normAcc = this._doc.createAccessor().setType(Accessor.Type.VEC3).setArray(normF32).setBuffer(gtBuf);
+        const posAcc = this._sharedAccessor(Accessor.Type.VEC3, posF32);
+        const normAcc = this._sharedAccessor(Accessor.Type.VEC3, normF32);
         const st = (style ?? mesh.style);
         const matDef = st.toGltfMaterial('mesh_material', false) as any;
         const pbr = matDef.pbrMetallicRoughness;
@@ -850,7 +906,7 @@ export class GLTFBuilder
         // No material textures → single PBR primitive (original behaviour).
         if (!sectionTex && !sidesTex)
         {
-            const idxAcc = this._doc.createAccessor().setType(Accessor.Type.SCALAR).setArray(idxCopy).setBuffer(gtBuf);
+            const idxAcc = this._sharedAccessor(Accessor.Type.SCALAR, idxCopy);
             const primitive = this._doc.createPrimitive()
                 .setAttribute('POSITION', posAcc).setAttribute('NORMAL', normAcc)
                 .setIndices(idxAcc).setMode(Primitive.Mode.TRIANGLES)
@@ -1123,11 +1179,7 @@ export class GLTFBuilder
             [posF32[i * 3], posF32[i * 3 + 1], posF32[i * 3 + 2]] = remapAxis(rawBuf[i * 3] - c.x, rawBuf[i * 3 + 1] - c.y, rawBuf[i * 3 + 2] - c.z, this._up);
         }
 
-        const gtBuf = this._doc.getRoot().listBuffers()[0] ?? this._doc.createBuffer();
-        const posAcc = this._doc.createAccessor()
-            .setType(Accessor.Type.VEC3)
-            .setArray(posF32)
-            .setBuffer(gtBuf);
+        const posAcc = this._sharedAccessor(Accessor.Type.VEC3, posF32);
 
         const matDef = effStyle.toGltfMaterial('curve_material', true) as any;
         const [r, g, b, a] = matDef.pbrMetallicRoughness.baseColorFactor;
@@ -1163,11 +1215,7 @@ export class GLTFBuilder
                 colF32[i * 3 + 1] = srgbToLinear(cg / 255);
                 colF32[i * 3 + 2] = srgbToLinear(cb / 255);
             }
-            const colAcc = this._doc.createAccessor()
-                .setType(Accessor.Type.VEC3)
-                .setArray(colF32)
-                .setBuffer(gtBuf);
-            prim.setAttribute('COLOR_0', colAcc);
+            prim.setAttribute('COLOR_0', this._sharedAccessor(Accessor.Type.VEC3, colF32));
         }
 
         const gltfMesh = this._doc.createMesh(name).addPrimitive(prim);
@@ -1179,12 +1227,7 @@ export class GLTFBuilder
     /** Assemble a GltfNode for a Vertex as a GLTF POINTS primitive at local origin. */
     private _vertexToGLTFNode(vertex: Vertex, name = 'vertex', style?: Style): { node: GltfNode; material: Material }
     {
-        const posF32 = new Float32Array([0, 0, 0]);
-        const gtBuf = this._doc.getRoot().listBuffers()[0] ?? this._doc.createBuffer();
-        const posAcc = this._doc.createAccessor()
-            .setType(Accessor.Type.VEC3)
-            .setArray(posF32)
-            .setBuffer(gtBuf);
+        const posAcc = this._sharedAccessor(Accessor.Type.VEC3, new Float32Array([0, 0, 0]));
 
         const st = style ?? vertex.style;
         const matDef = st.toGltfMaterial('vertex_material', true) as any;
@@ -1215,16 +1258,7 @@ export class GLTFBuilder
     {
         if (ext.indices.length === 0) return;
 
-        const gtBuf = this._doc.getRoot().listBuffers()[0] ?? this._doc.createBuffer();
-
-        const bitfieldRaw = computeEdgeVisibilityBitfield(
-            ext.positions, ext.indices, EDGE_PROJECTION_DEFAULTS.featureAngle,
-        );
-        const bitfield = new Uint8Array(bitfieldRaw.buffer.slice(0) as ArrayBuffer);
-        const visAcc = this._doc.createAccessor()
-            .setType(Accessor.Type.SCALAR)
-            .setArray(bitfield)
-            .setBuffer(gtBuf);
+        const visAcc = this._edgeVisibilityAccessor(ext);
 
         const edgeVisProp = this._doc.createExtension(EdgeVisibilityExtension).createProperty();
         edgeVisProp.visibilityAccessor = visAcc;
@@ -1296,6 +1330,35 @@ export class GLTFBuilder
         }
 
         ext.primitive.setExtension('EXT_mesh_primitive_edge_visibility', edgeVisProp);
+    }
+
+    /** The edge visibility bitfield of a primitive, as an accessor. It depends on the indices
+     *  and positions only, so a primitive that shares both with one done before (a copy, see
+     *  _sharedAccessor()) shares its bitfield too and skips computing it. */
+    private _edgeVisibilityAccessor(ext: PendingMeshExt): Accessor
+    {
+        const indicesAcc = ext.primitive.getIndices();
+        const positionAcc = ext.primitive.getAttribute('POSITION');
+        const cached = (indicesAcc && positionAcc) ? this._edgeVisibilityCache.get(indicesAcc)?.get(positionAcc) : undefined;
+        if (cached) return cached;
+
+        const gtBuf = this._doc.getRoot().listBuffers()[0] ?? this._doc.createBuffer();
+        const bitfieldRaw = computeEdgeVisibilityBitfield(
+            ext.positions, ext.indices, EDGE_PROJECTION_DEFAULTS.featureAngle,
+        );
+        const bitfield = new Uint8Array(bitfieldRaw.buffer.slice(0) as ArrayBuffer);
+        const visAcc = this._doc.createAccessor()
+            .setType(Accessor.Type.SCALAR)
+            .setArray(bitfield)
+            .setBuffer(gtBuf);
+
+        if (indicesAcc && positionAcc)
+        {
+            const byPositions = this._edgeVisibilityCache.get(indicesAcc) ?? new Map<Accessor, Accessor>();
+            byPositions.set(positionAcc, visAcc);
+            this._edgeVisibilityCache.set(indicesAcc, byPositions);
+        }
+        return visAcc;
     }
 
     private _applyCurveExtensions(ext: PendingCurveExt): void

@@ -43,6 +43,9 @@ export abstract class Shape
     _modeler: any = null;
     /** Assigned material name (see the host's materials module). Set via `.material('wood')`. */
     _material?: string;
+    /** What this shape is as a part of a build, set by the host's products module. Opaque to
+     *  meshup: it only carries it to a copy, so a copied stud is still a stud. */
+    _product?: unknown;
     /** True when this shape's name was inherited from a copy() source; the host auto-namer
      *  may then rename it after the variable it is assigned to. */
     _nameInherited?: boolean;
@@ -135,6 +138,7 @@ export abstract class Shape
         c._scene = this._node?.root() ?? this._scene;
         c._nameInherited = true;
         c._material = this._material;
+        c._product = this._product;
 
         if (this._suppressScene)
         {
@@ -482,6 +486,32 @@ export abstract class Shape
     }
 
     alpha(a: number): this { return this.opacity(a); }
+
+    /** Say what this shape is, for drawings: `stud.addClass('wood')`. A drawing writes the
+     *  classes on its line work, and the styler draws them (`styler.set('cut.wood', { weight: 0.5 })`).
+     *  Classes travel to the sections and elevations made of the shape. */
+    addClass(...names: string[]): this
+    {
+        this.style.addClass(...names);
+        return this;
+    }
+
+    removeClass(...names: string[]): this
+    {
+        this.style.removeClass(...names);
+        return this;
+    }
+
+    /** The classes of this shape (see {@link addClass}). Those of its layers are added when it is drawn. */
+    classes(): string[]
+    {
+        return this.style.classes;
+    }
+
+    hasClass(name: string): boolean
+    {
+        return this.style.hasClass(name);
+    }
 
     /**
      * Line width in SCREEN PIXELS — not model units.

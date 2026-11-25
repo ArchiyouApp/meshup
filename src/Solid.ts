@@ -9,8 +9,8 @@
  * 
  */
 
-import type { CsgrsModule, Axis, BasePlane, OrientationXY, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions, HlrStrategy, ProjectionOptions } from './types';
-import { isAxis, isBasePlane, isPointLike, resolveProjectionArgs } from './types';
+import type { CsgrsModule, Axis, BasePlane, OrientationXY, PointLike, RaycastHit, ClosestPointResult, SdfSample, ProjectEdgeOptions, HlrStrategy, ProjectionOptions, ResolvedProjectionOptions, AxisDirection, RowFillDistribute } from './types';
+import { isAxis, isBasePlane, isPointLike, resolveProjectionArgs, resolveProjectionOptions } from './types';
 
 import { Curve, getCsgrs } from './index';
 import { Shape } from './Shape';
@@ -18,7 +18,7 @@ import { Point } from './Point';
 import { Bbox } from './Bbox';
 import { OBbox } from './OBbox';
 import { Vector } from './Vector'
-import { rad, deg, shortestArcAxisAngle, primaryOrthoXYAngle, svgDocument, gridCounts } from './utils';
+import { rad, deg, shortestArcAxisAngle, primaryOrthoXYAngle, svgDocument, gridCounts, rowFillOffsets } from './utils';
 import { Style } from './Style';
 import { sceneAdd, sceneReplace, sceneLayer, sceneCarry, sceneReplaceOrKeep, replaceInScene } from './sceneDecorators';
 import { GLTFBuilder } from './GLTFBuilder';
@@ -34,13 +34,6 @@ import { Selector } from './Selector';
 import { TOLERANCE, EDGE_PROJECTION_DEFAULTS, EDGE_PROJECTION_LIMITS,
     ISOMETRY_HLR_STRATEGY_DEFAULT, ISOMETRY_CAM_DEFAULT, BASE_PLANE_NAME_TO_PLANE } from './constants';
 import { getQuality } from './quality';
-
-/** Largest turn, in degrees, at which two projected lines that meet end to end
- *  are joined into one polyline (see Solid._joinPolylines). A tessellated circle
- *  turns a few degrees per segment, a box corner 60 degrees or more in the usual
- *  views. Joining only changes how line work is grouped into Curves, never where
- *  the lines are. */
-const PROJECTION_JOIN_MAX_TURN = 30;
 
 export class Solid extends Shape
 {
@@ -484,36 +477,22 @@ export class Solid extends Shape
         return new Point(props?.centerOfMass);
     }
 
-    /** Area-weighted centroid of all polygons (each polygon fan-triangulated), or null for an
-     *  empty mesh. */
+    /** Area-weighted centroid of the surface (computed in the kernel), or null for an empty
+     *  mesh. */
     _areaCentroid(): Point | null
     {
-        let ax = 0, ay = 0, az = 0, total = 0;
-        this.polygons().toArray().forEach(poly =>
-        {
-            const v = poly.vertices().toArray();
-            for (let i = 1; i + 1 < v.length; i++)
-            {
-                const [a, b, c] = [v[0], v[i], v[i + 1]];
-                const ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
-                const wx = c.x - a.x, wy = c.y - a.y, wz = c.z - a.z;
-                const area = 0.5 * Math.hypot(uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx);
-                if (!(area > 0)) continue;
-                ax += area * (a.x + b.x + c.x) / 3;
-                ay += area * (a.y + b.y + c.y) / 3;
-                az += area * (a.z + b.z + c.z) / 3;
-                total += area;
-            }
-        });
-        return total > 0 ? new Point(ax / total, ay / total, az / total) : null;
+        const centroid = this.inner()?.areaCentroid();
+        return centroid ? new Point(centroid) : null;
     }
 
-    
-
-    /** Surface area — sum of all polygon face areas */
+    /** Surface area: the sum of the polygon areas, computed in the kernel.
+     *
+     *  Through polygons() every face became a Polygon and every corner a Vertex, each with an
+     *  id and a style, only to be added up: that was most of the time of measuring a model
+     *  of many parts. */
     area(): number
     {
-        return this.polygons().toArray().reduce((sum, poly) => sum + poly.area(), 0);
+        return this.inner()?.area() ?? 0;
     }
 
     /** No polygons at all: the result of merging nothing, or a failed operation. */
@@ -1796,6 +1775,53 @@ export class Solid extends Shape
         return meshes;
     }
 
+    /** Fill a span with a row of copies of this Solid, like studs in a wall or joists in a floor.
+     *
+     *  This Solid is the first member. The span runs from its back face along `direction`: over a
+     *  length, or up to the near face of another shape. By default the members sit every `spacing`
+     *  from the start with a closing member flush at the end, so sheet edges land on them.
+     *
+     *  NOTE: `spacing` is centre to centre here, while in row() it is the gap between copies.
+     *
+     *  @param until      - the span: a length from the back of this Solid to the far side of the
+     *                      last member, or a shape (or collection) to fill up to
+     *  @param spacing    - centre-to-centre distance of the members; with 'even' the largest one
+     *  @param direction  - direction of the row: an axis ('x', '-y', ...) or a vector (default: 'x')
+     *  @param distribute - 'grid' (default): every `spacing` from the start, what is left in the
+     *                      last bay; 'even': the span split in equal bays of at most `spacing`.
+     *                      The number of bays rounds up, so a bay is `spacing` or a bit less:
+     *                      a 3000 span of 38 studs at 600 gives 5 bays of 592.4.
+     *  @param close      - end with a member flush with the end of the span (default: true). Use
+     *                      false when `until` carries that end already, like a wall under joists.
+     *  @returns ShapeCollection<Solid> of all members, this Solid the first
+     *
+     *  @example
+     *    stud = box(38, 140, 2400)
+     *    studs = stud.rowFill(3000, 600)                        // studs 600 c/c, one at 3000
+     *    joist = box(3000, 50, 200)
+     *    wallB = box(3000, 140, 300).move(0, 4000, 0)
+     *    joists = joist.rowFill(wallB, 400, 'y', 'even', false) // equal bays up to wallB
+     */
+    rowFill(until:number|Shape|ShapeCollection<any>, spacing:number, direction:PointLike|AxisDirection='x', distribute:RowFillDistribute='grid', close:boolean=true):ShapeCollection<Solid>
+    {
+        const bbox = this.bbox();
+        if(!bbox){ throw new Error('Solid.rowFill(): this Solid has no size'); }
+        const dirVec = Vector.from(direction).normalize();
+        const target = (typeof until === 'number') ? until : until?.bbox?.();
+        const offsets = rowFillOffsets(bbox, target as any, spacing, dirVec.toArray(), distribute, close, 'Solid.rowFill()');
+
+        const meshes = new ShapeCollection<Solid>();
+        offsets.forEach((offset, i) =>
+        {
+            const member = (i === 0) ? this : this.copy();
+            member.move(dirVec.copy().scale(offset));
+            meshes.add(member);
+        });
+
+        ShapeCollection._nameRow(meshes, this.name() as string | undefined);
+        return meshes;
+    }
+
     /** Arrange copies of this Solid on a 3-D grid.
      *  Counts are floored and clamped to at least 1, so `grid(4, 3, 0)` is a flat 4x3 grid
      *  in XY rather than an empty collection.
@@ -2051,6 +2077,26 @@ export class Solid extends Shape
             hit.free?.();
             return result;
         }
+    }
+
+    /**
+     * Many rays in one direction, one per origin: how each meets the first surface it hits.
+     *
+     * Made for sun and visibility studies, where thousands of points look the same way. The
+     * BVH is built once per mesh and kept, so calling this for every sun position is cheap
+     * (millions of rays per second).
+     *
+     * @param origins   Flat coordinates x0,y0,z0, x1,y1,z1, …
+     * @param direction Shared ray direction (need not be normalised).
+     * @param maxDist   Maximum hit distance. Default: unlimited.
+     * @returns Per origin: `-1` when the ray hits nothing, otherwise the cosine of the angle
+     *          between the ray and the surface normal at the hit (0 grazing … 1 head-on).
+     */
+    raycastIncidence(origins: Float64Array | Array<number>, direction: [number, number, number], maxDist: number = Number.MAX_VALUE): Float32Array
+    {
+        const flat = origins instanceof Float64Array ? origins : new Float64Array(origins);
+        return this.inner()?.raycastBatchIncidence(flat, direction[0], direction[1], direction[2], maxDist)
+            ?? new Float32Array(flat.length / 3).fill(-1);
     }
 
     /**
@@ -2547,7 +2593,7 @@ export class Solid extends Shape
      * @return ShapeCollection with groups:
      *   - `'visible'`: unoccluded projected edges
      *   - `'hidden'`: occluded edges (only present when `hiddenLines` is set)
-     *   - `'silhouette'`: subset of `'visible'` forming the outer contour
+     *   - `'outline'`: subset of `'visible'` forming the outer contour
      *     (silhouette + open-mesh boundary edges) as classified by the Rust HLR
      */
     isometry(cam?: PointLike, options?: ProjectionOptions): ShapeCollection<Shape>;
@@ -2655,11 +2701,11 @@ export class Solid extends Shape
     }
 
     /** The line work of a WASM hidden-line result as Curves: a 'hidden' and a
-     *  'visible' group, and the 'silhouette' subset of 'visible' (outer contour)
+     *  'visible' group, and the 'outline' subset of 'visible' (outer contour)
      *  tagged on the same Curve instances, so the shape count does not grow.
      *
      *  The solver returns one polyline per mesh edge; the ones that continue each
-     *  other smoothly are joined first (see {@link _joinPolylines}). Silhouette
+     *  other are joined first (see {@link _joinPolylines}). Silhouette
      *  and other visible lines are joined apart, so each Curve is wholly one or
      *  the other, and they keep the order the solver gave them. */
     static _projectionToShapeCollection(r: {
@@ -2683,16 +2729,16 @@ export class Solid extends Shape
             Solid._joinPolylines(r.hiddenPolylines()).map(c => c.points)));
 
         const visibleCurves = new ShapeCollection<Shape>();
-        const silhouette = new ShapeCollection<Shape>();
+        const outlines = new ShapeCollection<Shape>();
         chains.forEach(c =>
         {
             const curve = Solid._polylineToCurve(c.points);
             if (!curve) return;
             visibleCurves.add(curve);
-            if (c.outline) silhouette.add(curve);
+            if (c.outline) outlines.add(curve);
         });
         result.addGroup('visible', visibleCurves);
-        if (silhouette.length) result.tagGroup('silhouette', silhouette);
+        if (outlines.length) result.tagGroup('outline', outlines);
         return result;
     }
 
@@ -2700,11 +2746,16 @@ export class Solid extends Shape
      *
      *  The hidden-line solvers return one polyline per mesh edge, so a
      *  tessellated circle comes out as dozens of separate lines, each its own
-     *  Curve and its own SVG path. Where exactly two polylines end at the same
-     *  point and the line turns less than {@link PROJECTION_JOIN_MAX_TURN}
-     *  degrees there, they are one smooth curve and are joined. Corners stay
-     *  separate lines, and so does any point where three or more lines meet.
-     *  Exact copies of a line are dropped first.
+     *  Curve and its own SVG path, and the outline of a box as four. Where exactly
+     *  two polylines end at the same point they are joined, at any angle: a corner
+     *  then gets a real line join instead of two line ends on top of each other, a
+     *  dash pattern runs on around it, and in CAD the outline is one polyline that
+     *  is selected whole. A chain that comes back to where it started is closed.
+     *  Where three or more lines meet each one stops: which two belong together,
+     *  the lines do not say. Exact copies of a line are dropped first.
+     *
+     *  Joining only changes how line work is grouped into Curves, never where the
+     *  lines are.
      *
      *  `null` entries are skipped, so a caller can join a subset and keep the
      *  indices. Returns each joined polyline with the index of the first
@@ -2750,32 +2801,16 @@ export class Solid extends Shape
             });
         });
 
-        // Direction in which a polyline leaves one of its ends, towards the
-        // nearest of its points that does not coincide with that end.
-        const leaving = (e: End): P =>
-        {
-            const pts = e.atStart ? lines[e.line]! : [...lines[e.line]!].reverse();
-            const [x, y, z] = pts[0];
-            const to = pts.find(q => Math.hypot(q[0] - x, q[1] - y, q[2] - z) >= Curve.ZERO_LENGTH_TOLERANCE)!;
-            return [to[0] - x, to[1] - y, to[2] - z];
-        };
-
-        const cosMaxTurn = Math.cos(PROJECTION_JOIN_MAX_TURN * Math.PI / 180);
         const used = lines.map(p => p === null);
 
         // The line that continues the chain at its free end `e`, or null when
-        // that end meets no line, meets several, or turns too sharply.
+        // that end meets no line or meets several.
         const next = (e: End): End | null =>
         {
             const meeting = ends.get(key(endPoint(e)))!;
             if (meeting.length !== 2) return null;
             const other = meeting.find(m => m.line !== e.line || m.atStart !== e.atStart)!;
-            if (used[other.line]) return null;
-            // Both directions point away from the shared point: going straight
-            // on, they are opposite.
-            const [a, b] = [leaving(e), leaving(other)];
-            const cos = -(a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (Math.hypot(...a) * Math.hypot(...b));
-            return (cos >= cosMaxTurn) ? other : null;
+            return used[other.line] ? null : other;
         };
 
         // Follow the chain from the free end `e` of `line`, marking every line it
@@ -2866,6 +2901,14 @@ export class Solid extends Shape
         moveTo(x: number, y: number, z: number): T;
     }>(projection: T, planeNormal: Vector): T
     {
+        // what each line is in the drawing goes on the line as a class too, so it stays known
+        // where the groups are not: in the scene, an export, a copy (see Mesh.PROJECTION_GROUPS)
+        if (projection instanceof ShapeCollection)
+        {
+            Solid.PROJECTION_GROUPS.forEach(name =>
+                projection._groups.get(name)?.forEach((s: any) => s?.style?.addClass?.(name)));
+        }
+
         // Flatten onto XY plane (Z = [0,0,1]) via shortest-arc rotation
         const flattenRot = planeNormal.rotationBetween(Vector.from(0, 0, 1));
         const flattened = projection.rotateQuaternion(flattenRot);
@@ -2901,6 +2944,11 @@ export class Solid extends Shape
         return screen;
     }
 
+    /** The groups a projection sorts its line work in, by what a line is in the drawing: what a
+     *  section cuts, what is seen beyond it, its outer contour, what is hidden, and the opaque
+     *  faces of the painter strategy. Each line also carries its group's name as a class. */
+    static readonly PROJECTION_GROUPS = ['cut', 'visible', 'outline', 'hidden', 'fill'];
+
     /** Resolve a BasePlane name or PointLike direction into a normalized
      *  camera-side direction vector (pointing from origin toward viewer).
      *  For BasePlane, returns the plane's outward normal.
@@ -2926,7 +2974,7 @@ export class Solid extends Shape
      *               'xy', 'xz', 'yz') or a `PointLike` direction.
      *  @param options Projection settings, like `{ hiddenLines: true }` or `{ method: 'raycast' }` — see {@link ProjectionOptions}.
      *    `includeHiddenShapes` and `fallback` have nothing to act on for a single mesh.
-     *  @returns ShapeCollection with groups 'visible', 'silhouette' (outer
+     *  @returns ShapeCollection with groups 'visible', 'outline' (outer
      *    contour, subset of 'visible'), and 'hidden' (only if requested).
      */
     elevation(from?: PointLike | BasePlane, options?: ProjectionOptions): ShapeCollection<Shape>;
@@ -2955,7 +3003,8 @@ export class Solid extends Shape
     }
 
     /** Architectural section: cut the mesh with a plane and project the
-     *  geometry beyond the cut onto that same plane with HLR.
+     *  geometry beyond the cut onto that same plane with HLR. What is on the
+     *  viewer's side of the plane is left out (a floor plan does not show the roof).
      *
      *  The viewer looks along `-normal` (so for the default normal=[0,0,1]
      *  the camera is above, looking down — the standard floor-plan setup).
@@ -2965,7 +3014,7 @@ export class Solid extends Shape
      *                Default `[0,0,1]` (horizontal cut).
      *  @param options Projection settings, like `{ hiddenLines: true }` or `{ method: 'raycast' }` — see {@link ProjectionOptions}.
      *    `includeHiddenShapes` and `fallback` have nothing to act on for a single mesh.
-     *  @returns ShapeCollection with groups 'cut', 'visible', 'silhouette'
+     *  @returns ShapeCollection with groups 'cut', 'visible', 'outline'
      *    (outer contour, subset of 'visible'), and 'hidden' (if requested).
      *
      *  @remarks The underlying csgrs `slice()` drops Z when building the cut
@@ -2977,7 +3026,16 @@ export class Solid extends Shape
     @sceneLayer('section')
     section(pivot: PointLike, normal: PointLike | BasePlane = [0, 0, 1], ...args: any[]): ShapeCollection<Shape>
     {
-        const o = resolveProjectionArgs(args, 'Solid.section(pivot, normal, options)');
+        return this._section(pivot, normal, resolveProjectionArgs(args, 'Solid.section(pivot, normal, options)'));
+    }
+
+    /** Internal section — skips scene management, like {@link _elevation}.
+     *
+     *  @param options The method and the {@link ProjectionOptions}; whatever is left out takes its
+     *    default from {@link PROJECTION_DEFAULTS}. */
+    _section(pivot: PointLike, normal: PointLike | BasePlane = [0, 0, 1], options: Partial<ResolvedProjectionOptions> = {}): ShapeCollection<Shape>
+    {
+        const o = resolveProjectionOptions(options);
         const sectionNormal = Solid._resolveViewDirection(normal);
         const pivotPoint    = Point.from(pivot);
 
@@ -3078,6 +3136,7 @@ export class Solid extends Shape
             for (const ring of rings)
             {
                 const pts3 = Solid._liftPointsToSectionPlane(ring.points, normal, sectionOffset);
+                if (!Solid._polylineHasLength(pts3)) continue; // a sliver of a slice: no line to draw
                 if (ring.closed && pts3.length >= 2)
                 {
                     // Ensure ring is explicitly closed

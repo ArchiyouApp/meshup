@@ -54,7 +54,7 @@ pub enum BoolAlgorithm
 #[cfg(feature = "parallel")]
 use rayon::{iter::IntoParallelRefIterator, prelude::*};
 
-#[cfg(not(feature = "parallel"))]
+// Always compiled: `bsp_parallel` replaces single methods of `bsp::Node`, which are gated inside `bsp.rs`.
 pub mod bsp;
 
 #[cfg(feature = "parallel")]
@@ -539,6 +539,36 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S>
         )
     }
 
+    /// +MESHUP
+    /// Surface area: the sum of the areas of all polygons, holes left out.
+    pub fn surface_area(&self) -> Real {
+        self.area_moments().0
+    }
+
+    /// +MESHUP
+    /// Area-weighted centroid of the surface, or `None` when it has no area. A flat mesh has
+    /// no volume and so no centre of mass: this is its centre.
+    pub fn area_centroid(&self) -> Option<Point3<Real>> {
+        let (area, moment) = self.area_moments();
+        (area > 0.0).then(|| Point3::from(moment / area))
+    }
+
+    /// +MESHUP
+    /// Total area and first moment of area (each triangle's area times its centroid), in one
+    /// pass over the triangulation of every polygon. Triangulated, not fanned from a corner:
+    /// a fan from a corner that does not see the whole of a concave face covers area outside
+    /// it, and a fan knows nothing of holes.
+    fn area_moments(&self) -> (Real, Vector3<Real>) {
+        self.polygons
+            .iter()
+            .flat_map(|poly| poly.triangulate())
+            .fold((0.0, Vector3::zeros()), |(area, moment), [a, b, c]| {
+                let (a, b, c) = (a.position, b.position, c.position);
+                let t = 0.5 * (b - a).cross(&(c - a)).norm();
+                (area + t, moment + (a.coords + b.coords + c.coords) * (t / 3.0))
+            })
+    }
+
     /// Create a Rapier rigid body + collider from this Mesh, using
     /// an axis-angle `rotation` in 3D (the vector’s length is the
     /// rotation in radians, and its direction is the axis).
@@ -634,7 +664,7 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S> {
         direction: &Vector3<Real>,
         max_dist: Real,
     ) -> Option<bvh::RaycastHit> {
-        let trimesh = self.to_trimesh()?;
+        let trimesh = self.cached_trimesh()?;
         let dir = direction.normalize();
         let ray = Ray::new(*origin, dir);
         let hit = trimesh.cast_local_ray_and_get_normal(&ray, max_dist, true)?;
@@ -649,8 +679,8 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S> {
 
     /// Batch first-hit visibility test for multiple origins along a shared ray direction.
     ///
-    /// Calls `to_trimesh()` **once** to build the BVH, then dispatches one ray per
-    /// origin.  Returns a `Vec<bool>` where `true` means the ray hit something
+    /// Uses the mesh's cached BVH (built on the first spatial query), then dispatches one
+    /// ray per origin.  Returns a `Vec<bool>` where `true` means the ray hit something
     /// (sample is occluded / hidden) and `false` means no hit (sample is visible).
     ///
     /// This is much cheaper than calling `raycast_first` N times from the JS side
@@ -662,7 +692,7 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S> {
         max_dist: Real,
     ) -> Vec<bool> {
         let dir = direction.normalize();
-        let Some(trimesh) = self.to_trimesh() else {
+        let Some(trimesh) = self.cached_trimesh() else {
             return vec![false; origins.len()];
         };
         origins
@@ -670,6 +700,36 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S> {
             .map(|&(ox, oy, oz)| {
                 let ray = Ray::new(Point3::new(ox, oy, oz), dir);
                 trimesh.cast_local_ray(&ray, max_dist, true).is_some()
+            })
+            .collect()
+    }
+
+    /// Batch first-hit incidence test for multiple origins along a shared ray direction.
+    ///
+    /// Like [`Self::raycast_batch_visibility`], but tells how the ray meets the surface it
+    /// hits first: the result holds, per origin, `-1.0` when the ray hits nothing and
+    /// otherwise the cosine of the angle between the ray and the surface normal at the
+    /// hit (`0.0` grazing … `1.0` head-on, whichever side of the surface is hit).
+    ///
+    /// Made for sun studies: on an occluder mesh any value `>= 0` means "in shadow", and
+    /// on a glazing mesh the cosine is the angle of incidence the glass transmits at.
+    pub fn raycast_batch_incidence(
+        &self,
+        origins: &[(Real, Real, Real)],
+        direction: &Vector3<Real>,
+        max_dist: Real,
+    ) -> Vec<f32> {
+        let dir = direction.normalize();
+        let Some(trimesh) = self.cached_trimesh() else {
+            return vec![-1.0; origins.len()];
+        };
+        origins
+            .iter()
+            .map(|&(ox, oy, oz)| {
+                let ray = Ray::new(Point3::new(ox, oy, oz), dir);
+                trimesh
+                    .cast_local_ray_and_get_normal(&ray, max_dist, true)
+                    .map_or(-1.0, |hit| hit.normal.dot(&dir).abs() as f32)
             })
             .collect()
     }

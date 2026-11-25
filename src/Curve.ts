@@ -14,7 +14,7 @@ import { Shape } from './Shape';
 import type { SceneNode } from './SceneNode';
 import { sceneReplace, sceneAdd, sceneUpdate, sceneCarry, sceneReplaceOrKeep, sceneLayer } from './sceneDecorators';
 import type { CsgrsModule, PointLike, Axis, BasePlane, CurveCornerSelection, OrientationXY, HlrStrategy,
-    ProjectionOptions, SpanParams, SpanEllipse, SpanPoint, CurveData, PointData } from './types';
+    ProjectionOptions, SpanParams, SpanEllipse, SpanPoint, CurveData, PointData, AxisDirection, RowFillDistribute } from './types';
 import { isPointLike, isBasePlane, isAxis, resolveProjectionArgs } from './types'
 import { Point } from './Point';
 import { Vector } from './Vector';
@@ -24,7 +24,7 @@ import { OBbox } from './OBbox';
 import { Polygon } from './Polygon';
 import { Style } from './Style';
 
-import { rad, shortestArcAxisAngle, primaryOrthoXYAngle, gridCounts } from "./utils";
+import { rad, shortestArcAxisAngle, primaryOrthoXYAngle, gridCounts, rowFillOffsets } from "./utils";
 import { GLTFBuilder } from './GLTFBuilder';
 import { Selector } from './Selector';
 
@@ -1536,10 +1536,12 @@ export class Curve extends Shape
         return bb.width() === 0 || bb.depth() === 0 || bb.height() === 0;
     }
 
-    /** Direction vector from start to end point (not normalised) */
-    direction(): Vector
+    /** Direction vector from start to end point; not normalised unless `normalize` is true
+     *  (as in the brep kernel) */
+    direction(normalize: boolean = false): Vector
     {
-        return Vector.from(this.end()).subtract(Vector.from(this.start()));
+        const v = Vector.from(this.end()).subtract(Vector.from(this.start()));
+        return normalize ? v.normalize() : v;
     }
 
     //// SELECT ////
@@ -2503,6 +2505,53 @@ export class Curve extends Shape
         return curves;
     }
 
+    /** Fill a span with a row of copies of this Curve, like studs in a wall or joists in a floor.
+     *
+     *  This Curve is the first member. The span runs from its back face along `direction`: over a
+     *  length, or up to the near face of another shape. By default the members sit every `spacing`
+     *  from the start with a closing member flush at the end, so sheet edges land on them.
+     *
+     *  NOTE: `spacing` is centre to centre here, while in row() it is the gap between copies.
+     *
+     *  @param until      - the span: a length from the back of this Curve to the far side of the
+     *                      last member, or a shape (or collection) to fill up to
+     *  @param spacing    - centre-to-centre distance of the members; with 'even' the largest one
+     *  @param direction  - direction of the row: an axis ('x', '-y', ...) or a vector (default: 'x')
+     *  @param distribute - 'grid' (default): every `spacing` from the start, what is left in the
+     *                      last bay; 'even': the span split in equal bays of at most `spacing`.
+     *                      The number of bays rounds up, so a bay is `spacing` or a bit less:
+     *                      a 3000 span of 38 studs at 600 gives 5 bays of 592.4.
+     *  @param close      - end with a member flush with the end of the span (default: true). Use
+     *                      false when `until` carries that end already, like a wall under joists.
+     *  @returns ShapeCollection<Curve> of all members, this Curve the first
+     *
+     *  @example
+     *    stud = box(38, 140, 2400)
+     *    studs = stud.rowFill(3000, 600)                        // studs 600 c/c, one at 3000
+     *    joist = box(3000, 50, 200)
+     *    wallB = box(3000, 140, 300).move(0, 4000, 0)
+     *    joists = joist.rowFill(wallB, 400, 'y', 'even', false) // equal bays up to wallB
+     */
+    rowFill(until:number|Shape|ShapeCollection<any>, spacing:number, direction:PointLike|AxisDirection='x', distribute:RowFillDistribute='grid', close:boolean=true):ShapeCollection<Curve>
+    {
+        const bbox = this.bbox();
+        if(!bbox){ throw new Error('Curve.rowFill(): this Curve has no size'); }
+        const dirVec = Vector.from(direction).normalize();
+        const target = (typeof until === 'number') ? until : until?.bbox?.();
+        const offsets = rowFillOffsets(bbox, target as any, spacing, dirVec.toArray(), distribute, close, 'Curve.rowFill()');
+
+        const curves = new ShapeCollection<Curve>();
+        offsets.forEach((offset, i) =>
+        {
+            const member = (i === 0) ? this : this.copy();
+            member.move(dirVec.copy().scale(offset));
+            curves.add(member);
+        });
+
+        ShapeCollection._nameRow(curves, this.name() as string | undefined);
+        return curves;
+    }
+
     /** Extend this curve to another curve or shape collection.
      *  Fires a probe ray from each end along its tangent direction, finds where it meets
      *  `other`, and extends the nearer end by that amount.
@@ -2651,11 +2700,16 @@ export class Curve extends Shape
      *  - `'round'`: an arc of radius `|distance|` centred on the original corner.
      *  - `'smooth'`: mitred, but a corner sharper than ~29° — whose miter would run out past
      *    four times the offset distance — is arced instead. The historical behaviour.
+     *
+     *  `planeNormal` picks the side for a single straight line, as in the brep kernel: it offsets
+     *  along `planeNormal × direction`, so `line([0,0,0],[100,0,50]).offset(-10, null, [0,-1,0])`
+     *  goes down, below the line. Without it a line offsets to a fixed side (see below).
      */
     @sceneUpdate
-    offset(distance: number, cornerType:'sharp'|'round'|'smooth'='sharp'): Curve|null
+    offset(distance: number, cornerType:'sharp'|'round'|'smooth'|null='sharp', planeNormal?: PointLike): Curve|null
     {
         if(!this.isPlanar()){ throw new Error(`Curve::offset(): Cannot offset a non-planar curve!`);}
+        cornerType = cornerType ?? 'sharp';
 
         // NOTE: there used to be a fast path here that rebuilt a circle at radius + distance,
         // because the native offset returned a tessellated ring. The native offset now
@@ -2670,6 +2724,15 @@ export class Curve extends Shape
         if(!this.isClosed() && this.isStraight())
         {
             const t = this.direction().normalize();
+            if(planeNormal)
+            {
+                const d = Vector.from(planeNormal).cross(t);
+                if(d.length() > 1e-6)
+                {
+                    const off = d.normalize().scale(distance);
+                    return this.translate(off.x, off.y, off.z);
+                }
+            }
             const n = this.normal();
             if(n && n.length() > 1e-6)
             {

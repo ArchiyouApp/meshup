@@ -419,6 +419,208 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S> {
         result
     }
 
+    /// What a section looks at: this mesh with everything on the viewer's side of the cut
+    /// plane taken away, and the cut closed with a cap.
+    ///
+    /// The polygons are split by the plane (no boolean, so no BSP of the whole mesh against a
+    /// box) and only what lies beyond it is kept, plus faces lying in the plane. Without that,
+    /// a floor plan showed the roof above the cut. The cap is the cut region itself, facing
+    /// the viewer: an opened wall would otherwise show its own bottom edge through the top.
+    #[cfg(feature = "sketch")]
+    pub fn beyond_section(
+        &self,
+        cut_plane: &crate::mesh::plane::Plane,
+        section_normal: &Vector3<Real>,
+        section_offset: Real,
+        cut: &crate::sketch::Sketch<S>,
+    ) -> Mesh<S>
+    {
+        use crate::mesh::plane::{BACK, SPANNING};
+
+        // Which side the plane calls the far one: test a point just behind it, away from the viewer
+        let on_plane = Point3::from(cut_plane.normal() * cut_plane.offset());
+        let behind = cut_plane.orient_point(&Point3::from(on_plane.coords - cut_plane.normal()));
+        let far_is_back = behind == BACK;
+
+        let mut polygons: Vec<crate::polygon::Polygon<S>> = self
+            .polygons
+            .iter()
+            .flat_map(|polygon|
+            {
+                // split_polygon() splits the outer ring only: a face with holes (a wall with its
+                // window openings) that the plane runs through goes in as triangles, so the
+                // openings stay open
+                let pieces: Vec<crate::polygon::Polygon<S>> =
+                    if polygon.holes.is_empty() || cut_plane.classify_polygon(polygon) != SPANNING
+                    {
+                        vec![polygon.clone()]
+                    }
+                    else
+                    {
+                        polygon
+                            .triangulate()
+                            .into_iter()
+                            .map(|[a, b, c]| crate::polygon::Polygon::new(vec![a, b, c], polygon.metadata.clone()))
+                            .collect()
+                    };
+                pieces.into_iter().flat_map(|piece|
+                {
+                    let (coplanar_front, coplanar_back, front, back) = cut_plane.split_polygon(&piece);
+                    let beyond = if far_is_back { back } else { front };
+                    coplanar_front.into_iter().chain(coplanar_back).chain(beyond)
+                }).collect::<Vec<_>>()
+            })
+            .collect();
+
+        if polygons.is_empty()
+        {
+            return Mesh::from_polygons(&polygons, self.metadata.clone());
+        }
+
+        polygons.extend(Self::section_cap(cut, section_normal, section_offset, self.metadata.clone()));
+        Mesh::from_polygons(&polygons, self.metadata.clone())
+    }
+
+    /// The occluders of a section, each cut back the same way as the mesh itself
+    #[cfg(feature = "sketch")]
+    fn occluders_beyond_section(
+        occluders: &[&Mesh<S>],
+        cut_plane: &crate::mesh::plane::Plane,
+        section_normal: &Vector3<Real>,
+        section_offset: Real,
+    ) -> Vec<Mesh<S>>
+    {
+        occluders
+            .iter()
+            .map(|occluder|
+            {
+                let cut = occluder.slice(cut_plane.clone());
+                occluder.beyond_section(cut_plane, section_normal, section_offset, &cut)
+            })
+            .filter(|occluder| !occluder.polygons.is_empty())
+            .collect()
+    }
+
+    /// The cut region as triangles in the section plane, facing the viewer. The slice sketch
+    /// is flat on XY (its Z is dropped), so it is lifted back onto the plane; a vertical cut
+    /// has no such lift and gets no cap (its cut profile is degenerate anyway).
+    #[cfg(feature = "sketch")]
+    fn section_cap(
+        cut: &crate::sketch::Sketch<S>,
+        section_normal: &Vector3<Real>,
+        section_offset: Real,
+        metadata: Option<S>,
+    ) -> Vec<crate::polygon::Polygon<S>>
+    {
+        use crate::vertex::Vertex;
+
+        if section_normal.z.abs() < 1e-9
+        {
+            return Vec::new();
+        }
+        let lift = |p: &Point3<Real>| Point3::new(
+            p.x,
+            p.y,
+            (section_offset - section_normal.x * p.x - section_normal.y * p.y) / section_normal.z,
+        );
+        let normal = section_normal.normalize();
+
+        Self::cap_triangles(cut)
+            .iter()
+            .filter_map(|triangle|
+            {
+                let [a, b, c] = triangle.map(|[x, y]| lift(&Point3::new(x, y, 0.0)));
+                let face = (b - a).cross(&(c - a));
+                if face.norm() < tolerance() { return None; }
+                let [a, c] = if face.dot(&normal) < 0.0 { [c, a] } else { [a, c] };
+                Some(crate::polygon::Polygon::new(
+                    vec![Vertex::new(a, normal), Vertex::new(b, normal), Vertex::new(c, normal)],
+                    metadata.clone(),
+                ))
+            })
+            .collect()
+    }
+
+    /// The cut region as flat triangles, without ever giving up the run.
+    ///
+    /// `Sketch::triangulate()` loads a constrained Delaunay triangulation that panics when two
+    /// edges of the rings cross, and a slice can give such rings (a wall with openings in it, a
+    /// random layout of windows): in WASM that panic ends the whole run. Here crossing edges are
+    /// skipped instead, and only the triangles inside the region are kept. A region that cannot
+    /// be triangulated gets no cap, which costs at most a line seen through the cut.
+    #[cfg(all(feature = "sketch", feature = "delaunay"))]
+    fn cap_triangles(cut: &crate::sketch::Sketch<S>) -> Vec<[[Real; 2]; 3]>
+    {
+        use geo::{Contains, Coord};
+        use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation};
+
+        let polygons: Vec<geo::Polygon<Real>> = cut
+            .geometry
+            .iter()
+            .flat_map(|geometry| match geometry
+            {
+                geo::Geometry::Polygon(polygon) => vec![polygon.clone()],
+                geo::Geometry::MultiPolygon(multi) => multi.0.clone(),
+                _ => Vec::new(),
+            })
+            .collect();
+
+        polygons
+            .iter()
+            .flat_map(|polygon|
+            {
+                // each ring once around, without repeated points
+                let rings: Vec<Vec<Coord<Real>>> = std::iter::once(polygon.exterior())
+                    .chain(polygon.interiors().iter())
+                    .map(|ring|
+                    {
+                        let mut coords: Vec<Coord<Real>> = ring.coords().copied().collect();
+                        coords.dedup();
+                        if coords.len() > 1 && coords.first() == coords.last() { coords.pop(); }
+                        coords
+                    })
+                    .filter(|coords| coords.len() >= 3)
+                    .collect();
+                if rings.iter().flatten().any(|c| !c.x.is_finite() || !c.y.is_finite())
+                {
+                    return Vec::new();
+                }
+
+                let offsets: Vec<usize> = rings
+                    .iter()
+                    .scan(0, |next, ring| { let at = *next; *next += ring.len(); Some(at) })
+                    .collect();
+                let edges: Vec<[usize; 2]> = rings
+                    .iter()
+                    .zip(offsets.iter())
+                    .flat_map(|(ring, &at)| (0..ring.len()).map(move |i| [at + i, at + (i + 1) % ring.len()]))
+                    .collect();
+                let vertices: Vec<Point2<Real>> = rings.iter().flatten().map(|c| Point2::new(c.x, c.y)).collect();
+
+                let Ok(cdt) = ConstrainedDelaunayTriangulation::<Point2<Real>>::try_bulk_load_cdt(vertices, edges, |_| {})
+                else
+                {
+                    return Vec::new();
+                };
+                cdt.inner_faces()
+                    .filter_map(|face|
+                    {
+                        let [a, b, c] = face.positions();
+                        let centroid = geo::Point::new((a.x + b.x + c.x) / 3.0, (a.y + b.y + c.y) / 3.0);
+                        polygon.contains(&centroid).then_some([[a.x, a.y], [b.x, b.y], [c.x, c.y]])
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// Without a triangulator there is no cap (see above)
+    #[cfg(all(feature = "sketch", not(feature = "delaunay")))]
+    fn cap_triangles(_cut: &crate::sketch::Sketch<S>) -> Vec<[[Real; 2]; 3]>
+    {
+        Vec::new()
+    }
+
     /// [`Mesh::project_edges_section`] with a selectable HLR algorithm.
     #[cfg(feature = "sketch")]
     #[allow(clippy::too_many_arguments)]
@@ -436,16 +638,26 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S> {
     ) -> SectionElevationResult<S> {
         use crate::mesh::plane::Plane;
         let cut_plane = Plane::from_normal(*section_normal, section_offset);
-        let cut = self.slice(cut_plane);
-        let edge_result = self.project_edges_with_strategy(
-            view_normal,
-            plane_origin,
-            plane_normal,
-            feature_angle_deg,
-            n_samples,
-            occluders,
-            strategy,
-        );
+        let cut = self.slice(cut_plane.clone());
+        let beyond = self.beyond_section(&cut_plane, section_normal, section_offset, &cut);
+        let occluders_beyond = Self::occluders_beyond_section(occluders, &cut_plane, section_normal, section_offset);
+        let occluder_refs: Vec<&Mesh<S>> = occluders_beyond.iter().collect();
+        let edge_result = if beyond.polygons.is_empty()
+        {
+            EdgeProjectionResult::default()
+        }
+        else
+        {
+            beyond.project_edges_with_strategy(
+                view_normal,
+                plane_origin,
+                plane_normal,
+                feature_angle_deg,
+                n_samples,
+                &occluder_refs,
+                strategy,
+            )
+        };
         SectionElevationResult {
             cut,
             visible_polylines: edge_result.visible_polylines,
@@ -472,15 +684,25 @@ impl<S: Clone + Send + Sync + Debug> Mesh<S> {
     ) -> SectionElevationResult<S> {
         use crate::mesh::plane::Plane;
         let cut_plane = Plane::from_normal(*section_normal, section_offset);
-        let cut = self.slice(cut_plane);
-        let edge_result = self.project_edges(
-            view_normal,
-            plane_origin,
-            plane_normal,
-            feature_angle_deg,
-            n_samples,
-            occluders,
-        );
+        let cut = self.slice(cut_plane.clone());
+        let beyond = self.beyond_section(&cut_plane, section_normal, section_offset, &cut);
+        let occluders_beyond = Self::occluders_beyond_section(occluders, &cut_plane, section_normal, section_offset);
+        let occluder_refs: Vec<&Mesh<S>> = occluders_beyond.iter().collect();
+        let edge_result = if beyond.polygons.is_empty()
+        {
+            EdgeProjectionResult::default()
+        }
+        else
+        {
+            beyond.project_edges(
+                view_normal,
+                plane_origin,
+                plane_normal,
+                feature_angle_deg,
+                n_samples,
+                &occluder_refs,
+            )
+        };
         SectionElevationResult {
             cut,
             visible_polylines: edge_result.visible_polylines,
