@@ -1,0 +1,50 @@
+file bvh_types_js.rs 121
+file curve_js.rs 1971
+file edge_projection_js.rs 64
+file matrix_js.rs 81
+file mesh_js.rs 1179
+file metaballs_js.rs 0
+file mod.rs 53
+file plane_js.rs 136
+file point_js.rs 42
+file polygon_js.rs 149
+file sketch_js.rs 757
+file vector_js.rs 144
+file vertex_js.rs 66
+fn curve_js.rs Curve3DJs::bbox 21
+fn curve_js.rs Curve3DJs::bbox_exact 22
+fn curve_js.rs Curve3DJs::boolean 45
+fn curve_js.rs Curve3DJs::control_points 15
+fn curve_js.rs Curve3DJs::degree 22
+fn curve_js.rs Curve3DJs::extend 19
+fn curve_js.rs Curve3DJs::extend_to_curve 33
+fn curve_js.rs Curve3DJs::extension_of 14
+fn curve_js.rs Curve3DJs::intersect 30
+fn curve_js.rs Curve3DJs::make_interpolated 16
+fn curve_js.rs Curve3DJs::make_polyline 14
+fn curve_js.rs Curve3DJs::mirror 21
+fn curve_js.rs Curve3DJs::offset 22
+fn curve_js.rs Curve3DJs::param_closest_to_point 23
+fn curve_js.rs Curve3DJs::reverse 24
+fn curve_js.rs Curve3DJs::rotate_axis 14
+fn curve_js.rs Curve3DJs::scale 20
+fn curve_js.rs Curve3DJs::scale_non_uniform 28
+fn curve_js.rs Curve3DJs::segment_tessellations 15
+fn curve_js.rs Curve3DJs::span_params_raw 98
+fn curve_js.rs Curve3DJs::split_at_curve 29
+fn curve_js.rs Curve3DJs::straight_segments_via_world 24
+fn curve_js.rs Curve3DJs::subtype 28
+fn curve_js.rs Frame::from_points 45
+fn curve_js.rs SpanParamsJs::validated 13
+fn matrix_js.rs Matrix4Js::new 19
+fn matrix_js.rs Matrix4Js::to_array 18
+fn mesh_js.rs MeshJs::from_points_with_holes 42
+fn mesh_js.rs MeshJs::polyhedron 13
+fn mesh_js.rs MeshJs::project_edges_js 17
+fn mesh_js.rs MeshJs::project_edges_section_js 26
+fn mesh_js.rs MeshJs::split_by_plane 13
+fn mesh_js.rs MeshJs::to_arrays 36
+fn sketch_js.rs SketchJs::debug_geometry 84
+fn sketch_js.rs SketchJs::rings 21
+fn sketch_js.rs SketchJs::to_arrays 36
+fn vector_js.rs Vector3Js::rotation_between 20
