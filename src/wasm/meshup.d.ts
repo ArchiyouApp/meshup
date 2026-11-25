@@ -1468,11 +1468,11 @@ export interface InitOutput {
   readonly vector3js_x: (a: number) => number;
   readonly vector3js_y: (a: number) => number;
   readonly vector3js_z: (a: number) => number;
-  readonly setTessellationQuality: (a: number, b: number, c: number, d: number) => void;
   readonly planejs_new: (a: number, b: number) => number;
   readonly vector3js_new: (a: number, b: number, c: number) => number;
   readonly __wbg_raycasthitjs_free: (a: number, b: number) => void;
   readonly __wbg_vector3js_free: (a: number, b: number) => void;
+  readonly setTessellationQuality: (a: number, b: number, c: number, d: number) => void;
   readonly init_panic_hook: () => void;
   readonly __wbindgen_malloc: (a: number, b: number) => number;
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
